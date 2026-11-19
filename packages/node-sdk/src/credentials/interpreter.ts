@@ -7,6 +7,7 @@ import {
   type CredentialProgressEvent,
   type CredentialRequirement,
 } from "@tinycloud/sdk-core";
+import { assertHeldBinding } from "./held-binding";
 import type { CredentialAcquisitionTransport, CredentialProofSubject, CredentialSigningAdapter, InlineCredentialProofHandler, InlineCredentialProofRequest, PrimitiveStepHandler } from "./types";
 
 const delay = (ms: number, signal?: AbortSignal) => new Promise<void>((resolve, reject) => {
@@ -30,6 +31,8 @@ export async function interpretCredentialFlow(input: {
   readonly descriptorDigest: string;
   readonly requirementDigest: string;
   readonly openerOrigin: string;
+  /** `expiresAt` of the create response. Required for a held (account) descriptor: the signed binding must carry it. */
+  readonly expiresAt?: string;
   readonly transport: CredentialAcquisitionTransport;
   readonly signing: CredentialSigningAdapter;
   /**
@@ -41,9 +44,48 @@ export async function interpretCredentialFlow(input: {
   readonly signal?: AbortSignal;
   readonly onProgress?: (event: CredentialProgressEvent) => void;
   readonly onWait?: () => Promise<void>;
+  /**
+   * Passed only by the email-proof functions, after the per-call held opt-in was accepted. Without it an account-bound (held, EIP191)
+   * descriptor is refused before the first transport call (TC-2254 A2.5).
+   */
+  readonly allowAccountSubject?: true;
 }): Promise<void> {
+  const held = input.descriptor.subjectRelationship === "account_is_subject";
+  if (held && input.allowAccountSubject !== true) throw new CredentialError("UNSUPPORTED_PROFILE", "The held credential profile requires an explicit opt-in");
   const steps = new Map(input.descriptor.steps.map((step) => [step.type, step]));
   const completed = new Set<string>(); let lastTransition = "";
+  /** The identity checks on a holder binding, and for a held request all of S11 (a). One function, called wherever a held binding is read. */
+  const checkBinding = async (value: unknown) => {
+    const binding = validateCredentialHolderBinding(value);
+    if (binding.requestId !== input.requestId || binding.descriptorDigest !== input.descriptorDigest || binding.requirementDigest !== input.requirementDigest || binding.holderDid !== input.holderDid || binding.issuer !== input.descriptor.issuer.did || binding.issuerKid !== input.descriptor.issuer.kid || binding.profile !== input.descriptor.profile || binding.openerOrigin !== input.openerOrigin || binding.completionOrigin !== input.openerOrigin || binding.audience !== "tinycloud://credentials") throw new CredentialError("REQUEST_SUBSTITUTED", "Holder binding was substituted");
+    const alg = input.descriptor.holderBinding.alg;
+    if (binding.type !== input.descriptor.holderBinding.domain || (alg === "EIP191" && !input.transport.challengeNonce)) throw new CredentialError("REQUEST_SUBSTITUTED", "Holder binding was substituted");
+    if (alg === "EIP191") await assertHeldBinding(binding, { descriptor: input.descriptor, requirement: input.requirement, requestId: input.requestId, descriptorDigest: input.descriptorDigest, requirementDigest: input.requirementDigest, holderDid: input.holderDid, openerOrigin: input.openerOrigin, challengeNonce: input.transport.challengeNonce!(input.requestId), serverExpiresAt: input.expiresAt });
+    return binding;
+  };
+  /**
+   * S11 (e): a held request found past the signature (a retry after a failed notice, or after a lost issue response) has no binding read in
+   * this call. Read it and check it in full before R7 or R8, so (vi) and (viii) are judged against the binding of THIS call. No R6, no wallet.
+   *
+   * Residual risk, accepted (contract addendum A3(1), appended to A2.2): on the retry path the SDK cannot tell that the `jti` in the re-fetched
+   * R5 binding is the `jti` the account signed at R6. A2.1(a) keeps no record of that `jti`, and the witness keeps no copy of the signature
+   * (`OC/mod.rs:500,2416`). S11(a) therefore checks the re-fetched `jti` for format only (lowercase v4 `urn:uuid`). Checks (vi) and (viii)
+   * compare the credential with the binding fetched in the same call.
+   *
+   * A witness that serves a different `jti` on the retry is detected only at (vi), after R7 has sent the notice, and only if it issues a `jti`
+   * different from the one it served. If it issues the `jti` it served, the credential is accepted.
+   *
+   * This gives a compromised witness nothing it lacks as the pinned issuer. It can already issue a held credential for any account and mailbox
+   * without an account signature. The held credential carries no account signature (`held_email.rs:303-317`), and no verifier relies on the
+   * `jti` being account-signed (`held_presentation.rs:315-320,367`; `sdk-core/src/held-credentials/credential.ts:159,194`). Possession is proven
+   * at presentation by the account's SIWE (`held_presentation.rs:351-359`).
+   *
+   * An honest witness serves the same binding on every R5 call (`binding_for` is deterministic, `OC/mod.rs:2657-2676`).
+   */
+  const ensureHeldBinding = async () => {
+    if (!held || input.transport.signedBinding?.(input.requestId) !== undefined) return;
+    await checkBinding(await input.transport.holderBinding(input.requestId, input.verifier, input.signal));
+  };
   for (;;) {
     input.signal?.throwIfAborted();
     const state = await input.transport.state(input.requestId, input.verifier, input.signal);
@@ -51,8 +93,9 @@ export async function interpretCredentialFlow(input: {
     if (state.state === "expired") throw new CredentialError("REQUEST_EXPIRED", "Credential request expired", { state: state.state, correlationId: state.correlationId });
     if (state.state === "canceled") throw new CredentialError("CANCELED", "Credential request was canceled", { state: state.state, correlationId: state.correlationId });
     if (state.state === "issuer_unready") throw new CredentialError("ISSUER_UNREADY", "Credential issuer is not ready", { retryAfterMs: state.retryAfterMs, state: state.state, correlationId: state.correlationId });
-    if (state.state === "complete") return;
+    if (state.state === "complete") { await ensureHeldBinding(); return; }
     if (state.state === "ready_to_issue" || state.state === "issued") {
+      await ensureHeldBinding();
       if (state.state === "ready_to_issue" && !completed.has("issue")) { await input.transport.issue(input.requestId, input.verifier, input.signal); completed.add("issue"); }
       else await (input.onWait?.() ?? delay(state.retryAfterMs ?? 50, input.signal));
       continue;
@@ -65,8 +108,10 @@ export async function interpretCredentialFlow(input: {
     lastTransition = state.transitionId;
     if (next.type === "holder_signature") {
       input.onProgress?.({ state: "signing", stepId: next.id, correlationId: state.correlationId });
-      const binding = validateCredentialHolderBinding(await input.transport.holderBinding(input.requestId, input.verifier, input.signal));
-      if (binding.requestId !== input.requestId || binding.descriptorDigest !== input.descriptorDigest || binding.requirementDigest !== input.requirementDigest || binding.holderDid !== input.holderDid || binding.issuer !== input.descriptor.issuer.did || binding.issuerKid !== input.descriptor.issuer.kid || binding.profile !== input.descriptor.profile || binding.openerOrigin !== input.openerOrigin || binding.completionOrigin !== input.openerOrigin || binding.audience !== "tinycloud://credentials") throw new CredentialError("REQUEST_SUBSTITUTED", "Holder binding was substituted");
+      const binding = await checkBinding(await input.transport.holderBinding(input.requestId, input.verifier, input.signal));
+      // Held (account, EIP-191) and ticket (did:key, EdDSA) never mix: the descriptor, the binding type and the holder key agree, or nothing is signed.
+      const alg = input.descriptor.holderBinding.alg;
+      if ((alg === "EIP191") !== (input.signing.holderKey?.alg === "EIP191")) throw new CredentialError("REQUEST_SUBSTITUTED", "Holder binding was substituted");
       const bytes = holderBindingSigningBytes(binding);
       let signature = await input.signing.autoSign?.(binding, bytes, input.signal);
       if (signature === undefined) {
@@ -74,7 +119,7 @@ export async function interpretCredentialFlow(input: {
         try { signature = await input.signing.requestApproval(binding, bytes, input.signal); } catch (cause) { if (cause instanceof CredentialError) throw cause; throw new CredentialError("SIGNATURE_REJECTED", "OpenKey approval was rejected", { cause }); }
       }
       if (!(signature instanceof Uint8Array) || signature.length === 0) throw new CredentialError("SIGNATURE_REJECTED", "OpenKey signature is invalid");
-      await input.transport.submitHolderSignature(input.requestId, input.verifier, encodeBase64Url(signature), input.signal, input.signing.holderKey);
+      await input.transport.submitHolderSignature(input.requestId, input.verifier, alg === "EIP191" ? `0x${Array.from(signature, (byte) => byte.toString(16).padStart(2, "0")).join("")}` : encodeBase64Url(signature), input.signal, input.signing.holderKey);
     } else {
       input.onProgress?.({ state: next.type === "collect_input" ? "collecting" : "proving", stepId: next.id, correlationId: state.correlationId });
       const handler = input.handlers?.[next.type];

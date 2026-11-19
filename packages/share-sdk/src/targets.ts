@@ -16,10 +16,15 @@ export interface TargetPublishInput {
   readonly target: ShareTarget;
   readonly expiresAt: Date;
   readonly expiryWasExplicit?: boolean;
+  /** The relative expiry the caller asked for, in milliseconds, when it gave a duration (not a date). Lets a rerun recognise the same choice. */
+  readonly expiresInMs?: number;
   readonly origin: string;
   readonly resourceKind?: "exact" | "prefix";
   readonly actions?: readonly ("read" | "list" | "edit")[];
   readonly notify?: boolean;
+  readonly credentialDescriptor?: unknown;
+  readonly issuerDid?: string;
+  readonly issuerKid?: string;
   /** Publish as the next write-once version of this artifact and pin the share to it (TC-1428). */
   readonly artifact?: { readonly id: string; readonly note?: string };
 }
@@ -95,6 +100,9 @@ export async function publishTargetShare(input: SharePublishOptions & {
   readonly files?: readonly { readonly bytes: Uint8Array; readonly filename: string; readonly mediaType?: string }[];
   readonly resourceKind?: "exact" | "prefix";
   readonly actions?: readonly ("read" | "list" | "edit")[];
+  readonly credentialDescriptor?: unknown;
+  readonly issuerDid?: string;
+  readonly issuerKid?: string;
 }): Promise<TargetPublishOutcome> {
   const target = normalizeShareTarget(input.target);
   const filename = publishFilename(input.filename);
@@ -149,7 +157,11 @@ export async function publishTargetShare(input: SharePublishOptions & {
     target,
     expiresAt,
     expiryWasExplicit: input.expiryWasExplicit ?? input.expiresAt !== undefined,
+    ...(input.expiresInMs === undefined ? {} : { expiresInMs: input.expiresInMs }),
     origin: input.origin,
     ...(input.notify === undefined ? {} : { notify: input.notify }),
+    ...(input.credentialDescriptor === undefined ? {} : { credentialDescriptor: input.credentialDescriptor }),
+    ...(input.issuerDid === undefined ? {} : { issuerDid: input.issuerDid }),
+    ...(input.issuerKid === undefined ? {} : { issuerKid: input.issuerKid }),
   });
 }

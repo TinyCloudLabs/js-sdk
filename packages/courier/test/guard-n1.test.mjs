@@ -45,8 +45,8 @@ test('N1: a blanked Paseo COURIER_HOME discovers only the clean-home snapshot', 
   const { profileDir } = await import('../dist/profile.js');
   const previousHome = process.env.HOME; const previousCourier = process.env.COURIER_HOME;
   try {
-    process.env.HOME = '/private-agent-home'; process.env.COURIER_HOME = '';
-    assert.equal(profileDir(), '/private-agent-home/.courier');
+    process.env.HOME = path.join(process.env.COURIER_TEST_HOME, 'private-agent-home'); process.env.COURIER_HOME = '';
+    assert.equal(profileDir(), path.join(process.env.COURIER_TEST_HOME, 'private-agent-home', '.courier'));
   } finally {
     if (previousHome === undefined) delete process.env.HOME; else process.env.HOME = previousHome;
     if (previousCourier === undefined) delete process.env.COURIER_HOME; else process.env.COURIER_HOME = previousCourier;

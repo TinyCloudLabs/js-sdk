@@ -27,11 +27,14 @@ import {
   type EncryptionError,
   type InlineEncryptedEnvelope,
 } from "./types";
-import { parseNetworkId } from "./networkId";
+import { NetworkIdError, parseEncryptionResource } from "./networkId";
+import { assertKeyWrapAlgorithm, assertKeyWrapContext, KEY_WRAP_V2_ALG, readKeyWrapV2, sealKeyV2 } from "./keyWrap";
 
 export interface EncryptToNetworkInput {
   /** Target network id URN. */
   networkId: string;
+  /** Exact named-key path; omitted for a network-root key. */
+  keyPath?: string;
   /** Network public key bytes (already discovered). */
   networkPublicKey: Uint8Array;
   /** Payload bytes to encrypt. Callers serialize objects to bytes themselves. */
@@ -44,6 +47,8 @@ export interface EncryptToNetworkInput {
   keyVersion?: number;
   /** Caller-supplied envelope metadata. */
   metadata?: Record<string, string>;
+  /** Write TCW2 key wraps. Disabled by default. */
+  keyWrapV2?: boolean;
 }
 
 export interface EncryptToNetworkResult {
@@ -61,13 +66,31 @@ export function encryptToNetwork(
   crypto: EncryptionCrypto,
   input: EncryptToNetworkInput,
 ): EncryptToNetworkResult {
-  parseNetworkId(input.networkId);
-  const alg = input.alg ?? DEFAULT_ENCRYPTION_ALG;
+  const parsedResource = parseEncryptionResource(
+    input.keyPath === undefined
+      ? input.networkId
+      : `${input.networkId}/${input.keyPath}`,
+  );
+  if (
+    parsedResource.keyPath !== input.keyPath ||
+    input.keyPath?.endsWith("/")
+  ) {
+    throw new NetworkIdError("keyPath must name an exact encryption key");
+  }
+  const alg = input.keyWrapV2 ? KEY_WRAP_V2_ALG : DEFAULT_ENCRYPTION_ALG;
+  if (input.alg !== undefined && input.alg !== alg) {
+    throw new Error("Algorithm does not match keyWrapV2");
+  }
   const keyVersion = input.keyVersion ?? DEFAULT_KEY_VERSION;
 
   const symmetricKey = crypto.randomBytes(32);
   const ciphertext = crypto.authEncrypt(symmetricKey, input.plaintext, input.aad);
-  const wrapped = crypto.sealToNetworkKey(input.networkPublicKey, symmetricKey);
+  const wrapped = input.keyWrapV2
+    ? sealKeyV2(input.networkPublicKey, symmetricKey, {
+      purpose: "network-key", networkId: input.networkId, keyPath: input.keyPath ?? "",
+      keyVersion, metadata: input.metadata ?? {},
+    })
+    : crypto.sealToNetworkKey(input.networkPublicKey, symmetricKey);
   const encryptedSymmetricKey = base64Encode(wrapped);
   const encryptedSymmetricKeyHash = canonicalHashHex(
     crypto.sha256,
@@ -77,6 +100,7 @@ export function encryptToNetwork(
   const envelope: InlineEncryptedEnvelope = {
     v: ENVELOPE_VERSION,
     networkId: input.networkId,
+    ...(input.keyPath !== undefined ? { keyPath: input.keyPath } : {}),
     alg,
     keyVersion,
     encryptedSymmetricKey,
@@ -96,6 +120,7 @@ export function encryptToNetwork(
 export function validateEnvelope(
   crypto: EncryptionCrypto,
   envelope: unknown,
+  requireKeyWrapV2 = false,
 ): { ok: true; data: InlineEncryptedEnvelope } | { ok: false; error: EncryptionError } {
   if (envelope === null || typeof envelope !== "object") {
     return {
@@ -117,13 +142,24 @@ export function validateEnvelope(
     };
   }
   try {
-    parseNetworkId(e.networkId);
+    if (parseEncryptionResource(e.networkId).keyPath !== undefined) {
+      throw new Error("networkId must identify the network root");
+    }
+    if (e.keyPath !== undefined) {
+      if (typeof e.keyPath !== "string") {
+        throw new Error("keyPath must be a string");
+      }
+      const parsed = parseEncryptionResource(`${e.networkId}/${e.keyPath}`);
+      if (parsed.keyPath !== e.keyPath || e.keyPath.endsWith("/")) {
+        throw new Error("keyPath must name an exact encryption key");
+      }
+    }
   } catch (err) {
     return {
       ok: false,
       error: encryptionError({
         code: "INVALID_ENVELOPE",
-        message: `envelope.networkId is malformed: ${
+        message: `envelope encryption resource is malformed: ${
           err instanceof Error ? err.message : String(err)
         }`,
       }),
@@ -165,7 +201,24 @@ export function validateEnvelope(
       }),
     };
   }
+  try {
+    validateEnvelopeKeyWrap(e, requireKeyWrapV2);
+  } catch {
+    return { ok: false, error: encryptionError({ code: "INVALID_ENVELOPE", message: "Envelope key wrap context is invalid" }) };
+  }
   return { ok: true, data: e };
+}
+
+/** The node authenticates this header; its signed response binds the exact capsule hash. */
+export function validateEnvelopeKeyWrap(envelope: Pick<InlineEncryptedEnvelope, "alg" | "encryptedSymmetricKey" | "networkId" | "keyPath" | "keyVersion" | "metadata">, requireKeyWrapV2 = false): void {
+  const wrapped = base64Decode(envelope.encryptedSymmetricKey);
+  assertKeyWrapAlgorithm(wrapped, envelope.alg, requireKeyWrapV2);
+  if (envelope.alg === KEY_WRAP_V2_ALG) {
+    assertKeyWrapContext(readKeyWrapV2(wrapped).header, {
+      purpose: "network-key", networkId: envelope.networkId, keyPath: envelope.keyPath ?? "",
+      keyVersion: envelope.keyVersion, metadata: envelope.metadata ?? {},
+    });
+  }
 }
 
 /**
@@ -180,6 +233,7 @@ export function decryptEnvelopeWithKey(
   envelope: InlineEncryptedEnvelope,
   symmetricKey: Uint8Array,
 ): Uint8Array {
+  validateEnvelopeKeyWrap(envelope);
   const ciphertext = base64Decode(envelope.ciphertext);
   const aad = envelope.aad !== undefined ? base64Decode(envelope.aad) : undefined;
   return crypto.authDecrypt(symmetricKey, ciphertext, aad);

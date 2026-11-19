@@ -71,12 +71,26 @@ export type ReplicaOptions = {
    * that later fails. Lets the caller report partial progress immediately.
    */
   onCommit?: () => void;
+  /**
+   * `"eager"` (default) downloads each changed value while syncing. `"lazy"` syncs entry names only:
+   * no value is fetched while syncing or repairing, a value not already held is committed without
+   * content, and a read of it reports `content_missing`.
+   */
+  contentFetch?: "eager" | "lazy";
 };
 
 const DEFAULT_PAGE_LIMIT = 500;
 const DEFAULT_LEASE_TTL_MS = 120_000;
 const FETCH_CHUNK = 100;
 const REPAIR_BATCH = 100;
+/** A value that cannot be verified is fetched for repair at most this many times per `Replica`. */
+export const REPAIR_MAX_TRIES = 5;
+/**
+ * The wait before the next repair fetch of a key after its n-th failure: none
+ * after the first (the value usually only moved between the feed page and the
+ * fetch), then this base doubling per failure: 1, 2, 4 minutes.
+ */
+export const REPAIR_BACKOFF_BASE_MS = 60_000;
 const RETENTION_REVOKED = new Set(["retention-grant-revoked", "retention-grant-ancestor-revoked"]);
 /** Refusals of a pending grant that leave the active grant to serve. */
 const PENDING_REFUSALS = new Set<string>([
@@ -88,6 +102,11 @@ const PENDING_REFUSALS = new Set<string>([
 /** `"blake3-" + hex(blake3(bytes))`, the strong ETag the node attests for content. */
 export function contentHash(bytes: Uint8Array): string {
   return bytesToHex(blake3(bytes));
+}
+
+/** Retry state is per value, not per key: a rewritten key starts afresh. */
+function repairId(entry: { key: string; hash: string }): string {
+  return `${entry.hash}\u0000${entry.key}`;
 }
 
 function sameEtag(a: string, b: string): boolean {
@@ -123,6 +142,10 @@ export class Replica {
   readonly #now: () => number;
   readonly #leaseTtlMs: number;
   readonly #onCommit: (() => void) | undefined;
+  readonly #contentFetch: "eager" | "lazy";
+
+  /** Failed repair fetches of this session, by key and ETag hash. Never persisted: a new `Replica` retries afresh. */
+  readonly #repairTries = new Map<string, { tries: number; nextAttemptAt: number }>();
 
   constructor(options: ReplicaOptions) {
     this.#store = options.store;
@@ -131,6 +154,7 @@ export class Replica {
     this.#now = options.now ?? Date.now;
     this.#leaseTtlMs = options.leaseTtlMs ?? DEFAULT_LEASE_TTL_MS;
     this.#onCommit = options.onCommit;
+    this.#contentFetch = options.contentFetch ?? "eager";
   }
 
   async #state(): Promise<ReplicaState> {
@@ -499,6 +523,8 @@ export class Replica {
       return false;
     });
 
+    // Lazy: commit the names with content=0; reads of those values go to the network.
+    if (this.#contentFetch === "lazy") return { changes, blobs, fetched: 0 };
     let fetched = 0;
     for (let start = 0; start < needed.length; start += FETCH_CHUNK) {
       const chunk = needed.slice(start, start + FETCH_CHUNK);
@@ -518,7 +544,17 @@ export class Replica {
     return { changes, blobs, fetched };
   }
   async #repair(attempt: Attempt, cursor: string | null, nodeDid: string | null, coverage: Coverage, retentionGrantCid: string | null): Promise<number> {
-    const pending = await this.#store.pendingRepairs(Number.MAX_SAFE_INTEGER);
+    // Lazy: entries committed without content are not failed fetches; never download them in the background.
+    if (this.#contentFetch === "lazy") return 0;
+    const all = await this.#store.pendingRepairs(Number.MAX_SAFE_INTEGER);
+    const now = this.#now();
+    // A value that stopped being pending (verified by a feed page, rewritten, deleted) leaves the map.
+    const pendingIds = new Set(all.map((entry) => repairId(entry)));
+    for (const id of this.#repairTries.keys()) if (!pendingIds.has(id)) this.#repairTries.delete(id);
+    const pending = all.filter((entry) => {
+      const state = this.#repairTries.get(repairId(entry));
+      return state === undefined || (state.tries < REPAIR_MAX_TRIES && now >= state.nextAttemptAt);
+    });
     let repaired = 0;
     for (let start = 0; start < pending.length; start += REPAIR_BATCH) {
       const chunk = pending.slice(start, start + REPAIR_BATCH);
@@ -530,7 +566,14 @@ export class Replica {
       const changes: VerifiedChange[] = [];
       for (const entry of chunk) {
         const bytes = acceptContent(entry, contents.get(entry.key));
-        if (bytes === undefined) continue;
+        const id = repairId(entry);
+        if (bytes === undefined) {
+          const tries = (this.#repairTries.get(id)?.tries ?? 0) + 1;
+          const wait = tries === 1 ? 0 : REPAIR_BACKOFF_BASE_MS * 2 ** (tries - 2);
+          this.#repairTries.set(id, { tries, nextAttemptAt: this.#now() + wait });
+          continue;
+        }
+        this.#repairTries.delete(id);
         blobs.set(entry.hash, bytes);
         changes.push({ ...entry, content: true });
       }

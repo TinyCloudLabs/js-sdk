@@ -87,6 +87,24 @@ describe("permission prompt suppression", () => {
     ).toBe(false);
   });
 
+  test("writes the record under the key existing installs already read", () => {
+    const storage = new MemoryStorage();
+    const thirtyDaysMs = 30 * 24 * 60 * 60 * 1000;
+
+    suppressPermissionPromptFor30Days(manifest, {
+      storage,
+      now: () => 1_000,
+      pageScope: "https://example.com/app",
+    });
+
+    const key =
+      "tinycloud:permission-prompt-suppression:https%3A%2F%2Fexample.com%2Fapp:com.test.app";
+    expect(storage.getItem(key)).toBe(
+      JSON.stringify({ expiresAt: 1_000 + thirtyDaysMs }),
+    );
+    expect(storage.length).toBe(1);
+  });
+
   test("expires and removes old suppression records", () => {
     const storage = new MemoryStorage();
     const thirtyDaysMs = 30 * 24 * 60 * 60 * 1000;

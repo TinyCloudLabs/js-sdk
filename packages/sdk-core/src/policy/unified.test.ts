@@ -41,6 +41,13 @@ const kv = {
 };
 
 describe("TC-405 unified policy contracts", () => {
+  test("accepts an exact share key while retaining legacy root encryption capabilities", () => {
+    const network = "urn:tinycloud:encryption:did:pkh:eip155:1:0x1111111111111111111111111111111111111111:default";
+    for (const resource of [network, `${network}/share/first`]) {
+      expect(normalizeUnifiedPolicyCapability({ kind: "encryption", resource, action: "tinycloud.encryption/decrypt" })).toEqual({ kind: "encryption", resource, action: "tinycloud.encryption/decrypt" });
+    }
+    expect(() => normalizeUnifiedPolicyCapability({ kind: "encryption", resource: `${network}/share/`, action: "tinycloud.encryption/decrypt" })).toThrow();
+  });
   test("authors long-lived proofless roots without widening invocation TTL", async () => {
     const privateKey = new Uint8Array(32).fill(17);
     const publicKey = ed25519.getPublicKey(privateKey);

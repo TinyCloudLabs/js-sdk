@@ -192,8 +192,8 @@ test("the secrets escalation and agent approval refuse a limited permission befo
       ctx: { profile: PROFILE, host: "http://127.0.0.1:1" }, profile, requested: [limited],
       expiryOption: "1h", reason: "test", openKeyAcquisition,
     };
-    await expect(ensureDelegationAuthority({ ...shared, node, yes: true })).rejects.toMatchObject({ code: "CAVEATS_UNSUPPORTED", exitCode: 2 });
-    await expect(ensureDelegationAuthority({ ...shared, node, yes: true, persist: false })).rejects.toMatchObject({ code: "CAVEATS_UNSUPPORTED" });
+    await expect(ensureDelegationAuthority({ ...shared, node })).rejects.toMatchObject({ code: "CAVEATS_UNSUPPORTED", exitCode: 2 });
+    await expect(ensureDelegationAuthority({ ...shared, node, persist: false })).rejects.toMatchObject({ code: "CAVEATS_UNSUPPORTED" });
     await expect(acquireOpenKeyApproval(shared)).rejects.toMatchObject({ code: "CAVEATS_UNSUPPORTED", exitCode: 2 });
     expect(acquisitions).toEqual([]);
     expect(fetchSpy).not.toHaveBeenCalled();

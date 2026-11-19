@@ -3,12 +3,29 @@ import { Command } from "commander";
 import { mkdtemp, mkdir, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { MemorySenderShareRecordStorage, revokeShare, ShareNotifyError, ShareReceiveError, type PublishedShare, type SenderShareRecord, type ShareTarget } from "@tinycloud/share-sdk";
+import { MemorySenderShareRecordStorage, revokeShare, ShareNotifyError, ShareReceiveError, ShareRevocationIncompleteError, type PublishedShare, type SenderShareRecord, type ShareTarget } from "@tinycloud/share-sdk";
 import { ProfileLockTimeoutError } from "@tinycloud/operations/state";
-import { configureShareCommandServices, inspectShareInputOnce, registerShareCommand, parseShareTarget, shareCliError, shareHistoryRecoverError } from "./share.js";
+import { buildShortLink } from "@tinycloud/share-envelope/links";
+import { configureShareCommandServices as configureServices, inspectShareInputOnce, registerShareCommand, parseShareTarget, shareCliError, shareHistoryRecoverError, type ShareCommandServices } from "./share.js";
 import { ShareHistoryReadError, ShareHistoryRetryError, ShareHistoryUnreadableError, SharePublishAuthorityError } from "../share/errors.js";
 import { safeFilename, writeShareOutput } from "../share/io.js";
 import { runShareCaptured } from "./share.integration-harness.js";
+
+const SHORT_LINK = buildShortLink({
+  origin: "https://share.example", type: "share", id: "a".repeat(26), key: new Uint8Array(32).fill(7),
+  bodyCid: "bafkreibm6jg3ux5qucnwb24kinphs4b5fbc7n5t3lti2skm4du5qjn4fli",
+});
+
+/** These tests exercise the commands with short links available and invitations enabled; the gate has its own tests. */
+function configureShareCommandServices(services: ShareCommandServices): void {
+  configureServices(Object.keys(services).length === 0 ? services : {
+    links: { show: async (published) => ({ url: published.url, short: true }), unlink: async () => "deleted" },
+    shortLinkInvitations: true,
+    // Domain publishing fixtures model a node with domain-delivery support.
+    assertDomainDelivery: async () => {},
+    ...services,
+  });
+}
 
 describe("tc share command contract", () => {
   const reviewRecord: SenderShareRecord = {
@@ -21,16 +38,17 @@ describe("tc share command contract", () => {
     enforcementDelegationCid: "bafy-enforcement",
     registeredAt: new Date().toISOString(),
     expiresAt: "2030-01-01T00:00:00.000Z",
+    link: SHORT_LINK,
   };
   const reviewPublished: PublishedShare = {
-    protocol: "tinycloud-share", version: 1, url: "https://share.example/s/inline#v=2&p=sealed",
+    protocol: "tinycloud-share", version: 1, url: SHORT_LINK,
     link: { kind: "policy", cid: "bafy-review" },
     metadata: {
       protocol: "tinycloud-share", version: 1, shareId: reviewRecord.shareId, origin: "https://share.example",
-      target: { kind: "email", ...reviewRecord.target },
+      target: { kind: "emailDomain", ...reviewRecord.target },
       resource: reviewRecord.resource, actions: ["read"],
       expiresAt: reviewRecord.expiresAt, display: { filename: "note.md" },
-      recipientMatcher: { kind: "exactEmail", value: "alice@example.com" },
+      recipientMatcher: reviewRecord.recipientMatcher,
     },
   };
   test("parses every target spelling without accepting an unknown target", () => {
@@ -44,17 +62,19 @@ describe("tc share command contract", () => {
     expect(() => parseShareTarget("domain:example.123")).toThrow("recipient email domain is invalid");
     expect(() => parseShareTarget("unknown-target")).toThrow();
   });
-  test("refuses email-addressed shares from a sign-in without decrypt with a clear message and exit 5 (TC-1753)", () => {
-    const refusal = shareCliError(new SharePublishAuthorityError({ kind: "decrypt-not-held" }));
-    expect([refusal.code, refusal.exitCode]).toEqual(["PERMISSION_DENIED", 5]);
-    expect(refusal.message).toBe("this sign-in can't create email-addressed shares: it has no permission to decrypt with the account's key. Nothing was shared.");
-    expect(refusal.metadata?.hint).toBe("Share it from https://share.tinycloud.xyz while signed in as the account owner, or ask the owner to share it. A link anyone can open works from this sign-in: --to anyone.");
-  });
   test("an untrusted-origin inline link exits 5 ORIGIN_MISMATCH and a malformed link exits 2 INVALID_LINK (TC-1737)", () => {
     const mismatch = shareCliError(new ShareReceiveError("origin-mismatch", "share link origin does not match the trusted viewer origin"));
     expect([mismatch.code, mismatch.exitCode]).toEqual(["ORIGIN_MISMATCH", 5]);
     const malformed = shareCliError(new ShareReceiveError("invalid-link", "share link format is invalid"));
     expect([malformed.code, malformed.exitCode]).toEqual(["INVALID_LINK", 2]);
+  });
+  test("an incomplete addressed revocation exits 1 REVOCATION_INCOMPLETE, naming the root left and whether access ended (TC-2337)", () => {
+    const accessEnded = shareCliError(new ShareRevocationIncompleteError(["bafy-enforcement"], [{ rootCid: "bafy-owner", targetRole: "policy-authority", error: new Error("HTTP 503") }]));
+    expect([accessEnded.code, accessEnded.exitCode]).toEqual(["REVOCATION_INCOMPLETE", 1]);
+    expect(accessEnded.message).toContain("policy-authority root bafy-owner");
+    expect(accessEnded.metadata?.hint).toContain("Recipient access has already ended");
+    const nothingRevoked = shareCliError(new ShareRevocationIncompleteError([], [{ rootCid: "bafy-enforcement", targetRole: "policy-enforcement", error: new Error("HTTP 503") }]));
+    expect(nothingRevoked.metadata?.hint).toBe("Run the same command again.");
   });
   test("share list prints a status column: active, revoked, expired (TC-1754)", async () => {
     const records = new MemorySenderShareRecordStorage();
@@ -92,7 +112,7 @@ describe("tc share command contract", () => {
       profileName: "remote",
     }));
     expect(sessionAuth.code).toBe("AUTH_REQUIRED");
-    expect(sessionAuth.message).toContain("tc --profile remote auth login --device --manifest builtin:share-publishing");
+    expect(sessionAuth.message).toContain("tc --profile remote auth login --manifest builtin:share-publishing");
     expect(sessionAuth.message).toContain("tc --profile remote enable share");
     expect(sessionAuth.message).not.toContain("--method local");
 
@@ -118,7 +138,7 @@ describe("tc share command contract", () => {
     expect(openKeyScope.code).toBe("PERMISSION_DENIED");
     expect(openKeyScope.message).toContain("builtin:share-publishing scope");
     expect(openKeyScope.message).toContain("verify the session includes");
-    expect(openKeyScope.message).toContain("tc --profile publisher auth login --device --manifest builtin:share-publishing");
+    expect(openKeyScope.message).toContain("tc --profile publisher auth login --manifest builtin:share-publishing");
     // A caveated session is fixed by a fresh unrestricted approval, not by
     // logging the same profile in again for a scope it already has.
     const caveated = shareCliError(new SharePublishAuthorityError({
@@ -209,7 +229,7 @@ describe("tc share command contract", () => {
     }));
     expect(sessionTooClose.code).toBe("AUTH_REQUIRED");
     expect(sessionTooClose.message).toContain("log in again");
-    expect(sessionTooClose.message).toContain("tc --profile remote auth login --device --manifest builtin:share-publishing");
+    expect(sessionTooClose.message).toContain("tc --profile remote auth login --manifest builtin:share-publishing");
 
     const originMismatch = shareCliError(new SharePublishAuthorityError({ kind: "origin-mismatch" }));
     expect(originMismatch.code).toBe("ORIGIN_MISMATCH");
@@ -248,7 +268,7 @@ describe("tc share command contract", () => {
     registerShareCommand(program);
     const share = program.commands.find((command) => command.name() === "share");
     expect(share?.commands.map((command) => command.name())).toEqual([
-      "publish", "inspect", "versions", "receive", "list", "show", "notify", "revoke", "history",
+      "publish", "inspect", "versions", "receive", "list", "show", "notify", "revoke", "unlink", "history",
     ]);
     const history = share?.commands.find((command) => command.name() === "history");
     expect(history?.commands.map((command) => command.name())).toEqual(["recover"]);
@@ -279,7 +299,7 @@ describe("tc share command contract", () => {
     try {
       const program = new Command();
       registerShareCommand(program);
-      await program.parseAsync(["node", "tc", "share", "publish", file, "--to", "email:alice@example.com", "--notify", "--action", "edit"]);
+      await program.parseAsync(["node", "tc", "share", "publish", file, "--to", "domain:example.com", "--notify", "--notify-to", "alice@example.com", "--action", "edit"]);
     } finally {
       process.exit = originalExit;
       process.exitCode = originalExitCode;
@@ -303,16 +323,16 @@ describe("tc share command contract", () => {
       // Mirrors the real adapter: the published matcher is the target it was given.
       targetAdapter: { async publish(input) {
         const target: ShareTarget = input.target;
-        if (target.kind !== "email") throw new Error("expected an email target");
+        if (target.kind !== "emailDomain") throw new Error("expected a domain target");
         return {
-          protocol: "tinycloud-share", version: 1, url: "https://share.example/s/inline#v=2&p=sealed",
+          protocol: "tinycloud-share", version: 1, url: SHORT_LINK,
           link: { kind: "policy", cid: "bafy-share" },
           metadata: {
             protocol: "tinycloud-share", version: 1, shareId: "share-notify", origin: "https://share.example",
-            target: { kind: "email", origin: "https://node.example", nodeAudience: "did:key:z6Mknode", spaceId: "tinycloud:space" },
+            target: { kind: "emailDomain", origin: "https://node.example", nodeAudience: "did:key:z6Mknode", spaceId: "tinycloud:space" },
             resource: { kind: "exact", path: "shares/share-notify/note.md" }, actions: ["read"],
             expiresAt: "2030-01-01T00:00:00.000Z", display: { filename: "note.md" },
-            recipientMatcher: { kind: "exactEmail", value: target.address },
+            recipientMatcher: { kind: "emailDomain", value: target.domain },
           },
         } satisfies PublishedShare;
       } },
@@ -337,17 +357,17 @@ describe("tc share command contract", () => {
     try {
       const program = new Command();
       registerShareCommand(program);
-      await program.parseAsync(["node", "tc", "share", "publish", file, "--to", "email:Foo@X.com", "--notify"]);
+      await program.parseAsync(["node", "tc", "share", "publish", file, "--to", "domain:X.com", "--notify", "--notify-to", "Foo@X.com"]);
       await program.parseAsync(["node", "tc", "share", "notify", "share-notify", "--to", "FOO@X.COM"]);
     } finally {
       process.stdout.write = write;
       configureShareCommandServices({});
     }
     expect(process.exitCode ?? 0).toBe(0);
-    expect(records.get("share-notify")?.recipientMatcher).toEqual({ kind: "exactEmail", value: "foo@x.com" });
+    expect(records.get("share-notify")?.recipientMatcher).toEqual({ kind: "emailDomain", value: "x.com" });
     expect(records.get("share-notify")?.deliveredRecipients).toEqual(["foo@x.com"]);
     expect(delivered).toEqual(["foo@x.com", "foo@x.com"]);
-    expect(written.join("")).toContain("https://share.example/s/inline#v=2&p=sealed");
+    expect(written.join("")).toContain(SHORT_LINK);
     expect(written.at(-1)).toBe("already-delivered\n");
   });
 
@@ -361,7 +381,7 @@ describe("tc share command contract", () => {
       targetAdapter: { async publish(input) {
         published.push({ target: input.target, actions: input.actions, notify: input.notify });
         return {
-          protocol: "tinycloud-share", version: 1, url: "https://share.example/s/inline#v=2&p=sealed",
+          protocol: "tinycloud-share", version: 1, url: SHORT_LINK,
           link: { kind: "policy", cid: "bafy-domain" },
           metadata: {
             protocol: "tinycloud-share", version: 1, shareId: "share-domain", origin: "https://share.example",
@@ -419,7 +439,7 @@ describe("tc share command contract", () => {
     const originalExit = process.exit;
     process.exit = (() => {}) as typeof process.exit;
     try {
-      const output = await runShareCaptured(["share", "publish", file, "--to", "email:alice@example.com", "--notify"]);
+      const output = await runShareCaptured(["share", "publish", file, "--to", "domain:example.com", "--notify", "--notify-to", "alice@example.com"]);
       expect(output.exitCode).toBe(0);
       expect(output.stdout).toBe(`${reviewPublished.url}\n`);
       expect(output.stderr).toContain("published but not recorded");
@@ -448,7 +468,7 @@ describe("tc share command contract", () => {
     const originalExit = process.exit;
     process.exit = (() => {}) as typeof process.exit;
     try {
-      return await runShareCaptured(["share", "publish", file, "--to", "email:alice@example.com", "--json"]);
+      return await runShareCaptured(["share", "publish", file, "--to", "domain:example.com", "--json"]);
     } finally {
       process.exit = originalExit;
       configureShareCommandServices({});
@@ -460,8 +480,8 @@ describe("tc share command contract", () => {
     expect(stderr).toContain(reviewPublished.metadata.shareId);
     expect(stderr).toContain(reviewPublished.link.cid);
     expect(stderr).not.toContain(reviewPublished.url);
-    expect(stderr).not.toContain("p=sealed");
-    expect(stderr).not.toContain("#v=2");
+    expect(stderr).not.toContain("k=");
+    expect(stderr).not.toContain("#v=4");
   }
 
   test("publish --json reports HISTORY_UNREADABLE when the existing sender history cannot be decrypted", async () => {
@@ -512,7 +532,7 @@ describe("tc share command contract", () => {
     const originalExit = process.exit;
     process.exit = (() => {}) as typeof process.exit;
     try {
-      const output = await runShareCaptured(["share", "publish", file, "--to", "email:alice@example.com", "--json"]);
+      const output = await runShareCaptured(["share", "publish", file, "--to", "domain:example.com", "--json"]);
       expect(output.exitCode).toBe(0);
       expect(JSON.parse(output.stdout)).toMatchObject({ history: { recorded: false, reason: "HISTORY_UNAVAILABLE" } });
       expectHistoryWarningWithoutSecrets(output.stderr, "HISTORY_UNAVAILABLE");
@@ -601,7 +621,7 @@ describe("tc share command contract", () => {
     const originalExit = process.exit;
     process.exit = (() => {}) as typeof process.exit;
     try {
-      const published = await runShareCaptured(["share", "publish", file, "--to", "email:alice@example.com", "--notify"]);
+      const published = await runShareCaptured(["share", "publish", file, "--to", "domain:example.com", "--notify", "--notify-to", "alice@example.com"]);
       expect(published).toMatchObject({ exitCode: 0, stdout: `${reviewPublished.url}\n` });
       expect(published.stderr).toContain("(HISTORY_UNAVAILABLE)");
       expect(persisted?.deliveredRecipients).toBeUndefined();
@@ -634,7 +654,7 @@ describe("tc share command contract", () => {
     const originalExit = process.exit;
     process.exit = (() => {}) as typeof process.exit;
     try {
-      const output = await runShareCaptured(["share", "publish", file, "--to", "email:alice@example.com", "--notify", "--json"]);
+      const output = await runShareCaptured(["share", "publish", file, "--to", "domain:example.com", "--notify", "--notify-to", "alice@example.com", "--json"]);
       expect(output.exitCode).toBe(0);
       expect(JSON.parse(output.stdout)).toMatchObject({ history: { recorded: true }, notification: { state: "delivered" } });
       expectHistoryWarningWithoutSecrets(output.stderr, "HISTORY_UNAVAILABLE");
@@ -654,7 +674,7 @@ describe("tc share command contract", () => {
       delivery: { async deliver() { throw new ShareNotifyError("window expired", "delivery-window-expired"); } },
     });
     try {
-      const output = await runShareCaptured(["share", "publish", file, "--to", "email:alice@example.com", "--notify", "--json"]);
+      const output = await runShareCaptured(["share", "publish", file, "--to", "domain:example.com", "--notify", "--notify-to", "alice@example.com", "--json"]);
       expect(output.exitCode).toBe(9);
       expect(JSON.parse(output.stdout)).toMatchObject({
         protocol: "tinycloud-share", version: 1, link: reviewPublished.link,
@@ -821,6 +841,7 @@ describe("tc share command contract", () => {
       recipientMatcher: { kind: "exactEmail", value: "alice@example.com" },
       registeredAt: "2026-01-01T00:00:00.000Z",
       expiresAt: "2030-01-01T00:00:00.000Z",
+      link: SHORT_LINK,
     };
     configureShareCommandServices({
       records: {
@@ -857,14 +878,14 @@ describe("tc share command contract", () => {
     let reads = 0;
     let inspected = "";
     const result = await inspectShareInputOnce(undefined, true, "https://share.example", {
-      read: async () => { reads += 1; return "https://share.example/s/inline#v=2&p=sealed"; },
+      read: async () => { reads += 1; return SHORT_LINK; },
       inspect: (async (link: string) => {
         inspected = link;
         return { protocol: "tinycloud-share", version: 1 } as never;
       }) as never,
     });
     expect(reads).toBe(1);
-    expect(inspected).toBe("https://share.example/s/inline#v=2&p=sealed");
+    expect(inspected).toBe(SHORT_LINK);
     expect(result).toMatchObject({ protocol: "tinycloud-share", version: 1 });
   });
 
@@ -872,8 +893,8 @@ describe("tc share command contract", () => {
     let inspected = 0;
     const inspect = (async () => { inspected += 1; throw new ShareReceiveError("invalid-link", "share link format is invalid"); }) as never;
     for (const link of [
-      "https://share.example.evil.example/s/inline#v=2&p=AAAA",
-      "http://share.example/s/inline#v=2&p=AAAA",
+      SHORT_LINK.replace("https://share.example", "https://share.example.evil.example"),
+      SHORT_LINK.replace("https://share.example", "http://share.example"),
     ]) {
       await expect(inspectShareInputOnce(link, false, "https://share.example", { inspect })).rejects.toMatchObject({ code: "origin-mismatch" });
     }
@@ -914,7 +935,7 @@ describe("safe Share output", () => {
     for (const name of ["a\u0001.md", "a\u200b.md", "a\u202e.md", "a\u2028.md"]) {
       let caught: unknown;
       try { safeFilename(name); } catch (error) { caught = error; }
-      expect(caught).toMatchObject({ code: "UNSAFE_FILENAME", exitCode: 8, message: "filename contains control or invisible characters" });
+      expect(caught).toMatchObject({ code: "UNSAFE_FILENAME", exitCode: 2, message: "filename contains control or invisible characters" });
     }
   });
 });
@@ -933,5 +954,113 @@ describe("share history recover failures", () => {
     const unknown = shareHistoryRecoverError(new Error("Not signed in. Call signIn() first."));
     expect(unknown).toMatchObject({ code: "INVALID_ARGUMENT", exitCode: 2, message: "share operation failed" });
     expect(shareHistoryRecoverError(Object.assign(new Error("missing"), { code: "ENOENT" }))).toMatchObject({ code: "INVALID_ARGUMENT", exitCode: 2 });
+  });
+});
+
+describe("tc share with the default services", () => {
+  // No `links` and no `shortLinkInvitations`: the configuration index.ts installs. The wrapper the other tests use is not involved.
+  test("invitations fail closed with exit 4 and the final text, and a publish without --notify works", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "tc-share-default-"));
+    const file = join(directory, "note.md");
+    await writeFile(file, "# note\n");
+    const stored = new Map<string, SenderShareRecord>();
+    let publishes = 0;
+    let deliveries = 0;
+    const published: PublishedShare = {
+      protocol: "tinycloud-share", version: 1, url: SHORT_LINK, link: { kind: "policy", cid: "bafy-default" },
+      metadata: {
+        protocol: "tinycloud-share", version: 1, shareId: "share-default", origin: "https://share.example",
+        target: { kind: "emailDomain", origin: "https://node.example", nodeAudience: "did:key:z6Mknode", spaceId: "tinycloud:space" },
+        resource: { kind: "exact", path: "shares/share-default/note.md" }, actions: ["read"],
+        expiresAt: "2030-01-01T00:00:00.000Z", display: { filename: "note.md" },
+        recipientMatcher: { kind: "emailDomain", value: "example.com" },
+      },
+    };
+    stored.set("share-default", { ...reviewRecordForDefaults(), link: SHORT_LINK });
+    configureServices({
+      targetAdapter: { async publish() { publishes += 1; return published; } },
+      records: {
+        async put(record) { stored.set(record.shareId, record); },
+        async get(shareId) { return stored.get(shareId); },
+        async list() { return [...stored.values()]; },
+        async delete(shareId) { stored.delete(shareId); },
+      },
+      delivery: { async deliver() { deliveries += 1; return "delivered"; } },
+    });
+    const originalExit = process.exit;
+    const exits: (number | undefined)[] = [];
+    process.exit = ((code?: number) => { exits.push(code); }) as typeof process.exit;
+    try {
+      const notifyPublish = await runShareCaptured(["share", "publish", file, "--to", "domain:example.com", "--notify", "--notify-to", "alice@example.com"]);
+      expect(exits).toEqual([4]);
+      expect(notifyPublish.stderr).toContain("Invitation emails are not available yet. Nothing was shared and no invitation was sent.");
+      expect(publishes).toBe(0);
+
+      exits.length = 0;
+      const notify = await runShareCaptured(["share", "notify", "share-default", "--to", "alice@example.com"]);
+      expect(exits).toEqual([4]);
+      expect(notify.stderr).toContain("Invitation emails are not available yet. No invitation was sent.");
+      expect(deliveries).toBe(0);
+
+      stored.delete("share-default");
+      exits.length = 0;
+      const plain = await runShareCaptured(["share", "publish", file, "--to", "domain:example.com"]);
+      expect(exits).toEqual([]);
+      expect(plain.exitCode).toBe(0);
+      expect(plain.stdout).toBe(`${SHORT_LINK}\n`);
+      expect(publishes).toBe(1);
+      expect(stored.get("share-default")?.link).toBe(SHORT_LINK);
+    } finally {
+      process.exit = originalExit;
+      configureServices({});
+    }
+  });
+});
+
+function reviewRecordForDefaults(): SenderShareRecord {
+  return {
+    shareId: "share-default",
+    target: { origin: "https://node.example", nodeAudience: "did:key:z6Mknode", spaceId: "tinycloud:space" },
+    resource: { kind: "exact", path: "shares/share-default/note.md" },
+    actions: ["tinycloud.kv/get"],
+    recipientMatcher: { kind: "exactEmail", value: "alice@example.com" },
+    registeredAt: new Date().toISOString(),
+    expiresAt: "2030-01-01T00:00:00.000Z",
+  };
+}
+
+describe("tc share from a sign-in without the default-key decrypt", () => {
+  test("an addressed share is refused with PERMISSION_DENIED pointing at the paste sign-in, and nothing is stored or sent", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "tc-share-decrypt-"));
+    const file = join(directory, "note.md");
+    await writeFile(file, "# note\n");
+    const stored = new Map<string, SenderShareRecord>();
+    let deliveries = 0;
+    configureShareCommandServices({
+      targetAdapter: { async publish() { throw new SharePublishAuthorityError({ kind: "decrypt-not-held" }); } },
+      records: {
+        async put(record) { stored.set(record.shareId, record); },
+        async get(shareId) { return stored.get(shareId); },
+        async list() { return [...stored.values()]; },
+        async delete(shareId) { stored.delete(shareId); },
+      },
+      delivery: { async deliver() { deliveries += 1; return "delivered"; } },
+    });
+    const originalExit = process.exit;
+    const exits: (number | undefined)[] = [];
+    process.exit = ((code?: number) => { exits.push(code); }) as typeof process.exit;
+    try {
+      const result = await runShareCaptured(["share", "publish", file, "--to", "domain:example.com", "--notify", "--notify-to", "alice@example.com", "--json"]);
+      expect(exits).toEqual([5]);
+      expect(result.stderr).toContain("PERMISSION_DENIED");
+      expect(result.stderr).toContain("--paste");
+      expect(result.stdout).toBe("");
+      expect(stored.size).toBe(0);
+      expect(deliveries).toBe(0);
+    } finally {
+      process.exit = originalExit;
+      configureServices({});
+      await rm(directory, { recursive: true, force: true });
+    }
   });
 });

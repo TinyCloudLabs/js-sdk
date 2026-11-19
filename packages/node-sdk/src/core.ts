@@ -15,6 +15,7 @@
 
 // Re-export core values
 export { TinyCloud } from "@tinycloud/sdk-core";
+export { NodeNotRespondingError, NodeIdentityMismatchError, PartialNodeWriteError } from "@tinycloud/sdk-services";
 
 // Re-export core types
 export type {
@@ -120,8 +121,12 @@ export { FileSessionStorage } from "./storage/FileSessionStorage";
 export {
   NodeUserAuthorization,
   type NodeUserAuthorizationConfig,
+  type PreparedOpenKeyAuthorization,
+  type SpaceHosting,
 } from "./authorization/NodeUserAuthorization";
+export { wireOpenKeyAuthorize, type OpenKeyAuthorizeTinyCloud } from "./authorization/openKeyBridge";
 export { refuseCaveated } from "./authorization/caveatRefusal";
+export { isAppKeyHostBound } from "./authorization/appKeyHostBinding";
 
 // Sign strategies — value exports
 export {
@@ -225,13 +230,18 @@ export {
 
 // Delegation
 export { DelegatedAccess } from "./DelegatedAccess";
+export type { DelegatedSecretReadInput } from "./DelegatedAccess";
 export {
   activateCompactRuntimeDelegation,
+  activateValidatedRuntimeDelegation,
+  RuntimeDelegationRejectedError,
+  MissingSpacesError,
   serializeDelegation,
   deserializeDelegation,
 } from "./delegation";
 export type {
   CompactRuntimeDelegationInput,
+  RuntimeDelegationRejection,
   PortableDelegation,
   ValidatedRuntimeDelegation,
 } from "./delegation";

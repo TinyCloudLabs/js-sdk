@@ -44,6 +44,8 @@ export interface HookEvent {
   service: string;
   ability: string;
   path?: string;
+  /** Logical SQL/DuckDB resource; path may identify an encoded physical table. */
+  databasePath?: string;
   actor: string;
   epoch: string;
   eventIndex: number;
@@ -59,6 +61,12 @@ export interface HookStreamEvent {
 export interface SubscribeOptions {
   ttlSeconds?: number;
   signal?: AbortSignal;
+  /**
+   * Called once after the server confirms this authorized stream is ready,
+   * initially and after reconnect/renewal. Schedule durable-row reconciliation
+   * here; the callback is not awaited and readiness is never a write event.
+   */
+  onReady?: () => void;
 }
 
 export interface HooksServiceConfig extends Record<string, unknown> {

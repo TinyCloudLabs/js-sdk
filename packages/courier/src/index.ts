@@ -24,3 +24,7 @@ export * from './canonical.js';
 export * from './approval.js';
 export * from './notify.js';
 export * from './pause.js';
+export { cmdStart, discoverSessions, INVITATION_MODES } from './guided.js';
+export type { CourierSession, InvitationMode } from './guided.js';
+export { cmdInvite, cmdJoin, parseInvitation } from './invitation.js';
+export type { CourierInvitation } from './invitation.js';

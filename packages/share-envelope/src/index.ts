@@ -25,6 +25,7 @@ export {
 export { canonicalize } from "./jcs.js";
 export { canonicalEmailDomain, canonicalMailbox, isCanonicalEmailDomain, mailboxBelongsToDomain } from "./email.js";
 export {
+  POLICY_ROOT_MAX_LIFETIME_SECONDS,
   signCompactUcanAuthorization,
   verifyCompactUcanAuthorization,
   type CompactUcanAuthorization,
@@ -108,12 +109,8 @@ export {
 } from "./sign.js";
 export {
   encodeShareUrl,
-  encodeSealedInlineShareUrl,
-  parseSealedInlineShareUrl,
   parseShareUrl,
-  type SealedInlineShareUrlParts,
   type ParseShareUrlOptions,
-  type ParsedSealedInlineShareUrl,
   type ShareUrlParts,
 } from "./link.js";
 export { getBearerSessionJwk } from "./bearer.js";

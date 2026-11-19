@@ -281,6 +281,7 @@ export function createKVReplication(deps: KVReplicationDeps): KVReplicationContr
       const spec = {
         identity, space: session.space, prefix, allowSecrets: options.allowSecrets, grantPolicy,
         ...(quota ? { quota } : {}),
+        ...(options.contentFetch ? { contentFetch: options.contentFetch } : {}),
         ...(deps.stamp ? { stamp: deps.stamp } : {}),
         ...(device ? { device } : {}),
         ...(deps.fetch ? { fetch: deps.fetch } : {}),

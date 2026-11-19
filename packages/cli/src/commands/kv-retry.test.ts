@@ -13,16 +13,18 @@ import { applyNoRetryFlag, cliRetryPolicy } from "../lib/retry-policy.js";
 const BUSY = "sql_busy: begin: database is locked";
 let requests = 0;
 let script: Array<() => Response> = [];
+let nodeReply: ((input: unknown, init: RequestInit | undefined) => Promise<Response> | Response) | undefined;
 
-const fakeFetch = async () => {
+const nodeFetch = async (input: unknown, init?: RequestInit) => {
   requests++;
+  if (nodeReply) return nodeReply(input, init);
   return script[Math.min(requests, script.length) - 1]();
 };
 
 function buildNode() {
   const context = new ServiceContext({
     invoke: () => ({ Authorization: "Bearer signed" }),
-    fetch: fakeFetch as never,
+    fetch: nodeFetch as never,
     hosts: ["https://node.test"],
     session: {
       delegationHeader: { Authorization: "Bearer test" },
@@ -74,6 +76,7 @@ describe("CLI retry opt-out (probe contract)", () => {
   beforeEach(() => {
     requests = 0;
     script = [busy, value];
+    nodeReply = undefined;
     delete process.env.TINYCLOUD_RETRY;
   });
   afterEach(() => { delete process.env.TINYCLOUD_RETRY; });
@@ -97,4 +100,48 @@ describe("CLI retry opt-out (probe contract)", () => {
       expect(stdout + stderr).toContain("NODE_BUSY");
     });
   }
+});
+
+describe("CLI kv put --if-none-match with a node response", () => {
+  const stored = new Map<string, string>();
+  const headersSeen: Array<string | null> = [];
+
+  beforeEach(() => {
+    requests = 0;
+    stored.clear();
+    headersSeen.length = 0;
+    nodeReply = async (input, init) => {
+      const headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined));
+      const conditional = headers.get("if-none-match");
+      headersSeen.push(conditional);
+      const key = "feed/item";
+      if (conditional === "*" && stored.has(key)) return new Response("exists", { status: 412 });
+      stored.set(key, await new Response(init?.body).text());
+      return new Response("", { status: 200 });
+    };
+  });
+  afterEach(() => { nodeReply = undefined; });
+
+  test("creates once and refuses a second write while preserving the first value", async () => {
+    const first = await runTc(["--json", "kv", "put", "feed/item", "first", "--if-none-match", "*"]);
+    const second = await runTc(["--json", "kv", "put", "feed/item", "second", "--if-none-match", "*"]);
+
+    expect(first.exitCode).toBeUndefined();
+    expect(JSON.parse(first.stdout)).toMatchObject({ key: "feed/item", written: true });
+    expect(second.exitCode).toBe(5);
+    expect(second.stdout + second.stderr).toContain("KV_ALREADY_EXISTS");
+    expect(JSON.parse(second.stdout + second.stderr).error.message).toBe('Key "feed/item" already exists, so nothing was written.');
+    expect(requests).toBe(2);
+    expect(headersSeen).toEqual(["*", "*"]);
+    expect(stored.get("feed/item")).toBe("first");
+  });
+
+  test("refuses another option value with no node request", async () => {
+    const result = await runTc(["--json", "kv", "put", "feed/item", "first", "--if-none-match", "foo"]);
+
+    expect(result.exitCode).toBe(2);
+    expect(result.stdout + result.stderr).toContain("`--if-none-match` only accepts `'*'`.");
+    expect(requests).toBe(0);
+    expect(stored.size).toBe(0);
+  });
 });

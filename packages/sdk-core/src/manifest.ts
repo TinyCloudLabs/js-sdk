@@ -17,7 +17,8 @@
 
 import ms from "ms";
 import { ACCOUNT_MANIFEST_PERMISSIONS } from "@tinycloud/bootstrap";
-import { resolveSecretPath, SECRET_NAME_RE } from "@tinycloud/sdk-services";
+import { resolveSecretPath, SECRET_NAME_RE, parseNetworkId } from "@tinycloud/sdk-services";
+import { parseEncryptionResource } from "@tinycloud/sdk-services/encryption/resource";
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -75,6 +76,12 @@ export type ManifestSecretActions =
       description?: string;
     };
 
+export type ManifestKeyAbility = "key.create" | "decrypt" | "key.block" | "key.unblock";
+
+export type ManifestKeyDeclaration =
+  | { path: string; abilities: ManifestKeyAbility[] }
+  | { prefix: string; abilities: ManifestKeyAbility[] };
+
 /**
  * The valid values for `Manifest.defaults`.
  *
@@ -107,6 +114,8 @@ export interface Manifest {
   manifest_version?: 1;
   /** Application identifier / namespace prefix. Required. */
   app_id: string;
+  /** App key namespace when it differs from app_id. */
+  keys_app_id?: string;
   /** Display name. Required. */
   name: string;
   /** Description of what the app or delegate does. Optional. */
@@ -146,6 +155,8 @@ export interface Manifest {
    * the `secrets` space.
    */
   secrets?: Record<string, ManifestSecretActions>;
+  /** Named keys on the app's default encryption network. */
+  keys?: ManifestKeyDeclaration[];
 }
 
 /**
@@ -213,6 +224,8 @@ export interface ManifestRegistryRecord {
 }
 
 export interface ComposeManifestOptions {
+  /** Include implicit space-level capabilities reads. Default true. Explicit entries are always preserved. */
+  includeImplicitCapabilitiesRead?: boolean;
   /** Include implicit account-space registry permissions. Default true. */
   includeAccountRegistryPermissions?: boolean;
 }
@@ -482,7 +495,8 @@ export function expandPermissionEntry(entry: PermissionEntry): PermissionEntry[]
 /**
  * Expand a `tinycloud.encryption` manifest entry.
  *
- * - `path` MUST be a networkId URN (`urn:tinycloud:encryption:...`).
+ * - `path` MUST be a networkId URN (`urn:tinycloud:encryption:...`),
+ *   except the default network's `share/` decrypt prefix.
  *   The manifest prefix is always skipped — network ids are top-level
  *   owner-scoped resources, not space-scoped paths.
  * - `actions` must be `decrypt`, `network.create`, or `network.revoke`
@@ -504,6 +518,16 @@ function expandEncryptionPermissionEntry(
       `tinycloud.encryption entries require path to be a networkId URN ` +
         `(got ${JSON.stringify(entry.path)})`,
     );
+  }
+  const sharePrefix = entry.path.endsWith("/share/");
+  if (entry.path.includes("/") && !sharePrefix) {
+    throw new ManifestValidationError("named keys go in manifest.keys");
+  }
+  try {
+    const network = parseNetworkId(sharePrefix ? entry.path.slice(0, -"/share/".length) : entry.path);
+    if (sharePrefix && network.name !== "default") throw new Error("share prefix requires default network");
+  } catch {
+    throw new ManifestValidationError("tinycloud.encryption entries require a valid networkId URN");
   }
   const normalizedActions: string[] = [];
   for (const action of entry.actions) {
@@ -543,6 +567,9 @@ function expandEncryptionPermissionEntry(
       seen.add(a);
     }
   }
+  if (sharePrefix && dedupedActions.some((action) => action !== "tinycloud.encryption/decrypt")) {
+    throw new ManifestValidationError("share prefix only supports decrypt");
+  }
   // Encryption resources are network-scoped, not space-scoped. We
   // always emit the synthetic "encryption" space label so manifest
   // grouping can deal with it uniformly without collapsing the
@@ -569,6 +596,35 @@ export function expandPermissionEntries(
   entries: readonly PermissionEntry[],
 ): PermissionEntry[] {
   return entries.flatMap(expandPermissionEntry);
+}
+
+/** Expand exact named-key decrypt entries for child delegations only. */
+export function expandDelegationPermissionEntries(
+  entries: readonly PermissionEntry[],
+): PermissionEntry[] {
+  return entries.flatMap((entry) => {
+    if (entry.service !== ENCRYPTION_PERMISSION_SERVICE ||
+      typeof entry.path !== "string" || !entry.path.includes("/")) {
+      return expandPermissionEntry(entry);
+    }
+    let resource;
+    try {
+      resource = parseEncryptionResource(entry.path);
+    } catch {
+      throw new ManifestValidationError("delegation requires a canonical exact named-key resource");
+    }
+    if (resource.kind !== "key" || !Array.isArray(entry.actions) || entry.actions.length === 0 ||
+      entry.actions.some((action) => action !== "decrypt" && action !== "tinycloud.encryption/decrypt")) {
+      throw new ManifestValidationError("named-key delegation requires an exact key and decrypt only");
+    }
+    return [{
+      ...entry,
+      space: ENCRYPTION_MANIFEST_SPACE,
+      path: `${resource.networkId}/${resource.path}`,
+      actions: ["tinycloud.encryption/decrypt"],
+      skipPrefix: true,
+    }];
+  });
 }
 
 /**
@@ -688,7 +744,62 @@ export function validateManifest(input: unknown): Manifest {
   if (m.secrets !== undefined) {
     validateManifestSecrets(m.secrets);
   }
+  if (Object.prototype.hasOwnProperty.call(m, "keys_app_id") &&
+      (typeof m.keys_app_id !== "string" || !KEY_APP_ID.test(m.keys_app_id))) {
+    throw new ManifestValidationError("manifest.keys_app_id is invalid");
+  }
+  validateManifestKeys(m.keys_app_id ?? m.app_id, m.keys);
   return m;
+}
+
+const KEY_SEGMENT = "[a-z0-9][a-z0-9._-]{0,63}";
+const KEY_APP_ID = new RegExp(`^${KEY_SEGMENT}$`);
+const KEY_PATH = new RegExp(`^${KEY_SEGMENT}(?:/${KEY_SEGMENT}){2,7}$`);
+const KEY_ABILITIES: readonly string[] = ["key.create", "decrypt", "key.block", "key.unblock"];
+
+/** Match OpenKey's manifest key declaration grammar without echoing input. */
+function validateManifestKeys(appId: string, keys: unknown): void {
+  if (keys === undefined) return;
+  if (!Array.isArray(keys) || keys.length > 32) {
+    throw new ManifestValidationError("manifest.keys must contain at most 32 entries");
+  }
+  if (keys.length === 0) return;
+  if (!KEY_APP_ID.test(appId)) {
+    throw new ManifestValidationError("manifest.keys requires a valid app_id");
+  }
+  const paths = new Set<string>();
+  let prefixSeen = false;
+  for (const [index, value] of keys.entries()) {
+    const label = `manifest.keys[${index}]`;
+    if (value === null || typeof value !== "object" || Array.isArray(value)) {
+      throw new ManifestValidationError(`${label} must be an object`);
+    }
+    const entry = value as Record<string, unknown>;
+    const fields = Object.keys(entry);
+    const hasPath = Object.prototype.hasOwnProperty.call(entry, "path");
+    const hasPrefix = Object.prototype.hasOwnProperty.call(entry, "prefix");
+    if (hasPath === hasPrefix || fields.some((field) => !["path", "prefix", "abilities"].includes(field))) {
+      throw new ManifestValidationError(`${label} must have one path or prefix and abilities`);
+    }
+    if (!Array.isArray(entry.abilities) || entry.abilities.length === 0 ||
+        new Set(entry.abilities).size !== entry.abilities.length ||
+        entry.abilities.some((ability) => typeof ability !== "string" || !KEY_ABILITIES.includes(ability))) {
+      throw new ManifestValidationError(`${label}.abilities is invalid`);
+    }
+    if (hasPath) {
+      const path = entry.path;
+      if (typeof path !== "string" || path.length > 255 || !KEY_PATH.test(path) ||
+          !path.startsWith(`apps/${appId}/`) || paths.has(path)) {
+        throw new ManifestValidationError(`${label}.path is invalid`);
+      }
+      paths.add(path);
+    } else {
+      if (entry.prefix !== `apps/${appId}/` || prefixSeen) {
+        throw new ManifestValidationError(`${label}.prefix is invalid`);
+      }
+      prefixSeen = true;
+    }
+  }
 }
 
 /**
@@ -873,7 +984,7 @@ function defaultEntriesForTier(tier: ManifestDefaults): PermissionEntry[] {
  * - Per-entry expiry overrides per-delegation overrides manifest > `DEFAULT_EXPIRY`.
  * - Default entries use `skipPrefix: false` so they inherit the manifest prefix.
  */
-export function resolveManifest(input: Manifest): ResolvedCapabilities {
+export function resolveManifest(input: Manifest, options: Pick<ComposeManifestOptions, "includeImplicitCapabilitiesRead"> = {}): ResolvedCapabilities {
   const manifest = validateManifest(input);
 
   const prefix =
@@ -895,9 +1006,9 @@ export function resolveManifest(input: Manifest): ResolvedCapabilities {
     ...secretEntries,
   ];
 
-  const resources: ResourceCapability[] = withCapabilitiesReadForSpaces(
-    allEntries.flatMap((entry) => resolveEntry(entry, prefix, expiryMs, space)),
-  );
+  const entries = allEntries.flatMap((entry) => resolveEntry(entry, prefix, expiryMs, space));
+  const resources: ResourceCapability[] = options.includeImplicitCapabilitiesRead === false
+    ? dedupeResources(entries) : withCapabilitiesReadForSpaces(entries);
 
   const additionalDelegates: ResolvedDelegate[] =
     manifest.did === undefined
@@ -1275,7 +1386,7 @@ export function composeManifestRequest(
   const includeAccountRegistryPermissions =
     options.includeAccountRegistryPermissions ?? true;
   const manifests = inputs.map(validateManifest);
-  const resolved = manifests.map(resolveManifest);
+  const resolved = manifests.map((manifest) => resolveManifest(manifest, options));
   const resources = resolved.flatMap((entry) => entry.resources);
   const delegationTargets = resolved.flatMap((entry) =>
     entry.additionalDelegates.map((delegate) => ({
@@ -1292,8 +1403,8 @@ export function composeManifestRequest(
       })),
     );
   }
-  const resourcesWithImplicitCapabilities =
-    withCapabilitiesReadForSpaces(resources);
+  const resourcesWithImplicitCapabilities = options.includeImplicitCapabilitiesRead === false
+    ? dedupeResources(resources) : withCapabilitiesReadForSpaces(resources);
 
   const manifestsByAppId = new Map<string, Manifest[]>();
   for (const manifest of manifests) {

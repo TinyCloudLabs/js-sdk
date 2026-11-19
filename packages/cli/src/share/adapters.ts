@@ -1,7 +1,10 @@
 import type { IKVService } from "@tinycloud/node-sdk";
 import { kvArtifactStore } from "./artifact-store.js";
-import { createShareShortLinks, type ShareShortLinks } from "./short-links.js";
+import { createShareLinks, type ShareLinks } from "./short-links.js";
+import type { EmailInviteApprover } from "./invite-approval.js";
+import { publishEmailShareV3 } from "@tinycloud/node-sdk/share-publish";
 import { artifactSpaceNotReady, failIfSpaceNotReady } from "./space-not-ready.js";
+import { POLICY_ROOT_MAX_LIFETIME_SECONDS } from "@tinycloud/share-envelope";
 import { ShareHistoryReadError, ShareHistoryRetryError, ShareHistoryUnreadableError, SharePublishAuthorityError } from "./errors.js";
 import { storageRejection } from "../output/storage.js";
 import { chmod, link, open, readFile, stat, unlink } from "node:fs/promises";
@@ -11,7 +14,8 @@ import { ProfileManager } from "../config/profiles.js";
 import { ExitCode, PROFILE_COMMIT_LOCK_TIMEOUT_MS } from "../config/constants.js";
 import { CLIError } from "../output/errors.js";
 import { isSessionExpiredError } from "../auth/session-expired.js";
-import { writeJsonAtomic } from "@tinycloud/operations/state";
+import { recordRegistryFallbackWarning } from "../output/warnings.js";
+import { createProfileRegistryCacheStore, createProfileRegistrySequenceStore, writeJsonAtomic } from "@tinycloud/operations/state";
 import { withoutBearer } from "@tinycloud/operations/delegation-binding";
 import {
   ArtifactError,
@@ -43,8 +47,9 @@ import {
   shareDeliveryWindowExpiresAt,
   deliverCredentialInvitation,
 } from "@tinycloud/share-sdk";
-import { canonicalize, isEnvelopeDeliveryEmail } from "@tinycloud/share-envelope";
+import { isEnvelopeDeliveryEmail } from "@tinycloud/share-envelope";
 import {
+  DEFAULT_TINYCLOUD_FALLBACK_HOST,
   LocationRecordValidationError,
   LocationRegistryHttpError,
   parseSignedCompactUcanAttenuation,
@@ -52,7 +57,17 @@ import {
   revokePolicyRootV3,
   signCompactUcanAuthorization,
 } from "@tinycloud/sdk-core";
-import { extractSiweExpiration, InvalidRestoredSessionError, type TinyCloudNode } from "@tinycloud/node-sdk";
+import { extractSiweExpiration, InvalidRestoredSessionError, ManifestValidationError, type TinyCloudNode } from "@tinycloud/node-sdk";
+import {
+  AddressedShareOverLimitError,
+  assertAddressedShareFits,
+  bindPathBoundContentSource,
+  encryptAddressedShareContent,
+  planPathBoundShare,
+  type AddressedShareWrites,
+  type AddressedSharePublishOptions,
+  type SharePolicyRootRevocation,
+} from "@tinycloud/share-sdk";
 
 function requiredKvAction(meta: unknown): "tinycloud.kv/put" | "tinycloud.kv/get" | "tinycloud.kv/list" | undefined {
   if (meta === null || typeof meta !== "object" || !("requiredAction" in meta)) return undefined;
@@ -66,9 +81,58 @@ function throwKvUploadFailure(error: unknown): never {
   throw new SharePublishAuthorityError({ kind: "upload-failed" });
 }
 
+/**
+ * What an over-limit publish leaves behind, and what it removes. The size bound makes this unreachable for a correct
+ * publish; if the sealed envelope is over the limit anyway, the owner roots are revoked (the registered policy then
+ * admits no one) and a plain share's uploaded ciphertext is deleted. The registered policy record, the registry's
+ * location record (one per owner, shared by every share) and a pinned artifact version (write-once) cannot be removed.
+ * Returns a sentence for each thing that stays.
+ */
+async function removeOverLimitShare(input: {
+  readonly written: AddressedShareWrites;
+  readonly revokeRoot: (request: SharePolicyRootRevocation) => Promise<void>;
+  readonly owner: Omit<SharePolicyRootRevocation, "rootCid" | "targetRole">;
+  readonly content: { readonly kind: "object"; readonly path: string; readonly remove: () => Promise<void> } | { readonly kind: "artifact"; readonly id: string; readonly version: number };
+}): Promise<readonly string[]> {
+  const remaining: string[] = [];
+  let rootsRevoked = true;
+  for (const [rootCid, targetRole] of [[input.written.enforcementRootCid, "policy-enforcement"], [input.written.policyRootCid, "policy-authority"]] as const) {
+    try {
+      await input.revokeRoot({ ...input.owner, rootCid, targetRole });
+    } catch {
+      rootsRevoked = false;
+      remaining.push(`the ${targetRole} root ${rootCid} could not be revoked`);
+    }
+  }
+  if (rootsRevoked) remaining.push("a policy record stays on your node with both of its roots revoked, so it admits no one");
+  // The publish wrote the registry's location record before any content; the registry keeps one per owner for every share.
+  remaining.push("your node's location record stays in the TinyCloud registry, shared by all your shares");
+  if (input.content.kind === "artifact") {
+    remaining.push(`artifact ${input.content.id} version ${input.content.version} stays in your space, because artifact versions are write-once`);
+  } else {
+    try {
+      await input.content.remove();
+    } catch {
+      remaining.push(`the uploaded encrypted file ${input.content.path} could not be deleted`);
+    }
+  }
+  return remaining;
+}
+
 /** Whether the node's session (or an installed runtime grant) holds decrypt on the encryption network. */
-export function sessionHoldsEncryptionDecrypt(node: Pick<TinyCloudNode, "hasRuntimePermissions">, networkId: string): boolean {
-  return node.hasRuntimePermissions([{ service: "tinycloud.encryption", path: networkId, actions: ["tinycloud.encryption/decrypt"] }]);
+/** The SDK's own refusal to evaluate a share-key path as a manifest permission (`ManifestValidationError` prefixes its message). */
+const NAMED_KEY_PATH_MESSAGE = "Manifest validation failed: named keys go in manifest.keys";
+export function sessionHoldsEncryptionDecrypt(node: Pick<TinyCloudNode, "hasRuntimePermissions"> & Partial<Pick<TinyCloudNode, "getRuntimePermissionDelegations">>, networkId: string): boolean {
+  try {
+    return node.hasRuntimePermissions([{ service: "tinycloud.encryption", path: networkId, actions: ["tinycloud.encryption/decrypt"] }]);
+  } catch (error) {
+    // The SDK will not evaluate a named-key path as a manifest permission. An exact key is held only through a runtime grant, so ask those.
+    if (!(error instanceof ManifestValidationError) || error.message !== NAMED_KEY_PATH_MESSAGE || node.getRuntimePermissionDelegations === undefined) throw error;
+    // Only a live runtime grant that names exactly this key (not a prefix or the network) and carries decrypt counts.
+    const now = Date.now();
+    return node.getRuntimePermissionDelegations().some((delegation) => delegation.expiry.getTime() > now &&
+      (delegation.resources ?? []).some((resource) => resource.service === "encryption" && resource.path === networkId && resource.actions.includes("tinycloud.encryption/decrypt")));
+  }
 }
 const DEFAULT_SHARE_ORIGIN = "https://share.tinycloud.xyz";
 const MIN_DOMAIN_DELIVERY_VERSION = "1.17.3";
@@ -486,9 +550,16 @@ export function createShareAuthorityAdapters(input: {
   readonly publishTarget?: (value: TargetPublishInput) => Promise<TargetPublishOutcome>;
   readonly deliver?: ShareDeliveryAdapter["deliver"];
   readonly revokeDelegation?: ShareRevocationAdapter["revokeDelegation"];
-  readonly revokePolicyRoot?: ShareRevocationAdapter["revokePolicyRoot"];
-  /** Bearer-link sharing service: `undefined` host decodes the link, a host reads from that owner Node. */
-  readonly nativeSharing?: (host: string | undefined) => TinyCloudNode["sharing"];
+  /** The CLI revokes every root; it never leaves one live. */
+  readonly revokePolicyRoot?: (request: SharePolicyRootRevocation) => Promise<void>;
+  /** Receive-only sharing service for an in-process deployment or tests. */
+  readonly nativeSharing?: () => TinyCloudNode["sharing"];
+  /**
+   * A session-only profile that does not already hold decrypt for an email share asks its owner for one approval for that
+   * invitation's key instead of being refused; the approver installs the approved grant on the node and returns the key id.
+   * Without it the refusal below is unchanged.
+   */
+  readonly approveEmailInviteKey?: EmailInviteApprover;
 } = {}): {
   readonly targetAdapter: TargetPublishAdapter;
   readonly records: SenderShareRecordStorage;
@@ -498,8 +569,8 @@ export function createShareAuthorityAdapters(input: {
   readonly nativeReader: (link: string) => Promise<{ readonly bytes: Uint8Array; readonly filename: string }>;
   /** The authenticated owner's artifact storage (`tc share versions`). */
   readonly artifactStore: () => Promise<ArtifactStore>;
-  /** Short links for addressed shares (TC-1737). */
-  readonly shortLinks: ShareShortLinks;
+  /** Links for addressed shares (TC-1737). */
+  readonly links: ShareLinks;
 } {
   const origin = input.origin ?? DEFAULT_SHARE_ORIGIN;
   const fetchFn = input.fetchFn ?? globalThis.fetch;
@@ -590,8 +661,37 @@ export function createShareAuthorityAdapters(input: {
     const node = await authenticatedNode();
     await assertDomainDeliveryForOrigin((await node.activeNodeIdentity()).origin, "notify");
   };
+  const revokeRoot: (request: SharePolicyRootRevocation) => Promise<void> = input.revokePolicyRoot ?? (async (request) => {
+    const node = await authenticatedNode();
+    const activeNode = await node.activeNodeIdentity();
+    if (request.nodeOrigin !== activeNode.origin || request.nodeAudience !== activeNode.nodeDid || request.ownerDid !== node.credentialHolderDid) {
+      throw new Error("share Policy/v3 revocation is not bound to the active owner node");
+    }
+    try {
+      await revokePolicyRootV3({
+        nodeOrigin: activeNode.origin,
+        rootCid: request.rootCid,
+        targetRole: request.targetRole,
+        ownerDid: node.credentialHolderDid,
+        issuerDid: node.credentialHolderDid,
+        nodeAudience: activeNode.nodeDid,
+        reason: "share revoked",
+        sign: (digest) => node.signSessionBytes(digest),
+        spaceId: node.spaceId,
+        resourceTransport: node.resourceTransport,
+      });
+    } catch (error) {
+      // The Node answers this only for a root it already holds a signed revocation for (a retry signs a new `revokedAt`).
+      if (!(error instanceof Error && "status" in error && error.status === 409 && error.message.endsWith(" - root-revocation-irreversible"))) throw error;
+    }
+  });
   const targetAdapter: TargetPublishAdapter = { async publish(targetInput) {
     if (input.publishTarget !== undefined) return input.publishTarget(targetInput);
+    // Not available in this release (TC-2242). First statement of the real path: before authentication, profile keys,
+    // the Share config or any other request, and before anything is created. The kind lookup keeps the later
+    // domain-target code type-checked as it was.
+    const refusedKind: string | undefined = ({ emailDomain: "domain", recipientDid: "did" } as Record<string, string>)[targetInput.target.kind];
+    if (refusedKind !== undefined) throw new CLIError("UNAVAILABLE", `${refusedKind}-addressed shares are not available in this release; nothing was shared`, 4);
     // The Share config is fetched only after the local checks below, so a refusal makes no request.
     const node = await authenticatedNode();
     const session = node.restorableSession;
@@ -632,7 +732,7 @@ export function createShareAuthorityAdapters(input: {
       });
     }
     const effectiveExpiry = expiryClamped ? sessionExpiresAt! : targetInput.expiresAt;
-    const expiresAt = new Date(Math.floor(effectiveExpiry.getTime() / 1000) * 1000);
+    let expiresAt = new Date(Math.floor(effectiveExpiry.getTime() / 1000) * 1000);
     if (expiresAt.getTime() <= Date.now() + 60_000) {
       throw new SharePublishAuthorityError({
         kind: "lifetime-exceeds-session",
@@ -647,9 +747,55 @@ export function createShareAuthorityAdapters(input: {
     // An addressed share's policy ceiling includes decrypt on the owner's encryption network, which a
     // session-only sign-in (e.g. builtin:share-publishing) deliberately lacks. Refuse before any Share
     // or node request, registry write or upload. A signer-backed (local-key) owner has full authority.
-    const addressedEncryptionNetwork = targetInput.target.kind === "bearer" ? undefined : node.getEncryptionNetworkIdForSpace(ownerSpaceId);
-    if (addressedEncryptionNetwork !== undefined && node.isSessionOnly && !sessionHoldsEncryptionDecrypt(node, addressedEncryptionNetwork)) {
-      throw new SharePublishAuthorityError({ kind: "decrypt-not-held" });
+    if (targetInput.target.kind === "email" &&
+        (targetInput.credentialDescriptor === undefined || targetInput.issuerDid === undefined || targetInput.issuerKid === undefined)) {
+      throw new TypeError("email credential descriptor and issuer are required");
+    }
+    const addressedEncryptionNetwork = targetInput.target.kind === "bearer" ? undefined : targetInput.target.kind === "email"
+      ? node.getDefaultEncryptionNetworkId() : node.getEncryptionNetworkIdForSpace(ownerSpaceId);
+    // Every addressed share (DID, email, email domain) is encrypted under its own named key `share/<shareId>`; the
+    // share-sdk plan owns the path, the network check and the permissions that key needs.
+    let shareId = crypto.randomUUID().replaceAll("-", "");
+    let pathPlan = addressedEncryptionNetwork === undefined ? undefined : planPathBoundShare({ shareId, encryptionNetwork: addressedEncryptionNetwork });
+    if (pathPlan !== undefined && node.isSessionOnly && !sessionHoldsEncryptionDecrypt(node, pathPlan.keyResource)) {
+      if (input.approveEmailInviteKey === undefined || targetInput.target.kind !== "email" || activeProfileName === undefined) {
+        throw new SharePublishAuthorityError({ kind: "decrypt-not-held" });
+      }
+      // Everything that can be checked without the owner passes first, so nothing is approved that could not be published. An addressed share
+      // cannot stay readable longer than the policy root limit the SDK signs with; a longer one is refused here, never shortened.
+      const requestedSeconds = (expiresAt.getTime() - Date.now()) / 1000;
+      if (requestedSeconds > POLICY_ROOT_MAX_LIFETIME_SECONDS) {
+        throw new SharePublishAuthorityError({ kind: "invite-access-too-long", requestedDays: Math.ceil(requestedSeconds / 86_400), limitDays: POLICY_ROOT_MAX_LIFETIME_SECONDS / 86_400 });
+      }
+      if (targetInput.origin !== (await publicConfig()).shareOrigin) throw new SharePublishAuthorityError({ kind: "origin-mismatch" });
+      await node.activeNodeIdentity();
+      // The approver chooses the key: its id replaces the one generated above, which was never used.
+      const approved = await input.approveEmailInviteKey({
+        node, profile: activeProfileName, recipientEmail: targetInput.target.address, subjectName: targetInput.filename,
+        subjectKind: "file", accessExpiresAt: expiresAt,
+        // A default clamped to the session's expiry is not the user's duration: a later, longer session must not silently reuse this shorter date.
+        ...(targetInput.expiresInMs === undefined || expiryClamped ? {} : { requestedDurationMs: targetInput.expiresInMs }),
+        contentSha256: (() => {
+          // The file's identity: every file name and the hash of its bytes, so a different file never resumes this approval.
+          const hash = createHash("sha256");
+          for (const file of targetInput.files !== undefined && targetInput.files.length > 0 ? targetInput.files : [{ bytes: targetInput.source, filename: targetInput.filename }]) {
+            hash.update(file.filename).update("\0").update(createHash("sha256").update(file.bytes).digest());
+          }
+          return hash.digest("hex");
+        })(),
+      });
+      // What the owner signed as the file's access date must be the expiry this share is issued with: no silent shortening, no extension.
+      if (approved.accessExpiresAt !== expiresAt.toISOString()) {
+        // Only a resumed approval for the same relative expiry carries an earlier absolute date: the share is issued with exactly that date (never later
+        // than the one just computed, never recomputed). Any other difference is refused.
+        const approvedExpiry = new Date(approved.accessExpiresAt);
+        if (!approved.resumed || !(approvedExpiry.getTime() < expiresAt.getTime()) || approvedExpiry.getTime() <= Date.now() + 60_000) {
+          throw new SharePublishAuthorityError({ kind: "invalid-request", reason: "the approval's access date is not this share's expiry; nothing was published" });
+        }
+        expiresAt = approvedExpiry;
+      }
+      shareId = approved.shareId;
+      pathPlan = planPathBoundShare({ shareId, encryptionNetwork: addressedEncryptionNetwork! });
     }
     const config = await publicConfig();
     if (targetInput.origin !== config.shareOrigin) throw new SharePublishAuthorityError({ kind: "origin-mismatch" });
@@ -657,7 +803,6 @@ export function createShareAuthorityAdapters(input: {
     if (targetInput.notify === true && targetInput.target.kind === "emailDomain") {
       await assertDomainDeliveryForOrigin(activeNode.origin, "publish");
     }
-    const shareId = crypto.randomUUID().replaceAll("-", "");
     const files = targetInput.files === undefined || targetInput.files.length === 0
       ? [{ bytes: targetInput.source, filename: targetInput.filename, mediaType: targetInput.mediaType }]
       : targetInput.files;
@@ -786,6 +931,28 @@ export function createShareAuthorityAdapters(input: {
     } catch (error) {
       throw new SharePublishAuthorityError({ kind: "invalid-request", reason: error instanceof TypeError ? error.message : "addressed share request is invalid" });
     }
+    const deliveryEmail = prepared.target.kind === "email" && isEnvelopeDeliveryEmail(prepared.target.address) ? prepared.target.address : undefined;
+    // A link carries at most MAX_LINK_BODY_BYTES of sealed envelope. Measure the largest this share's envelope can be, from
+    // its own inputs, before the first write (registry record, upload, policy registration): a share over the limit stops here.
+    await assertAddressedShareFits({
+      shareId,
+      ownerDid: node.credentialHolderDid,
+      nodeOrigin: activeNode.origin,
+      nodeAudience: activeNode.nodeDid,
+      enforcerDid: activeNode.nodeDid,
+      spaceId: ownerSpaceId,
+      target: prepared.target,
+      resource: { kind: resourceKind },
+      storage: artifact === undefined ? { path: resourcePath } : { artifactId: artifact.id, storageName },
+      encryptionNetwork: addressedEncryptionNetwork!,
+      actions,
+      policyActions,
+      ...(deliveryEmail === undefined ? {} : { deliveryEmail }),
+      filename: targetInput.filename,
+      mediaType,
+      byteLength,
+      expiresAt,
+    });
     // Receivers find the owner's node through a registry record signed by the
     // policy owner (this session key). Publish it before storing content so a
     // registry failure cannot leave an orphaned object or an unverifiable link.
@@ -798,10 +965,14 @@ export function createShareAuthorityAdapters(input: {
         || (error instanceof LocationRegistryHttpError && error.status >= 400 && error.status < 500 && error.status !== 408 && error.status !== 429);
       throw new SharePublishAuthorityError({ kind: rejected ? "registry-rejected" : "registry-unavailable" });
     }
-    const encryptionNetwork = addressedEncryptionNetwork!;
-    const encrypted = await node.encryption.encryptToNetwork(encryptionNetwork, file.bytes, { metadata: { contentType: mediaType } });
-    if (!encrypted.ok) throw new Error("addressed source encryption was rejected");
-    const storedBytes = new TextEncoder().encode(canonicalize(encrypted.data as unknown as Record<string, unknown>));
+    const pathPlanForShare = pathPlan!;
+    const encrypted = await encryptAddressedShareContent({
+      plan: pathPlanForShare,
+      keys: node.keys,
+      plaintext: file.bytes,
+      metadata: { contentType: mediaType },
+    });
+    const storedBytes = encrypted.storedBytes;
     let artifactVersion: ArtifactVersionResult | undefined;
     if (artifact !== undefined) {
       // The manifest records the digest of these stored bytes (ciphertext) only: a hash of the plaintext would sit
@@ -831,17 +1002,14 @@ export function createShareAuthorityAdapters(input: {
         throwKvUploadFailure(stored.error);
       }
     }
-    const contentSource = {
-      shareId,
+    const contentSource = bindPathBoundContentSource({
+      plan: pathPlanForShare,
+      envelope: encrypted.envelope,
+      storedBytes,
       kvResource: `${ownerSpaceId}/kv/${resourcePath}`,
       selector: resourceKind,
-      encryptionNetwork: encrypted.data.networkId,
-      encryptedSymmetricKeyDigestHex: encrypted.data.encryptedSymmetricKeyHash,
-      keyVersion: encrypted.data.keyVersion,
-      mode: "immutable" as const,
-      initialCiphertextDigestHex: createHash("sha256").update(storedBytes).digest("hex"),
-    };
-    const published = await publishAddressedShare({
+    });
+    const addressedOptions: AddressedSharePublishOptions = {
       shareId,
       shareOrigin: config.shareOrigin,
       nodeOrigin: activeNode.origin,
@@ -861,7 +1029,7 @@ export function createShareAuthorityAdapters(input: {
       // it), so an exact-email share pins its canonical mailbox for `--notify`
       // and `tc share notify`. A mailbox the envelope's `deliveryEmail` rule
       // rejects (deployed viewers validate with it) is published unpinned.
-      ...(prepared.target.kind === "email" && isEnvelopeDeliveryEmail(prepared.target.address) ? { deliveryEmail: prepared.target.address } : {}),
+      ...(deliveryEmail === undefined ? {} : { deliveryEmail }),
       filename: targetInput.filename,
       mediaType,
       byteLength,
@@ -874,7 +1042,35 @@ export function createShareAuthorityAdapters(input: {
         sign: (bytes) => node.signSessionBytes(bytes),
         registerPolicy: (request) => node.registerPolicy(request),
       },
-    });
+    };
+    let published: PublishedShare;
+    try {
+      published = prepared.target.kind === "email"
+        ? await publishEmailShareV3({ ...addressedOptions, target: prepared.target,
+          credentialDescriptor: targetInput.credentialDescriptor,
+          issuerDid: targetInput.issuerDid!, issuerKid: targetInput.issuerKid! })
+        : await publishAddressedShare(addressedOptions);
+    } catch (error) {
+      if (!(error instanceof AddressedShareOverLimitError)) throw error;
+      // The sealed envelope was over the limit although the bound said it fit: nothing was linked. Remove what was written.
+      const remaining = await removeOverLimitShare({
+        written: error.written,
+        revokeRoot,
+        owner: { ownerDid: node.credentialHolderDid, nodeOrigin: activeNode.origin, nodeAudience: activeNode.nodeDid },
+        content: artifactVersion === undefined
+          ? {
+              kind: "object",
+              path: resourcePath,
+              remove: async () => {
+                const removed = await node.kvForSpace(ownerSpaceId).delete(resourcePath);
+                const code = !removed.ok && typeof removed.error === "object" && removed.error !== null && "code" in removed.error ? removed.error.code : undefined;
+                if (!removed.ok && code !== "KV_NOT_FOUND") throw new Error("uploaded content could not be deleted");
+              },
+            }
+          : { kind: "artifact", id: artifactVersion.artifactId, version: artifactVersion.version },
+      });
+      throw new SharePublishAuthorityError({ kind: "over-limit", remaining }, { cause: error });
+    }
     if (expiryClamped) Object.defineProperty(published.metadata, "expiryClamped", { value: true, enumerable: true });
     if (artifact !== undefined && artifactVersion !== undefined) {
       Object.defineProperty(published.metadata, "artifact", { value: { id: artifact.id, version: artifactVersion.version, mode: "pinned" as const }, enumerable: true });
@@ -898,9 +1094,6 @@ export function createShareAuthorityAdapters(input: {
     const [config, node] = await Promise.all([publicConfig(), authenticatedNode()]);
     const receipt = await node.authorizeShareDeliveryV3({
       envelope: record.deliveryMaterial.envelope as Parameters<typeof node.authorizeShareDeliveryV3>[0]["envelope"],
-      sealedEnvelope: record.deliveryMaterial.sealedEnvelope,
-      envelopeKey: record.deliveryMaterial.envelopeKey,
-      shareCid: record.deliveryMaterial.shareCid,
       resourcePath: record.resource.path,
       recipientEmail: request.recipient,
       shareUrl: record.link,
@@ -908,6 +1101,7 @@ export function createShareAuthorityAdapters(input: {
       expiresAt: authorizationExpiresAt,
       deliveryAudience: config.credentialsOrigin,
       idempotencyKey: request.idempotencyKey,
+      trustedOrigins: [config.shareOrigin],
     });
     await deliverCredentialInvitation({
       credentialsOrigin: config.credentialsOrigin,
@@ -996,31 +1190,30 @@ export function createShareAuthorityAdapters(input: {
         { status: response.status },
       );
     }),
-    revokePolicyRoot: input.revokePolicyRoot ?? (async (request) => {
-      const node = await authenticatedNode();
-      const activeNode = await node.activeNodeIdentity();
-      if (request.nodeOrigin !== activeNode.origin || request.nodeAudience !== activeNode.nodeDid || request.ownerDid !== node.credentialHolderDid) {
-        throw new Error("share Policy/v3 revocation is not bound to the active owner node");
-      }
-      await revokePolicyRootV3({
-        nodeOrigin: activeNode.origin,
-        rootCid: request.rootCid,
-        targetRole: request.targetRole,
-        ownerDid: node.credentialHolderDid,
-        issuerDid: node.credentialHolderDid,
-        nodeAudience: activeNode.nodeDid,
-        reason: "share revoked",
-        sign: (digest) => node.signSessionBytes(digest),
-      });
-    }),
+    revokePolicyRoot: revokeRoot,
   };
   const nativeReader = async (link: string): Promise<{ readonly bytes: Uint8Array; readonly filename: string }> => {
     const { TinyCloudNode } = await import("@tinycloud/node-sdk");
-    const sharing = input.nativeSharing ?? ((host: string | undefined) => new TinyCloudNode({ ...(host === undefined ? {} : { host }), autoDiscoverLocalNode: false }).sharing);
+    let sharing = input.nativeSharing;
+    if (sharing === undefined) {
+      const selectedProfile = await profileName();
+      const selected = await ProfileManager.profileExists(selectedProfile)
+        ? await ProfileManager.getProfile(selectedProfile) : undefined;
+      const registry = selected === undefined ? {} : {
+        registryCacheStore: createProfileRegistryCacheStore(selectedProfile),
+        registrySequenceStore: createProfileRegistrySequenceStore(selectedProfile),
+        tinycloudRegistryUrl: process.env.TC_REGISTRY_URL || selected.tinycloudRegistryUrl,
+      };
+      // A sender the registry verifies has no record is read from the default node (TC-3181).
+      // The SDK refuses registry outages and offline verdicts, and a registered sender uses its own record.
+      sharing = () => new TinyCloudNode({
+        ...registry, newUserHost: DEFAULT_TINYCLOUD_FALLBACK_HOST, autoDiscoverLocalNode: false,
+        onRegistryFallback: recordRegistryFallbackWarning,
+      }).sharing;
+    }
     const token = parseNativeShareUrl(link);
-    const decoded = sharing(undefined).decodeLink(token) as { readonly host?: unknown };
-    if (typeof decoded.host !== "string") throw new Error("native share has no owner Node");
-    const received = await sharing(canonicalOrigin(decoded.host, "owner node origin")).receive(token, { autoSubdelegate: false, useSessionKey: false });
+    const share = sharing();
+    const received = await share.receive(token, { autoSubdelegate: false, useSessionKey: false });
     const value = received.ok ? await received.data.kv.get<Uint8Array>("", { binary: true }) : undefined;
     // The owner Node answers a revoked link's read with `401 - delegation-revoked: <cid>`.
     const failure = !received.ok ? received.error : value !== undefined && !value.ok ? value.error : undefined;
@@ -1048,8 +1241,11 @@ export function createShareAuthorityAdapters(input: {
       list: (prefix) => mapped(() => store.list(prefix)),
     };
   };
-  const shortLinks = createShareShortLinks({
-    kvForSpace: async (spaceId) => (await authenticatedNode()).kvForSpace(spaceId),
+  const links = createShareLinks({
+    signer: async () => {
+      const node = await authenticatedNode();
+      return { did: node.credentialHolderDid, sign: (digest) => node.signSessionBytes(digest) };
+    },
     fetchFn,
   });
   return {
@@ -1060,7 +1256,7 @@ export function createShareAuthorityAdapters(input: {
     assertDomainDelivery,
     nativeReader,
     artifactStore,
-    shortLinks,
+    links,
   };
 }
 

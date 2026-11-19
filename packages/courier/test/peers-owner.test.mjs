@@ -1,6 +1,6 @@
 import { mock, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -413,24 +413,30 @@ test('COURIER_PEERS_OWNER alone sets the intake owner, and --peers-owner beats i
   }
 });
 
-test('COURIER_PEERS_OWNER alone sets the outbox serve owner, and --peers-owner beats it', { timeout: 20000 }, () => {
+test('COURIER_PEERS_OWNER alone sets the outbox serve owner, and --peers-owner beats it', { timeout: 20000 }, async () => {
   const s = scratch();
   const cli = fileURLToPath(new URL('../dist/cli.js', import.meta.url));
   const env = { ...process.env, COURIER_HOME: s.dir, COURIER_PEERS_OWNER: 'no-such-user-tc712' };
-  const serve = (extra) => spawnSync(process.execPath, [
-    cli, 'outbox', 'serve',
-    '--outbox-dir', path.join(s.dir, 'outbox'),
-    '--pipe', path.join(s.dir, 'outbox.sock'),
-    ...extra,
-  ], { env, encoding: 'utf8', timeout: 3000 });
+  const pipe = path.join(s.dir, 'outbox.sock');
+  // Runs until it exits by itself, or until its socket appears (it is serving: then it is stopped). No wall-clock kill.
+  const serve = (extra) => new Promise((resolve) => {
+    const child = spawn(process.execPath, [cli, 'outbox', 'serve', '--outbox-dir', path.join(s.dir, 'outbox'), '--pipe', pipe, ...extra],
+      { env, stdio: ['ignore', 'ignore', 'pipe'] });
+    let stderr = '';
+    child.stderr.setEncoding('utf8').on('data', (chunk) => { stderr += chunk; });
+    const listening = () => { if (fs.existsSync(pipe)) child.kill('SIGTERM'); };
+    const watcher = fs.watch(s.dir, listening);
+    listening();
+    child.on('exit', (status, signal) => { watcher.close(); resolve({ status, signal, stderr }); });
+  });
   try {
     // No flag: the env name is refused as usage before any socket opens.
-    const refused = serve([]);
+    const refused = await serve([]);
     assert.equal(refused.signal, null);
     assert.notEqual(refused.status, 0);
     assert.match(refused.stderr, /no account named "no-such-user-tc712"/);
     // With the flag: the env name is ignored, so the owner resolves to the running user and the env name is never refused.
-    const flagged = serve(['--peers-owner', String(UID)]);
+    const flagged = await serve(['--peers-owner', String(UID)]);
     assert.doesNotMatch(flagged.stderr, /no account named/);
   } finally {
     s.cleanup();

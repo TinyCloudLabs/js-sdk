@@ -1,14 +1,19 @@
+import { assertRenewalAdmissionLeadTime, recoverAdmittedRenewal } from './renewal-recovery.js';
+import { assertOwnerRenewalIdentity, signedLeaseExpiry, verifyOwnerRenewal } from './owner-renewal.js';
+import type { ApprovalRenewal } from '@tinycloud/share-envelope/links';
 import { createServer } from 'node:http';
 import { createInterface } from 'node:readline';
-import { TinyCloudNode, NodeWasmBindings } from '@tinycloud/node-sdk';
+import { TinyCloudNode, NodeWasmBindings, publicJwk } from '@tinycloud/node-sdk';
 import type { PermissionEntry } from '@tinycloud/node-sdk';
 import { cmd, tcCmd } from './program.js';
 import { CourierError } from './errors.js';
 import { AGENT_GRANT, AGENT_GRANT_EXPIRY, COURIER_SPACE, k } from './keys.js';
-import { loadGrant, saveGrant, saveProfile, type AgentKey, type OwnerGrant, type Profile } from './profile.js';
+import { loadGrant, loadKey, saveGrantIfCurrent, saveProfile, type AgentKey, type OwnerGrant, type Profile } from './profile.js';
 import { nodeOpts } from './node.js';
 import { listAll } from './store.js';
-import { assertAgentGrant, siweTimes } from './authority.js';
+import { assertAgentGrant, CLOCK_SKEW_MS, siweTimes } from './authority.js';
+import { withRefusalNotice } from './grant-refusal.js';
+import { dropAllPending, dropPendingDelegation, dropPendingForCode, newestPending, pendingForCode, savePending } from './pending.js';
 
 const PRIVATE_JWK_FIELDS = new Set(['d', 'p', 'q', 'dp', 'dq', 'qi', 'oth', 'k']);
 
@@ -26,6 +31,7 @@ export interface DelegateRequest {
 }
 
 export interface GrantPayload {
+  renewal?: ApprovalRenewal;
   delegationHeader: { Authorization: string };
   delegationCid: string;
   spaceId: string;
@@ -42,8 +48,7 @@ export interface GrantPayload {
 export function openKeyDelegateUrl(request: DelegateRequest): string {
   const params = new URLSearchParams({ did: request.did, host: request.host, reason: request.reason, expiry: request.expiry ?? AGENT_GRANT_EXPIRY, protocolVersion: '1' });
   if (request.callback) params.set('callback', request.callback);
-  const publicJwk = Object.fromEntries(Object.entries(request.publicJwk).filter(([key]) => !PRIVATE_JWK_FIELDS.has(key)));
-  params.set('jwk', Buffer.from(JSON.stringify(publicJwk)).toString('base64url'));
+  params.set('jwk', Buffer.from(JSON.stringify(publicJwk(request.publicJwk))).toString('base64url'));
   params.set('permissions', Buffer.from(JSON.stringify({ permissions: request.permissions, reason: request.reason })).toString('base64url'));
   return `${request.openkeyHost.replace(/\/$/, '')}/delegate?${params}`;
 }
@@ -101,7 +106,7 @@ async function redeemShortCode(code: string, apiHost: string): Promise<unknown> 
     throw new CourierError('code-lookup-failed', `Could not reach OpenKey at ${apiHost} to redeem the code: ${(error as Error).message}`);
   }
   if (response.status === 404) {
-    throw new CourierError('code-not-found', 'Delegation code not found or expired. Paste the full grant code shown in OpenKey instead.');
+    throw new CourierError('code-not-found', 'Delegation code not found or expired. A short code works only once: if this one was already used and the approval was saved, resume it with `' + cmd('init --resume') + '`; otherwise approve again in OpenKey to get a new code.');
   }
   if (!response.ok) throw new CourierError('code-lookup-failed', `Could not redeem the delegation code (HTTP ${response.status}).`);
   let body: unknown;
@@ -112,7 +117,7 @@ async function redeemShortCode(code: string, apiHost: string): Promise<unknown> 
 }
 
 /** Same binding checks as `tc`'s delegationFromInput: the redeemed delegation must be for this agent key. */
-function assertBoundToKey(delegation: unknown, key: Pick<AgentKey, 'did' | 'jwk'>): void {
+export function assertBoundToKey(delegation: unknown, key: Pick<AgentKey, 'did' | 'jwk'>): void {
   const value = delegation as Record<string, unknown> | null | undefined;
   const jwk = value?.jwk as Record<string, unknown> | undefined;
   if (
@@ -132,12 +137,63 @@ function assertBoundToKey(delegation: unknown, key: Pick<AgentKey, 'did' | 'jwk'
  * `XXXX-XXXX` code (redeemed at `apiHost`), JSON, or base64 JSON.
  */
 export async function grantFromInput(input: unknown, key: Pick<AgentKey, 'did' | 'jwk'>, options: { apiHost: string }): Promise<GrantPayload> {
+  const seen: { delegationCid?: string } = {};
+  try {
+    return await readGrantInput(input, key, options, seen);
+  } catch (error) {
+    // A grant refused before install (wrong key, malformed) still tells the owner which delegation it was, when one could be read.
+    throw withRefusalNotice(error, seen.delegationCid ?? cidOf(input));
+  }
+}
+
+/** The delegation CID of a grant given as an object, JSON or base64 JSON; undefined when it cannot be read. */
+function cidOf(value: unknown): string | undefined {
+  try {
+    const parsed = (typeof value === 'string' ? decodePayload(value) : value) as { delegationCid?: unknown } | null;
+    return typeof parsed?.delegationCid === 'string' && parsed.delegationCid !== '' ? parsed.delegationCid : undefined;
+  } catch { return undefined; }
+}
+
+async function readGrantInput(input: unknown, key: Pick<AgentKey, 'did' | 'jwk'>, options: { apiHost: string }, seen: { delegationCid?: string }): Promise<GrantPayload> {
   if (typeof input === 'string' && isShortCode(input)) {
+    // OpenKey consumes the code on redeem: a code redeemed by an interrupted run is finished from its local copy.
+    const saved = pendingForCode(input);
+    if (saved) {
+      seen.delegationCid = cidOf(saved);
+      try {
+        assertBoundToKey(saved, key);
+        return parseGrantPayload(saved, key);
+      } catch (error) {
+        dropPendingForCode(input);
+        throw error;
+      }
+    }
     const delegation = await redeemShortCode(input, options.apiHost);
+    seen.delegationCid = cidOf(delegation);
     assertBoundToKey(delegation, key);
-    return parseGrantPayload(delegation, key);
+    const payload = parseGrantPayload(delegation, key);
+    // Before any node call, so a kill from here on cannot lose the owner's approval.
+    const expiresAt = signedExpiry(payload.siwe);
+    if (expiresAt && expiresAt.getTime() > Date.now()) savePending(input, publicGrant(payload), expiresAt);
+    return payload;
   }
   return parseGrantPayload(input, key);
+}
+
+/** The SIWE's expiry; undefined for a message that cannot be parsed (installGrant refuses such a grant itself). */
+function signedExpiry(siwe: string): Date | undefined {
+  try { return siweTimes(siwe).expiresAt; } catch { return undefined; }
+}
+
+/** The grant fields `installGrant` uses, with the key reduced to its public members. */
+function publicGrant(payload: GrantPayload): GrantPayload {
+  const { delegationHeader, delegationCid, spaceId, address, chainId, siwe, signature, verificationMethod, jwk, spaceReady, spacePending } = payload;
+  return {
+    delegationHeader: { Authorization: delegationHeader.Authorization }, delegationCid, spaceId, address, chainId, siwe, signature, verificationMethod,
+    ...(jwk ? { jwk: Object.fromEntries(Object.entries(jwk).filter(([name]) => !PRIVATE_JWK_FIELDS.has(name))) } : {}),
+    ...(spaceReady !== undefined ? { spaceReady } : {}),
+    ...(spacePending !== undefined ? { spacePending } : {}),
+  };
 }
 
 export async function receiveGrant(request: DelegateRequest, options: { paste?: boolean } = {}): Promise<GrantPayload> {
@@ -243,9 +299,9 @@ function ownerSpaceId(payload: GrantPayload): string {
 async function restoreVerifiedGrant(profile: Profile, key: AgentKey, payload: GrantPayload): Promise<{ node: TinyCloudNode; expiresAt: Date }> {
   const times = siweTimes(payload.siwe);
   const expiresAt = times.expiresAt;
-  if (!expiresAt || expiresAt.getTime() <= Date.now()) throw new CourierError('bad-grant', 'OpenKey grant is missing a future SIWE expiry.');
+  if (!expiresAt || (!payload.renewal && expiresAt.getTime() <= Date.now())) throw new CourierError('bad-grant', 'OpenKey grant is missing a future SIWE expiry.');
   const node = new TinyCloudNode(nodeOpts(profile.host));
-  await node.restoreSession({
+  const sessionData = {
     delegationHeader: payload.delegationHeader,
     delegationCid: payload.delegationCid,
     spaceId: payload.spaceId,
@@ -257,8 +313,27 @@ async function restoreVerifiedGrant(profile: Profile, key: AgentKey, payload: Gr
     signature: payload.signature,
     expiresAt: expiresAt.toISOString(),
     tinycloudHosts: [profile.host],
-  });
-  assertAgentGrant(node.getVerifiedSessionCapabilities(), times);
+  };
+  const late = expiresAt.getTime() <= Date.now();
+  if (payload.renewal && late) {
+    await verifyOwnerRenewal(payload, `did:pkh:eip155:${payload.chainId}:${payload.address}`, payload.renewal);
+    await recoverAdmittedRenewal(node, sessionData, payload.renewal.receipt.leaseAuthorization);
+  } else await node.restoreSession(sessionData);
+  if (payload.renewal) {
+    await verifyOwnerRenewal(payload, `did:pkh:eip155:${payload.chainId}:${payload.address}`, payload.renewal);
+    const identity = await node.renewalNodeIdentity();
+    assertOwnerRenewalIdentity(payload.renewal, identity);
+    // Verified late-crash recovery already proved admission; only new admission needs scheduler headroom.
+    if (!late) assertRenewalAdmissionLeadTime(expiresAt);
+    // Admission is replayable before the first renewal stamp exists.
+    const { admitOwnerRenewalLease } = await import('@tinycloud/sdk-core/delegations/renewal');
+    if (!late) await admitOwnerRenewalLease({ host: profile.host, originalAuthorization: payload.delegationHeader.Authorization,
+      originalCid: payload.delegationCid, ownerDid: `did:pkh:eip155:${payload.chainId}:${payload.address}`,
+      agentDid: profile.courierDid, spaceId: payload.spaceId, nodeIdentity: identity,
+      leaseAuthorization: payload.renewal.receipt.leaseAuthorization, leaseCid: payload.renewal.receipt.leaseCid,
+      leaseExpiresAt: await signedLeaseExpiry(payload.renewal) });
+  }
+  assertAgentGrant(node.getVerifiedSessionCapabilities(), times, payload.renewal ? Math.min(Date.now(), expiresAt.getTime() - 1) : Date.now());
   if (node.credentialHolderDid !== profile.courierDid) {
     throw new CourierError('bad-grant', `Grant holder ${node.credentialHolderDid} does not match courier key ${profile.courierDid}.`);
   }
@@ -313,6 +388,7 @@ export function noSpaceError(profile: Profile): CourierError {
 function ownerGrant(payload: GrantPayload, expiresAt: Date): OwnerGrant {
   return {
     v: 1,
+    ...(payload.renewal ? { renewal: payload.renewal } : {}),
     delegationHeader: payload.delegationHeader,
     delegationCid: payload.delegationCid,
     spaceId: payload.spaceId,
@@ -329,6 +405,7 @@ function ownerGrant(payload: GrantPayload, expiresAt: Date): OwnerGrant {
 
 function grantPayload(grant: OwnerGrant): GrantPayload {
   return {
+    ...(grant.renewal ? { renewal: grant.renewal } : {}),
     delegationHeader: grant.delegationHeader,
     delegationCid: grant.delegationCid,
     spaceId: grant.spaceId,
@@ -346,14 +423,52 @@ function applyGrantToProfile(profile: Profile, grant: OwnerGrant): void {
   profile.grantExpiresAt = grant.expiresAt;
 }
 
-export async function installGrant(profile: Profile, key: AgentKey, payload: GrantPayload): Promise<void> {
+/** Refusals that depend only on what OpenKey signed: no retry can change them, so the saved copy is useless. */
+const CONTENT_REFUSALS = new Set(['bad-grant', 'grant-too-broad', 'grant-incomplete']);
+/** Refusals that depend on the local clock (bad-grant, expiry): a wrong clock must never cost the consumed code. */
+const CLOCK_REFUSAL = /issued in the future|future SIWE expiry/;
+
+/** Whether a failed install of a saved delegation can never succeed on a retry with a correct clock. */
+export function isClockRefusal(error: unknown): boolean {
+  return error instanceof CourierError && (error.code === 'grant-expired' || (error.code === 'bad-grant' && CLOCK_REFUSAL.test(error.message)));
+}
+
+export function isPermanentRefusal(error: unknown, siwe: string): boolean {
+  if (!(error instanceof CourierError)) return false;
+  if (isClockRefusal(error)) {
+    // Useless only once the signed expiry is past even allowing for clock skew.
+    const expiresAt = signedExpiry(siwe);
+    return !expiresAt || expiresAt.getTime() + CLOCK_SKEW_MS < Date.now();
+  }
+  return CONTENT_REFUSALS.has(error.code);
+}
+
+/** Best effort: a failed cleanup must neither replace the error the caller needs to see nor fail a saved grant. */
+function dropPendingQuietly(delegationCid: string): void {
+  try { dropPendingDelegation(delegationCid); } catch (error) {
+    console.error(`warning: could not remove the saved grant record (${(error as Error).message}); it expires on its own.`);
+  }
+}
+
+/** `spaceTimeoutMs` bounds the wait for OpenKey to host a pending agents space (default 150 s); `init --wait` passes what its --timeout leaves. */
+export async function installGrant(profile: Profile, key: AgentKey, payload: GrantPayload, options: { spaceTimeoutMs?: number } = {}): Promise<void> {
+  try {
+    await installGrantFrom(profile, key, payload, options);
+  } catch (error) {
+    if (isPermanentRefusal(error, payload.siwe)) dropPendingQuietly(payload.delegationCid);
+    throw error;
+  }
+}
+
+async function installGrantFrom(profile: Profile, key: AgentKey, payload: GrantPayload, options: { spaceTimeoutMs?: number } = {}): Promise<void> {
+
   const expectedSpace = ownerSpaceId(payload);
   if (payload.spaceId.toLowerCase() !== expectedSpace.toLowerCase()) {
     throw new CourierError('bad-grant', `Grant space ${payload.spaceId} is not ${COURIER_SPACE} for did:pkh:eip155:${payload.chainId}:${payload.address}.`);
   }
   const { node, expiresAt } = await restoreVerifiedGrant(profile, key, payload);
   const grant = ownerGrant(payload, expiresAt);
-  saveGrant(grant);
+  saveGrantIfCurrent(profile, grant);
   applyGrantToProfile(profile, grant);
   if (!(await verifySpaceReady(node))) {
     const pending = payload.spacePending === true && payload.spaceReady === null;
@@ -362,12 +477,35 @@ export async function installGrant(profile: Profile, key: AgentKey, payload: Gra
     else delete profile.spacePending;
     saveProfile(profile);
     if (!pending) throw noSpaceError(profile);
-    console.error(`OpenKey is setting up your TinyCloud "${COURIER_SPACE}" space; waiting up to 2.5 minutes…`);
-    if (!(await waitForSpaceReady(() => verifySpaceReady(node)))) throw pendingSpaceError(profile);
+    const spaceTimeoutMs = options.spaceTimeoutMs;
+    console.error(`OpenKey is setting up your TinyCloud "${COURIER_SPACE}" space; waiting up to ${spaceTimeoutMs === undefined ? '2.5 minutes' : `${Math.ceil(spaceTimeoutMs / 1000)} seconds`}…`);
+    if (!(await waitForSpaceReady(() => verifySpaceReady(node), spaceTimeoutMs === undefined ? {} : { timeoutMs: spaceTimeoutMs }))) throw pendingSpaceError(profile);
   }
   profile.status = 'ready';
   delete profile.spacePending;
   saveProfile(profile);
+  dropPendingQuietly(payload.delegationCid);
+}
+
+/**
+ * A refusal with the TC-2308 notice, except that one caused by THIS machine's clock (and not yet past its signed expiry) says to check
+ * the clock and retry: a valid delegation is nothing to revoke.
+ */
+function noticedRefusal(error: unknown, payload: Pick<GrantPayload, 'delegationCid' | 'siwe'>, retry: string): unknown {
+  if (isClockRefusal(error) && !isPermanentRefusal(error, payload.siwe)) {
+    return new CourierError((error as CourierError).code, `${(error as CourierError).message}\nThe system clock may be wrong. Nothing was installed and the grant is not something to revoke: check the system clock, then ${retry}.`);
+  }
+  return withRefusalNotice(error, payload.delegationCid);
+}
+
+/** `installGrant` for a grant that came from outside (an approval result, a code, a file): a refusal carries the TC-2308 notice. */
+export async function installRefusing(profile: Profile, key: AgentKey, payload: GrantPayload, options: { spaceTimeoutMs?: number; viaCode?: boolean } = {}): Promise<void> {
+  try {
+    await installGrant(profile, key, payload, options);
+  } catch (error) {
+    // `init --resume` finishes a redeemed XXXX-XXXX code from its saved copy; a file or JSON grant is simply given again.
+    throw noticedRefusal(error, payload, options.viaCode ? `run \`${cmd('init --resume')}\` (or give the same code again)` : `run \`${cmd('init')}\` with the same grant again`);
+  }
 }
 
 export async function resumeGrant(profile: Profile, key: AgentKey): Promise<void> {
@@ -380,7 +518,8 @@ export async function resumeGrant(profile: Profile, key: AgentKey): Promise<void
   if (payload.spaceId.toLowerCase() !== ownerSpaceId(payload).toLowerCase()) {
     throw new CourierError('bad-grant', `Saved grant space is not ${COURIER_SPACE}.`);
   }
-  const { node } = await restoreVerifiedGrant(profile, key, payload);
+  let node: TinyCloudNode;
+  try { ({ node } = await restoreVerifiedGrant(profile, key, payload)); } catch (error) { throw noticedRefusal(error, { delegationCid: grant.delegationCid, siwe: grant.siwe }, `run \`${cmd('init --resume')}\` again`); }
   const ready = profile.spacePending
     ? await waitForSpaceReady(() => verifySpaceReady(node), { timeoutMs: 60_000 })
     : await verifySpaceReady(node);
@@ -393,6 +532,35 @@ export async function resumeGrant(profile: Profile, key: AgentKey): Promise<void
   delete profile.spacePending;
   applyGrantToProfile(profile, grant);
   saveProfile(profile);
+  dropPendingQuietly(grant.delegationCid);
+}
+
+/**
+ * `init --resume` for a profile left `awaiting-grant` by a kill: finish from the redeemed delegation saved
+ * before the install, else from the grant file the install had already written. False when there is neither.
+ */
+export async function resumeAwaitingGrant(profile: Profile): Promise<boolean> {
+  if (!newestPending() && !loadGrant()) return false;
+  const key = loadKey();
+  const saved = newestPending();
+  if (saved) {
+    let payload: GrantPayload | undefined;
+    try {
+      assertBoundToKey(saved, key);
+      payload = parseGrantPayload(saved, key);
+    } catch (error) {
+      // Bound to a key this profile does not hold: never installed, and useless to keep.
+      if (!(error instanceof CourierError) || error.code !== 'bad-grant') throw error;
+      dropAllPending();
+    }
+    if (payload) {
+      await installRefusing(profile, key, payload, { viaCode: true });
+      return true;
+    }
+  }
+  if (!loadGrant()) return false;
+  await resumeGrant(profile, key);
+  return true;
 }
 
 export function courierGrantRequest(profile: Profile, key: AgentKey, expiry: string, options: { openkeyApiHost?: string } = {}): DelegateRequest {

@@ -31,6 +31,9 @@ mock.module("../config/profiles.js", () => ({
       profile: opts.profile ?? "cli-test",
       host: "https://host",
     }),
+    profileExists: async () => false,
+    ensureConfigDir: async () => undefined,
+    setKey: async () => undefined,
     getProfile: async () => ({ ...existingProfile }),
     setProfile: async (name: string, data: Record<string, unknown>) => {
       recorded.setProfiles.push({ name, data });
@@ -102,6 +105,40 @@ async function runProfile(args: string[]): Promise<void> {
   registerProfileCommand(program);
   await program.parseAsync(["node", "tc", "profile", ...args], { from: "node" });
 }
+
+describe("tc profile create registry URL", () => {
+  beforeEach(resetState);
+
+  test("stores the registry URL separately from the host fallback hint", async () => {
+    await runProfile([
+      "create",
+      "local-secrets-demo",
+      "--posture",
+      "delegate-session",
+      "--operator",
+      "agent",
+      "--host",
+      "https://stale-hint.test",
+      "--registry-url",
+      "https://current-registry.test",
+    ]);
+
+    expect(recorded.errors).toEqual([]);
+    expect(recorded.setProfiles).toEqual([
+      {
+        name: "local-secrets-demo",
+        data: expect.objectContaining({
+          did: "did:key:zgen",
+          sessionDid: "did:key:zgen",
+          host: "https://stale-hint.test",
+          tinycloudRegistryUrl: "https://current-registry.test",
+          posture: "delegate-session",
+          operatorType: "agent",
+        }),
+      },
+    ]);
+  });
+});
 
 describe("tc profile set-default-space", () => {
   beforeEach(resetState);

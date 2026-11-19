@@ -59,7 +59,7 @@ export interface ReceiverCredentialCustody {
 
 /** Holder key the witness verifies against. Sent on the wire with the holder signature. */
 export interface HolderSignatureKey {
-  readonly alg: "EdDSA";
+  readonly alg: "EdDSA" | "EIP191";
   readonly kid: string;
 }
 
@@ -200,6 +200,10 @@ export interface CredentialAcquisitionTransport {
   submitStep(requestId: string, verifier: string, stepId: string, proof: PrimitiveStepResult, signal?: AbortSignal): Promise<void>;
   holderBinding(requestId: string, verifier: string, signal?: AbortSignal): Promise<CredentialHolderBinding>;
   submitHolderSignature(requestId: string, verifier: string, signature: string, signal?: AbortSignal, key?: HolderSignatureKey): Promise<void>;
+  /** The challenge nonce this transport stored for the request (from R3 or R2). Held acquisition compares the signed binding with it. */
+  challengeNonce?(requestId: string): string | undefined;
+  /** The holder binding this transport fetched and validated for the request. Held acquisition keeps its `jti`. */
+  signedBinding?(requestId: string): CredentialHolderBinding | undefined;
   issue(requestId: string, verifier: string, signal?: AbortSignal): Promise<void>;
   result(requestId: string, verifier: string, signal?: AbortSignal): Promise<IssuedCredentialEnvelope>;
   issuerMetadata(signal?: AbortSignal): Promise<CredentialIssuerMetadata>;

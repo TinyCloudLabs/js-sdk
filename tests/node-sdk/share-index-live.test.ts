@@ -4,7 +4,7 @@ import { Wallet } from "ethers";
 import { PrivateKeySigner, TinyCloudNode } from "@tinycloud/node-sdk";
 import { parseSignedSiweCacao } from "@tinycloud/sdk-core";
 import { ed25519 } from "@noble/curves/ed25519";
-import { canonicalize, didKeyFromEd25519PublicKey, parseSealedInlineShareUrl } from "@tinycloud/share-envelope";
+import { canonicalize, didKeyFromEd25519PublicKey } from "@tinycloud/share-envelope";
 import {
   SHARE_PUBLISH_RESULT_VERSION,
   createNativeShare,
@@ -29,7 +29,6 @@ import {
   deriveAgentKeyMaterial,
   project,
   sealAgentRecord,
-  shareLinkForRecord,
   verifyAgentRecordChain,
   type SenderShareRecord,
   type ShareIndexBackend,
@@ -901,10 +900,9 @@ describe("share index on a live node (DESIGN-C §10)", () => {
     // The v3 record's chain judged directly, apart from the store.
     const v3Verdict = await verifyAgentRecordChain(stored, { accountOwnerDid: owner.ownerDid, agentDid, now: new Date(), parseSiweCacao: parseSignedSiweCacao })
       .then((verdict) => (verdict.ok ? verdict.state : `rejected: ${verdict.detail}`));
-    // Read back by the agent with its share origin: the envelope and the `/s/inline` link are rebuilt exactly.
-    const readBack = await new AgentShareRecordStore({ backend: agentBackend, agentDid, agentKey: await agentKeyFor(agentNode, agentDid), shareOrigin: SHARE_ORIGIN }).get(v3.shareId);
-    const rebuiltLink = await shareLinkForRecord(stored, SHARE_ORIGIN);
-    const parsedLink = await parseSealedInlineShareUrl(rebuiltLink!, { expectedOrigin: SHARE_ORIGIN });
+    // Read back by the agent: the envelope is reopened from the sealed material; the full link is not kept in the index.
+    const readBack = await new AgentShareRecordStore({ backend: agentBackend, agentDid, agentKey: await agentKeyFor(agentNode, agentDid) }).get(v3.shareId);
+    const { link: _fullLink, ...v3WithoutLink } = v3;
     report.h = {
       recordsSpaceIsApplications: appsId.endsWith(":applications"),
       contentSpaceIsDefault: owner.spaceId.endsWith(":default"),
@@ -924,21 +922,20 @@ describe("share index on a live node (DESIGN-C §10)", () => {
         storedRecord: storedBytes.v3,
         headroom: 32 * 1024 - storedBytes.v3!,
       },
-      v3ReadBackWhole: canonicalize(readBack) === canonicalize(v3),
-      v3LinkRebuilt: rebuiltLink === v3.link && parsedLink.ciphertextCid === v3.deliveryMaterial?.shareCid,
+      v3ReadBackWhole: canonicalize(readBack) === canonicalize(v3WithoutLink),
+      v3FullLinkNotStored: stored.link === undefined && readBack?.link === undefined,
     };
     console.log(`SHARE-INDEX-H ${JSON.stringify(report.h)}`);
     leakChecked.push({ label: "h", index });
-    // The cap ruling: the stored v3 record keeps each blob once (no envelope, no inline link), fits under
+    // The cap ruling: the stored v3 record keeps each blob once (no envelope, no full link), fits under
     // MAX_AGENT_RECORD_BYTES and is admitted proven.
     expect(puts).toEqual({ bearer: "OK", v3: "OK", foreign: "OK", backdated: "OK" });
     expect(storedBytes.v3).toBeLessThanOrEqual(32 * 1024);
     expect(v3Verdict).toBe("proven");
     expect(records.map(([, record]) => proofState(record))).toEqual(["proven", "proven", null, null]);
     expect(pass.rejected).toEqual({ schema: 2 });
-    expect(readBack).toEqual(v3);
-    expect(rebuiltLink).toBe(v3.link!);
-    expect(parsedLink.ciphertextCid).toBe(v3.deliveryMaterial!.shareCid);
+    expect(readBack).toEqual(v3WithoutLink);
+    expect(stored.link).toBeUndefined();
   }, 180_000);
 
   test("e: no link, token, delivery material or full email in any decrypted index (after a, b, c, h)", async () => {

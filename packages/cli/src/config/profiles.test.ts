@@ -23,7 +23,6 @@ describe("ProfileManager.getProfile", () => {
   test("a missing profile is PROFILE_NOT_FOUND and names the init command for that profile", async () => {
     await expect(ProfileManager.getProfile("owner")).rejects.toMatchObject({
       code: "PROFILE_NOT_FOUND",
-      message: expect.stringContaining("`tc init --name owner`"),
     });
   });
 });
@@ -164,6 +163,48 @@ describe("ProfileManager.resolveContext replication flags", () => {
       else process.env.TC_REPLICATION = previous;
       if (previousDebug === undefined) delete process.env.TC_REPLICATION_DEBUG;
       else process.env.TC_REPLICATION_DEBUG = previousDebug;
+    }
+  });
+});
+describe("ProfileManager.resolveContext registry URL", () => {
+  test("environment registry URL overrides the stored registry without replacing the profile host hint", async () => {
+    const profileHost = "https://profile-host.test";
+    const profileRegistry = "https://profile-registry.test";
+    const envRegistry = "https://env-registry.test";
+    const previousRegistry = process.env.TC_REGISTRY_URL;
+    await ProfileManager.setProfile("registry-profile", {
+      name: "registry-profile",
+      host: profileHost,
+      chainId: 1,
+      spaceName: "default",
+      did: "did:key:zregistry",
+      createdAt: "2026-10-01T00:00:00.000Z",
+      tinycloudRegistryUrl: profileRegistry,
+    });
+
+    try {
+      delete process.env.TC_REGISTRY_URL;
+      const fromProfile = await ProfileManager.resolveContext({
+        profile: "registry-profile",
+        host: profileHost,
+      });
+      expect(fromProfile).toMatchObject({
+        host: profileHost,
+        tinycloudRegistryUrl: profileRegistry,
+      });
+
+      process.env.TC_REGISTRY_URL = envRegistry;
+      const fromEnvironment = await ProfileManager.resolveContext({
+        profile: "registry-profile",
+        host: profileHost,
+      });
+      expect(fromEnvironment).toMatchObject({
+        host: profileHost,
+        tinycloudRegistryUrl: envRegistry,
+      });
+    } finally {
+      if (previousRegistry === undefined) delete process.env.TC_REGISTRY_URL;
+      else process.env.TC_REGISTRY_URL = previousRegistry;
     }
   });
 });

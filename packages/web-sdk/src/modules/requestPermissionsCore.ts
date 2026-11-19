@@ -11,7 +11,7 @@
  * @packageDocumentation
  */
 
-import type { Manifest, PermissionEntry } from "@tinycloud/sdk-core";
+import { type Manifest, type PermissionEntry } from "@tinycloud/sdk-core";
 import type { PortableDelegation } from "@tinycloud/node-sdk/core";
 
 export interface RequestPermissionsCoreDeps {

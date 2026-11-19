@@ -121,7 +121,9 @@ export type ReplicaGateReason =
   /** Browser only: the `localStorage` logout marker is set. */
   | "logout_pending"
   /** The gate store itself could not be read; fail closed. */
-  | "gate_unavailable";
+  | "gate_unavailable"
+  /** Browser: replication is configured but no wallet provider can prove the connected account. */
+  | "wallet_provider_required";
 
 /** Shape of every gate refusal error: `Error & { code: "REPLICA_GATED"; gate }`. */
 export interface ReplicaGatedError extends Error {
@@ -382,6 +384,52 @@ export interface ReplicaLifecycleGate {
   erasePending(o: { signal: AbortSignal }): Promise<ReplicaEraseReport>;
   /** Outstanding intents; non-empty means status `purgePending: true`. */
   pendingPurge(): Promise<ReplicaPurgeIntent[]>;
+  /**
+   * Browser only. Under the gate lock, erases pending intents and deletes the whole origin
+   * database. Deletes only when nothing live is at stake: the gate is denied (null principal),
+   * the gate is behind the persisted deny tombstone, or the logout marker is set with a tombstone.
+   * A live or other-account gate is `refused` and left untouched. On a failed delete it sets the
+   * logout marker (when a tombstone exists) so `recover` finishes the erase on the next load.
+   * Never clears the deny tombstone.
+   */
+  eraseLocalCopy?(o: { signal: AbortSignal }): Promise<ReplicaLocalEraseOutcome>;
+}
+
+/** Result of {@link ReplicaLifecycleGate.eraseLocalCopy}. */
+export type ReplicaLocalEraseOutcome =
+  /** The database is gone and the logout marker (if any) is cleared. */
+  | { status: "erased" }
+  /** Delete blocked or storage error; a retry can succeed. `marker` is true when the next-load marker is set. */
+  | { status: "failed"; code: string; marker: boolean }
+  /** The gate does not authorize destruction; nothing was deleted. A retry cannot succeed until the gate is denied. */
+  | { status: "refused"; code: string };
+
+/** What triggered a local-copy erase. */
+export type ReplicaPurgeTrigger = "sign_out" | "account_switch" | "purge_local_copy";
+
+/** Result of `replication.purgeLocalCopy()`. `retryNow` means a short bounded retry is meaningful. */
+export type ReplicaPurgeLocalCopyResult = { ok: true } | { ok: false; retryNow: boolean };
+
+/**
+ * Emitted (`on("replica.purge.failed", …)`) when the local copy could not be erased after the
+ * bounded retries. The SDK finishes the erase on the next load through the logout marker.
+ */
+export interface ReplicaPurgeFailedEvent {
+  type: "replica.purge.failed";
+  trigger: ReplicaPurgeTrigger;
+  /** Typed reason: `logout_pending` (marker set, erase retried on next load) or `gate_unavailable`. */
+  reason: ReplicaGateReason;
+  /** Storage error code of the last attempt. */
+  code: string;
+  /** True when a short bounded retry is meaningful (delete blocked or storage error). */
+  retryNow: boolean;
+}
+
+/** Rejection of `signOut()` when the deny itself was `unguarded` and the erase did not complete. */
+export interface ReplicaPurgeError extends Error {
+  code: "REPLICA_PURGE_FAILED";
+  reason: ReplicaGateReason;
+  retryNow: boolean;
 }
 
 /** Node/CLI profile-local fencing token, not a secret capability; the profile lock remains authoritative. */

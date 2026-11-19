@@ -1,5 +1,1437 @@
 # @tinycloud/courier
 
+## 0.7.0-beta.10
+
+### Patch Changes
+
+- Updated dependencies [313b056]
+  - @tinycloud/share-sdk@1.6.0-beta.1
+  - @tinycloud/node-sdk@3.13.0-beta.9
+  - @tinycloud/sdk-core@3.13.0-beta.9
+
+## 0.7.0-beta.9
+
+### Minor Changes
+
+- b228ca4: Read exact messages with `read <thread> --peer <peer> --message <id>` (repeat up to 20 ids), without downloading the thread archive. Each side reports found, missing or incomplete outcomes; message reads use a 64 KiB per-value limit and a shared 10-second data-read deadline. Receipt-update warnings use fixed text.
+
+  Details: TC-2749
+
+## 0.7.0-beta.8
+
+### Minor Changes
+
+- 0576031: The CLI, the hosted MCP server and Courier now use `https://node.tinycloud.xyz` as the default TinyCloud node, in place of `https://tee.node.tinycloud.xyz`. Profiles that already store a host keep it. To keep using `https://tee.node.tinycloud.xyz`, set `--host` or `TC_HOST` for the CLI and the MCP server, or `COURIER_HOST` for Courier.
+
+  Details: TC-2923
+
+### Patch Changes
+
+- Updated dependencies [7399b14]
+  - @tinycloud/sdk-core@3.13.0-beta.8
+  - @tinycloud/node-sdk@3.13.0-beta.8
+
+## 0.6.1-beta.7
+
+### Patch Changes
+
+- Updated dependencies [9f3ca26]
+- Updated dependencies [9f3ca26]
+  - @tinycloud/node-sdk@3.13.0-beta.7
+
+## 0.6.1-beta.6
+
+### Patch Changes
+
+- @tinycloud/node-sdk@3.13.0-beta.6
+- @tinycloud/sdk-core@3.13.0-beta.6
+
+## 0.6.1-beta.5
+
+### Patch Changes
+
+- Updated dependencies [c7741ab]
+  - @tinycloud/sdk-core@3.13.0-beta.5
+  - @tinycloud/node-sdk@3.13.0-beta.5
+
+## 0.6.1-beta.4
+
+### Patch Changes
+
+- Updated dependencies [1f961e4]
+  - @tinycloud/sdk-core@3.13.0-beta.4
+  - @tinycloud/node-sdk@3.13.0-beta.4
+
+## 0.6.1-beta.3
+
+### Patch Changes
+
+- Updated dependencies [400cf7f]
+  - @tinycloud/sdk-core@3.13.0-beta.3
+  - @tinycloud/node-sdk@3.13.0-beta.3
+
+## 0.6.1-beta.2
+
+### Patch Changes
+
+- Updated dependencies [b758e71]
+  - @tinycloud/node-sdk@3.13.0-beta.2
+
+## 0.6.1-beta.1
+
+### Patch Changes
+
+- Updated dependencies [2395340]
+  - @tinycloud/sdk-core@3.13.0-beta.1
+  - @tinycloud/node-sdk@3.13.0-beta.1
+  - @tinycloud/share-sdk@1.6.0-beta.0
+
+## 0.6.1-beta.0
+
+### Patch Changes
+
+- Updated dependencies [634753d]
+  - @tinycloud/node-sdk@3.13.0-beta.0
+
+## 0.6.0
+
+### Minor Changes
+
+- feb9f50: `courier watch --wake exec --unguarded` can now wake an agent CLI that has no guarded adapter (`codex`, `opencode`, `omp`, `gemini`, `cursor-agent`, `amp`, `aider`, `goose`) when the owner also passes `--agent-cli`. Without that flag such a command is refused as before, and the refusal names the flag. `claude` and `paseo` stay refused under `exec` with or without it: use `--wake claude` or `--wake paseo`, which install the guard.
+
+  `--agent-cli` installs no guard. Nothing checks what the woken agent does with a peer's message, and it can read whatever the watcher's OS user can read. Run such a watcher under an OS account that holds only what the agent may use.
+
+  `courier watch --wake exec --home-file <path>` (repeatable, relative to your HOME) copies an agent CLI's model-login file into the woken agent's clean HOME on every wake, mode 0600. Only the known login file of a supported agent CLI is accepted, and a symbolic link is refused, never followed; the `--home-file` entry below lists the files. `--wake claude` takes no `--home-file`: it copies the Claude login itself.
+
+  Details: TC-712
+
+- e1ebdc4: Validate and persist owner-signed renewal lease approval proofs and restore admitted agent-grant renewals, including retrying a saved installation after the original grant expires. Renewal request emission requires the coordinated OpenKey producer rollout.
+
+  Details: TC-2904
+
+- 88a5f28: Courier's grant check is stricter. It is exact: the base grant is exactly `AGENT_GRANT`, and any `share/` entry (one exact key, the prefix, several keys, half a pair) is refused at grant load as `grant-too-broad`. The standing base grant never carries a share key.
+
+  `@tinycloud/node-sdk` adds `@tinycloud/node-sdk/share-publish` (`publishEmailShareV3`, moved unchanged from the CLI), `emailProofDescriptor` in `@tinycloud/node-sdk/credentials`, and `resumeAgentShareReceive` in `@tinycloud/node-sdk/share-receive` for a two-step receive across processes. The CLI imports `publishEmailShareV3` from node-sdk.
+
+  The node side (the Policy/v3 named-key binding, #481, and the refusal of unbound registrations, #485) is in production node 1.26.8.
+
+  Details: TC-2234
+
+- e3e4bd7: Internal changes to Courier and `@tinycloud/share-envelope`. Commands and behavior are unchanged. `@tinycloud/share-envelope/links` adds `buildShareInvitationApprovalSpec`, the `ShareInvitationApprovalContext` type, and an optional `context` field on the approval request.
+
+  Details: TC-2234
+
+### Patch Changes
+
+- d8f2d10: Courier no longer renews a peer's access for longer than that peer accepts. Peers on Courier 0.5.x refuse anything over 7 days, so a 30-day renewal cut them off. The renewal now lasts at most the lifetime of the access the peer gave you (7 days when that is 7 days or unknown, up to 30 days when it is longer), and never past your own approval. `pair renew` and `courier status` show "peer limit" when this shortens a renewal. Nothing about pairing or stored data changes.
+
+  Details: TC-3159
+
+- ee93ac3: The agent's clean HOME is checked for links the agent planted there between wakes. Before Courier makes, removes or writes any path in it (`.claude`, `.config`, a `--home-file` directory such as `.codex`, `.gitconfig`, the agent identity files), each component is checked without following links: a link found is removed (the link only, never what it points at) and the wake logs `removed a symbolic link the agent left in its clean HOME: <path>`. A clean HOME that is itself a link is refused. Before, a planted link such as `.config -> ~/somewhere` could make the next wake delete or overwrite files outside the clean HOME.
+
+  The Claude login that a `--wake claude` wake copies automatically (`.claude/.credentials.json`) is now read the way `--home-file` sources are: a link on the file or above it fails the wake closed instead of being followed; a missing file is still skipped.
+
+  Details: TC-3014
+
+- 33a2fde: Courier now picks up renewed access from paired peers before reading their messages or subscribing to them, while the current access is still valid.
+
+  Details: TC-2746
+
+- f956a87: `courier watch --home-file` now accepts only the known model-login file of a supported agent CLI, instead of refusing a short denylist: `.codex/auth.json` (codex), `.gemini/oauth_creds.json` (gemini), `.local/share/opencode/auth.json` (opencode), `.local/share/amp/secrets.json` (amp), `.config/goose/secrets.yaml` (goose) and `.aider/oauth-keys.env` (aider). `omp` and `cursor-agent` accept no file (omp keeps its login in a database with every account; Cursor does not publish where its credentials are): pass their login with `--env-pass` or run them under their own account. When `--exec` starts one of these CLIs only that CLI's file is accepted; for any other command any listed file is. Settings files, owner state (`.omp`, `.tinycloud`, `.gnupg`, `.docker`, `.kube`, `.config/gcloud`, `.paseo`) and every other file are refused with a clear message, when the watcher starts and again on every wake. `--wake claude` takes no `--home-file`.
+
+  A `--home-file` source that is a symbolic link, or that sits behind one (a linked `.codex` directory, for example), is refused and its target is never copied; the check runs on every wake and the file is opened without following links. The Claude login that a `--wake claude` wake copies automatically (`.claude/.credentials.json`) is read the same way: a link on the file or above it fails the wake closed instead of being followed; a missing file is still skipped.
+
+  The README now warns plainly that `--unguarded --agent-cli` puts outside message content into an agent that can act, and that it should only be used with an agent holding no credentials beyond its model login, in a sandbox.
+
+  Details: TC-3014
+
+- f6e60a8: `courier watch` makes far fewer node calls while idle:
+  - It lists every peer in full every 5 minutes while its hook subscriptions are healthy, instead of every minute. Hook events still deliver at once. A failed or ended subscription catches up at once and brings back the full listing every `--poll` seconds until a new stream is healthy. A peer whose sync did not finish is listed again at the next minute.
+  - A catch-up lists the pause markers once for all peers, reads receipts only when the listing holds a message they are not known to cover, and lists known threads only for a peer's pause notice.
+  - The scheduled renewal and authority check runs every 5 minutes, so detecting an idle revocation and cleaning up sibling grants takes up to 5 minutes. Enforcement is unchanged: the node refuses revoked grants. A hook event for a peer's renewal marker or a refusal checks at once, after re-reading the marker; a refused sync is retried only under a different grant.
+
+  Watcher state (`watch.json`, pause markers, wake claims) now lives under `me/state/agents/<did:key id>/` for each Courier agent, so two agents of one owner can run in one space without a state conflict. `courier pause` and `courier resume` use the same keys. The old shared `me/state/` records for an agent's own peers are copied on its first start and left in place. `courier pause` and `courier resume` read a thread's shared pause marker too, so a thread paused before the upgrade stays paused until a human resumes it. A second watcher of the same agent no longer exits with `state-conflict`, which `Restart=always` turned into a restart and catch-up loop. It stands by instead, checks `watch.json` once per window (5 to 30 minutes), and takes over after a quiet window. `--once` still exits with `state-conflict`.
+
+  `courier intake` doubles its wait after a cycle that queued nothing, up to 5 minutes or `--interval` if that is longer, and returns to `--interval` on the next queued message. `courier read` caches create-only messages and meta in `<COURIER_HOME>/read-cache/<agent>/`, so reading an unchanged thread again fetches only its listings and tasks. Messages are create-only; a later overwrite of the same key isn't shown. The cache is owner-only, bounded at 64 MiB and 7 days per agent, and deleted on `revoke`, a refusal, an owner revocation and a key rotation.
+
+  Importing from a peer, waking an agent for it and informing it each take a fresh authority check first; a removed or refused peer's queued wake or inform is dropped, and a check that cannot confirm access (a node error, a timeout) fails closed: nothing runs and the item is retried on the next pass. With `--poll` above 5 minutes, the authority check and dirty-peer retries still run every 5 minutes.
+
+  Details: TC-2917
+
+- d7e4062: `courier inbox` skips a message whose thread or message id, taken from the peer's key name, isn't a safe id (letters, digits, `-` and `_`, at most 64 characters), as the watcher already does. Such a message isn't fetched, listed or receipted; it is reported as `bad-message` with the id escaped, so no control or bidi character from a peer reaches the text or `--json` output. The ids in the `bad-message` and `message-too-large` errors are escaped too. Courier's `test` script now fails a test file that runs longer than 2 minutes instead of hanging.
+
+  Details: TC-2951
+
+- 7c1f987: `courier read` of an unchanged thread now makes one KV call, the peer's listing. Your own side of the thread comes from a local, per-entry owner-space record of the writes made under your thread roots. That record is used for an hour after a listing, then your side is listed again. A peer's renewal marker is read at most every 5 minutes per thread. `courier read --full` lists both sides and fetches everything again. The documented meaning of `authority: "self"` in `courier read` output is now "written by an agent of the same owner", because same-owner agents are one principal. The output itself is unchanged.
+
+  `courier watch` keeps what it already knows in `<COURIER_HOME>/watch-cache/<agent>.json`: receipted messages, mirrored meta, marker reads and the claim pruning time. A restart or a `--once` run doesn't fetch these again. The file is bound to this agent's DID and space. Each peer's facts carry the DID, space and session they were learned under, and are dropped, never relabelled, once that peer is a different agent, space or session. Facts are kept per peer, so two peers that use the same name for this agent never share mirrored meta or task state. It keeps only eligible peers, and is deleted with the read cache.
+
+  A wake or inform put off because the authority check gave no verdict is held for at most 24 hours, then dropped and logged. Imports keep retrying. After 24 hours without a verdict, the human gets one `access-unverified` notice for that peer, and no more until a check succeeds and access is lost again. A positive verdict restarts an inform's 24 hours even if its post then fails. `courier guard` keeps the mode of `.claude/settings.local.json` whatever the umask. The local caches are used only when `COURIER_HOME` is a real directory of yours and every directory above it is owned by root or you and not writable by others (ssh StrictModes; a sticky `/tmp` is allowed when the directory below it is yours and owner-only). Otherwise everything is fetched. Each cache directory is opened without following a symlink, made owner-only through that handle, and checked again right before every read, write or delete, including clearing. The one-time clean-up of the old cache layout deletes only `<thread ULID>.json` files.
+
+  Courier now reads entries in bounded batches: `courier read`, `courier inbox`, intake, and the watcher's import and mirroring each read up to 16 messages or meta (at most 2 MiB each) or 4 tasks (at most 8 MiB each) in one `tinycloud.kv/get` invocation, so no response exceeds 32 MiB. Before, every entry took its own call. When one value is over its cap, the node refuses that batch, and Courier reads that batch's keys once more one by one. The oversized entry is reported by id (`entry-too-large` in `read`, `message-too-large` in `inbox`, an `ignored` watcher log line once per process for a message, meta or task, an `intake-error` plus a `too-large` done marker in intake), and every other entry is read. Each entry is still checked on its own. A cache directory that can't be made owner-only is not used and everything is fetched. A first read of a 260-entry thread drops from 265 invocations to 21, and importing 130 messages takes 9 reads instead of 130.
+
+  Details: TC-2917, TC-2951
+
+- 271b73d: Courier keeps only a confirmed absence from the location registry, and only plain data reads use it. Reads of an owner with no registry record share one lookup per minute in a process, so `read`, `inbox` and an idle `watch` pass keep their lower registry traffic. Everything else looks the owner up when it runs:
+  - each write to a space (send, `watch` and `intake` imports, mirrors, receipts and state, `outbox serve`, pause and resume notices, tasks, requests, pairing);
+  - installing a peer's grant;
+  - an owner with a registry record, before every call.
+
+  A removed or changed registration is seen on the next such call.
+
+  Details: TC-2481, TC-2970
+
+- 85095e8: Courier makes far fewer location-registry lookups for an owner with no registry record. A `watch --once` pass made 28 to 34 registry lookups for one owner, and `read` of a 344-entry thread made 698. Data reads of such an owner now share one lookup (one v2 and one v1) per minute in a process. An owner with a registry record, and every write, is still looked up on each call (see the absent-reads entry).
+
+  sdk-core adds an opt-in `verdictCache` option on `lookupOwnerRegistryVerdict`, `resolveRegistryResource` and `resolveFailClosedTinyCloudHosts`, and the entry point `@tinycloud/sdk-core/registry-verdict-cache` with `createRegistryVerdictCache()`, `REGISTRY_VERDICT_REGISTERED_TTL_MS`, `REGISTRY_VERDICT_UNREGISTERED_TTL_MS` and `REGISTRY_VERDICT_CACHE_MAX_ENTRIES`. `createRegistryVerdictCache({ mode: "absent-reads" })` keeps only confirmed absences, and only for lookups marked as data reads. node-sdk adds the `registryVerdictCache` option on `TinyCloudNode`.
+
+  How the cache behaves by default (without `mode`):
+  - It is keyed by owner DID and by the registry base the lookup fetches (host case and a default port don't matter), and concurrent lookups of one owner share one request. A registry URL with `?`, `#`, `@`, `\` or whitespace is refused.
+  - It keeps a registered record and a confirmed absence (v2 and v1 both not found) for 60 seconds each, on a monotonic clock, so a revoked registration stops routing and a new one is seen within a minute. It holds at most 256 owners.
+  - It never keeps an unavailable verdict, an outage fallback from saved settings or a failed lookup.
+  - A verdict, kept or still in flight, is served to a client only if that client's own registry stores agree with it: a registered record only when the client already holds that exact sequence, or an absence only for an owner the client has no registration evidence for (no sequence marker, no saved settings). Otherwise the client looks the owner up itself, which raises its floor and saves its settings. A failed or unavailable lookup is shared with clients waiting on it as it is; an outage fallback from one client's saved settings is never served to another.
+  - A route the record does not list, in routing or at sign-in, drops the owner's entry at once, and a refresh that finds no record drops the registered one.
+
+  Without the option, every lookup asks the registry, as before.
+
+  Courier gives every node it creates one shared cache in `absent-reads` mode, plus the same registry sequence store and saved-settings store. Plain data reads in `read`, `inbox` and an idle `watch` pass share the lookup of an owner with no registry record. A long-running `watch`, `intake` or `outbox serve` looks that owner up again after a minute.
+
+  Details: TC-2970
+
+- 2c3c65d: Courier refuses a flag the command does not accept: it exits 2 with `Unknown flag --name for <command>` and the accepted flags, before reading stdin or a grant file or touching the profile.
+
+  Details: TC-2343
+
+- 82a327f: Hide the beta Courier invite command from help and usage documentation.
+
+  Details: TC-2234
+
+- 2139b24: Send only the public session key to OpenKey during sign-in.
+
+  `sdk-core` adds `publicJwk(jwk)`, re-exported by `node-sdk`: it returns only the standard public members of a JWK (`{kty, crv, x}` for Ed25519, `{kty, crv, x, y}` for EC, `{kty, n, e}` for RSA) plus `kid` when present, and throws for a key type without a public form. The OpenKey sign-in request from `prepareOpenKeySignIn()` and `signInWithOpenKey()`, `wireOpenKeyAuthorize`, the CLI's OpenKey links and handoff, the MCP approval link and Courier's approval link and `request` output now use it. Other members such as `alg` or `use` are no longer sent.
+
+  Details: TC-2582
+
+- d4cb4df: Courier renews a paired peer's read access, up to 30 days at a time, while your own access is live, and asks for your approval in OpenKey before your access ends. To stop sharing, revoke the pairing. Expired or revoked access requires a new pairing.
+
+  Details: TC-2746
+
+- c55863a: Resolve known threads to their peers and preserve available messages when a peer read fails. Read and inbox output explicitly report partial results instead of claiming an unreadable inbox is empty.
+
+  Details: TC-2748
+
+- f3df7de: A CLI sign-in whose approval returns an owner-signed renewal lease now checks the lease against the grant it renews, admits it at the node and saves it with the session. After the original grant ends, CLI commands and the MCP server's stdio mode restore that session through the node while the lease is live, and `tc auth status` shows that it renews until the lease ends. A lease that ended or was stopped asks for a new sign-in; a node that can't be reached is reported as a network error, not as an expired session. The CLI does not ask for a renewal yet.
+
+  `@tinycloud/sdk-core/delegations/renewal-receipt` exports the lease verifier that Courier and the CLI share, and `@tinycloud/operations/profile` exports `restoreStoredSession` and `liveStoredLease`. Courier's renewal mismatch errors now say what didn't match and tell the owner to run `courier init` and approve again.
+
+  Details: TC-2904
+
+- 3dfd566: `courier revoke` now revokes the peer's access on your TinyCloud node, so their next read is refused. If it can't finish, the pairing is kept and you can run it again.
+
+  Details: TC-712
+
+- 3395226: Add `courier status [--peer <peer>] [--json]` to show saved inbound and outbound grant expiry separately, with warnings within 24 hours of expiry. Status does not contact a peer or check automatic renewal.
+
+  Details: TC-2747, TC-2755
+
+- Updated dependencies [85095e8]
+- Updated dependencies [f859fb3]
+- Updated dependencies [2139b24]
+- Updated dependencies [2a8edc2]
+- Updated dependencies [649bb18]
+- Updated dependencies [5817c2b]
+- Updated dependencies [55d52f7]
+- Updated dependencies [e50dd6c]
+- Updated dependencies [ccf3347]
+- Updated dependencies [b32f52e]
+- Updated dependencies [66a03e0]
+- Updated dependencies [593f051]
+- Updated dependencies [c070c4b]
+- Updated dependencies [e409bef]
+- Updated dependencies [5f271e5]
+- Updated dependencies [693676e]
+- Updated dependencies [766d27a]
+- Updated dependencies [f3df7de]
+- Updated dependencies [d4366f9]
+- Updated dependencies [e3cd63b]
+- Updated dependencies [728b25c]
+- Updated dependencies [56df81d]
+- Updated dependencies [0080686]
+- Updated dependencies [f4220cf]
+- Updated dependencies [6010858]
+- Updated dependencies [b00ad0b]
+- Updated dependencies [163f986]
+- Updated dependencies [c2fde3d]
+- Updated dependencies [711903b]
+- Updated dependencies [5fe6cff]
+- Updated dependencies [88a5f28]
+- Updated dependencies [e3e4bd7]
+- Updated dependencies [273491d]
+- Updated dependencies [7266493]
+- Updated dependencies [9ff4cf2]
+  - @tinycloud/sdk-core@3.12.0
+  - @tinycloud/node-sdk@3.12.0
+  - @tinycloud/share-sdk@1.5.0
+  - @tinycloud/share-envelope@1.6.0
+
+## 0.6.0-beta.48
+
+### Patch Changes
+
+- d8f2d10: Courier no longer renews a peer's access for longer than that peer accepts. Peers on Courier 0.5.x refuse anything over 7 days, so a 30-day renewal cut them off. The renewal now lasts at most the lifetime of the access the peer gave you (7 days when that is 7 days or unknown, up to 30 days when it is longer), and never past your own approval. `pair renew` and `courier status` show "peer limit" when this shortens a renewal. Nothing about pairing or stored data changes.
+
+  Details: TC-3159
+
+## 0.6.0-beta.47
+
+### Patch Changes
+
+- Updated dependencies [711903b]
+  - @tinycloud/node-sdk@3.12.0-beta.38
+
+## 0.6.0-beta.46
+
+### Patch Changes
+
+- Updated dependencies [c2fde3d]
+  - @tinycloud/sdk-core@3.12.0-beta.37
+  - @tinycloud/node-sdk@3.12.0-beta.37
+
+## 0.6.0-beta.45
+
+### Patch Changes
+
+- f3df7de: A CLI sign-in whose approval returns an owner-signed renewal lease now checks the lease against the grant it renews, admits it at the node and saves it with the session. After the original grant ends, CLI commands and the MCP server's stdio mode restore that session through the node while the lease is live, and `tc auth status` shows that it renews until the lease ends. A lease that ended or was stopped asks for a new sign-in; a node that can't be reached is reported as a network error, not as an expired session. The CLI does not ask for a renewal yet.
+
+  `@tinycloud/sdk-core/delegations/renewal-receipt` exports the lease verifier that Courier and the CLI share, and `@tinycloud/operations/profile` exports `restoreStoredSession` and `liveStoredLease`. Courier's renewal mismatch errors now say what didn't match and tell the owner to run `courier init` and approve again.
+
+  Details: TC-2904
+
+- Updated dependencies [f3df7de]
+  - @tinycloud/sdk-core@3.12.0-beta.36
+  - @tinycloud/node-sdk@3.12.0-beta.36
+
+## 0.6.0-beta.44
+
+### Patch Changes
+
+- Updated dependencies [6010858]
+  - @tinycloud/sdk-core@3.12.0-beta.35
+  - @tinycloud/node-sdk@3.12.0-beta.35
+  - @tinycloud/share-sdk@1.5.0-beta.5
+
+## 0.6.0-beta.43
+
+### Patch Changes
+
+- 271b73d: Courier keeps only a confirmed absence from the location registry, and only plain data reads use it. Reads of an owner with no registry record share one lookup per minute in a process, so `read`, `inbox` and an idle `watch` pass keep their lower registry traffic. Everything else looks the owner up when it runs:
+  - each write to a space (send, `watch` and `intake` imports, mirrors, receipts and state, `outbox serve`, pause and resume notices, tasks, requests, pairing);
+  - installing a peer's grant;
+  - an owner with a registry record, before every call.
+
+  A removed or changed registration is seen on the next such call.
+
+  Details: TC-2481, TC-2970
+
+## 0.6.0-beta.42
+
+### Minor Changes
+
+- e1ebdc4: Validate and persist owner-signed renewal lease approval proofs and restore admitted agent-grant renewals, including retrying a saved installation after the original grant expires. Renewal request emission requires the coordinated OpenKey producer rollout.
+
+  Details: TC-2904
+
+## 0.6.0-beta.41
+
+### Patch Changes
+
+- Updated dependencies [163f986]
+  - @tinycloud/sdk-core@3.12.0-beta.34
+  - @tinycloud/node-sdk@3.12.0-beta.34
+
+## 0.6.0-beta.40
+
+### Patch Changes
+
+- d7e4062: `courier inbox` skips a message whose thread or message id, taken from the peer's key name, isn't a safe id (letters, digits, `-` and `_`, at most 64 characters), as the watcher already does. Such a message isn't fetched, listed or receipted; it is reported as `bad-message` with the id escaped, so no control or bidi character from a peer reaches the text or `--json` output. The ids in the `bad-message` and `message-too-large` errors are escaped too. Courier's `test` script now fails a test file that runs longer than 2 minutes instead of hanging.
+
+  Details: TC-2951
+
+## 0.6.0-beta.39
+
+### Patch Changes
+
+- ee93ac3: The agent's clean HOME is checked for links the agent planted there between wakes. Before Courier makes, removes or writes any path in it (`.claude`, `.config`, a `--home-file` directory such as `.codex`, `.gitconfig`, the agent identity files), each component is checked without following links: a link found is removed (the link only, never what it points at) and the wake logs `removed a symbolic link the agent left in its clean HOME: <path>`. A clean HOME that is itself a link is refused. Before, a planted link such as `.config -> ~/somewhere` could make the next wake delete or overwrite files outside the clean HOME.
+
+  The Claude login that a `--wake claude` wake copies automatically (`.claude/.credentials.json`) is now read the way `--home-file` sources are: a link on the file or above it fails the wake closed instead of being followed; a missing file is still skipped.
+
+  Details: TC-3014
+
+## 0.6.0-beta.38
+
+### Patch Changes
+
+- f956a87: `courier watch --home-file` now accepts only the known model-login file of a supported agent CLI, instead of refusing a short denylist: `.codex/auth.json` (codex), `.gemini/oauth_creds.json` (gemini), `.local/share/opencode/auth.json` (opencode), `.local/share/amp/secrets.json` (amp), `.config/goose/secrets.yaml` (goose) and `.aider/oauth-keys.env` (aider). `omp` and `cursor-agent` accept no file (omp keeps its login in a database with every account; Cursor does not publish where its credentials are): pass their login with `--env-pass` or run them under their own account. When `--exec` starts one of these CLIs only that CLI's file is accepted; for any other command any listed file is. Settings files, owner state (`.omp`, `.tinycloud`, `.gnupg`, `.docker`, `.kube`, `.config/gcloud`, `.paseo`) and every other file are refused with a clear message, when the watcher starts and again on every wake. `--wake claude` takes no `--home-file`.
+
+  A `--home-file` source that is a symbolic link, or that sits behind one (a linked `.codex` directory, for example), is refused and its target is never copied; the check runs on every wake and the file is opened without following links.
+
+  The README now warns plainly that `--unguarded --agent-cli` puts outside message content into an agent that can act, and that it should only be used with an agent holding no credentials beyond its model login, in a sandbox.
+
+  Details: TC-3014
+
+- Updated dependencies [b00ad0b]
+  - @tinycloud/sdk-core@3.12.0-beta.33
+  - @tinycloud/node-sdk@3.12.0-beta.33
+
+## 0.6.0-beta.37
+
+### Minor Changes
+
+- feb9f50: `courier watch --wake exec --unguarded` can now wake an agent CLI that has no guarded adapter (`codex`, `opencode`, `omp`, `gemini`, `cursor-agent`, `amp`, `aider`, `goose`) when the owner also passes `--agent-cli`. Without that flag such a command is refused as before, and the refusal names the flag. `claude` and `paseo` stay refused under `exec` with or without it: use `--wake claude` or `--wake paseo`, which install the guard.
+
+  `--agent-cli` installs no guard. Nothing checks what the woken agent does with a peer's message, and it can read whatever the watcher's OS user can read. Run such a watcher under an OS account that holds only what the agent may use.
+
+  `courier watch --home-file <path>` (repeatable, relative to your HOME, with `--wake exec` or `--wake claude`) copies one file into the woken agent's clean HOME on every wake, mode 0600, for a CLI that keeps its model login in a file. Shell start-up files, tool settings and the credential stores the clean HOME never holds (`.ssh`, `.aws`, `.npmrc`, `.netrc`, `.config/gh`, `.config/git`, Claude and MCP settings) are refused when the watcher starts.
+
+  Details: TC-712
+
+## 0.6.0-beta.36
+
+### Patch Changes
+
+- Updated dependencies [728b25c]
+  - @tinycloud/sdk-core@3.12.0-beta.31
+  - @tinycloud/node-sdk@3.12.0-beta.31
+
+## 0.6.0-beta.35
+
+### Patch Changes
+
+- 85095e8: Courier looks each owner up in the location registry once per command instead of once per node call. A `watch --once` pass made 28 to 34 registry lookups for one owner, and `read` of a 344-entry thread made 698; each now makes one lookup per owner (for an owner with no registry record, one v2 and one v1).
+
+  sdk-core adds an opt-in `verdictCache` option on `lookupOwnerRegistryVerdict`, `resolveRegistryResource` and `resolveFailClosedTinyCloudHosts`, and the entry point `@tinycloud/sdk-core/registry-verdict-cache` with `createRegistryVerdictCache()`, `REGISTRY_VERDICT_REGISTERED_TTL_MS`, `REGISTRY_VERDICT_UNREGISTERED_TTL_MS` and `REGISTRY_VERDICT_CACHE_MAX_ENTRIES`. node-sdk adds the `registryVerdictCache` option on `TinyCloudNode`.
+
+  How the cache behaves:
+  - It is keyed by owner DID and by the registry base the lookup fetches (host case and a default port don't matter), and concurrent lookups of one owner share one request. A registry URL with `?`, `#`, `@`, `\` or whitespace is refused.
+  - It keeps a registered record and a confirmed absence (v2 and v1 both not found) for 60 seconds each, on a monotonic clock, so a revoked registration stops routing and a new one is seen within a minute. It holds at most 256 owners.
+  - It never keeps an unavailable verdict, an outage fallback from saved settings or a failed lookup.
+  - A verdict, kept or still in flight, is served to a client only if that client's own registry stores agree with it: a registered record only when the client already holds that exact sequence, or an absence only for an owner the client has no registration evidence for (no sequence marker, no saved settings). Otherwise the client looks the owner up itself, which raises its floor and saves its settings. A failed or unavailable lookup is shared with clients waiting on it as it is; an outage fallback from one client's saved settings is never served to another.
+  - A route the record does not list, in routing or at sign-in, drops the owner's entry at once, and a refresh that finds no record drops the registered one.
+
+  Without the option, every lookup asks the registry, as before.
+
+  Courier gives every node it creates the same cache, registry sequence store and saved-settings store, so `send`, `read`, `inbox`, `watch`, `intake` and `outbox serve` share one lookup per owner. A long-running `watch`, `intake` or `outbox serve` looks an owner up again after those bounds.
+
+  Details: TC-2970
+
+- Updated dependencies [85095e8]
+  - @tinycloud/sdk-core@3.12.0-beta.30
+  - @tinycloud/node-sdk@3.12.0-beta.30
+
+## 0.6.0-beta.34
+
+### Patch Changes
+
+- 7c1f987: `courier read` of an unchanged thread now makes one KV call, the peer's listing. Your own side of the thread comes from a local, per-entry owner-space record of the writes made under your thread roots. That record is used for an hour after a listing, then your side is listed again. A peer's renewal marker is read at most every 5 minutes per thread. `courier read --full` lists both sides and fetches everything again. The documented meaning of `authority: "self"` in `courier read` output is now "written by an agent of the same owner", because same-owner agents are one principal. The output itself is unchanged.
+
+  `courier watch` keeps what it already knows in `<COURIER_HOME>/watch-cache/<agent>.json`: receipted messages, mirrored meta, marker reads and the claim pruning time. A restart or a `--once` run doesn't fetch these again. The file is bound to this agent's DID and space. Each peer's facts carry the DID, space and session they were learned under, and are dropped, never relabelled, once that peer is a different agent, space or session. Facts are kept per peer, so two peers that use the same name for this agent never share mirrored meta or task state. It keeps only eligible peers, and is deleted with the read cache.
+
+  A wake or inform put off because the authority check gave no verdict is held for at most 24 hours, then dropped and logged. Imports keep retrying. After 24 hours without a verdict, the human gets one `access-unverified` notice for that peer, and no more until a check succeeds and access is lost again. A positive verdict restarts an inform's 24 hours even if its post then fails. `courier guard` keeps the mode of `.claude/settings.local.json` whatever the umask. The local caches are used only when `COURIER_HOME` is a real directory of yours and every directory above it is owned by root or you and not writable by others (ssh StrictModes; a sticky `/tmp` is allowed when the directory below it is yours and owner-only). Otherwise everything is fetched. Each cache directory is opened without following a symlink, made owner-only through that handle, and checked again right before every read, write or delete, including clearing. The one-time clean-up of the old cache layout deletes only `<thread ULID>.json` files.
+
+  Courier now reads entries in bounded batches: `courier read`, `courier inbox`, intake, and the watcher's import and mirroring each read up to 16 messages or meta (at most 2 MiB each) or 4 tasks (at most 8 MiB each) in one `tinycloud.kv/get` invocation, so no response exceeds 32 MiB. Before, every entry took its own call. When one value is over its cap, the node refuses that batch, and Courier reads that batch's keys once more one by one. The oversized entry is reported by id (`entry-too-large` in `read`, `message-too-large` in `inbox`, an `ignored` watcher log line once per process for a message, meta or task, an `intake-error` plus a `too-large` done marker in intake), and every other entry is read. Each entry is still checked on its own. A cache directory that can't be made owner-only is not used and everything is fetched. A first read of a 260-entry thread drops from 265 invocations to 21, and importing 130 messages takes 9 reads instead of 130.
+
+  Details: TC-2917, TC-2951
+
+## 0.6.0-beta.33
+
+### Patch Changes
+
+- Updated dependencies [0080686]
+  - @tinycloud/sdk-core@3.12.0-beta.28
+  - @tinycloud/node-sdk@3.12.0-beta.28
+  - @tinycloud/share-sdk@1.5.0-beta.4
+
+## 0.6.0-beta.32
+
+### Patch Changes
+
+- Updated dependencies [f4220cf]
+  - @tinycloud/sdk-core@3.12.0-beta.27
+  - @tinycloud/node-sdk@3.12.0-beta.27
+
+## 0.6.0-beta.31
+
+### Patch Changes
+
+- Updated dependencies [2a8edc2]
+  - @tinycloud/node-sdk@3.12.0-beta.26
+
+## 0.6.0-beta.30
+
+### Patch Changes
+
+- f6e60a8: `courier watch` makes far fewer node calls while idle:
+  - It lists every peer in full every 5 minutes while its hook subscriptions are healthy, instead of every minute. Hook events still deliver at once. A failed or ended subscription catches up at once and brings back the full listing every `--poll` seconds until a new stream is healthy. A peer whose sync did not finish is listed again at the next minute.
+  - A catch-up lists the pause markers once for all peers, reads receipts only when the listing holds a message they are not known to cover, and lists known threads only for a peer's pause notice.
+  - The scheduled renewal and authority check runs every 5 minutes, so detecting an idle revocation and cleaning up sibling grants takes up to 5 minutes. Enforcement is unchanged: the node refuses revoked grants. A hook event for a peer's renewal marker or a refusal checks at once, after re-reading the marker; a refused sync is retried only under a different grant.
+
+  Watcher state (`watch.json`, pause markers, wake claims) now lives under `me/state/agents/<did:key id>/` for each Courier agent, so two agents of one owner can run in one space without a state conflict. `courier pause` and `courier resume` use the same keys. The old shared `me/state/` records for an agent's own peers are copied on its first start and left in place. `courier pause` and `courier resume` read a thread's shared pause marker too, so a thread paused before the upgrade stays paused until a human resumes it. A second watcher of the same agent no longer exits with `state-conflict`, which `Restart=always` turned into a restart and catch-up loop. It stands by instead, checks `watch.json` once per window (5 to 30 minutes), and takes over after a quiet window. `--once` still exits with `state-conflict`.
+
+  `courier intake` doubles its wait after a cycle that queued nothing, up to 5 minutes or `--interval` if that is longer, and returns to `--interval` on the next queued message. `courier read` caches create-only messages and meta in `<COURIER_HOME>/read-cache/<agent>/`, so reading an unchanged thread again fetches only its listings and tasks. Messages are create-only; a later overwrite of the same key isn't shown. The cache is owner-only, bounded at 64 MiB and 7 days per agent, and deleted on `revoke`, a refusal, an owner revocation and a key rotation.
+
+  Importing from a peer, waking an agent for it and informing it each take a fresh authority check first; a removed or refused peer's queued wake or inform is dropped, and a check that cannot confirm access (a node error, a timeout) fails closed: nothing runs and the item is retried on the next pass. With `--poll` above 5 minutes, the authority check and dirty-peer retries still run every 5 minutes.
+
+  Details: TC-2917
+
+## 0.6.0-beta.29
+
+### Patch Changes
+
+- Updated dependencies [56df81d]
+  - @tinycloud/sdk-core@3.12.0-beta.24
+  - @tinycloud/node-sdk@3.12.0-beta.24
+
+## 0.6.0-beta.28
+
+### Patch Changes
+
+- Updated dependencies [e3cd63b]
+  - @tinycloud/share-envelope@1.6.0-beta.1
+  - @tinycloud/node-sdk@3.12.0-beta.23
+  - @tinycloud/sdk-core@3.12.0-beta.23
+  - @tinycloud/share-sdk@1.5.0-beta.3
+
+## 0.6.0-beta.27
+
+### Patch Changes
+
+- Updated dependencies [d4366f9]
+  - @tinycloud/sdk-core@3.12.0-beta.22
+  - @tinycloud/node-sdk@3.12.0-beta.22
+
+## 0.6.0-beta.26
+
+### Patch Changes
+
+- Updated dependencies [766d27a]
+  - @tinycloud/sdk-core@3.12.0-beta.21
+  - @tinycloud/node-sdk@3.12.0-beta.21
+
+## 0.6.0-beta.25
+
+### Patch Changes
+
+- @tinycloud/node-sdk@3.12.0-beta.20
+- @tinycloud/sdk-core@3.12.0-beta.20
+
+## 0.6.0-beta.24
+
+### Patch Changes
+
+- d4cb4df: Courier renews a paired peer's read access, up to 30 days at a time, while your own access is live, and asks for your approval in OpenKey before your access ends. To stop sharing, revoke the pairing. Expired or revoked access requires a new pairing.
+
+  Details: TC-2746
+
+## 0.6.0-beta.23
+
+### Patch Changes
+
+- 33a2fde: Courier now picks up renewed access from paired peers before reading their messages or subscribing to them, while the current access is still valid.
+
+  Details: TC-2746
+
+## 0.6.0-beta.22
+
+### Patch Changes
+
+- 3dfd566: `courier revoke` now revokes the peer's access on your TinyCloud node, so their next read is refused. If it can't finish, the pairing is kept and you can run it again.
+
+  Details: TC-712
+
+- Updated dependencies [5fe6cff]
+  - @tinycloud/sdk-core@3.12.0-beta.19
+  - @tinycloud/node-sdk@3.12.0-beta.19
+
+## 0.6.0-beta.21
+
+### Patch Changes
+
+- 82a327f: Hide the beta Courier invite command from help and usage documentation.
+
+  Details: TC-2234
+
+## 0.6.0-beta.20
+
+### Patch Changes
+
+- Updated dependencies [7266493]
+  - @tinycloud/share-sdk@1.5.0-beta.2
+  - @tinycloud/node-sdk@3.12.0-beta.18
+  - @tinycloud/sdk-core@3.12.0-beta.18
+
+## 0.6.0-beta.19
+
+### Minor Changes
+
+- e3e4bd7: `courier invite --mode email` asks the owner for one approval per invitation. The approval request carries the recipient, session name and dates; OpenKey chooses the Share key and returns a grant for that one key (`key.create` and `decrypt`), valid until the invitation expires (at most 24 hours). Courier writes the pending invitation before asking, sends nothing until the approval is verified, and uses the approved grant only for that invitation's key; the main Courier grant is not changed. Run the same command again to continue a pending invitation. `@tinycloud/share-envelope/links` adds an optional strict `context` to the approval request (with no permissions) and `buildShareInvitationApprovalSpec`.
+
+  Details: TC-2234
+
+### Patch Changes
+
+- Updated dependencies [e3e4bd7]
+- Updated dependencies [273491d]
+  - @tinycloud/share-envelope@1.6.0-beta.0
+  - @tinycloud/sdk-core@3.12.0-beta.17
+  - @tinycloud/share-sdk@1.5.0-beta.1
+  - @tinycloud/node-sdk@3.12.0-beta.17
+
+## 0.6.0-beta.18
+
+### Patch Changes
+
+- a6234a9: Add `courier status [--peer <peer>] [--json]` to show saved inbound and outbound grant expiry separately, with warnings within 24 hours of expiry.
+
+  Details: TC-2747, TC-2755
+
+## 0.6.0-beta.17
+
+### Patch Changes
+
+- Updated dependencies [f859fb3]
+  - @tinycloud/node-sdk@3.12.0-beta.16
+  - @tinycloud/sdk-core@3.12.0-beta.16
+
+## 0.6.0-beta.16
+
+### Minor Changes
+
+- 88a5f28: Adds the Courier email-invitation code on the existing Share path (`courier invite --mode email --recipient <email>`, `courier join <share link> --consent [--code-stdin]`). **It cannot send a real invitation yet:** there is no Courier path to request or install per-invitation authority (see below), so `courier invite --mode email` fails closed for every real grant: an ordinary grant ends at `invite-authority-missing`, and a grant carrying a `share/` prefix, several keys or half a pair is refused earlier, when the grant is loaded, as `grant-too-broad`. The design is: the invitation body, with its existing pairing relay, is encrypted under a fresh `share/<shareId>` key and registered as one path-bound, digested Share policy owned by the Courier `did:key`; OpenCredentials mails the link and only the verified mailbox holder can open it; the session join, read and peer-delegation path is the existing one. The mode is not listed in `INVITATION_MODES` or the guide. The send and receive steps are tested only against stand-ins; no full link, decrypt and join run exists and no OpenKey call was made.
+
+  Courier's grant check is exact: the base grant is exactly `AGENT_GRANT`, and any `share/` entry (one exact key, the prefix, several keys, half a pair) is refused at grant load as `grant-too-broad`. The standing base grant never carries a share key. `courier invite --mode email` now generates the random share id first and checks that exact `share/<id>` authority before it creates anything: a grant with no share key, or one well-formed exact key for another id, stops with `invite-authority-missing` and has created no pairing relay delegation, invitation state, Share key, link or email. With authority for the generated id, the relay and state are created and the same id goes to the Share step. Courier does not request that authority and nothing binds a previously signed key to the generated id, so today the check only passes for a grant that already names it, which no real grant can (the id is random and generated at invite time). What is missing is a per-invitation owner approval: an OpenKey `/delegate` that issues an exact-key `key.create` + `decrypt` grant (not run, not proven; `DelegateRequest.permissions` can carry the entries) and a Courier path to install it (Courier stores one `grant.json`, and `installGrant` replaces it). That is OpenKey and grant-scope work, not done; which scope to request is an open decision. Future design constraint: the installed grant is valid for up to 30 days (`AGENT_GRANT_EXPIRY` is the default and the maximum; `courier init --expiry` can shorten it) while an invitation lives at most 24 hours, so an approval that re-issues the whole grant per invitation would renew that authority each time, and a key-only approval should expire with the invitation. Calling the library `sendEmailInvitation` after `issueInvitation` and failing the same check leaves the relay delegation (it expires with the invitation) and the invitation state record, which nothing deletes; the error message names both.
+
+  Opening an invitation (`courier join <link> --consent --code-stdin`) checks everything it can before the one-time code reaches the witness: the signed envelope's exact resource path (`…/to/invite-<id>/envelope/<shareId>.json`), its expiry, its node origin against this profile's host, that its issuer is not this agent, the local profile, grant and node, and whether this invitation id was already joined. A failed check leaves the pending proof untouched. The body is encrypted, so its session, relay and pairing artifact cannot be checked until it is decrypted; then its id, node origin, issuer, expiry and space must equal the envelope's and the join state is checked again. The pending proof follows `courier credential acquire`: it is kept after a recoverable witness rejection (`EmailProofError.recoverable`) so the same request takes another code, and deleted on a terminal failure, once the code was accepted, and on success.
+
+  `@tinycloud/node-sdk` adds `@tinycloud/node-sdk/share-publish` (`publishEmailShareV3`, moved unchanged from the CLI), `emailProofDescriptor` in `@tinycloud/node-sdk/credentials`, and `resumeAgentShareReceive` in `@tinycloud/node-sdk/share-receive` for a two-step receive across processes. The CLI imports `publishEmailShareV3` from node-sdk.
+
+  Needs a node release containing the Policy/v3 named-key binding (#481) and the refusal of unbound registrations (#485) before it works against production.
+
+  Details: TC-2234
+
+### Patch Changes
+
+- Updated dependencies [88a5f28]
+  - @tinycloud/node-sdk@3.12.0-beta.15
+
+## 0.5.3-beta.15
+
+### Patch Changes
+
+- c55863a: Resolve known threads to their peers and preserve available messages when a peer read fails. Read and inbox output explicitly report partial results instead of claiming an unreadable inbox is empty.
+
+  Details: TC-2748
+
+## 0.5.3-beta.14
+
+### Patch Changes
+
+- Updated dependencies [e50dd6c]
+  - @tinycloud/sdk-core@3.12.0-beta.14
+  - @tinycloud/node-sdk@3.12.0-beta.14
+
+## 0.5.3-beta.13
+
+### Patch Changes
+
+- Updated dependencies [649bb18]
+  - @tinycloud/sdk-core@3.12.0-beta.13
+  - @tinycloud/node-sdk@3.12.0-beta.13
+
+## 0.5.3-beta.12
+
+### Patch Changes
+
+- Updated dependencies [693676e]
+  - @tinycloud/sdk-core@3.12.0-beta.12
+  - @tinycloud/node-sdk@3.12.0-beta.12
+
+## 0.5.3-beta.11
+
+### Patch Changes
+
+- Updated dependencies [5f271e5]
+  - @tinycloud/node-sdk@3.12.0-beta.11
+
+## 0.5.3-beta.10
+
+### Patch Changes
+
+- Updated dependencies [593f051]
+  - @tinycloud/node-sdk@3.12.0-beta.10
+  - @tinycloud/sdk-core@3.12.0-beta.10
+
+## 0.5.3-beta.9
+
+### Patch Changes
+
+- Updated dependencies [e409bef]
+  - @tinycloud/sdk-core@3.12.0-beta.9
+  - @tinycloud/node-sdk@3.12.0-beta.9
+
+## 0.5.3-beta.8
+
+### Patch Changes
+
+- Updated dependencies [c070c4b]
+  - @tinycloud/sdk-core@3.12.0-beta.8
+  - @tinycloud/node-sdk@3.12.0-beta.8
+
+## 0.5.3-beta.7
+
+### Patch Changes
+
+- @tinycloud/node-sdk@3.12.0-beta.7
+- @tinycloud/sdk-core@3.12.0-beta.7
+
+## 0.5.3-beta.6
+
+### Patch Changes
+
+- 2c3c65d: Courier refuses a flag the command does not accept: it exits 2 with `Unknown flag --name for <command>` and the accepted flags, before reading stdin or a grant file or touching the profile.
+
+  Details: TC-2343
+
+## 0.5.3-beta.5
+
+### Patch Changes
+
+- 2139b24: Sign-in requests to OpenKey now include only the standard public members of the session key.
+
+  Details: TC-2582
+
+- Updated dependencies [2139b24]
+  - @tinycloud/sdk-core@3.12.0-beta.5
+  - @tinycloud/node-sdk@3.12.0-beta.5
+
+## 0.5.3-beta.4
+
+### Patch Changes
+
+- Updated dependencies [ccf3347]
+  - @tinycloud/sdk-core@3.12.0-beta.4
+  - @tinycloud/node-sdk@3.12.0-beta.4
+
+## 0.5.3-beta.3
+
+### Patch Changes
+
+- Updated dependencies [b32f52e]
+- Updated dependencies [66a03e0]
+  - @tinycloud/sdk-core@3.12.0-beta.3
+  - @tinycloud/node-sdk@3.12.0-beta.3
+
+## 0.5.3-beta.2
+
+### Patch Changes
+
+- Updated dependencies [9ff4cf2]
+  - @tinycloud/node-sdk@3.12.0-beta.2
+
+## 0.5.3-beta.1
+
+### Patch Changes
+
+- Updated dependencies [55d52f7]
+  - @tinycloud/node-sdk@3.12.0-beta.1
+
+## 0.5.3-beta.0
+
+### Patch Changes
+
+- Updated dependencies [5817c2b]
+  - @tinycloud/node-sdk@3.11.1-beta.0
+
+## 0.5.2
+
+### Patch Changes
+
+- 7062e9f: Courier now prints `Next:` lines on stderr. Every line that hands the owner a link asks the agent only to send the owner that link in its reply now, and, where there is a follow-up command, to run it when the owner next writes to the agent (it no longer asks for the command in the same reply). The follow-up command is named in backticks, written as the user ran Courier (`courier` or `tinycloud courier`). This works best with a short `--timeout` (for example `1s`) so the pending exit is immediate and the flow continues on the owner's next message; in testing the request is not always followed, so it is a request, not a guarantee. `courier init --request` ends its stderr with a line that asks for the link above to be sent now and `init --wait --timeout 60s` to be run when the owner next writes. A pending `courier init --wait` (exit 8) ends with a line that names the same command again (only when every part of the command line is a known `init --wait` flag with a plain value; otherwise the words `this same command` and nothing from the command line, including any control character, is echoed): for a link created in this run, send the link now and run the command when the owner next writes; for a resumed request, send the link only if it has not been sent yet. A pending `courier invite --wait` ends its stderr, after the existing `[invite-pending]` line, with a line that asks for the invitation link (which stays on stdout) to be sent now and `invite serve <id> --wait 60` to be run when the owner next writes. `courier invite serve` prints, at the start of every run of a live, unclaimed invitation (not an expired or already-claimed one), a line with the saved invitation link to send if it has not been sent yet, and, if it ends pending, a last line after `[invite-pending]` that says no one has joined yet and to run the same command again now (it has no link to hand over, so it keeps the run-again wording). A claimed invitation prints no run-again line. stdout JSON and exit codes are unchanged, and other runs print no such line.
+
+  Details: TC-2360
+
+## 0.5.2-beta.0
+
+### Patch Changes
+
+- 7062e9f: Courier now prints `Next:` lines on stderr. Every line that hands the owner a link asks the agent only to send the owner that link in its reply now, and, where there is a follow-up command, to run it when the owner next writes to the agent (it no longer asks for the command in the same reply). The follow-up command is named in backticks, written as the user ran Courier (`courier` or `tinycloud courier`). This works best with a short `--timeout` (for example `1s`) so the pending exit is immediate and the flow continues on the owner's next message; in testing the request is not always followed, so it is a request, not a guarantee. `courier init --request` ends its stderr with a line that asks for the link above to be sent now and `init --wait --timeout 60s` to be run when the owner next writes. A pending `courier init --wait` (exit 8) ends with a line that names the same command again (only when every part of the command line is a known `init --wait` flag with a plain value; otherwise the words `this same command` and nothing from the command line, including any control character, is echoed): for a link created in this run, send the link now and run the command when the owner next writes; for a resumed request, send the link only if it has not been sent yet. A pending `courier invite --wait` ends its stderr, after the existing `[invite-pending]` line, with a line that asks for the invitation link (which stays on stdout) to be sent now and `invite serve <id> --wait 60` to be run when the owner next writes. `courier invite serve` prints, at the start of every run of a live, unclaimed invitation (not an expired or already-claimed one), a line with the saved invitation link to send if it has not been sent yet, and, if it ends pending, a last line after `[invite-pending]` that says no one has joined yet and to run the same command again now (it has no link to hand over, so it keeps the run-again wording). A claimed invitation prints no run-again line. stdout JSON and exit codes are unchanged, and other runs print no such line.
+
+  Details: TC-2360
+
+## 0.5.1
+
+### Patch Changes
+
+- d93ac9b: `courier init` works out where it stands once, from the profile status, the saved grant, the agent key, a saved redeemed grant, the saved approval request and the key-rotation record, and every mode (`--request`, `--wait`, `--resume`, `--rotate-key`, `--grant-file`) recovers from that one result.
+  - `init --resume` continues as `init --wait` when an approval from the owner is saved and no grant is waiting to be installed; with a grant waiting it installs the grant and keeps the approval for the next `init --wait`.
+  - A saved approval whose profile or agent key is missing is refused, and no file is changed (before, `init --wait` and `init --request` started a new request over it).
+  - A `grant.json` that is cut short or is not a grant counts as no saved grant and is reported once. A `profile.json` that cannot be read is reported as such and never treated as missing.
+  - `init --rotate-key` replaces the agent key, the profile and the grant as one journaled step that the next `init` finishes if it is interrupted. The record is checked before it is replayed, and a stray temporary key file left by a killed process is overwritten with zeros and removed. It still discards a held approval with a warning; when the approval already held a granted result, or a redeemed grant for the old key was saved, it also says a live grant may exist, until when, and that the owner can revoke it at https://account.tinycloud.xyz/delegations.
+  - A corrupt key file could print part of the private key in an error message; fixed. Courier now reports only the file name and that it is unreadable or corrupt for the state files it reads with its profile reader (`key.json`, `profile.json`, `grant.json`, `rotation.json`) and for `approval-pending.json`. Parse errors for input a person supplies, such as an invitation passed to `invite join`, are outside this change.
+  - The saved approval request is read, written and classified in one module (`approval-phase`); the file format and the approval flow are unchanged.
+
+  Details: TC-2383
+
+- d93ac9b: Follow-up corrections to `courier init` state handling.
+  - A corrupt or cut-short `approval-pending.json` is reported with a fixed reason. The JSON parser's message quoted the text around the failure, which could include `relayPrivateKey`.
+  - A `grant.json` that has the shape of a grant but is not owner-only is a saved grant: `init` stops with `profile-permissions` and `chmod 600` advice and changes no file (before, it counted as no grant and a renewal could replace it). `init --rotate-key` still discards the grant, as before. A loose-mode `grant.json` that is corrupt or not a grant gets the corrupt-file warning instead, with no `chmod` advice.
+  - `init --rotate-key`, with or without `--request`/`--wait`, refuses before writing anything when the saved approval cannot be read, naming the file and the `chmod` that fixes it. Before, a plain `--rotate-key` rotated the key and left that approval bound to the old one.
+  - The rotation record's key is proven before replay: `kty` OKP, `crv` Ed25519, `x` and `d` as unpadded base64url text of exactly 32 bytes, `x` the public key of `d` (both in canonical base64url), and a `did:key` derived from `x` whose single optional `#fragment` names the same key. Any other record is refused and no file changes.
+  - Stray key-bearing temporary files now include those of `approval-pending.json`. A file whose writing process is still running (`kill(pid, 0)` answers, or `EPERM`) is kept, not deleted, and reported by name. The process may be a live writer, whose key must not be zeroed between its fsync and its rename, or an unrelated process that was given the same pid after Courier died; Courier cannot tell which, so the file stays until that process is gone or the owner removes it.
+  - The rotation record notes the installed grant's delegation CID and expiry (no secrets) before `grant.json` is removed. The rotation, and an `init` that finishes an interrupted one, then says the old grant is not revoked, may still be valid, and that the owner can revoke it at https://account.tinycloud.xyz/delegations. A saved approval that holds only a result reference is not a grant and gets no revocation page.
+  - When `key.json` cannot be read, redeemed grants in `pending-grant.json` cannot be matched to the old key. The rotation keeps them and reports each with its CID and the revocation page. A later `init --resume` that finds a saved grant bound to a key the profile does not hold drops it, as it always has; the rotation's report is the record of it.
+  - A temporary file holds key material of any of the three files: an agent key (the new one, or the one being rewritten) or an approval's relay key and encrypted result. Those of `approval-pending.json` are now scrubbed silently like the others.
+  - The read-only readers added for this work (`pending-grant.json`, and `grant.json` for the loose-mode check and the rotation notice) never follow a symlink and never block on a FIFO; a `pending-grant.json` that is not a regular file of this user counts as no saved delegation. The `rm` command in the recovery line is shell-quoted. Stray temporary files are classified from one directory listing with one liveness check each.
+
+  Details: TC-2383
+
+- 053f912: Courier no longer loses pairings, revocations or key rotations when two commands use the same profile. A command that holds a copy of `profile.json` for a long time (`init --wait`, `invite serve`) used to save that copy over whatever another command had written meanwhile.
+  - `profile.json` is saved under a lock (`profile.json.lock`) that uses the intake lock: an `{pid, nonce}` owner record created whole, released only by its own nonce, broken only when its holder is established dead (on this machine and host, either a different true boot id (Linux boot_id, macOS kern.bootsessionuuid) or its pid is absent (on Linux, in the same pid namespace); a pid that exists is never judged dead, so a crashed holder whose pid was reused needs the manual recovery line). A stale lock is broken by one breaker at a time. A lock is never broken because it is old. If its holder is alive, is on another host or pid namespace, or the record cannot be read, the save waits 10 s and then refuses with `[profile-locked]` and one line naming the lock file, the holder and `rm -f -- <lock>` (PowerShell on Windows: `Remove-Item -LiteralPath <lock> -Force`) to clear it once no Courier command is running; the lock is left in place. The save re-reads the file and writes only what the command itself changed: a pairing made, a peer revoked or a renewal imported meanwhile is kept. Two renewals racing keep every outbound delegation and the longer inbound one, so a shorter artifact imported last no longer replaces a longer one.
+  - A command that started before `init --rotate-key` finished is refused with `[profile-changed]` and writes nothing, including no `grant.json` for the old key.
+  - Two commands that add the same handle never replace each other's peer or delegations (`[profile-changed]`), and a command whose peer was revoked meanwhile fails (`[peer-revoked]`) instead of printing an artifact.
+  - A `pending-A` or `awaiting-C` pairing that is more than 7 days old is forgotten.
+  - Starting a pairing again over a pending one that expired is no longer refused.
+  - `pair accept` of an artifact A that names an already paired peer is refused (`[usage]`, "Already paired with <peer>") before any delegation is created (a pairing that completes during `delegateTo` is refused with a warning naming the unsaved delegation and where to revoke it), and the pairing is left as it was.
+  - `courier intake` uses the same lock: a lock it cannot prove dead is kept and its refusal is one line naming the lock file, the holder and the removal command (`rm -f -- <lock>`, or `Remove-Item -LiteralPath <lock> -Force` on Windows), to run only after confirming no Courier command is running.
+
+  Details: TC-2384
+
+- 60607b5: Courier now persists a private identity sidecar before writing key-bearing temp bytes. Recovery scrubs a temp only when its recorded identity and liveness prove the writer is gone; missing, malformed, or foreign host/PID-namespace metadata keeps the temp and reports platform-specific manual recovery guidance (`rm -f --` or PowerShell `Remove-Item -LiteralPath`). Only UUID-shaped `linux:`/`macos:` boot values are accepted; malformed boot metadata is never reboot evidence and makes a lock record unreadable or a sidecar unknown. Operators must confirm no Courier writer anywhere could still be writing the temp or sidecar before using that command. After a successful rename, Courier syncs the installed target before best-effort sidecar removal; orphan sidecars are handled conservatively.
+
+  Details: TC-2464
+
+- Updated dependencies [dc48089]
+- Updated dependencies [75c0432]
+- Updated dependencies [75c0432]
+- Updated dependencies [cb0c6ce]
+- Updated dependencies [cb0c6ce]
+  - @tinycloud/node-sdk@3.11.0
+  - @tinycloud/sdk-core@3.11.0
+
+## 0.5.1-beta.5
+
+### Patch Changes
+
+- 60607b5: Courier now persists a private identity sidecar before writing key-bearing temp bytes. Recovery scrubs a temp only when its recorded identity and liveness prove the writer is gone; missing, malformed, or foreign host/PID-namespace metadata keeps the temp and reports platform-specific manual recovery guidance (`rm -f --` or PowerShell `Remove-Item -LiteralPath`). Only UUID-shaped `linux:`/`macos:` boot values are accepted; malformed boot metadata is never reboot evidence and makes a lock record unreadable or a sidecar unknown. Operators must confirm no Courier writer anywhere could still be writing the temp or sidecar before using that command. After a successful rename, Courier syncs the installed target before best-effort sidecar removal; orphan sidecars are handled conservatively.
+
+  Details: TC-2464
+
+## 0.5.1-beta.4
+
+### Patch Changes
+
+- 053f912: Courier no longer loses pairings, revocations or key rotations when two commands use the same profile. A command that holds a copy of `profile.json` for a long time (`init --wait`, `invite serve`) used to save that copy over whatever another command had written meanwhile.
+  - `profile.json` is saved under a lock (`profile.json.lock`) that uses the intake lock: an `{pid, nonce}` owner record created whole, released only by its own nonce, broken only when its holder is established dead (on this machine and host, either a different true boot id (Linux boot_id, macOS kern.bootsessionuuid) or its pid is absent (on Linux, in the same pid namespace); a pid that exists is never judged dead, so a crashed holder whose pid was reused needs the manual recovery line). A stale lock is broken by one breaker at a time. A lock is never broken because it is old. If its holder is alive, is on another host or pid namespace, or the record cannot be read, the save waits 10 s and then refuses with `[profile-locked]` and one line naming the lock file, the holder and `rm -f -- <lock>` (PowerShell on Windows: `Remove-Item -LiteralPath <lock> -Force`) to clear it once no Courier command is running; the lock is left in place. The save re-reads the file and writes only what the command itself changed: a pairing made, a peer revoked or a renewal imported meanwhile is kept. Two renewals racing keep every outbound delegation and the longer inbound one, so a shorter artifact imported last no longer replaces a longer one.
+  - A command that started before `init --rotate-key` finished is refused with `[profile-changed]` and writes nothing, including no `grant.json` for the old key.
+  - Two commands that add the same handle never replace each other's peer or delegations (`[profile-changed]`), and a command whose peer was revoked meanwhile fails (`[peer-revoked]`) instead of printing an artifact.
+  - A `pending-A` or `awaiting-C` pairing that is more than 7 days old is forgotten.
+  - Starting a pairing again over a pending one that expired is no longer refused.
+  - `pair accept` of an artifact A that names an already paired peer is refused (`[usage]`, "Already paired with <peer>") before any delegation is created (a pairing that completes during `delegateTo` is refused with a warning naming the unsaved delegation and where to revoke it), and the pairing is left as it was.
+  - `courier intake` uses the same lock: a lock it cannot prove dead is kept and its refusal is one line naming the lock file, the holder and the removal command (`rm -f -- <lock>`, or `Remove-Item -LiteralPath <lock> -Force` on Windows), to run only after confirming no Courier command is running.
+
+  Details: TC-2384
+
+## 0.5.1-beta.3
+
+### Patch Changes
+
+- d93ac9b: `courier init` works out where it stands once, from the profile status, the saved grant, the agent key, a saved redeemed grant, the saved approval request and the key-rotation record, and every mode (`--request`, `--wait`, `--resume`, `--rotate-key`, `--grant-file`) recovers from that one result.
+  - `init --resume` continues as `init --wait` when an approval from the owner is saved and no grant is waiting to be installed; with a grant waiting it installs the grant and keeps the approval for the next `init --wait`.
+  - A saved approval whose profile or agent key is missing is refused, and no file is changed (before, `init --wait` and `init --request` started a new request over it).
+  - A `grant.json` that is cut short or is not a grant counts as no saved grant and is reported once. A `profile.json` that cannot be read is reported as such and never treated as missing.
+  - `init --rotate-key` replaces the agent key, the profile and the grant as one journaled step that the next `init` finishes if it is interrupted. The record is checked before it is replayed, and a stray temporary key file left by a killed process is overwritten with zeros and removed. It still discards a held approval with a warning; when the approval already held a granted result, or a redeemed grant for the old key was saved, it also says a live grant may exist, until when, and that the owner can revoke it at https://account.tinycloud.xyz/delegations.
+  - A corrupt key file could print part of the private key in an error message; fixed. Courier now reports only the file name and that it is unreadable or corrupt for the state files it reads with its profile reader (`key.json`, `profile.json`, `grant.json`, `rotation.json`) and for `approval-pending.json`. Parse errors for input a person supplies, such as an invitation passed to `invite join`, are outside this change.
+  - The saved approval request is read, written and classified in one module (`approval-phase`); the file format and the approval flow are unchanged.
+
+  Details: TC-2383
+
+- d93ac9b: Follow-up corrections to `courier init` state handling.
+  - A corrupt or cut-short `approval-pending.json` is reported with a fixed reason. The JSON parser's message quoted the text around the failure, which could include `relayPrivateKey`.
+  - A `grant.json` that has the shape of a grant but is not owner-only is a saved grant: `init` stops with `profile-permissions` and `chmod 600` advice and changes no file (before, it counted as no grant and a renewal could replace it). `init --rotate-key` still discards the grant, as before. A loose-mode `grant.json` that is corrupt or not a grant gets the corrupt-file warning instead, with no `chmod` advice.
+  - `init --rotate-key`, with or without `--request`/`--wait`, refuses before writing anything when the saved approval cannot be read, naming the file and the `chmod` that fixes it. Before, a plain `--rotate-key` rotated the key and left that approval bound to the old one.
+  - The rotation record's key is proven before replay: `kty` OKP, `crv` Ed25519, `x` and `d` as unpadded base64url text of exactly 32 bytes, `x` the public key of `d` (both in canonical base64url), and a `did:key` derived from `x` whose single optional `#fragment` names the same key. Any other record is refused and no file changes.
+  - Stray key-bearing temporary files now include those of `approval-pending.json`. A file whose writing process is still running (`kill(pid, 0)` answers, or `EPERM`) is kept, not deleted, and reported by name. The process may be a live writer, whose key must not be zeroed between its fsync and its rename, or an unrelated process that was given the same pid after Courier died; Courier cannot tell which, so the file stays until that process is gone or the owner removes it.
+  - The rotation record notes the installed grant's delegation CID and expiry (no secrets) before `grant.json` is removed. The rotation, and an `init` that finishes an interrupted one, then says the old grant is not revoked, may still be valid, and that the owner can revoke it at https://account.tinycloud.xyz/delegations. A saved approval that holds only a result reference is not a grant and gets no revocation page.
+  - When `key.json` cannot be read, redeemed grants in `pending-grant.json` cannot be matched to the old key. The rotation keeps them and reports each with its CID and the revocation page. A later `init --resume` that finds a saved grant bound to a key the profile does not hold drops it, as it always has; the rotation's report is the record of it.
+  - A temporary file holds key material of any of the three files: an agent key (the new one, or the one being rewritten) or an approval's relay key and encrypted result. Those of `approval-pending.json` are now scrubbed silently like the others.
+  - The read-only readers added for this work (`pending-grant.json`, and `grant.json` for the loose-mode check and the rotation notice) never follow a symlink and never block on a FIFO; a `pending-grant.json` that is not a regular file of this user counts as no saved delegation. The `rm` command in the recovery line is shell-quoted. Stray temporary files are classified from one directory listing with one liveness check each.
+
+  Details: TC-2383
+
+## 0.5.1-beta.2
+
+### Patch Changes
+
+- Updated dependencies [dc48089]
+  - @tinycloud/node-sdk@3.11.0-beta.2
+  - @tinycloud/sdk-core@3.11.0-beta.2
+
+## 0.5.1-beta.1
+
+### Patch Changes
+
+- Updated dependencies [cb0c6ce]
+- Updated dependencies [cb0c6ce]
+  - @tinycloud/node-sdk@3.11.0-beta.1
+  - @tinycloud/sdk-core@3.11.0-beta.1
+
+## 0.5.1-beta.0
+
+### Patch Changes
+
+- Updated dependencies [75c0432]
+- Updated dependencies [75c0432]
+  - @tinycloud/node-sdk@3.11.0-beta.0
+  - @tinycloud/sdk-core@3.11.0-beta.0
+
+## 0.5.0
+
+### Minor Changes
+
+- 1d688b3: Courier uses the same short-link approval flow as `tinycloud onboard`, so the owner has no code to copy back.
+  - `courier init --request` creates an OpenKey approval request for the agent key (the `agents` space grant, 30 days), saves it in `$COURIER_HOME/approval-pending.json` (owner-only, fsynced) before printing, and prints the same JSON as before with `openkeyUrl` now a short `https://openkey.so/a/<id>#…` link. Asking again reuses the saved request while it is open and unchanged.
+  - New `courier init --wait [--timeout <duration, at most 9m>]` polls OpenKey with a proof signed by the agent key, decrypts and checks the result (request id, digest, requester, target, owner, expiry, exact permissions), installs the grant, and only then acknowledges it. The default timeout is 60 s; at the deadline it exits 8 (not a failure: the approval is still pending) with `{"pending":{"step":1,"of":1,"approvalUrl":…,"expiresAt":…}}` on stdout, and the next run resumes the same request, with no second approval. A request that already holds an approval is never replaced by a run with other flags, a renewal approved by a different owner than the one holding the grant is refused (`--rotate-key` binds a new owner), and the granted lifetime may not exceed the requested one. The approved result is saved encrypted before any install work, so a process that is killed at any point resumes from disk. An expired request (`approval-expired`) or an approved result that passed OpenKey's 10-minute retention (`approval-result-expired`) installs nothing and says to run `init --request` again.
+  - Courier's grant, profile and pending-request files are now written with fsync before anything acknowledges them.
+  - `--grant-file`, `--paste` (old `XXXX-XXXX` codes) and plain `init` are unchanged.
+  - `@tinycloud/share-envelope/links` exports the requester side of an approval request as a pure client: `approvalSessionProof`, `discoverApprovalResult`, `fetchApprovalResult`, `ackApprovalResult`, `collectApprovalResult`, `generateRelayKey`, `openRelayResult` and `checkApprovalResultBinding`.
+
+  Details: TC-2300
+
+- 0d968db: `courier pair renew <peer> --renew-artifact` emits a fresh C artifact for one already-paired peer without requiring the issuer's inbound delegation. The receiver can install it with `courier pair accept`; both sides preserve the established peer and exact mailbox scope, and the renewed delegation remains limited to seven days. Export is rate-limited to one renewal per peer per 20 hours unless the owner passes `--force`; no automatic renewal is added.
+
+  Details: TC-712
+
+### Patch Changes
+
+- Updated dependencies [1d688b3]
+- Updated dependencies [7f81a1d]
+  - @tinycloud/share-envelope@1.5.0
+  - @tinycloud/sdk-core@3.10.0
+  - @tinycloud/node-sdk@3.10.0
+
+## 0.5.0-beta.3
+
+### Patch Changes
+
+- @tinycloud/node-sdk@3.10.0-beta.3
+
+## 0.5.0-beta.2
+
+### Minor Changes
+
+- 0d968db: `courier pair renew <peer> --renew-artifact` emits a fresh C artifact for one already-paired peer without requiring the issuer's inbound delegation. The receiver can install it with `courier pair accept`; both sides preserve the established peer and exact mailbox scope, and the renewed delegation remains limited to seven days. Export is rate-limited to one renewal per peer per 20 hours unless the owner passes `--force`; no automatic renewal is added.
+
+  Details: TC-712
+
+## 0.5.0-beta.1
+
+### Patch Changes
+
+- Updated dependencies [7f81a1d]
+  - @tinycloud/sdk-core@3.10.0-beta.2
+  - @tinycloud/node-sdk@3.10.0-beta.2
+
+## 0.5.0-beta.0
+
+### Minor Changes
+
+- 1d688b3: Courier uses the same short-link approval flow as `tinycloud onboard`, so the owner has no code to copy back.
+  - `courier init --request` creates an OpenKey approval request for the agent key (the `agents` space grant, 30 days), saves it in `$COURIER_HOME/approval-pending.json` (owner-only, fsynced) before printing, and prints the same JSON as before with `openkeyUrl` now a short `https://openkey.so/a/<id>#…` link. Asking again reuses the saved request while it is open and unchanged.
+  - New `courier init --wait [--timeout <duration, at most 9m>]` polls OpenKey with a proof signed by the agent key, decrypts and checks the result (request id, digest, requester, target, owner, expiry, exact permissions), installs the grant, and only then acknowledges it. The default timeout is 60 s; at the deadline it exits 8 (not a failure: the approval is still pending) with `{"pending":{"step":1,"of":1,"approvalUrl":…,"expiresAt":…}}` on stdout, and the next run resumes the same request, with no second approval. A request that already holds an approval is never replaced by a run with other flags, a renewal approved by a different owner than the one holding the grant is refused (`--rotate-key` binds a new owner), and the granted lifetime may not exceed the requested one. The approved result is saved encrypted before any install work, so a process that is killed at any point resumes from disk. An expired request (`approval-expired`) or an approved result that passed OpenKey's 10-minute retention (`approval-result-expired`) installs nothing and says to run `init --request` again.
+  - Courier's grant, profile and pending-request files are now written with fsync before anything acknowledges them.
+  - `--grant-file`, `--paste` (old `XXXX-XXXX` codes) and plain `init` are unchanged.
+  - `@tinycloud/share-envelope/links` exports the requester side of an approval request as a pure client: `approvalSessionProof`, `discoverApprovalResult`, `fetchApprovalResult`, `ackApprovalResult`, `collectApprovalResult`, `generateRelayKey`, `openRelayResult` and `checkApprovalResultBinding`.
+
+  Details: TC-2300
+
+### Patch Changes
+
+- Updated dependencies [1d688b3]
+  - @tinycloud/share-envelope@1.5.0-beta.0
+  - @tinycloud/node-sdk@3.10.0-beta.1
+  - @tinycloud/sdk-core@3.10.0-beta.1
+
+## 0.4.2
+
+### Patch Changes
+
+- f7639ea: An OpenKey short code is consumed the moment it is redeemed, so a run that was killed after the redeem (an agent tool's two-minute limit hit this) lost the owner's approval and the retry could only say "Delegation code not found". The redeemed delegation is now saved first, to an owner-only `pending-grant.json` in the Courier home (`pending-delegation-code.json` in the CLI profile directory), fsynced and holding public fields only. Re-running with the same code, or `courier init --resume`, finishes from that copy with no second redeem and no second approval; the record is deleted only after the grant and profile are saved (the CLI: after its login or grant commit), and an expired or wrong-key record is never installed. `courier init --resume` also accepts a profile left `awaiting-grant` beside a saved grant. Courier covers `init` with a code, and the CLI covers `--paste` for `auth login`, `init`, `auth rotate`, `auth grant` and `onboard --code`. One limit remains: the first `tc auth login --paste` on a profile with no saved key keeps its new private key only in memory until the login commits, so a kill before the commit needs a fresh approval. Nothing changes when a run is not interrupted: every message and exit code is unchanged, and no flag is added.
+
+  Details: TC-2301
+
+- Updated dependencies [8d278fb]
+- Updated dependencies [8d278fb]
+  - @tinycloud/node-sdk@3.9.1
+  - @tinycloud/sdk-core@3.9.1
+
+## 0.4.2-beta.2
+
+### Patch Changes
+
+- f7639ea: An OpenKey short code is consumed the moment it is redeemed, so a run that was killed after the redeem (an agent tool's two-minute limit hit this) lost the owner's approval and the retry could only say "Delegation code not found". The redeemed delegation is now saved first, to an owner-only `pending-grant.json` in the Courier home (`pending-delegation-code.json` in the CLI profile directory), fsynced and holding public fields only. Re-running with the same code, or `courier init --resume`, finishes from that copy with no second redeem and no second approval; the record is deleted only after the grant and profile are saved (the CLI: after its login or grant commit), and an expired or wrong-key record is never installed. `courier init --resume` also accepts a profile left `awaiting-grant` beside a saved grant. Courier covers `init` with a code, and the CLI covers `--paste` for `auth login`, `init`, `auth rotate`, `auth grant` and `onboard --code`. One limit remains: the first `tc auth login --paste` on a profile with no saved key keeps its new private key only in memory until the login commits, so a kill before the commit needs a fresh approval. Nothing changes when a run is not interrupted: every message and exit code is unchanged, and no flag is added.
+
+  Details: TC-2301
+
+## 0.4.2-beta.1
+
+### Patch Changes
+
+- @tinycloud/node-sdk@3.9.1-beta.1
+
+## 0.4.2-beta.0
+
+### Patch Changes
+
+- Updated dependencies [8d278fb]
+- Updated dependencies [8d278fb]
+  - @tinycloud/node-sdk@3.9.1-beta.0
+  - @tinycloud/sdk-core@3.9.1-beta.0
+
+## 0.4.1
+
+### Patch Changes
+
+- a9bc978: The SDK can acquire a `tinycloud.email-held/v1` credential from the witness, for a caller that opts in per call. Nothing is enabled by default: the held profile stays disabled, and a call without `allowHeldProfile: true` is refused `PROFILE_UNAVAILABLE` before any request. `@tinycloud/node-sdk`: `acquireEmailProof`, `requestEmailProofCode` and `completeEmailProof` take `allowHeldProfile: true`; the holder is a canonical `did:pkh:eip155:1` (EIP-55) account with `EIP191`; the address is trimmed, refused if non-ASCII, lowercased and checked against the witness's rules (`ADDRESS_INVALID` before any request); the account binding the witness serves is checked against the SDK's own values before the wallet is asked to sign; the result is verified with the held verifier against the pinned issuer and cross-checked against the request. New public error code `CLIENT_CLOCK_SKEW` (not recoverable; default message "Your device clock is more than 5 minutes behind. Correct it and try again."): a device clock more than 5 minutes behind the witness is refused after the create call and before the code is mailed. `DESCRIPTOR_MISMATCH` and `UNSUPPORTED_VERSION` from the witness map to `PROFILE_UNAVAILABLE`. `EmailProofResult.verified` is now the ticket or the held verifier's result (`isTicketEmailProofResult` narrows it), and `EMAIL_PROOF_PINS` is exported from `@tinycloud/node-sdk/credentials`. `@tinycloud/sdk-core`: the credential descriptor and holder binding accept the held account shape next to the ticket shape (`AccountHolderBinding`, `TicketHolderBinding`, `ACCOUNT_HOLDER_BINDING_DOMAIN`). `@tinycloud/web-sdk`: `createAccountHolderSigner` signs only an exact held account binding for its own account and refuses any other bytes with `HOLDER_INVALID` before the wallet is called; `acquireHeldCredential` takes `allowHeldProfile`, checks that the issuer policy accepts the pinned issuer and reads the member's storage strictly before any request (a failed read is `OFFLINE`), and stores at `max(client time, credential iat)`. `@tinycloud/courier` stores ticket credentials only (a held result is refused there).
+
+  Only the email-proof functions (and the held source that forwards their `allowHeldProfile: true`) reach the held profile. `OpenCredentialsHttpTransport` (constructor option) and `interpretCredentialFlow` (input) refuse an account-bound descriptor with `UNSUPPORTED_PROFILE`, before any request, unless called with `allowAccountSubject: true`. That is a public option of both; the SDK's own callers pass it only for the held profile, after the per-call opt-in was accepted. The `CredentialsService` operations (`acquire`, `ensure`, `verify`) refuse a held requirement or descriptor with `UNSUPPORTED_PROFILE` and `publishEmailShareV3` refuses it; `validateCredentialFlowDescriptor` stays shape-only. A held request that stopped after a failed wallet prompt (`SIGNATURE_REJECTED`, recoverable, the pending kept) or a failed notice (`ISSUER_UNAVAILABLE`) is retried with the same pending: the SDK reads the binding again and checks it, does not ask the wallet again after the signature was accepted, and mails no second code. On the retry the `jti` of the binding is format-checked only (contract addendum A3): a witness that serves a different `jti` is detected only when the credential disagrees with it, after the notice was sent. The file pending store persists a held request's non-secret `serverExpiresAt` (a ticket file is unchanged) and adds no other secret. `HELD_ACCOUNT_BINDING_PINS` (exported from `@tinycloud/node-sdk/credentials`) holds the static fields of the account binding; the create request, the binding checks and the web-sdk account signer all use it, and the signer refuses a binding with free text in any field. In `@tinycloud/web-sdk` the account signer copies its input once and decodes it strictly (a byte-order mark is refused); a cache miss without the opt-in is `PROFILE_UNAVAILABLE`. `email-publish-v3` refuses a descriptor that is not a ticket descriptor.
+
+  Details: TC-2254
+
+- Updated dependencies [614c1c2]
+- Updated dependencies [614c1c2]
+- Updated dependencies [614c1c2]
+- Updated dependencies [9758dfd]
+- Updated dependencies [a9bc978]
+- Updated dependencies [5e47629]
+- Updated dependencies [b0da170]
+- Updated dependencies [f1744fb]
+  - @tinycloud/node-sdk@3.9.0
+  - @tinycloud/sdk-core@3.9.0
+  - @tinycloud/share-envelope@1.4.1
+
+## 0.4.1-beta.7
+
+### Patch Changes
+
+- Updated dependencies [b0da170]
+  - @tinycloud/share-envelope@1.4.1-beta.1
+  - @tinycloud/node-sdk@3.9.0-beta.8
+  - @tinycloud/sdk-core@3.9.0-beta.8
+
+## 0.4.1-beta.6
+
+### Patch Changes
+
+- @tinycloud/node-sdk@3.9.0-beta.6
+
+## 0.4.1-beta.5
+
+### Patch Changes
+
+- Updated dependencies [9758dfd]
+  - @tinycloud/sdk-core@3.9.0-beta.5
+  - @tinycloud/node-sdk@3.9.0-beta.5
+
+## 0.4.1-beta.4
+
+### Patch Changes
+
+- a9bc978: The SDK can acquire a `tinycloud.email-held/v1` credential from the witness, for a caller that opts in per call. Nothing is enabled by default: the held profile stays disabled, and a call without `allowHeldProfile: true` is refused `PROFILE_UNAVAILABLE` before any request. `@tinycloud/node-sdk`: `acquireEmailProof`, `requestEmailProofCode` and `completeEmailProof` take `allowHeldProfile: true`; the holder is a canonical `did:pkh:eip155:1` (EIP-55) account with `EIP191`; the address is trimmed, refused if non-ASCII, lowercased and checked against the witness's rules (`ADDRESS_INVALID` before any request); the account binding the witness serves is checked against the SDK's own values before the wallet is asked to sign; the result is verified with the held verifier against the pinned issuer and cross-checked against the request. New public error code `CLIENT_CLOCK_SKEW` (not recoverable; default message "Your device clock is more than 5 minutes behind. Correct it and try again."): a device clock more than 5 minutes behind the witness is refused after the create call and before the code is mailed. `DESCRIPTOR_MISMATCH` and `UNSUPPORTED_VERSION` from the witness map to `PROFILE_UNAVAILABLE`. `EmailProofResult.verified` is now the ticket or the held verifier's result (`isTicketEmailProofResult` narrows it), and `EMAIL_PROOF_PINS` is exported from `@tinycloud/node-sdk/credentials`. `@tinycloud/sdk-core`: the credential descriptor and holder binding accept the held account shape next to the ticket shape (`AccountHolderBinding`, `TicketHolderBinding`, `ACCOUNT_HOLDER_BINDING_DOMAIN`). `@tinycloud/web-sdk`: `createAccountHolderSigner` signs only an exact held account binding for its own account and refuses any other bytes with `HOLDER_INVALID` before the wallet is called; `acquireHeldCredential` takes `allowHeldProfile`, checks that the issuer policy accepts the pinned issuer and reads the member's storage strictly before any request (a failed read is `OFFLINE`), and stores at `max(client time, credential iat)`. `@tinycloud/courier` stores ticket credentials only (a held result is refused there).
+
+  Only the email-proof functions (and the held source that forwards their `allowHeldProfile: true`) reach the held profile. `OpenCredentialsHttpTransport` (constructor option) and `interpretCredentialFlow` (input) refuse an account-bound descriptor with `UNSUPPORTED_PROFILE`, before any request, unless called with `allowAccountSubject: true`. That is a public option of both; the SDK's own callers pass it only for the held profile, after the per-call opt-in was accepted. The `CredentialsService` operations (`acquire`, `ensure`, `verify`) refuse a held requirement or descriptor with `UNSUPPORTED_PROFILE` and `publishEmailShareV3` refuses it; `validateCredentialFlowDescriptor` stays shape-only. A held request that stopped after a failed wallet prompt (`SIGNATURE_REJECTED`, recoverable, the pending kept) or a failed notice (`ISSUER_UNAVAILABLE`) is retried with the same pending: the SDK reads the binding again and checks it, does not ask the wallet again after the signature was accepted, and mails no second code. On the retry the `jti` of the binding is format-checked only (contract addendum A3): a witness that serves a different `jti` is detected only when the credential disagrees with it, after the notice was sent. The file pending store persists a held request's non-secret `serverExpiresAt` (a ticket file is unchanged) and adds no other secret. `HELD_ACCOUNT_BINDING_PINS` (exported from `@tinycloud/node-sdk/credentials`) holds the static fields of the account binding; the create request, the binding checks and the web-sdk account signer all use it, and the signer refuses a binding with free text in any field. In `@tinycloud/web-sdk` the account signer copies its input once and decodes it strictly (a byte-order mark is refused); a cache miss without the opt-in is `PROFILE_UNAVAILABLE`. `email-publish-v3` refuses a descriptor that is not a ticket descriptor.
+
+  Details: TC-2254
+
+- Updated dependencies [a9bc978]
+  - @tinycloud/sdk-core@3.9.0-beta.4
+  - @tinycloud/node-sdk@3.9.0-beta.4
+
+## 0.4.1-beta.3
+
+### Patch Changes
+
+- Updated dependencies [614c1c2]
+- Updated dependencies [614c1c2]
+- Updated dependencies [614c1c2]
+  - @tinycloud/node-sdk@3.9.0-beta.3
+  - @tinycloud/sdk-core@3.9.0-beta.3
+
+## 0.4.1-beta.2
+
+### Patch Changes
+
+- @tinycloud/node-sdk@3.8.1-beta.2
+- @tinycloud/sdk-core@3.8.1-beta.2
+
+## 0.4.1-beta.1
+
+### Patch Changes
+
+- Updated dependencies [5e47629]
+  - @tinycloud/share-envelope@1.4.1-beta.0
+  - @tinycloud/node-sdk@3.8.1-beta.1
+  - @tinycloud/sdk-core@3.8.1-beta.1
+
+## 0.4.1-beta.0
+
+### Patch Changes
+
+- Updated dependencies [f1744fb]
+  - @tinycloud/node-sdk@3.8.1-beta.0
+
+## 0.4.0
+
+### Minor Changes
+
+- c6b78b2: Courier pairing now accepts artifacts from a different Courier agent key of the same owner, so two agents sharing one `did:pkh` pair like any two agents. Pairing still refuses the agent's own courier DID, and the peer delegation binding is unchanged. Tested with an isolated same-owner A→B→C exchange plus self-pair, key-substitution and different-owner regression checks.
+
+  Details: TC-1248
+
+### Patch Changes
+
+- 406ec01: Add a one-prompt guided start with persisted chat discovery, explicit selection, and signed invitation links. Support same-owner agents, anyone holding the link, and named Courier keys or verified paired handles through a participating issuer's scoped KV pairing relay. Bind joins and durable winning claims to the intended session; keep existing manual pairing guards and restrict guided peer grants to one thread. Email recipient identifiers are refused rather than treated as verified names.
+
+  Explicitly supplied empty invitation links, including positional links, are refused before chat discovery or creation; they cannot create or activate a fallback session.
+
+  Details: TC-1543
+
+- Updated dependencies [15080ed]
+- Updated dependencies [32ed899]
+- Updated dependencies [49f3665]
+- Updated dependencies [20a872e]
+- Updated dependencies [479205d]
+- Updated dependencies [19048ec]
+- Updated dependencies [92e4bd0]
+- Updated dependencies [e740a6d]
+- Updated dependencies [c541786]
+- Updated dependencies [e424ba9]
+- Updated dependencies [812a818]
+- Updated dependencies [7b22f61]
+- Updated dependencies [4a19c47]
+- Updated dependencies [5d9d314]
+- Updated dependencies [44c439a]
+- Updated dependencies [2789240]
+- Updated dependencies [f167805]
+- Updated dependencies [9fb359a]
+- Updated dependencies [9fb359a]
+- Updated dependencies [812a818]
+  - @tinycloud/node-sdk@3.8.0
+  - @tinycloud/sdk-core@3.8.0
+  - @tinycloud/share-envelope@1.4.0
+
+## 0.4.0-beta.23
+
+### Patch Changes
+
+- @tinycloud/node-sdk@3.8.0-beta.23
+- @tinycloud/sdk-core@3.8.0-beta.23
+
+## 0.4.0-beta.22
+
+### Patch Changes
+
+- @tinycloud/node-sdk@3.8.0-beta.22
+- @tinycloud/sdk-core@3.8.0-beta.22
+
+## 0.4.0-beta.21
+
+### Patch Changes
+
+- Updated dependencies [9fb359a]
+- Updated dependencies [9fb359a]
+  - @tinycloud/sdk-core@3.8.0-beta.21
+  - @tinycloud/node-sdk@3.8.0-beta.21
+
+## 0.4.0-beta.20
+
+### Patch Changes
+
+- Updated dependencies [e424ba9]
+  - @tinycloud/node-sdk@3.8.0-beta.20
+  - @tinycloud/sdk-core@3.8.0-beta.20
+
+## 0.4.0-beta.19
+
+### Patch Changes
+
+- Updated dependencies [19048ec]
+  - @tinycloud/share-envelope@1.4.0-beta.2
+  - @tinycloud/node-sdk@3.8.0-beta.19
+  - @tinycloud/sdk-core@3.8.0-beta.19
+
+## 0.4.0-beta.18
+
+### Patch Changes
+
+- @tinycloud/node-sdk@3.8.0-beta.18
+- @tinycloud/sdk-core@3.8.0-beta.18
+
+## 0.4.0-beta.17
+
+### Patch Changes
+
+- @tinycloud/node-sdk@3.8.0-beta.17
+- @tinycloud/sdk-core@3.8.0-beta.17
+
+## 0.4.0-beta.16
+
+### Patch Changes
+
+- 406ec01: Add a one-prompt guided start with persisted chat discovery, explicit selection, and signed invitation links. Support same-owner agents, anyone holding the link, and named Courier keys or verified paired handles through a participating issuer's scoped KV pairing relay. Bind joins and durable winning claims to the intended session; keep existing manual pairing guards and restrict guided peer grants to one thread. Email recipient identifiers are refused rather than treated as verified names.
+
+  Explicitly supplied empty invitation links, including positional links, are refused before chat discovery or creation; they cannot create or activate a fallback session.
+
+  Details: TC-1543
+
+## 0.4.0-beta.15
+
+### Minor Changes
+
+- c6b78b2: Courier pairing now accepts artifacts from a different Courier agent key of the same owner, so two agents sharing one `did:pkh` pair like any two agents. Pairing still refuses the agent's own courier DID, and the peer delegation binding is unchanged. Tested with an isolated same-owner A→B→C exchange plus self-pair, key-substitution and different-owner regression checks.
+
+  Details: TC-1248
+
+## 0.3.3-beta.14
+
+### Patch Changes
+
+- Updated dependencies [812a818]
+- Updated dependencies [812a818]
+  - @tinycloud/node-sdk@3.8.0-beta.16
+  - @tinycloud/sdk-core@3.8.0-beta.16
+
+## 0.3.3-beta.13
+
+### Patch Changes
+
+- Updated dependencies [f167805]
+  - @tinycloud/sdk-core@3.8.0-beta.15
+  - @tinycloud/node-sdk@3.8.0-beta.15
+
+## 0.3.3-beta.12
+
+### Patch Changes
+
+- Updated dependencies [49f3665]
+- Updated dependencies [e740a6d]
+  - @tinycloud/sdk-core@3.8.0-beta.14
+  - @tinycloud/node-sdk@3.8.0-beta.14
+
+## 0.3.3-beta.11
+
+### Patch Changes
+
+- Updated dependencies [32ed899]
+  - @tinycloud/node-sdk@3.8.0-beta.13
+
+## 0.3.3-beta.10
+
+### Patch Changes
+
+- Updated dependencies [5d9d314]
+  - @tinycloud/node-sdk@3.8.0-beta.11
+
+## 0.3.3-beta.9
+
+### Patch Changes
+
+- Updated dependencies [20a872e]
+  - @tinycloud/node-sdk@3.8.0-beta.10
+
+## 0.3.3-beta.8
+
+### Patch Changes
+
+- Updated dependencies [92e4bd0]
+  - @tinycloud/node-sdk@3.8.0-beta.9
+  - @tinycloud/sdk-core@3.8.0-beta.9
+
+## 0.3.3-beta.7
+
+### Patch Changes
+
+- @tinycloud/node-sdk@3.8.0-beta.7
+
+## 0.3.3-beta.6
+
+### Patch Changes
+
+- Updated dependencies [479205d]
+  - @tinycloud/node-sdk@3.8.0-beta.6
+
+## 0.3.3-beta.5
+
+### Patch Changes
+
+- Updated dependencies [44c439a]
+  - @tinycloud/sdk-core@3.8.0-beta.5
+  - @tinycloud/node-sdk@3.8.0-beta.5
+
+## 0.3.3-beta.4
+
+### Patch Changes
+
+- Updated dependencies [c541786]
+  - @tinycloud/sdk-core@3.8.0-beta.4
+  - @tinycloud/node-sdk@3.8.0-beta.4
+
+## 0.3.3-beta.3
+
+### Patch Changes
+
+- @tinycloud/sdk-core@3.8.0-beta.3
+- @tinycloud/node-sdk@3.8.0-beta.3
+
+## 0.3.3-beta.2
+
+### Patch Changes
+
+- Updated dependencies [4a19c47]
+  - @tinycloud/sdk-core@3.8.0-beta.2
+  - @tinycloud/node-sdk@3.8.0-beta.2
+
+## 0.3.3-beta.1
+
+### Patch Changes
+
+- Updated dependencies [2789240]
+  - @tinycloud/sdk-core@3.8.0-beta.1
+  - @tinycloud/node-sdk@3.8.0-beta.1
+
+## 0.3.3-beta.0
+
+### Patch Changes
+
+- Updated dependencies [15080ed]
+  - @tinycloud/node-sdk@3.8.0-beta.0
+
+## 0.3.2
+
+### Patch Changes
+
+- Updated dependencies [c142537]
+- Updated dependencies [279c8e9]
+- Updated dependencies [71fa087]
+- Updated dependencies [147bb78]
+  - @tinycloud/node-sdk@3.7.0
+  - @tinycloud/sdk-core@3.7.0
+
+## 0.3.2-beta.4
+
+### Patch Changes
+
+- Updated dependencies [c142537]
+  - @tinycloud/node-sdk@3.7.0-beta.4
+  - @tinycloud/sdk-core@3.7.0-beta.4
+
+## 0.3.2-beta.3
+
+### Patch Changes
+
+- Updated dependencies [279c8e9]
+  - @tinycloud/node-sdk@3.7.0-beta.3
+  - @tinycloud/sdk-core@3.7.0-beta.3
+
+## 0.3.2-beta.2
+
+### Patch Changes
+
+- Updated dependencies [147bb78]
+  - @tinycloud/node-sdk@3.7.0-beta.2
+  - @tinycloud/sdk-core@3.7.0-beta.2
+
+## 0.3.2-beta.1
+
+### Patch Changes
+
+- Updated dependencies [71fa087]
+  - @tinycloud/node-sdk@3.7.0-beta.1
+  - @tinycloud/sdk-core@3.7.0-beta.1
+
+## 0.3.2-beta.0
+
+### Patch Changes
+
+- @tinycloud/node-sdk@3.6.2-beta.0
+
+## 0.3.1
+
+### Patch Changes
+
+- 8acd73d: The courier test suite now runs every test file under a temporary home, and with `COURIER_TEST=1` the profile directory resolver refuses a home outside `COURIER_TEST_HOME` (`test-home-escape`). Without `COURIER_TEST=1` behaviour is unchanged.
+
+  Details: TC-712
+
+- Updated dependencies [271155a]
+- Updated dependencies [09b7dc0]
+  - @tinycloud/node-sdk@3.6.1
+  - @tinycloud/sdk-core@3.6.1
+
+## 0.3.1-beta.2
+
+### Patch Changes
+
+- 8acd73d: The courier test suite now runs every test file under a temporary home, and with `COURIER_TEST=1` the profile directory resolver refuses a home outside `COURIER_TEST_HOME` (`test-home-escape`). Without `COURIER_TEST=1` behaviour is unchanged.
+
+  Details: TC-712
+
+## 0.3.1-beta.1
+
+### Patch Changes
+
+- Updated dependencies [09b7dc0]
+  - @tinycloud/node-sdk@3.6.1-beta.1
+
+## 0.3.1-beta.0
+
+### Patch Changes
+
+- Updated dependencies [271155a]
+  - @tinycloud/node-sdk@3.6.1-beta.0
+
+## 0.3.0
+
+### Minor Changes
+
+- c0acb86: Adds `courier credential acquire --email <addr>` and `courier credential show --email <addr>`. `acquire` requests an email verification code. Run it again with `--code-stdin` and enter the code on stdin to store the verified credential under `COURIER_HOME/credentials/` (owner-only). `show` prints `email`, `credentialId`, `issuedAt`, `expiresAt`, and `status`, never the credential itself.
+
+  Details: TC-712
+
+- 7bd4ae6: `@tinycloud/node-sdk/credentials` adds `verifyStoredEmailProof`, which re-verifies a stored email-proof credential offline: descriptor digest pin, envelope rebuild, pinned issuer keys, status check, and holder match. `@tinycloud/node-sdk/credential-pending-store` exports `ensureSecureDir` and `checkSecureDir`. The credentials directory must be a real directory with owner-only mode; a symlink or a file is refused, and a pre-existing directory with loose permissions is refused rather than chmodded. A pending request expires at the earlier of the witness expiry and 15 minutes after creation.
+
+  `courier credential acquire` writes one JSON document to stdout per call (pretty printed, nothing else on stdout; hints go to stderr): `status: "code-sent"` with `codeExpiresAt` on the first call, then `status: "acquired"` with `issuedAt` and `expiresAt` on the second. The verification code must be entered within 5 minutes. `courier credential show` writes one JSON document with `address`, `credentialId`, `issuedAt`, `expiresAt`, and `status`, never the credential. Stored credentials are re-verified offline on every read before any other rule applies; a record that fails is refused with `credential-record-invalid` and kept, and nothing is deleted on the strength of unverified stored fields. A credential that passed verification is dropped when less than 60 seconds of its own expiry remain or once older than the 3600-second maximum age. Courier refuses to run when both `HOME` and `COURIER_HOME` are unset. `courier --version` prints the package version.
+
+  Details: TC-1757
+
+### Patch Changes
+
+- 7bd4ae6: `courier credential show` no longer deletes a stored credential that fails offline re-verification. The record is refused with `credential-record-invalid` and kept under `COURIER_HOME/credentials/` for inspection. Lifecycle drops are unchanged: a credential within 60 seconds of its own expiry, or older than the 3600-second maximum age, is still deleted.
+
+  `@tinycloud/node-sdk/credentials` also exports the `StoredEmailProofInput` type.
+
+  `@tinycloud/web-sdk/credentials` adds `verifyStoredEmailProof` and the `StoredEmailProofInput` and `StoredEmailProofRecord` types, so headless clients can re-verify a stored email-proof credential offline without importing `@tinycloud/node-sdk` directly.
+
+  Details: TC-712
+
+- Updated dependencies [e600a1a]
+- Updated dependencies [0c09d7b]
+- Updated dependencies [1f831e3]
+- Updated dependencies [7bd4ae6]
+- Updated dependencies [7bd4ae6]
+- Updated dependencies [e32bc41]
+- Updated dependencies [c0acb86]
+  - @tinycloud/node-sdk@3.6.0
+  - @tinycloud/sdk-core@3.6.0
+
 ## 0.3.0-beta.7
 
 ### Patch Changes

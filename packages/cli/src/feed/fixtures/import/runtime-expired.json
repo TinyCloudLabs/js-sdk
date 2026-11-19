@@ -1,0 +1,450 @@
+{
+  "formatVersion": 1,
+  "modelVersion": 1,
+  "frozenAt": "2000-01-02T12:00:00.000Z",
+  "source": {
+    "spaceId": "tinycloud:pkh:eip155:1:0x1111111111111111111111111111111111111111:legacy",
+    "namespace": "xyz.tinycloud.rocinante/",
+    "snapshotId": "prepared-runtime-expired-224",
+    "completePrefixSnapshot": true,
+    "cursor": {
+      "opaque": "frozen-cursor"
+    }
+  },
+  "origins": [
+    {
+      "path": "shared/schema.ts",
+      "sha256": "c465cba94181b311f7dc66bc18b1cf3213577d34695670dca19e2f59a8ffe126"
+    },
+    {
+      "path": "shared/board.ts",
+      "sha256": "c70c0092a2722e8a5ef882786aee216cb44a739273cc589f01e0e26b9a54fd49"
+    },
+    {
+      "path": "shared/expiry.ts",
+      "sha256": "c77a1535a101c131caaa4cedec468eb9e89d8738b7d10debe292eb9a241ed4e4"
+    },
+    {
+      "path": "shared/holds.ts",
+      "sha256": "00907a3497d9a075ce194d2c82cd85a42a6287495b2017c3b880d4258152812b"
+    },
+    {
+      "path": "shared/card-thread.ts",
+      "sha256": "7fbbe2e924e57a6e166128cf129415c02ae473543470ec58d9ac50b1fa94f037"
+    },
+    {
+      "path": "shared/recipients.ts",
+      "sha256": "9e30cac4523ffb41b80cc4abbf8724a9f2a6a233b6e610e75af4b88e94d464ad"
+    },
+    {
+      "path": "shared/deps.ts",
+      "sha256": "805ad47eecf0459f322b25398dfc61d112200c954829bee28cf972ebec3c534c"
+    },
+    {
+      "path": "shared/priority.ts",
+      "sha256": "92e42341ee900d4d3dd75f67e9ca67f8bab28dc8a99f772de637a3727a8a22e3"
+    },
+    {
+      "path": "shared/rank.ts",
+      "sha256": "085f4b88b77749fea0746c9349246bd750bf2a23200da75e40f019b461f654e1"
+    },
+    {
+      "path": "shared/priority-flag.ts",
+      "sha256": "94058d70d6cd11bbfef276f6c5d2bb2f4342dc7d411dec5e1284e47c7440d1e4"
+    },
+    {
+      "path": "shared/guard.ts",
+      "sha256": "3a0b12219d7c0cdbc91ddec416920fdcc93e1ddcb2c7fb490d7990288c665653"
+    },
+    {
+      "path": "shared/links.ts",
+      "sha256": "82f1044dddc790089b56cd159f2c6d641ad1a8ded83d54b5bfce9df1967527fb"
+    },
+    {
+      "path": "shared/known-repos.ts",
+      "sha256": "22258e1ae84008fb9138cba51fd493335dda298dd1e84a1752eb01299aa643c9"
+    },
+    {
+      "path": "shared/repos.ts",
+      "sha256": "e784adbef841c3b4b60cbb5de07a7232edde6c3b0c8b5aaf3bec14e755bb2dc2"
+    },
+    {
+      "path": "shared/groups.ts",
+      "sha256": "49131587e890c4c9529ac8c42f4735d5516c6de824cbdc79b2a442d1efbac407"
+    },
+    {
+      "path": "shared/upsert.ts",
+      "sha256": "6f64c6ee6504cdbbb58cbd5c83d78f6da5bf7cfaacd81526cf39c29b72898a44"
+    },
+    {
+      "path": "shared/agent-text.ts",
+      "sha256": "f16a1acf22bd12775fa50e867d45281ebd0bdf31f30531c098d87d88e516005f"
+    },
+    {
+      "path": "shared/metrics.ts",
+      "sha256": "05de4fd27bcaa01f30b9a0005e8e215a298a7723e238f2bbc8bf398751d81e6a"
+    },
+    {
+      "path": "cli/watch.ts",
+      "sha256": "d6f819a83200fd0ae2aae3d8aa280a13f7beb53c112354223405c385456fb70b"
+    },
+    {
+      "path": "cli/card-thread-watch.ts",
+      "sha256": "233ff729a9dc4641d518a63331db0d8c4c097277b5c023c245fe28bb3b6156f8"
+    },
+    {
+      "path": "cli/roci-board.ts",
+      "sha256": "5f696ff08220c8cfe8b9d245560f14bdcdd73e5038a7ef16a1ba6311df128dcf"
+    },
+    {
+      "path": "cli/holdactions.ts",
+      "sha256": "6c926273e87494e46fb421a2ef61f313a44a044043d5c55c6ae7056f07470532"
+    },
+    {
+      "path": "src/lib/store.ts",
+      "sha256": "2e931e8c16cee014f59dc480a336c9e2a38c9c3945ca19154e5ea890e416730c"
+    },
+    {
+      "path": "src/components/Claims.tsx",
+      "sha256": "40637e115784f83d1c0aac08dd4890258ca238f5957b799d814f4d22e7794d17"
+    },
+    {
+      "path": "src/Board.tsx",
+      "sha256": "4664d346c14d4f12b1bb57b62a9f980fc11dcdd46a1b44b1741824c7f5cf1bc4"
+    }
+  ],
+  "sourceRows": [
+    {
+      "sourceKey": "xyz.tinycloud.rocinante/board/approval/runtime-expired.json",
+      "sourceArea": "kv",
+      "encoding": "base64",
+      "rawBase64": "eyJmcm9tIjoiU3ludGhldGljT2ZmaWNlciIsIm93bmVyIjoiU3ludGhldGljT3duZXIiLCJib2R5IjoiU3ludGhldGljIGNhcmQgYm9keS4iLCJjcmVhdGVkQXQiOiIyMDAwLTAxLTAxVDAwOjAwOjAwLjAwMFoiLCJ1cGRhdGVkQXQiOiIyMDAwLTAxLTAxVDAwOjAwOjAwLjAwMFoiLCJ1cmdlbmN5IjoyLCJpbXBvcnRhbmNlIjoyLCJsaW5rcyI6W3sibGFiZWwiOiJQcml2YXRlIHJlcG9ydCIsInVybCI6Imh0dHBzOi8vcmVwb3J0cy5zeW50aGV0aWMtZXhhbXBsZS50cy5uZXQvcmVoZWFyc2FsLm1kIn1dLCJraW5kIjoiYXBwcm92YWwiLCJpZCI6InJ1bnRpbWUtZXhwaXJlZCIsInRpdGxlIjoiQXBwcm92ZSB0aGUgc3ludGhldGljIGRlcGxveSB3aW5kb3ciLCJhcHByb3ZhbFR5cGUiOiJnbyIsImFwcHJvdmFsS2luZCI6ImRlcGxveSIsImNvZGVFeHBlY3RlZCI6ZmFsc2UsImlzc3VlZEF0IjoiMjAwMC0wMS0wMVQwMDowMDowMC4wMDBaIiwiZXhwaXJlc0F0IjoiMjAwMC0wMS0wM1QwMDowMDowMC4wMDBaIiwic3RhdHVzIjoib3BlbiIsImNvbnRleHQiOnsiYmFja2dyb3VuZCI6IkEgc3ludGhldGljIHJlaGVhcnNhbCBjaGVja3MgdGhlIGV4aXN0aW5nIGNhcmQgc2VtYW50aWNzIHdpdGhvdXQgcmVhZGluZyBvciBjaGFuZ2luZyBhbnkgbGl2ZSByZWNvcmRzLiIsIndoeU5vdyI6IlRoZSBpc29sYXRlZCBvd25lciBuZWVkcyB0byBjaG9vc2UgdGhlIG5leHQgcmV2ZXJzaWJsZSBzdGVwLiIsImlmTm9BbnN3ZXIiOiJOb3RoaW5nIGlzIGFwcHJvdmVkIG9yIGV4ZWN1dGVkIHVudGlsIGEgdmFsaWQgb3duZXIgcmVzcG9uc2UgYXJyaXZlcy4iLCJrbm93biI6W10sInJlbGF0ZWQiOltdfX0=",
+      "sha256": "20d7eeba0d83d1d332c6d8561229cb0e5b4683786771b356cdafdbff72c2e795",
+      "classification": "card"
+    },
+    {
+      "sourceKey": "xyz.tinycloud.rocinante/sam/answers/runtime-expired/20000102T110000000Z.json",
+      "sourceArea": "kv",
+      "encoding": "base64",
+      "rawBase64": "eyJhc2tJZCI6InJ1bnRpbWUtZXhwaXJlZCIsImFjdGlvbiI6ImRvbmUiLCJ0ZXh0IjoiIiwiYXQiOiIyMDAwLTAxLTAyVDExOjAwOjAwLjAwMFoiLCJpc3N1ZWRBdCI6IjIwMDAtMDEtMDFUMDA6MDA6MDAuMDAwWiJ9",
+      "sha256": "311a324cbd0813f26380ead0303caf06f5cf6fcb4e78a5ffa07d0b67e7685e82",
+      "classification": "answer"
+    },
+    {
+      "sourceKey": "watch.expired.synthetic.json",
+      "sourceArea": "watch-state",
+      "encoding": "base64",
+      "rawBase64": "eyJ2ZXJzaW9uIjoyLCJjdXJzb3IiOiIxOTk5LTAxLTAxVDAwOjAwOjAwLjAwMFoiLCJkZWxpdmVyZWQiOnt9LCJ0YXNrcyI6e319",
+      "sha256": "30d320ddbe9f96405938af9cecae0864e18e1bb4978bc1c6446595ed84e5d7c1",
+      "classification": "checkpoint"
+    }
+  ],
+  "publishers": [
+    {
+      "publisherId": "legacy-alpha",
+      "agentId": "alpha",
+      "agentDid": "did:key:synthetic-alpha",
+      "outputResource": "xyz.tinycloud.tinychat/feed/feed_output_alpha",
+      "responseResource": "xyz.tinycloud.tinychat/feed/feed_responses_alpha"
+    },
+    {
+      "publisherId": "legacy-beta",
+      "agentId": "beta",
+      "agentDid": "did:key:synthetic-beta",
+      "outputResource": "xyz.tinycloud.tinychat/feed/feed_output_beta",
+      "responseResource": "xyz.tinycloud.tinychat/feed/feed_responses_beta"
+    }
+  ],
+  "recipients": [
+    {
+      "recipientKey": "logical-alpha",
+      "legacyName": "SyntheticOfficer",
+      "runtimeTarget": {
+        "agentId": "runtime-alpha",
+        "provider": "omp"
+      }
+    },
+    {
+      "recipientKey": "logical-alpha-alias",
+      "legacyName": "SyntheticAlias",
+      "runtimeTarget": {
+        "agentId": "runtime-alpha",
+        "provider": "omp"
+      }
+    },
+    {
+      "recipientKey": "logical-owner",
+      "legacyName": "SyntheticOwner",
+      "runtimeTarget": {
+        "agentId": "runtime-alpha",
+        "provider": "omp"
+      }
+    },
+    {
+      "recipientKey": "logical-beta",
+      "legacyName": "SyntheticOfficerB",
+      "runtimeTarget": {
+        "agentId": "runtime-beta",
+        "provider": "omp"
+      }
+    },
+    {
+      "recipientKey": "logical-beta-owner",
+      "legacyName": "SyntheticOwnerB",
+      "runtimeTarget": {
+        "agentId": "runtime-beta",
+        "provider": "omp"
+      }
+    },
+    {
+      "recipientKey": "logical-monica",
+      "legacyName": "Monica",
+      "runtimeTarget": {
+        "agentId": "runtime-beta",
+        "provider": "omp"
+      }
+    },
+    {
+      "recipientKey": "logical-unmapped",
+      "legacyName": "UnmappedOwner"
+    },
+    {
+      "recipientKey": "logical-xo",
+      "legacyName": "xo"
+    }
+  ],
+  "routes": [
+    {
+      "sourceKey": "xyz.tinycloud.rocinante/board/approval/runtime-expired.json",
+      "card": {
+        "kind": "approval",
+        "id": "runtime-expired"
+      },
+      "recipientKeys": [
+        "logical-owner"
+      ],
+      "fallbackRecipientKeys": [
+        "logical-xo"
+      ],
+      "unresolvedRecipients": []
+    }
+  ],
+  "cards": [
+    {
+      "sourceKey": "xyz.tinycloud.rocinante/board/approval/runtime-expired.json",
+      "publisherId": "legacy-alpha",
+      "identity": {
+        "cardId": "card-runtime-expired",
+        "revision": 1,
+        "issuanceId": "issuance-runtime-expired"
+      },
+      "record": {
+        "id": "runtime-expired",
+        "title": "Approve the synthetic deploy window",
+        "body": "Synthetic card body.",
+        "owner": "SyntheticOwner",
+        "from": "SyntheticOfficer",
+        "urgency": 2,
+        "importance": 2,
+        "links": [
+          {
+            "label": "Private report",
+            "url": "https://reports.synthetic-example.ts.net/rehearsal.md"
+          }
+        ],
+        "createdAt": "2000-01-01T00:00:00.000Z",
+        "updatedAt": "2000-01-01T00:00:00.000Z",
+        "kind": "approval",
+        "approvalType": "go",
+        "approvalKind": "deploy",
+        "issuedAt": "2000-01-01T00:00:00.000Z",
+        "expiresAt": "2000-01-03T00:00:00.000Z",
+        "codeExpected": false,
+        "status": "open",
+        "context": {
+          "background": "A synthetic rehearsal checks the existing card semantics without reading or changing any live records.",
+          "whyNow": "The isolated owner needs to choose the next reversible step.",
+          "ifNoAnswer": "Nothing is approved or executed until a valid owner response arrives.",
+          "known": [],
+          "related": []
+        }
+      },
+      "canonicalCard": {
+        "cardId": "card-runtime-expired",
+        "revision": 1,
+        "issuanceId": "issuance-runtime-expired",
+        "kind": "approval",
+        "needsResponse": true,
+        "title": "Approve the synthetic deploy window",
+        "body": "Synthetic card body.",
+        "urgency": 2,
+        "createdAt": "2000-01-01T00:00:00.000Z",
+        "payload": {
+          "sitrep": {
+            "version": 1,
+            "record": {
+              "id": "runtime-expired",
+              "title": "Approve the synthetic deploy window",
+              "body": "Synthetic card body.",
+              "owner": "SyntheticOwner",
+              "from": "SyntheticOfficer",
+              "urgency": 2,
+              "importance": 2,
+              "links": [
+                {
+                  "label": "Private report",
+                  "url": "https://reports.synthetic-example.ts.net/rehearsal.md"
+                }
+              ],
+              "createdAt": "2000-01-01T00:00:00.000Z",
+              "updatedAt": "2000-01-01T00:00:00.000Z",
+              "kind": "approval",
+              "approvalType": "go",
+              "approvalKind": "deploy",
+              "issuedAt": "2000-01-01T00:00:00.000Z",
+              "expiresAt": "2000-01-03T00:00:00.000Z",
+              "codeExpected": false,
+              "status": "open",
+              "context": {
+                "background": "A synthetic rehearsal checks the existing card semantics without reading or changing any live records.",
+                "whyNow": "The isolated owner needs to choose the next reversible step.",
+                "ifNoAnswer": "Nothing is approved or executed until a valid owner response arrives.",
+                "known": [],
+                "related": []
+              }
+            }
+          },
+          "source": {
+            "label": "Legacy source",
+            "ref": "xyz.tinycloud.rocinante/board/approval/runtime-expired.json"
+          }
+        }
+      },
+      "needsAction": false,
+      "attention": "handled",
+      "currentAnswerSourceKey": "xyz.tinycloud.rocinante/sam/answers/runtime-expired/20000102T110000000Z.json"
+    }
+  ],
+  "ownerResponses": [
+    {
+      "sourceKey": "xyz.tinycloud.rocinante/sam/answers/runtime-expired/20000102T110000000Z.json",
+      "eventKey": "xyz.tinycloud.rocinante/sam/answers/runtime-expired/20000102T110000000Z.json",
+      "publisherId": "legacy-alpha",
+      "card": {
+        "kind": "approval",
+        "id": "runtime-expired"
+      },
+      "response": {
+        "cardId": "card-runtime-expired",
+        "revision": 1,
+        "issuanceId": "issuance-runtime-expired",
+        "responseId": "sitrep-a61ee1186f0b5dbd71e365a8380c1f5026d857bbb23ff2df7716148958526bf3",
+        "kind": "answer",
+        "text": "Approval confirmed for this issuance",
+        "createdAt": "2000-01-02T11:00:00.000Z"
+      },
+      "ownerEventKind": "answer",
+      "payload": {
+        "type": "sitrep.answer",
+        "version": 1,
+        "data": {
+          "askId": "runtime-expired",
+          "action": "done",
+          "text": "",
+          "at": "2000-01-02T11:00:00.000Z",
+          "issuedAt": "2000-01-01T00:00:00.000Z"
+        }
+      },
+      "restoreTarget": "agent-response",
+      "recipientKeys": [
+        "logical-alpha",
+        "logical-xo"
+      ],
+      "unresolvedRecipients": [],
+      "legacyAnswer": {
+        "askId": "runtime-expired",
+        "action": "done",
+        "text": "",
+        "at": "2000-01-02T11:00:00.000Z",
+        "issuedAt": "2000-01-01T00:00:00.000Z"
+      }
+    }
+  ],
+  "ownerState": [],
+  "threads": [],
+  "deliveries": [
+    {
+      "sourceKey": "watch.expired.synthetic.json",
+      "eventSourceKey": "xyz.tinycloud.rocinante/sam/answers/runtime-expired/20000102T110000000Z.json",
+      "eventKey": "xyz.tinycloud.rocinante/sam/answers/runtime-expired/20000102T110000000Z.json",
+      "publisherId": "legacy-alpha",
+      "identity": {
+        "cardId": "card-runtime-expired",
+        "revision": 1,
+        "issuanceId": "issuance-runtime-expired"
+      },
+      "responseId": "sitrep-a61ee1186f0b5dbd71e365a8380c1f5026d857bbb23ff2df7716148958526bf3",
+      "recipientKey": "logical-alpha",
+      "recipient": "SyntheticOfficer",
+      "state": "pending",
+      "routedTo": "owner",
+      "evidence": "explicit",
+      "dispatch": "resolved-pending",
+      "dispatchBefore": "2000-01-03T00:00:00.000Z",
+      "originalReceipt": {
+        "cursor": "1999-01-01T00:00:00.000Z"
+      }
+    },
+    {
+      "sourceKey": "watch.expired.synthetic.json",
+      "eventSourceKey": "xyz.tinycloud.rocinante/sam/answers/runtime-expired/20000102T110000000Z.json",
+      "eventKey": "xyz.tinycloud.rocinante/sam/answers/runtime-expired/20000102T110000000Z.json",
+      "publisherId": "legacy-alpha",
+      "identity": {
+        "cardId": "card-runtime-expired",
+        "revision": 1,
+        "issuanceId": "issuance-runtime-expired"
+      },
+      "responseId": "sitrep-a61ee1186f0b5dbd71e365a8380c1f5026d857bbb23ff2df7716148958526bf3",
+      "recipientKey": "logical-xo",
+      "recipient": "xo",
+      "state": "held",
+      "routedTo": "xo",
+      "evidence": "explicit",
+      "dispatch": "held",
+      "dispatchBefore": "2000-01-03T00:00:00.000Z",
+      "originalReceipt": {
+        "cursor": "1999-01-01T00:00:00.000Z"
+      }
+    }
+  ],
+  "checkpoints": [
+    {
+      "sourceKey": "watch.expired.synthetic.json",
+      "type": "answer-cursor",
+      "value": {
+        "cursor": "1999-01-01T00:00:00.000Z"
+      }
+    },
+    {
+      "sourceKey": "watch.expired.synthetic.json",
+      "type": "claim-cursor",
+      "value": {
+        "claimsSince": "1999-01-01T00:00:00.000Z",
+        "delivered": {}
+      }
+    },
+    {
+      "sourceKey": "watch.expired.synthetic.json",
+      "type": "task-steps",
+      "value": {}
+    },
+    {
+      "sourceKey": "watch.expired.synthetic.json",
+      "type": "task-closed",
+      "value": {}
+    }
+  ],
+  "deletions": [],
+  "quarantine": []
+}

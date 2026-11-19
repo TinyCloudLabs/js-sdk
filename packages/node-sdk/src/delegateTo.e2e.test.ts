@@ -8,6 +8,8 @@ import { join } from "node:path";
 import { TinyCloudNode } from "./TinyCloudNode";
 import { NodeWasmBindings } from "./NodeWasmBindings";
 import { PrivateKeySigner } from "./signers/PrivateKeySigner";
+import { pkhDid } from "@tinycloud/bootstrap";
+import { formatKeyResource } from "@tinycloud/sdk-services/encryption/resource";
 
 // Runs against a real TinyCloud node binary (the same variable the replication e2e uses).
 const NODE_BIN = process.env.TC_REPLICATION_E2E_NODE_BIN;
@@ -41,6 +43,8 @@ describe.skipIf(!NODE_BIN)("delegateTo against a real node", () => {
         ROCKET_ADDRESS: "127.0.0.1",
         TINYCLOUD_KEYS__TYPE: "Static",
         TINYCLOUD_KEYS__SECRET: randomBytes(48).toString("base64url"),
+        TINYCLOUD_ENCRYPTION_NETWORK__NAMED_KEYS_V1: "true",
+        TINYCLOUD_ENCRYPTION_NETWORK__DELETION_LEDGER_PATH: join(dataDir, "deletions.jsonl"),
       },
       stdio: ["ignore", "pipe", "pipe"],
     });
@@ -116,5 +120,47 @@ describe.skipIf(!NODE_BIN)("delegateTo against a real node", () => {
     } finally {
       globalThis.fetch = realFetch;
     }
+  });
+
+  test("issues the exact two-resource terminal named-key delegation", async () => {
+    const keyPath = "apps/chat.tinycloud.tinychat/connectors/fireflies";
+    const kvPath = "xyz.tinycloud.tinychat/connectors/credentials/fireflies";
+    const owner = new TinyCloudNode({
+      host,
+      signer: new PrivateKeySigner(OWNER_KEY),
+      wasmBindings: new NodeWasmBindings(),
+      domain: "tinycloud.chat",
+      autoCreateSpace: true,
+      autoBootstrapAccount: false,
+      includeAccountRegistryPermissions: false,
+      enablePublicSpace: false,
+      manifest: {
+        app_id: "xyz.tinycloud.tinychat",
+        keys_app_id: "chat.tinycloud.tinychat",
+        name: "TinyChat delegation test",
+        defaults: false,
+        includePublicSpace: false,
+        permissions: [{ service: "tinycloud.kv", space: "applications", path: kvPath, actions: ["get"], skipPrefix: true }],
+        keys: [{ prefix: "apps/chat.tinycloud.tinychat/", abilities: ["key.create", "decrypt"] }],
+      },
+    });
+    await owner.signIn();
+    const network = `urn:tinycloud:encryption:${pkhDid(owner.address!, 1)}:default`;
+    const key = formatKeyResource(network, keyPath);
+    const recipient = newRecipient();
+    const issued = await owner.delegateTo(recipient, [
+      { service: "tinycloud.kv", space: "applications", path: kvPath, actions: ["get"] },
+      { service: "tinycloud.encryption", path: key, actions: ["decrypt"] },
+    ], { expiry: "1h", disableSubDelegation: true, requireActivation: true });
+    expect(issued.prompted).toBe(false);
+    expect(issued.delegation.resources).toEqual([
+      { service: "encryption", space: "encryption", path: key, actions: ["tinycloud.encryption/decrypt"] },
+      { service: "kv", space: owner.restorableSession!.spaceId, path: kvPath, actions: ["tinycloud.kv/get"] },
+    ]);
+    expect(issued.delegation.disableSubDelegation).toBe(true);
+    const payload = issued.delegation.delegationHeader.Authorization.split(".")[1]!;
+    expect(JSON.parse(Buffer.from(payload, "base64url").toString()).fct).toEqual([
+      { "xyz.tinycloud.policy/delegationMode": "terminal" },
+    ]);
   });
 });

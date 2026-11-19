@@ -26,13 +26,14 @@ function memoryStorage() {
 }
 
 test("share links are bound to the configured out-of-band Share origin and have no query", () => {
-  const fragment = "#v=2&p=eyJ2IjoyLCJjIjoiQVEiLCJjaWQiOiJiYWZrcmVpZzJ6N21icDZ2N3FodHViUHhseWx6anRvdnV4c250NW5vcDcyeDVvcmhrZGEydWRnd2FydSIsImsiOiJBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBIn0";
-  expect(validateShareReceiverExpectedOrigin(`https://share.example/s/inline${fragment}`, "https://share.example")).toBe("https://share.example");
-  expect(validateShareReceiverExpectedOrigin(`http://localhost:5173/s/inline${fragment}`, "http://localhost:5173")).toBe("http://localhost:5173");
-  expect(validateShareReceiverExpectedOrigin(`http://127.0.0.1:5173/s/inline${fragment}`, "http://127.0.0.1:5173")).toBe("http://127.0.0.1:5173");
-  expect(() => validateShareReceiverExpectedOrigin(`https://attacker.example/s/inline${fragment}`, "https://share.example")).toThrow("configured Share deployment");
-  expect(() => validateShareReceiverExpectedOrigin(`http://share.example/s/inline${fragment}`, "https://share.example")).toThrow("configured Share deployment");
-  expect(() => validateShareReceiverExpectedOrigin(`https://share.example/s/inline${fragment}`, "https://share.example/path")).toThrow("configured Share deployment");
+  const path = "/s/lqdw5iopqq2tkkvjj6gbbi5vbv";
+  const fragment = `#v=4&k=${"A".repeat(43)}&c=bafkreiewixmt5nwgi3ych6durcsheaql3ybswbplpjmpbdhfkvdkidzt5u`;
+  expect(validateShareReceiverExpectedOrigin(`https://share.example${path}${fragment}`, "https://share.example")).toBe("https://share.example");
+  expect(validateShareReceiverExpectedOrigin(`http://localhost:5173${path}${fragment}`, "http://localhost:5173")).toBe("http://localhost:5173");
+  expect(validateShareReceiverExpectedOrigin(`http://127.0.0.1:5173${path}${fragment}`, "http://127.0.0.1:5173")).toBe("http://127.0.0.1:5173");
+  expect(() => validateShareReceiverExpectedOrigin(`https://other-host.example${path}${fragment}`, "https://share.example")).toThrow("configured Share deployment");
+  expect(() => validateShareReceiverExpectedOrigin(`http://share.example${path}${fragment}`, "https://share.example")).toThrow("configured Share deployment");
+  expect(() => validateShareReceiverExpectedOrigin(`https://share.example${path}${fragment}`, "https://share.example/path")).toThrow("configured Share deployment");
   expect(() => validateShareReceiverExpectedOrigin("https://share.example/viewer?tc2=plaintext", "https://share.example")).toThrow("must not carry a query string");
 });
 

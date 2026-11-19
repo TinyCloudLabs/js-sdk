@@ -1,19 +1,66 @@
+import { approvedTc2931Optional, tc2931OptionalAllowance, validateTc2931OptionalTransition } from "./replica-optional-size-policy";
+import { validateTc2931BootstrapScopeTransition } from "./replica-size-policy";
+import { validateTc2923EncryptionTeeOriginRootTransition } from "./replica-size-policy";
+import { validateTc2934RequestedAccountRootTransition } from "./replica-size-policy";
+import { validateTc2936RestoreCommitRootTransition } from "./replica-size-policy";
 import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
-import { cp, mkdtemp, readFile, rm } from "node:fs/promises";
+import { cp, mkdtemp, open, readFile, rm } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { measureReplicaOptionalLoaded, type LoadedSizes } from "./measure-replica-optional";
 import {
   approvedCompactFixRequired, approvedMeasurementCorrection, approvedRelocations, compactFixOptionalAllowance,
-  correctedOptionalAllowance, ciOptionalAllowance, fixRequiredOptionalAllowance, hardeningOptionalAllowance, optionalFormats, tc1413OptionalAllowance, tc1432OptionalAllowance, tc1475OptionalAllowance, masterDriftOptionalAllowance, tc1789OptionalAllowance,
+  correctedOptionalAllowance, ciOptionalAllowance, fixRequiredOptionalAllowance, hardeningOptionalAllowance, optionalFormats, tc1413OptionalAllowance, tc1432OptionalAllowance, tc1475OptionalAllowance, masterDriftOptionalAllowance, tc1789OptionalAllowance, tc2043OptionalAllowance, tc1888OptionalAllowance,
+  tc2096OptionalAllowance, tc2096LazyOptionalAllowance, tc2481WebOptionalAllowance, validateTc2481WebOptionalTransition, evaluateOptionalBudget,
   mergedPinsNotLandedOn, priorOptionalAllowance, relocatedOptionalAllowance, validateIntroducedOptionalSources,
   validateOptionalEntryTransition, validateOptionalLedger, type OptionalLedger,
 } from "./replica-optional-size-policy";
 import { assertCiSizeToolchain, approvedCiToolchainCorrection, approvedFixRequiredRatchet, approvedGatedOnlyRatchet, approvedPhase2, ciCorrectionPolicyOnlyPaths, hasAncestor, isPolicyOnlySinceApprovedSource, preexistingS3EntryCommit, validateCiToolchainTransition, validateGatedOnlyRatchet, validateHardeningRatchetTransition, validateLedger, validateLogoutRatchetTransition, validateMasterMergeResolutionTransition, validateTc1413RatchetTransition, validateTc1424RatchetTransition, validateTc1448RatchetTransition, validateTc1432RatchetTransition, validateTc1436RatchetTransition, validateTc1443RatchetTransition, validateTc1443bRatchetTransition, validateTc1428RatchetTransition, validateTc1475RatchetTransition, validateTc606WorkerRatchetTransition, validateMasterDriftRatchetTransition, validateTc1789RatchetTransition, validateTc1476RatchetTransition, validateTc1466RatchetTransition, type GzipSizes, type Ledger, type LedgerEntry } from "./replica-size-policy";
 import { rootCeilingFor, validateTc1757RatchetTransition, validateTc1777ExpiryRatchetTransition, validateTc1777RatchetTransition, validateTc1781DecryptExpiryRatchetTransition, validateTc1801NonTransferableShareRatchetTransition, validateTc1807CredentialDiscoveryRatchetTransition, validateTc1823SizeCodeRatchetTransition, validateTc712CredentialCoreRatchetTransition, validateTc1827ReplicaWorkerRatchetTransition, validateTc1827WorkerRatchetTransition, validateTc848PanelRatchetTransition } from "./replica-size-policy";
 import { validateTc1781DecryptStandardExpiryRatchetTransition } from "./replica-size-policy";
+import { validateTc2096LazyContentRatchetTransition } from "./replica-size-policy";
 import { validateTc1855ManifestLimitGuardRatchetTransition } from "./replica-size-policy";
+import { validateTc1488SiweDomainUriRatchetTransition } from "./replica-size-policy";
+import { validateTc1737ShortLinkLazyChunkRatchetTransition } from "./replica-size-policy";
+import { validateTc1910SigningConsistencyRatchetTransition } from "./replica-size-policy";
+import { validateTc848SettingsPanelRatchetTransition } from "./replica-size-policy";
+import { validateTc2034NamedKeysCliRatchetTransition } from "./replica-size-policy";
+import { validateTc2043SyncScopeRatchetTransition } from "./replica-size-policy";
+import { validateTc1888PurgeLocalCopyRatchetTransition } from "./replica-size-policy";
+import { validateTc1977ManifestKeysRatchetTransition } from "./replica-size-policy";
+import { validateTc2038PanelPrefetchRatchetTransition } from "./replica-size-policy";
+import { validateTc2005RevokeWindowRatchetTransition } from "./replica-size-policy";
+import { validateTc2096RepairBackoffRatchetTransition } from "./replica-size-policy";
+import { validateTc2072LocationGuardRatchetTransition } from "./replica-size-policy";
+import { validateTc2113PanelGrantRatchetTransition } from "./replica-size-policy";
+import { validateTc2127WindowLocationRatchetTransition } from "./replica-size-policy";
+import { validateTc1977OpenKeySigninRatchetTransition } from "./replica-size-policy";
+import { validateTc2130PanelIphoneRatchetTransition } from "./replica-size-policy";
+import { validateTc1977HostBindingRatchetTransition } from "./replica-size-policy";
+import { validateTc2132IssuedDelegationsRatchetTransition } from "./replica-size-policy";
+import { validateTc2140ExactKeyDelegationRatchetTransition } from "./replica-size-policy";
+import { validateTc2481RegistryFreshnessTransition } from "./replica-size-policy";
+import { validateTc2481WebRoutingTransition, validateTc2481WebRootEntry } from "./replica-size-policy";
+import { validateTc2481ColdDeviceRefusalTransition } from "./replica-size-policy";
+import { validateTc2481OfflineReplicaTransportTransition } from "./replica-size-policy";
+import { validateTc2582PublicSessionKeyTransition } from "./replica-size-policy";
+import { validateTc2281OpenKeyConnectedKeyIdTransition } from "./replica-size-policy";
+import { validateTc2594ResourceTransportTransition } from "./replica-size-policy";
+import { validateTc2657RegistryPublicationTransition } from "./replica-size-policy";
+import { validateTc2518KeyWrapTransition } from "./replica-size-policy";
+import { validateTc2687PublishedSignInTransition } from "./replica-size-policy";
+import { validateTc2234InvitationPolicyRootTransition, validateTc2773LazyRestoreRootTransition } from "./replica-size-policy";
+import {
+  validateTc2872RenewalKvWorkerTransition,
+  validateTc2872RenewalReplicaWorkerTransition,
+  validateTc2872RenewalRootTransition,
+} from "./replica-size-policy";
+import { validateTc2924NodeAliasesRootTransition } from "./replica-size-policy";
+import { validateTc2904OwnerDirectProofRootTransition } from "./replica-size-policy";
+import { validateTc2773LazyRestoreReplicaWorkerTransition } from "./replica-size-policy";
+import { validateTc2691HostExpiryTransition } from "./replica-size-policy";
+import { validateTc2205HomeFeedRatchetTransition } from "./replica-size-policy";
 import { collectMeasuredArtifactInputs } from "./replica-size-inputs";
 import { replicaOwnedPath } from "./replica-owned-path";
 import { webSdkTestExitFailure } from "./web-sdk-test-exit";
@@ -92,12 +139,12 @@ if (ciCorrection) {
   console.log(`Current size toolchain: Bun ${bun}; ${rustc}`);
 }
 validateOptionalLedger(optionalLedger, ledger.fixRequiredRatchet !== undefined, ciCorrection !== undefined,
-  ledger.hardeningRatchet !== undefined, ledger.tc1413Ratchet !== undefined, ledger.tc1432Ratchet !== undefined, ledger.tc1475Ratchet !== undefined, ledger.masterDriftRatchet !== undefined, ledger.tc1789Ratchet !== undefined);
+  ledger.hardeningRatchet !== undefined, ledger.tc1413Ratchet !== undefined, ledger.tc1432Ratchet !== undefined, ledger.tc1475Ratchet !== undefined, ledger.masterDriftRatchet !== undefined, ledger.tc1789Ratchet !== undefined, ledger.tc2043SyncScopeRatchet !== undefined, ledger.tc1888PurgeLocalCopyRatchet !== undefined, ledger.tc2096RepairBackoffRatchet !== undefined, ledger.tc2096LazyContentRatchet !== undefined, ledger.tc2481WebRouting !== undefined, ledger.tc2481OfflineReplicaTransport, ledger.tc2931BootstrapScope);
 const optionalCurrent = await measureReplicaOptionalLoaded(distDir);
-for (const format of optionalFormats) {
-  const total = optionalLedger.entries.reduce((sum, entry) => sum + entry[format], 0);
-  console.log(`${format}: incremental loaded=${optionalCurrent[format]}; cumulative optional ledger=${total} / ${optionalLedger.allowance[format]} gzip-bytes`);
-  if (total > optionalLedger.allowance[format] || optionalCurrent[format] > optionalLedger.allowance[format]) {
+for (const reading of evaluateOptionalBudget(optionalLedger, ledger, optionalCurrent)) {
+  const { format, raw, effective, direct, ceiling } = reading;
+  console.log(`${format}: incremental loaded=${direct}; cumulative optional ledger RAW=${raw} EFFECTIVE=${effective}; DIRECT=${direct} / ${ceiling} gzip-bytes`);
+  if (reading.exceeded) {
     console.error(`${format}: optional no-growth allowance exceeded; changing this separate budget requires policy review.`);
     failed = true;
   }
@@ -176,6 +223,20 @@ if (prBaseSha) {
     throw new Error(`Unable to read base ${baseLedgerPath}: ${baseLedgerResult.stderr.trim()}`);
   }
   validateLedger(baseLedger, true);
+  validateTc2934RequestedAccountRootTransition(baseLedger.tc2934RequestedAccountRoot, ledger.tc2934RequestedAccountRoot);
+  validateTc2936RestoreCommitRootTransition(baseLedger.tc2936RestoreCommitRoot, ledger.tc2936RestoreCommitRoot);
+  validateTc2931BootstrapScopeTransition(baseLedger.tc2931BootstrapScope, ledger.tc2931BootstrapScope);
+  if (ledger.tc2931BootstrapScope !== undefined && baseLedger.tc2931BootstrapScope === undefined &&
+      (baseLedger.tc2936RestoreCommitRoot === undefined || !hasAncestor(repoRoot, ledger.tc2931BootstrapScope.sourceCommits.at(-1)!))) {
+    console.error("The TC-2931 admission requires the merged TC-2936 row and its measured source ancestor.");
+    failed = true;
+  }
+  validateTc2923EncryptionTeeOriginRootTransition(baseLedger.tc2923EncryptionTeeOriginRoot, ledger.tc2923EncryptionTeeOriginRoot);
+  if (ledger.tc2923EncryptionTeeOriginRoot !== undefined && baseLedger.tc2923EncryptionTeeOriginRoot === undefined &&
+      (baseLedger.tc2931BootstrapScope === undefined || !hasAncestor(repoRoot, ledger.tc2923EncryptionTeeOriginRoot.sourceCommits.at(-1)!))) {
+    console.error("The TC-2923 admission requires the merged TC-2931 row and its measured source ancestor.");
+    failed = true;
+  }
   validateCiToolchainTransition(baseLedger.canonicalToolchainCorrection, ciCorrection);
   validateMasterMergeResolutionTransition(baseLedger.masterMergeResolution, ledger.masterMergeResolution);
   validateHardeningRatchetTransition(baseLedger.hardeningRatchet, ledger.hardeningRatchet);
@@ -381,6 +442,285 @@ if (prBaseSha) {
     console.error("The manifest limit guard ratchet requires the merged decrypt standard expiry ratchet and its measured source commit.");
     failed = true;
   }
+  validateTc1488SiweDomainUriRatchetTransition(baseLedger.tc1488SiweDomainUriRatchet, ledger.tc1488SiweDomainUriRatchet);
+  const tc1488SiweDomainUri = ledger.tc1488SiweDomainUriRatchet;
+  if (tc1488SiweDomainUri !== undefined && baseLedger.tc1488SiweDomainUriRatchet === undefined &&
+      (baseLedger.tc1855ManifestLimitGuardRatchet === undefined || !hasAncestor(repoRoot, tc1488SiweDomainUri.sourceCommits.at(-1)!))) {
+    console.error("The SIWE domain and URI ratchet requires the merged manifest limit guard ratchet and its measured source commit.");
+    failed = true;
+  }
+  validateTc1737ShortLinkLazyChunkRatchetTransition(baseLedger.tc1737ShortLinkLazyChunkRatchet, ledger.tc1737ShortLinkLazyChunkRatchet);
+  const tc1737ShortLink = ledger.tc1737ShortLinkLazyChunkRatchet;
+  if (tc1737ShortLink !== undefined && baseLedger.tc1737ShortLinkLazyChunkRatchet === undefined &&
+      (baseLedger.tc1488SiweDomainUriRatchet === undefined || !hasAncestor(repoRoot, tc1737ShortLink.sourceCommits.at(-1)!))) {
+    console.error("The short-link ratchet requires the merged SIWE domain and URI ratchet and its measured source commit.");
+    failed = true;
+  }
+  validateTc1910SigningConsistencyRatchetTransition(baseLedger.tc1910SigningConsistencyRatchet, ledger.tc1910SigningConsistencyRatchet);
+  const tc1910SigningConsistency = ledger.tc1910SigningConsistencyRatchet;
+  if (tc1910SigningConsistency !== undefined && baseLedger.tc1910SigningConsistencyRatchet === undefined &&
+      (baseLedger.tc1737ShortLinkLazyChunkRatchet === undefined || !hasAncestor(repoRoot, tc1910SigningConsistency.sourceCommits.at(-1)!))) {
+    console.error("The signing-consistency ratchet requires the merged short-link ratchet and its measured source commit.");
+    failed = true;
+  }
+  validateTc848SettingsPanelRatchetTransition(baseLedger.tc848SettingsPanelRatchet, ledger.tc848SettingsPanelRatchet);
+  const tc848SettingsPanel = ledger.tc848SettingsPanelRatchet;
+  if (tc848SettingsPanel !== undefined && baseLedger.tc848SettingsPanelRatchet === undefined &&
+      (baseLedger.tc1910SigningConsistencyRatchet === undefined || !hasAncestor(repoRoot, tc848SettingsPanel.sourceCommits.at(-1)!))) {
+    console.error("The panel ratchet requires the merged signing-consistency ratchet and its measured source commit.");
+    failed = true;
+  }
+  validateTc2034NamedKeysCliRatchetTransition(baseLedger.tc2034NamedKeysCliRatchet, ledger.tc2034NamedKeysCliRatchet);
+  const tc2034NamedKeysCli = ledger.tc2034NamedKeysCliRatchet;
+  if (tc2034NamedKeysCli !== undefined && baseLedger.tc2034NamedKeysCliRatchet === undefined &&
+      (baseLedger.tc848SettingsPanelRatchet === undefined || !hasAncestor(repoRoot, tc2034NamedKeysCli.sourceCommits.at(-1)!))) {
+    console.error("The named-keys ratchet requires the merged settings panel ratchet and its measured source commit.");
+    failed = true;
+  }
+  validateTc2043SyncScopeRatchetTransition(baseLedger.tc2043SyncScopeRatchet, ledger.tc2043SyncScopeRatchet);
+  const tc2043SyncScope = ledger.tc2043SyncScopeRatchet;
+  if (tc2043SyncScope !== undefined && baseLedger.tc2043SyncScopeRatchet === undefined &&
+      (baseLedger.tc2034NamedKeysCliRatchet === undefined || !hasAncestor(repoRoot, tc2043SyncScope.sourceCommits.at(-1)!))) {
+    console.error("The replication syncScope ratchet requires the merged named-keys ratchet and its measured source commit.");
+    failed = true;
+  }
+  validateTc1888PurgeLocalCopyRatchetTransition(baseLedger.tc1888PurgeLocalCopyRatchet, ledger.tc1888PurgeLocalCopyRatchet);
+  const tc1888PurgeLocalCopy = ledger.tc1888PurgeLocalCopyRatchet;
+  if (tc1888PurgeLocalCopy !== undefined && baseLedger.tc1888PurgeLocalCopyRatchet === undefined &&
+      (baseLedger.tc2043SyncScopeRatchet === undefined || !hasAncestor(repoRoot, tc1888PurgeLocalCopy.sourceCommits.at(-1)!))) {
+    console.error("The sign-out local copy ratchet requires the merged replication syncScope ratchet and its measured source commit.");
+    failed = true;
+  }
+  validateTc1977ManifestKeysRatchetTransition(baseLedger.tc1977ManifestKeysRatchet, ledger.tc1977ManifestKeysRatchet);
+  const tc1977ManifestKeys = ledger.tc1977ManifestKeysRatchet;
+  if (tc1977ManifestKeys !== undefined && baseLedger.tc1977ManifestKeysRatchet === undefined &&
+      (baseLedger.tc1888PurgeLocalCopyRatchet === undefined || !hasAncestor(repoRoot, tc1977ManifestKeys.sourceCommits.at(-1)!))) {
+    console.error("The manifest-keys ratchet requires the merged sign-out local copy ratchet and its measured source commit.");
+    failed = true;
+  }
+  validateTc2038PanelPrefetchRatchetTransition(baseLedger.tc2038PanelPrefetchRatchet, ledger.tc2038PanelPrefetchRatchet);
+  const tc2038PanelPrefetch = ledger.tc2038PanelPrefetchRatchet;
+  if (tc2038PanelPrefetch !== undefined && baseLedger.tc2038PanelPrefetchRatchet === undefined &&
+      (baseLedger.tc1977ManifestKeysRatchet === undefined || !hasAncestor(repoRoot, tc2038PanelPrefetch.sourceCommits.at(-1)!))) {
+    console.error("The panel-prefetch ratchet requires the merged manifest-keys ratchet and its measured source commit.");
+    failed = true;
+  }
+  validateTc2005RevokeWindowRatchetTransition(baseLedger.tc2005RevokeWindowRatchet, ledger.tc2005RevokeWindowRatchet);
+  const tc2005RevokeWindow = ledger.tc2005RevokeWindowRatchet;
+  if (tc2005RevokeWindow !== undefined && baseLedger.tc2005RevokeWindowRatchet === undefined &&
+      (baseLedger.tc2038PanelPrefetchRatchet === undefined || !hasAncestor(repoRoot, tc2005RevokeWindow.sourceCommits.at(-1)!))) {
+    console.error("The revocation-window ratchet requires the merged panel-prefetch ratchet and its measured source commit.");
+    failed = true;
+  }
+  validateTc2096RepairBackoffRatchetTransition(baseLedger.tc2096RepairBackoffRatchet, ledger.tc2096RepairBackoffRatchet);
+  const tc2096RepairBackoff = ledger.tc2096RepairBackoffRatchet;
+  if (tc2096RepairBackoff !== undefined && baseLedger.tc2096RepairBackoffRatchet === undefined &&
+      (baseLedger.tc2005RevokeWindowRatchet === undefined || !hasAncestor(repoRoot, tc2096RepairBackoff.sourceCommits.at(-1)!))) {
+    console.error("The repair-backoff ratchet requires the merged revocation-window ratchet and its measured source commit.");
+    failed = true;
+  }
+  validateTc2072LocationGuardRatchetTransition(baseLedger.tc2072LocationGuardRatchet, ledger.tc2072LocationGuardRatchet);
+  const tc2072LocationGuard = ledger.tc2072LocationGuardRatchet;
+  if (tc2072LocationGuard !== undefined && baseLedger.tc2072LocationGuardRatchet === undefined &&
+      (baseLedger.tc2096RepairBackoffRatchet === undefined || !hasAncestor(repoRoot, tc2072LocationGuard.sourceCommits.at(-1)!))) {
+    console.error("The location-guard ratchet requires the merged repair-backoff ratchet and its measured source commit.");
+    failed = true;
+  }
+  validateTc2096LazyContentRatchetTransition(baseLedger.tc2096LazyContentRatchet, ledger.tc2096LazyContentRatchet);
+  const tc2096LazyContent = ledger.tc2096LazyContentRatchet;
+  if (tc2096LazyContent !== undefined && baseLedger.tc2096LazyContentRatchet === undefined &&
+      (baseLedger.tc2072LocationGuardRatchet === undefined || !hasAncestor(repoRoot, tc2096LazyContent.sourceCommits.at(-1)!))) {
+    console.error("The lazy-content ratchet requires the merged location-guard ratchet and its measured source commit.");
+    failed = true;
+  }
+  validateTc2113PanelGrantRatchetTransition(baseLedger.tc2113PanelGrantRatchet, ledger.tc2113PanelGrantRatchet);
+  const tc2113PanelGrant = ledger.tc2113PanelGrantRatchet;
+  if (tc2113PanelGrant !== undefined && baseLedger.tc2113PanelGrantRatchet === undefined &&
+      (baseLedger.tc2096LazyContentRatchet === undefined || !hasAncestor(repoRoot, tc2113PanelGrant.sourceCommits.at(-1)!))) {
+    console.error("The panel grant ratchet requires the merged lazy-content ratchet and its measured source commit.");
+    failed = true;
+  }
+  validateTc2127WindowLocationRatchetTransition(baseLedger.tc2127WindowLocationRatchet, ledger.tc2127WindowLocationRatchet);
+  const tc2127WindowLocation = ledger.tc2127WindowLocationRatchet;
+  if (tc2127WindowLocation !== undefined && baseLedger.tc2127WindowLocationRatchet === undefined &&
+      (baseLedger.tc2113PanelGrantRatchet === undefined || !hasAncestor(repoRoot, tc2127WindowLocation.sourceCommits.at(-1)!))) {
+    console.error("The window location ratchet requires the merged panel grant ratchet and its measured source commit.");
+    failed = true;
+  }
+  validateTc1977OpenKeySigninRatchetTransition(baseLedger.tc1977OpenKeySigninRatchet, ledger.tc1977OpenKeySigninRatchet);
+  const tc1977OpenKeySignin = ledger.tc1977OpenKeySigninRatchet;
+  if (tc1977OpenKeySignin !== undefined && baseLedger.tc1977OpenKeySigninRatchet === undefined &&
+      (baseLedger.tc2127WindowLocationRatchet === undefined || !hasAncestor(repoRoot, tc1977OpenKeySignin.sourceCommits.at(-1)!))) {
+    console.error("The OpenKey sign-in ratchet requires the merged window location ratchet and its measured source commit.");
+    failed = true;
+  }
+  validateTc2130PanelIphoneRatchetTransition(baseLedger.tc2130PanelIphoneRatchet, ledger.tc2130PanelIphoneRatchet);
+  const tc2130PanelIphone = ledger.tc2130PanelIphoneRatchet;
+  if (tc2130PanelIphone !== undefined && baseLedger.tc2130PanelIphoneRatchet === undefined &&
+      (baseLedger.tc1977OpenKeySigninRatchet === undefined || !hasAncestor(repoRoot, tc2130PanelIphone.sourceCommits.at(-1)!))) {
+    console.error("The panel safe-area ratchet requires the merged OpenKey sign-in ratchet and its measured source commit.");
+    failed = true;
+  }
+  validateTc1977HostBindingRatchetTransition(baseLedger.tc1977HostBindingRatchet, ledger.tc1977HostBindingRatchet);
+  const tc1977HostBinding = ledger.tc1977HostBindingRatchet;
+  if (tc1977HostBinding !== undefined && baseLedger.tc1977HostBindingRatchet === undefined &&
+      (baseLedger.tc2130PanelIphoneRatchet === undefined || !hasAncestor(repoRoot, tc1977HostBinding.sourceCommits.at(-1)!))) {
+    console.error("The host-binding export ratchet requires the merged panel safe-area ratchet and its measured source commit.");
+    failed = true;
+  }
+  validateTc2132IssuedDelegationsRatchetTransition(baseLedger.tc2132IssuedDelegationsRatchet, ledger.tc2132IssuedDelegationsRatchet);
+  const tc2132IssuedDelegations = ledger.tc2132IssuedDelegationsRatchet;
+  if (tc2132IssuedDelegations !== undefined && baseLedger.tc2132IssuedDelegationsRatchet === undefined &&
+      (baseLedger.tc1977HostBindingRatchet === undefined || !hasAncestor(repoRoot, tc2132IssuedDelegations.sourceCommits.at(-1)!))) {
+    console.error("The issued-delegations ratchet requires the merged host-binding export ratchet and its measured source commit.");
+    failed = true;
+  }
+  validateTc2140ExactKeyDelegationRatchetTransition(baseLedger.tc2140ExactKeyDelegationRatchet, ledger.tc2140ExactKeyDelegationRatchet);
+  const tc2140ExactKeyDelegation = ledger.tc2140ExactKeyDelegationRatchet;
+  if (tc2140ExactKeyDelegation !== undefined && baseLedger.tc2140ExactKeyDelegationRatchet === undefined &&
+      (baseLedger.tc2132IssuedDelegationsRatchet === undefined || !hasAncestor(repoRoot, tc2140ExactKeyDelegation.sourceCommits.at(-1)!))) {
+    console.error("The exact-key delegation ratchet requires the merged issued-delegations ratchet and its measured source commit.");
+    failed = true;
+  }
+  validateTc2205HomeFeedRatchetTransition(baseLedger.tc2205HomeFeedRatchet, ledger.tc2205HomeFeedRatchet);
+  const homeFeed = ledger.tc2205HomeFeedRatchet;
+  if (homeFeed !== undefined && baseLedger.tc2205HomeFeedRatchet === undefined &&
+      (baseLedger.tc2202AgentShareReceiveRatchet === undefined || !hasAncestor(repoRoot, homeFeed.sourceCommits.at(-1)!))) {
+    console.error("The Home feed ratchet requires the merged TC-2202 row and its measured source commit.");
+    failed = true;
+  }
+  validateTc2481RegistryFreshnessTransition(baseLedger.tc2481RegistryFreshness, ledger.tc2481RegistryFreshness);
+  const registryFreshness = ledger.tc2481RegistryFreshness;
+  if (registryFreshness !== undefined && baseLedger.tc2481RegistryFreshness === undefined &&
+      (baseLedger.tc2380Q2OneClick === undefined || !hasAncestor(repoRoot, registryFreshness.sourceCommits.at(-1)!))) {
+    console.error("The TC-2481 worker-only ratchet requires the merged TC-2380 Q2 row and its measured source commit.");
+    failed = true;
+  }
+  validateTc2481WebRoutingTransition(baseLedger.tc2481WebRouting, ledger.tc2481WebRouting);
+  const webRouting = ledger.tc2481WebRouting;
+  // The worker and Web admissions belong to the same PR; validateLedger has
+  // already validated the current worker row, which need not be merged yet.
+  if (webRouting !== undefined && baseLedger.tc2481WebRouting === undefined &&
+      (ledger.tc2481RegistryFreshness === undefined || !hasAncestor(repoRoot, webRouting.sourceCommits.at(-1)!))) {
+    console.error("The final TC-2481 Web routing ratchet requires the approved worker row and its final measured source ancestor.");
+    failed = true;
+  }
+  validateTc2481ColdDeviceRefusalTransition(baseLedger.tc2481ColdDeviceRefusal, ledger.tc2481ColdDeviceRefusal);
+  const coldDeviceRefusal = ledger.tc2481ColdDeviceRefusal;
+  if (coldDeviceRefusal !== undefined && baseLedger.tc2481ColdDeviceRefusal === undefined &&
+      (baseLedger.tc2481WebRouting === undefined || !hasAncestor(repoRoot, coldDeviceRefusal.sourceCommits.at(-1)!))) {
+    console.error("The TC-2481 cold-device root-only ratchet requires the merged Web routing row and its measured source ancestor.");
+    failed = true;
+  }
+  validateTc2481OfflineReplicaTransportTransition(baseLedger.tc2481OfflineReplicaTransport, ledger.tc2481OfflineReplicaTransport, ledger.tc2931BootstrapScope);
+  const offlineReplicaTransport = ledger.tc2481OfflineReplicaTransport;
+  // Both admissions are introduced by this PR; the current cold-root row is
+  // already strictly validated, while the measured final source must exist.
+  if (offlineReplicaTransport !== undefined && baseLedger.tc2481OfflineReplicaTransport === undefined &&
+      (ledger.tc2481ColdDeviceRefusal === undefined || !hasAncestor(repoRoot, offlineReplicaTransport.sourceCommits.at(-1)!))) {
+    console.error("The final TC-2481 cold routing and replica admission requires the approved cold-root row and its measured source ancestor.");
+    failed = true;
+  }
+  validateTc2582PublicSessionKeyTransition(baseLedger.tc2582PublicSessionKey, ledger.tc2582PublicSessionKey);
+  const publicSessionKey = ledger.tc2582PublicSessionKey;
+  if (publicSessionKey !== undefined && baseLedger.tc2582PublicSessionKey === undefined &&
+      (baseLedger.tc2481OfflineReplicaTransport === undefined || !hasAncestor(repoRoot, publicSessionKey.sourceCommits.at(-1)!))) {
+    console.error("The TC-2582 root ratchet requires the merged TC-2481 final row and its measured source ancestor.");
+    failed = true;
+  }
+  validateTc2281OpenKeyConnectedKeyIdTransition(baseLedger.tc2281OpenKeyConnectedKeyId, ledger.tc2281OpenKeyConnectedKeyId);
+  const connectedKeyId = ledger.tc2281OpenKeyConnectedKeyId;
+  if (connectedKeyId !== undefined && baseLedger.tc2281OpenKeyConnectedKeyId === undefined &&
+      (baseLedger.tc2582PublicSessionKey === undefined || !hasAncestor(repoRoot, connectedKeyId.sourceCommits.at(-1)!))) {
+    console.error("The TC-2281 root ratchet requires the merged TC-2582 row and its measured source ancestor.");
+    failed = true;
+  }
+  validateTc2594ResourceTransportTransition(baseLedger.tc2594ResourceTransport, ledger.tc2594ResourceTransport);
+  const resourceTransport = ledger.tc2594ResourceTransport;
+  if (resourceTransport !== undefined && baseLedger.tc2594ResourceTransport === undefined &&
+      (baseLedger.tc2281OpenKeyConnectedKeyId === undefined || !hasAncestor(repoRoot, resourceTransport.sourceCommits.at(-1)!))) {
+    console.error("The TC-2594 root ratchet requires the merged TC-2281 row and its measured source ancestor.");
+    failed = true;
+  }
+  validateTc2657RegistryPublicationTransition(baseLedger.tc2657RegistryPublication, ledger.tc2657RegistryPublication);
+  const registryPublication = ledger.tc2657RegistryPublication;
+  if (registryPublication !== undefined && baseLedger.tc2657RegistryPublication === undefined &&
+      (baseLedger.tc2594ResourceTransport === undefined || !hasAncestor(repoRoot, registryPublication.sourceCommits.at(-1)!))) {
+    console.error("The TC-2657 root ratchet requires the merged TC-2594 row and its measured source ancestor.");
+    failed = true;
+  }
+  validateTc2518KeyWrapTransition(baseLedger.tc2518KeyWrap, ledger.tc2518KeyWrap);
+  const keyWrap = ledger.tc2518KeyWrap;
+  if (keyWrap !== undefined && baseLedger.tc2518KeyWrap === undefined &&
+      (baseLedger.tc2657RegistryPublication === undefined || !hasAncestor(repoRoot, keyWrap.sourceCommits.at(-1)!))) {
+    console.error("The TC-2518 root ratchet requires the merged TC-2657 row and its measured source ancestor.");
+    failed = true;
+  }
+  validateTc2687PublishedSignInTransition(baseLedger.tc2687PublishedSignIn, ledger.tc2687PublishedSignIn);
+  const publishedSignIn = ledger.tc2687PublishedSignIn;
+  if (publishedSignIn !== undefined && baseLedger.tc2687PublishedSignIn === undefined &&
+      (baseLedger.tc2518KeyWrap === undefined || !hasAncestor(repoRoot, publishedSignIn.sourceCommits.at(-1)!))) {
+    console.error("The TC-2687 root ratchet requires the merged TC-2518 row and its measured source ancestor.");
+    failed = true;
+  }
+  validateTc2691HostExpiryTransition(baseLedger, ledger);
+  for (const row of ["tc2691HostExpiryWorker", "tc2691HostExpiryReplicaWorker", "tc2691HostExpiry"] as const) {
+    const admission = ledger[row];
+    if (admission !== undefined && baseLedger[row] === undefined &&
+        (baseLedger.tc2687PublishedSignIn === undefined || !hasAncestor(repoRoot, admission.sourceCommits.at(-1)!))) {
+      console.error("The TC-2691 admission requires the merged TC-2687 row and its measured source ancestor.");
+      failed = true;
+    }
+  }
+  validateTc2773LazyRestoreReplicaWorkerTransition(baseLedger.tc2773LazyRestoreReplicaWorker, ledger.tc2773LazyRestoreReplicaWorker);
+  const lazyRestore = ledger.tc2773LazyRestoreReplicaWorker;
+  if (lazyRestore !== undefined && baseLedger.tc2773LazyRestoreReplicaWorker === undefined &&
+      (baseLedger.tc2691HostExpiryReplicaWorker === undefined || !hasAncestor(repoRoot, lazyRestore.sourceCommits.at(-1)!))) {
+    console.error("The TC-2773 replica worker admission requires the merged TC-2691 row and its measured source ancestor.");
+    failed = true;
+  }
+  validateTc2773LazyRestoreRootTransition(baseLedger.tc2773LazyRestoreRoot, ledger.tc2773LazyRestoreRoot);
+  const lazyRestoreRoot = ledger.tc2773LazyRestoreRoot;
+  if (lazyRestoreRoot !== undefined && baseLedger.tc2773LazyRestoreRoot === undefined &&
+      (baseLedger.tc2691HostExpiry === undefined || !hasAncestor(repoRoot, lazyRestoreRoot.sourceCommits.at(-1)!))) {
+    console.error("The TC-2773 root admission requires the merged TC-2691 row and its measured source ancestor.");
+    failed = true;
+  }
+  validateTc2234InvitationPolicyRootTransition(baseLedger.tc2234InvitationPolicyRoot, ledger.tc2234InvitationPolicyRoot);
+  const invitationPolicyRoot = ledger.tc2234InvitationPolicyRoot;
+  if (invitationPolicyRoot !== undefined && baseLedger.tc2234InvitationPolicyRoot === undefined &&
+      (baseLedger.tc2773LazyRestoreRoot === undefined || !hasAncestor(repoRoot, invitationPolicyRoot.sourceCommits.at(-1)!))) {
+    console.error("The TC-2234 root admission requires the merged TC-2773 root row and its measured source ancestor.");
+    failed = true;
+  }
+  validateTc2872RenewalRootTransition(baseLedger.tc2872RenewalRoot, ledger.tc2872RenewalRoot);
+  const renewalRoot = ledger.tc2872RenewalRoot;
+  if (renewalRoot !== undefined && baseLedger.tc2872RenewalRoot === undefined &&
+      (baseLedger.tc2234InvitationPolicyRoot === undefined || !hasAncestor(repoRoot, renewalRoot.sourceCommits.at(-1)!))) {
+    console.error("The TC-2872 root budget requires the merged TC-2234 root row and its measured source ancestor.");
+    failed = true;
+  }
+  validateTc2872RenewalKvWorkerTransition(baseLedger.tc2872RenewalKvWorker, ledger.tc2872RenewalKvWorker);
+  const renewalKvWorker = ledger.tc2872RenewalKvWorker;
+  if (renewalKvWorker !== undefined && baseLedger.tc2872RenewalKvWorker === undefined &&
+      (ledger.tc2872RenewalRoot === undefined || !hasAncestor(repoRoot, renewalKvWorker.sourceCommits.at(-1)!))) {
+    console.error("The TC-2872 kv-storage worker budget requires the renewal root row and its measured source commit.");
+    failed = true;
+  }
+  validateTc2872RenewalReplicaWorkerTransition(baseLedger.tc2872RenewalReplicaWorker, ledger.tc2872RenewalReplicaWorker);
+  const renewalReplicaWorker = ledger.tc2872RenewalReplicaWorker;
+  if (renewalReplicaWorker !== undefined && baseLedger.tc2872RenewalReplicaWorker === undefined &&
+      (renewalKvWorker === undefined || !hasAncestor(repoRoot, renewalReplicaWorker.sourceCommits.at(-1)!))) {
+    console.error("The TC-2872 replica worker budget requires the kv-storage worker row and its measured source commit.");
+    failed = true;
+  }
+  validateTc2904OwnerDirectProofRootTransition(baseLedger.tc2904OwnerDirectProofRoot, ledger.tc2904OwnerDirectProofRoot);
+  validateTc2924NodeAliasesRootTransition(baseLedger.tc2924NodeAliasesRoot, ledger.tc2924NodeAliasesRoot);
+  if (ledger.tc2904OwnerDirectProofRoot !== undefined && baseLedger.tc2904OwnerDirectProofRoot === undefined &&
+      (baseLedger.tc2872RenewalRoot === undefined || !hasAncestor(repoRoot, ledger.tc2904OwnerDirectProofRoot.sourceCommits.at(-1)!))) {
+    console.error("The TC-2904 root budget requires the TC-2872 root row and its measured source ancestor.");
+    failed = true;
+  }
   const baseOptionalPath = "packages/web-sdk/scripts/replica-optional-size-ledger.json";
   const optionalResult = spawnSync("git", ["show", `${mergeBase}:${baseOptionalPath}`], {
     cwd: repoRoot, encoding: "utf8",
@@ -396,7 +736,9 @@ if (prBaseSha) {
   }
   validateOptionalLedger(baseOptional, baseLedger.fixRequiredRatchet !== undefined,
     baseLedger.canonicalToolchainCorrection !== undefined, baseLedger.hardeningRatchet !== undefined,
-    baseLedger.tc1413Ratchet !== undefined, baseLedger.tc1432Ratchet !== undefined, baseLedger.tc1475Ratchet !== undefined, baseLedger.masterDriftRatchet !== undefined, baseLedger.tc1789Ratchet !== undefined);
+    baseLedger.tc1413Ratchet !== undefined, baseLedger.tc1432Ratchet !== undefined, baseLedger.tc1475Ratchet !== undefined, baseLedger.masterDriftRatchet !== undefined, baseLedger.tc1789Ratchet !== undefined, baseLedger.tc2043SyncScopeRatchet !== undefined, baseLedger.tc1888PurgeLocalCopyRatchet !== undefined, baseLedger.tc2096RepairBackoffRatchet !== undefined, baseLedger.tc2096LazyContentRatchet !== undefined, baseLedger.tc2481WebRouting !== undefined, baseLedger.tc2481OfflineReplicaTransport, baseLedger.tc2931BootstrapScope);
+  validateTc2481WebOptionalTransition(baseOptional.tc2481WebRouting, optionalLedger.tc2481WebRouting);
+  validateTc2931OptionalTransition(baseOptional.tc2931, optionalLedger.tc2931);
   validateIntroducedOptionalSources(baseOptional, optionalLedger);
   // Consistency check: each merged row's pin is on the base or was landed by it (see pinLandedOn).
   for (const { row, pin } of mergedPinsNotLandedOn(repoRoot, baseLedger, baseOptional, prBaseSha)) {
@@ -489,9 +831,44 @@ if (prBaseSha) {
       optionalFormats.every((format) =>
         baseOptional.allowance[format] === masterDriftOptionalAllowance[format] &&
         optionalLedger.allowance[format] === tc1789OptionalAllowance[format]);
+    const tc2043Transition = baseLedger.tc2043SyncScopeRatchet === undefined && ledger.tc2043SyncScopeRatchet !== undefined &&
+      optionalFormats.every((format) =>
+        baseOptional.allowance[format] === tc1789OptionalAllowance[format] &&
+        optionalLedger.allowance[format] === tc2043OptionalAllowance[format]);
+    const tc1888Transition = baseLedger.tc1888PurgeLocalCopyRatchet === undefined && ledger.tc1888PurgeLocalCopyRatchet !== undefined &&
+      optionalFormats.every((format) =>
+        baseOptional.allowance[format] === tc2043OptionalAllowance[format] &&
+        optionalLedger.allowance[format] === tc1888OptionalAllowance[format]);
+    const tc2096Transition = baseLedger.tc2096RepairBackoffRatchet === undefined && ledger.tc2096RepairBackoffRatchet !== undefined &&
+      optionalFormats.every((format) =>
+        baseOptional.allowance[format] === tc1888OptionalAllowance[format] &&
+        optionalLedger.allowance[format] === tc2096OptionalAllowance[format]);
+    const tc2096LazyTransition = baseLedger.tc2096LazyContentRatchet === undefined && ledger.tc2096LazyContentRatchet !== undefined &&
+      optionalFormats.every((format) =>
+        baseOptional.allowance[format] === tc2096OptionalAllowance[format] &&
+        optionalLedger.allowance[format] === tc2096LazyOptionalAllowance[format]);
+    const tc2481WebTransition = baseLedger.tc2481WebRouting === undefined && ledger.tc2481WebRouting !== undefined &&
+      baseOptional.tc2481WebRouting === undefined && optionalLedger.tc2481WebRouting !== undefined &&
+      optionalFormats.every((format) =>
+        baseOptional.allowance[format] === tc2096LazyOptionalAllowance[format] &&
+        optionalLedger.allowance[format] === tc2481WebOptionalAllowance[format]);
+    const tc2481OfflineTransition = baseLedger.tc2481OfflineReplicaTransport === undefined &&
+      offlineReplicaTransport !== undefined && baseLedger.tc2481WebRouting !== undefined &&
+      baseOptional.tc2481WebRouting !== undefined && optionalLedger.tc2481WebRouting !== undefined &&
+      optionalFormats.every((format) =>
+        baseOptional.allowance[format] === tc2481WebOptionalAllowance[format] &&
+        optionalLedger.allowance[format] ===
+          (format === "replica.mjs" || format === "replica.cjs"
+            ? offlineReplicaTransport.firstImport.ceiling[format]
+            : offlineReplicaTransport.activation.ceiling[format]));
+    const tc2931Transition = baseLedger.tc2936RestoreCommitRoot !== undefined &&
+      baseOptional.tc2931 === undefined && optionalLedger.tc2931 !== undefined &&
+      JSON.stringify(optionalLedger.tc2931) === JSON.stringify(approvedTc2931Optional) &&
+      ledger.tc2931BootstrapScope !== undefined &&
+      optionalFormats.every((format) => optionalLedger.allowance[format] === tc2931OptionalAllowance[format]);
     if (!pairedTransition && !measurementCorrection && !reviewedFixTransition && !ciCorrectionTransition &&
-        !compactFixTransition && !hardeningTransition && !tc1413Transition && !tc1432Transition && !tc1475Transition && !masterDriftTransition && !tc1789Transition) {
-      console.error(`${baseOptionalPath}: optional allowance may increase only with an exact reviewed relocation, toolchain correction, fix-required source row, hardening ratchet, TC-1413 ratchet, TC-1432 ratchet, TC-1475 ratchet, master-drift ratchet or sdk-services 3.3.1 pin ratchet.`);
+        !compactFixTransition && !hardeningTransition && !tc1413Transition && !tc1432Transition && !tc1475Transition && !masterDriftTransition && !tc1789Transition && !tc2043Transition && !tc1888Transition && !tc2096Transition && !tc2096LazyTransition && !tc2481WebTransition && !tc2481OfflineTransition && !tc2931Transition) {
+      console.error(`${baseOptionalPath}: optional allowance may increase only with an exact reviewed relocation, toolchain correction, fix-required source row, hardening ratchet, TC-1413 ratchet, TC-1432 ratchet, TC-1475 ratchet, master-drift ratchet, sdk-services 3.3.1 pin ratchet, TC-2043 syncScope ratchet, TC-1888 sign-out ratchet, TC-2096 repair-backoff ratchet, TC-2096 lazy content fetch ratchet, TC-2481 Web routing ratchet or final TC-2481 cold-routing and replica admission.`);
       failed = true;
     }
   }
@@ -580,7 +957,10 @@ if (prBaseSha) {
         current["index.mjs"] === entry["index.mjs"] && current["index.cjs"] === entry["index.cjs"] &&
         current.note === entry.note;
     });
-  if (replicaPaths.length === 0) {
+  const tc2931OptionalOnly = replicaPaths.length === 0 && baseOptional.tc2931 === undefined &&
+    JSON.stringify(optionalLedger.tc2931) === JSON.stringify(approvedTc2931Optional) &&
+    ledger.tc2931BootstrapScope !== undefined;
+  if (replicaPaths.length === 0 && !tc2931OptionalOnly) {
     if (!baseEntriesUnchanged) {
       console.error("Non-replica PRs must not append to packages/web-sdk/scripts/replica-size-ledger.json entries[].");
       failed = true;
@@ -668,7 +1048,12 @@ if (prBaseSha) {
         failed = true;
       }
       const appended = ledger.entries.slice(baseLedger.entries.length);
-      if (phase2Introduced) {
+      if (tc2931OptionalOnly) {
+        if (!baseEntriesUnchanged || formats.some((format) => deltas[format] > ledger.tc2931BootstrapScope!.root.delta[format])) {
+          console.error("The exact TC-2931 optional-only admission must keep cumulative root accounting unchanged and fit its named root delta.");
+          failed = true;
+        }
+      } else if (phase2Introduced) {
         // The separately approved row replaces a cumulative #548 entry; #553
         // remains its own unchanged upstream ledger entry.
         if (!prefixMatches) failed = true;
@@ -684,6 +1069,16 @@ if (prBaseSha) {
           }
         }
         console.log("TC-858 #571 uses its exact absolute-root sign-out row, not additive old headroom.");
+      } else if (tc1888PurgeLocalCopy !== undefined && baseLedger.tc1888PurgeLocalCopyRatchet === undefined && prefixMatches && appended.length === 1) {
+        // The exact TC-1888 row carries the growth through its absolute root ceiling.
+        const entry = appended[0];
+        for (const format of formats) {
+          if (entry[format] !== 0 || deltas[format] > tc1888PurgeLocalCopy.root.delta[format]) {
+            console.error(`${format}: the TC-1888 entry must be 0 and the measured growth ${deltas[format]} must not exceed the TC-1888 row's ${tc1888PurgeLocalCopy.root.delta[format]}.`);
+            failed = true;
+          }
+        }
+        console.log("TC-1888 uses its exact absolute-root row, not additive old headroom.");
       } else if (tc1413 !== undefined && baseLedger.tc1413Ratchet === undefined && prefixMatches && appended.length === 1) {
         // As for #571: the exact TC-1413 row carries the growth through its absolute root ceiling, so the
         // cumulative old-headroom entry is zero. The measured growth may not exceed the row.
@@ -750,6 +1145,14 @@ if (prBaseSha) {
           }
         }
         console.log("The sdk-services 3.3.1 pin uses its exact absolute-root row, not additive old headroom.");
+      } else if (webRouting !== undefined && baseLedger.tc2481WebRouting === undefined && prefixMatches && appended.length === 1) {
+        try {
+          validateTc2481WebRootEntry(appended[0], deltas);
+        } catch (error) {
+          console.error(error instanceof Error ? error.message : "Invalid TC-2481 root accounting");
+          failed = true;
+        }
+        console.log("TC-2481 records the actual growth in its absolute root row; its owned-budget charge is zero.");
       } else if (!prefixMatches || appended.length !== 1) {
         const pr = process.env.REPLICA_BUDGET_PR_NUMBER ? `#${process.env.REPLICA_BUDGET_PR_NUMBER}` : "#<PR>";
         const ticket = process.env.REPLICA_BUDGET_TICKET?.match(/\bTC-\d+\b/i)?.[0] ?? "TC-UNKNOWN";
@@ -769,7 +1172,7 @@ if (prBaseSha) {
           }
         }
       }
-      if (!phase2Introduced && prefixMatches && appended.length !== 1) failed = true;
+      if (!phase2Introduced && !tc2931OptionalOnly && prefixMatches && appended.length !== 1) failed = true;
       console.log(`Replica-owned changes: ${replicaPaths.join(", ")}`);
     } finally {
       try {
@@ -783,20 +1186,39 @@ if (prBaseSha) {
   console.log("Replica size budget: no pull-request merge base; reporting only.");
 }
 
+async function runWebSdkTests(report: string) {
+  const stdoutFile = await open(`${report}.stdout.log`, "wx", 0o600);
+  try {
+    const stderrFile = await open(`${report}.stderr.log`, "wx", 0o600);
+    try {
+      // File-backed stdio retains the full result without spawnSync's output buffer.
+      const test = spawnSync("bun", ["test", "--parallel=1", "packages/web-sdk/tests", "--reporter=junit", `--reporter-outfile=${report}`], {
+        cwd: resolve(import.meta.dir, "../../.."),
+        stdio: ["ignore", stdoutFile.fd, stderrFile.fd],
+      });
+      const [stdout, stderr] = await Promise.all([
+        readFile(`${report}.stdout.log`, "utf8"),
+        readFile(`${report}.stderr.log`, "utf8"),
+      ]);
+      return { status: test.status, signal: test.signal, error: test.error, stdout, stderr };
+    } finally {
+      await stderrFile.close();
+    }
+  } finally {
+    await stdoutFile.close();
+  }
+}
+
 // Keep structural/size inspection independent of the web test suite.
 if (process.argv.includes("--dist-only")) process.exit(failed ? 1 : 0);
 const reportDir = await mkdtemp(join(tmpdir(), "tc-web-sdk-junit-"));
 const report = join(reportDir, "web-sdk.xml");
 try {
   // Bun's file workers share global test shims; keep the suite in one worker.
-  const test = spawnSync("bun", ["test", "--parallel=1", "packages/web-sdk/tests", "--reporter=junit", `--reporter-outfile=${report}`], {
-    cwd: resolve(import.meta.dir, "../../.."),
-    encoding: "utf8",
-    maxBuffer: 20 * 1024 * 1024,
-  });
-  if (test.error) throw test.error;
+  const test = await runWebSdkTests(report);
   process.stdout.write(test.stdout);
   process.stderr.write(test.stderr);
+  if (test.error) throw test.error;
   const exitFailure = webSdkTestExitFailure(test.status, test.signal);
   if (exitFailure) {
     console.error(`${exitFailure}; the step fails on any non-zero exit even when the junit report is clean`);

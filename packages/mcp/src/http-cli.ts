@@ -22,12 +22,20 @@ export async function main(): Promise<void> {
     publicUrl,
     stateDir,
     stateSecret,
-    nodeHost: process.env.TC_HOST ?? "https://tee.node.tinycloud.xyz",
+    nodeHost: process.env.TC_HOST ?? "https://node.tinycloud.xyz",
     openkeyHost,
     approvalTtlSeconds: positiveInteger(process.env.TC_MCP_APPROVAL_TTL_SECONDS, 300),
     delegationExpiry: process.env.TC_MCP_DELEGATION_EXPIRY ?? "1h",
-    allowedOrigins: commaList(process.env.TC_MCP_ALLOWED_ORIGINS),
+    ...(process.env.TC_MCP_NATIVE_SERVICE_CREDENTIAL === undefined
+      ? {}
+      : { nativeServiceCredential: process.env.TC_MCP_NATIVE_SERVICE_CREDENTIAL }),
     oauthMetadata,
+    introspection: {
+      endpoint: requiredUrl("TC_MCP_INTROSPECTION_URL").toString(),
+      clientId: requiredString("TC_MCP_INTROSPECTION_CLIENT_ID"),
+      clientSecret: requiredString("TC_MCP_INTROSPECTION_CLIENT_SECRET"),
+      authMethod: introspectionAuthMethod(process.env.TC_MCP_INTROSPECTION_AUTH_METHOD),
+    },
   });
   const nodeHandler = toNodeHandler(app);
   const server = createServer(nodeHandler);
@@ -63,16 +71,17 @@ function requiredAbsolutePath(name: string): string {
   return resolve(value);
 }
 
+function introspectionAuthMethod(value: string | undefined): "basic" | "post" {
+  if (value === undefined || value === "basic") return "basic";
+  if (value === "post") return "post";
+  throw new Error("TC_MCP_INTROSPECTION_AUTH_METHOD must be basic or post.");
+}
+
 function positiveInteger(value: string | undefined, fallback: number): number {
   if (value === undefined) return fallback;
   const parsed = Number(value);
   if (!Number.isInteger(parsed) || parsed <= 0) throw new Error("Expected a positive integer environment value.");
   return parsed;
-}
-
-function commaList(value: string | undefined): string[] | undefined {
-  if (value === undefined) return undefined;
-  return value.split(",").map((entry) => entry.trim()).filter(Boolean);
 }
 
 void main().catch(() => {

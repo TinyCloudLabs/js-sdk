@@ -28,6 +28,7 @@ export type {
 
 export {
   parseNetworkId,
+  parseEncryptionResource,
   buildNetworkId,
   isNetworkId,
   networkDiscoveryKey,
@@ -35,6 +36,7 @@ export {
   ENCRYPTION_NETWORK_URN_PREFIX,
   NETWORK_NAME_PATTERN,
   type ParsedNetworkId,
+  type ParsedEncryptionResource,
 } from "./networkId";
 
 export {
@@ -118,3 +120,9 @@ export {
   type ReceiverKeyPair,
   type ReceiverKeySigner,
 } from "./types";
+
+export {
+  KEY_WRAP_V2_ALG, sealKeyV2, openKeyV2, readKeyWrapV2, isKeyWrapV2,
+  assertKeyWrapAlgorithm, assertKeyWrapContext, decryptColumn,
+  type KeyWrapContext, type KeyWrapV2Header, type ColumnFormat,
+} from "./keyWrap";

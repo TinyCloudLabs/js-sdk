@@ -1,3 +1,4 @@
+import type { SharePlacement } from "../share-placement";
 /**
  * SharingService - v2 sharing link service with embedded private keys.
  *
@@ -18,7 +19,10 @@ import type {
   ServiceSession,
   InvokeFunction,
   FetchFunction,
+  ResourceTransport,
+  ResourceAccess,
 } from "@tinycloud/sdk-services";
+import { createResourceTransportInvocationFetch, routingFailure, wrapError } from "@tinycloud/sdk-services";
 import type {
   Result,
   DelegationError,
@@ -50,18 +54,14 @@ import { bases } from "multiformats/basics";
 import { ed25519 } from "@noble/curves/ed25519";
 import { ShareRecipientClient } from "./ShareRecipientClient";
 import type { ShareAccessV2, ShareRecipientClientOptions } from "./recipient-types";
+import { delegationTouchesVault, spaceIdsEqual, verifiedDelegationRouting } from "./portable";
+import { endToEndNodeHost } from "../tinycloud-node";
+import { parseSignedSiweCacao } from "./cacao";
 
 // ---------------------------------------------------------------------------
 // Local helpers
 // ---------------------------------------------------------------------------
 
-function spaceIdsEqual(left: string, right: string): boolean {
-  const normalizeOwnerAddress = (space: string): string => {
-    const match = /^(tinycloud:pkh:eip155:\d+:)(0x[0-9a-fA-F]{40})(:.+)$/.exec(space);
-    return match === null ? space : `${match[1]}${match[2]!.toLowerCase()}${match[3]}`;
-  };
-  return normalizeOwnerAddress(left) === normalizeOwnerAddress(right);
-}
 
 /**
  * Infer the short-form service name (`"kv"`, `"sql"`, etc) that all of the
@@ -94,6 +94,15 @@ function inferShortServiceFromActionUrns(
     }
   }
   return short;
+}
+
+/**
+ * A share link never carries a `tinycloud.delegation` action (TC-3286): whoever holds the link must not be able
+ * to revoke, create, list or renew delegations with it. A holder's own revoke is a separate, explicit grant.
+ */
+const SHARE_DELEGATION_ACTION_MESSAGE = "A share link can't carry tinycloud.delegation actions";
+function includesDelegationAction(actions: readonly string[]): boolean {
+  return actions.some((action) => action.startsWith("tinycloud.delegation/"));
 }
 
 // =============================================================================
@@ -233,6 +242,31 @@ function base64UrlDecode(encoded: string): string {
 // =============================================================================
 
 /**
+ * One resource of a share: a full path and the actions granted on it. The node treats a KV path without a
+ * trailing slash as covering its subkeys too (`a/b` covers `a/b/…`), so do not share a key that is also used as
+ * a prefix of other data.
+ */
+export interface ShareResource {
+  path: string;
+  actions: string[];
+}
+
+/** A share token as its owner signed it: what `inspectShareToken` returns. */
+export interface InspectedShareToken {
+  /** The account that signed the share's root delegation. */
+  owner: { address: string; chainId: number; spaceId: string };
+  /** Every shared resource with its actions, exactly as the root grants them. */
+  resources: ShareResource[];
+  /** When the root delegation ends: anyone holding the token can claim it until then. */
+  accessExpiresAt: Date;
+  /** The root delegation's CID, checked against its signed bytes: one share has one, whichever link carries it. */
+  rootCid: string;
+}
+
+/** Most resources one share may carry (the owner-delegation bound). */
+export const MAX_SHARE_RESOURCES = 16;
+
+/**
  * Data encoded in a sharing link.
  */
 export interface EncodedShareData {
@@ -242,14 +276,20 @@ export interface EncodedShareData {
   keyDid: string;
   /** The delegation granting access */
   delegation: Delegation;
-  /** Resource path this link grants access to */
+  /** Resource path this link grants access to (the first resource when there are several) */
   path: string;
+  /**
+   * Every resource of a share that carries more than one, `path` first.
+   * Absent on a single-resource share.
+   */
+  resources?: ShareResource[];
   /** TinyCloud host URL */
   host: string;
   /** Space ID */
   spaceId: string;
   /** Schema version */
-  version: 1;
+  version: 1 | 2;
+  placement?: SharePlacement;
 }
 
 /**
@@ -276,6 +316,8 @@ export interface ReceiveOptions {
  * Result of receiving a sharing link.
  */
 export interface ShareAccess {
+  /** Transport verified for this received share, including private placement when present. */
+  resourceTransport?: ResourceTransport;
   /** The delegation that was received/created */
   delegation: Delegation;
   /** Key info for the received key */
@@ -284,8 +326,10 @@ export interface ShareAccess {
   kv: IKVService;
   /** The space ID */
   spaceId: string;
-  /** The path prefix for this share */
+  /** The path prefix for this share (the first resource when there are several) */
   path: string;
+  /** Every resource, `path` first, when the share carries more than one. */
+  resources?: ShareResource[];
 }
 
 /**
@@ -336,6 +380,8 @@ export interface DelegatedShareAccess {
  * Configuration for SharingService.
  */
 export interface SharingServiceConfig {
+  createPlacement?: (share: EncodedShareData) => Promise<SharePlacement>;
+  receivedPlacementTransport?: (share: EncodedShareData) => Promise<ResourceTransport>;
   /** TinyCloud host URLs */
   hosts: string[];
   /**
@@ -347,6 +393,8 @@ export interface SharingServiceConfig {
   invoke: InvokeFunction;
   /** Optional custom fetch implementation */
   fetch?: FetchFunction;
+  /** Resource-specific transport supplied by the owning platform graph. */
+  resourceTransport?: ResourceTransport;
   /** Key provider for cryptographic operations */
   keyProvider: KeyProvider;
   /** Capability key registry for key/delegation management */
@@ -407,13 +455,16 @@ export interface SharingServiceConfig {
    */
   onRootDelegationNeeded?: (params: {
     /** DID of the share key to delegate to */
+    onPrepared?: (delegation: Delegation) => Promise<void>;
     shareKeyDID: string;
     /** Space ID */
     spaceId: string;
-    /** Path to grant access to */
+    /** Path to grant access to (the first resource) */
     path: string;
-    /** Actions to grant */
+    /** Actions to grant on `path` */
     actions: string[];
+    /** Every resource to grant, `path` first. One entry for a single-resource share. */
+    resources: ShareResource[];
     /** Requested expiry time */
     requestedExpiry: Date;
   }) => Promise<Delegation | undefined>;
@@ -425,7 +476,8 @@ export interface SharingServiceConfig {
  * Whether a session can issue a sharing delegation from its own authority:
  * `"ok"` (an uncaveated entry covers it), `"caveated"` (only caveated entries
  * cover it; their caveats cannot be carried into a child delegation) or
- * `"not-covered"`.
+ * `"not-covered"` (no entry covers it, or it asks for a `tinycloud.delegation`
+ * action, which no share link carries).
  */
 export type ShareDelegationPreflight = "ok" | "caveated" | "not-covered";
 
@@ -539,9 +591,14 @@ export class SharingService implements ISharingService {
   private sessionExpiry?: Date;
   private onRootDelegationNeeded?: SharingServiceConfig["onRootDelegationNeeded"];
   private assertActiveFn?: SharingServiceConfig["assertActive"];
+  private readonly resourceTransport?: ResourceTransport;
+  private readonly createPlacement?: SharingServiceConfig["createPlacement"];
+  private readonly receivedPlacementTransport?: SharingServiceConfig["receivedPlacementTransport"];
 
   /**
    * Creates a new SharingService instance.
+   * Standalone explicit-host calls do not consult the registry.
+   * Use Node/Web objects for registry routing; received-share paths require a resource transport.
    */
   constructor(config: SharingServiceConfig) {
     this.hosts = config.hosts;
@@ -559,6 +616,9 @@ export class SharingService implements ISharingService {
     this.sessionExpiry = config.sessionExpiry;
     this.onRootDelegationNeeded = config.onRootDelegationNeeded;
     this.assertActiveFn = config.assertActive;
+    this.resourceTransport = config.resourceTransport;
+    this.createPlacement = config.createPlacement;
+    this.receivedPlacementTransport = config.receivedPlacementTransport;
   }
 
   /**
@@ -638,28 +698,23 @@ export class SharingService implements ISharingService {
       };
     }
 
-    // Validate path
-    if (!params.path) {
-      return {
-        ok: false,
-        error: createError(
-          DelegationErrorCodes.INVALID_INPUT,
-          "path is required"
-        ),
-      };
+    if (params.includePlacement && !this.createPlacement) {
+      return { ok: false, error: createError(DelegationErrorCodes.PERMISSION_DENIED,
+        "Share placement requires an explicit wallet owner signer") };
     }
 
-    const actions = params.actions ?? DEFAULT_READ_ACTIONS;
+    const resolvedResources = this.resolveShareResources(params);
+    if (!resolvedResources.ok) return resolvedResources;
+    const resources = resolvedResources.data;
+    // The first resource is the share's `path`; a single-resource share behaves exactly as before.
+    const { path: fullPath, actions } = resources[0];
+    if (resources.length > 1 && params.includePlacement) {
+      return { ok: false, error: createError(DelegationErrorCodes.INVALID_INPUT, "Share placement supports one resource") };
+    }
     const requestedExpiry = params.expiry ?? new Date(Date.now() + DEFAULT_EXPIRY_MS);
     let expiry = requestedExpiry;
 
     const schema: ShareSchema = params.schema ?? "base64";
-
-    // Build full path with prefix (matches how KVService stores data)
-    // If pathPrefix is "demo-app" and path is "hello", fullPath is "demo-app/hello"
-    const fullPath = this.pathPrefix
-      ? `${this.pathPrefix}/${params.path}`.replace(/\/+/g, "/") // Normalize slashes
-      : params.path;
 
     // Only base64 schema is implemented in v1
     if (schema !== "base64") {
@@ -711,6 +766,12 @@ export class SharingService implements ISharingService {
 
     // Step 2: Check if any existing key can satisfy this delegation
     // Only prompt for root delegation if NO existing key in the registry can handle it
+    let preparedPlacement: SharePlacement | undefined;
+    const preparePlacement = async (parent: Delegation) => {
+      if (!this.createPlacement) throw new Error("Share placement requires an explicit wallet owner signer");
+      preparedPlacement = await this.createPlacement({ key: keyJwk, keyDid, delegation: parent, path: fullPath, host: this.host, spaceId: this.session!.spaceId, version: 1 });
+      this.assertActiveFn?.();
+    };
     let delegation: Delegation;
     // Strip fragment from DID URL to get plain DID for UCAN audience
     // getDID() returns "did:key:z6Mk...#z6Mk..." but audience needs "did:key:z6Mk..."
@@ -731,15 +792,16 @@ export class SharingService implements ISharingService {
     // 1. Covers the required path and actions
     // 2. Has sufficient expiry (delegation.expiry >= requestedExpiry)
     // 3. Allows sub-delegation
-    const canSatisfyFromRegistry = this.classifyDelegationAuthority(
-      fullPath,
-      actions,
+    const canSatisfyFromRegistry = resources.every((resource) => this.classifyDelegationAuthority(
+      resource.path,
+      resource.actions,
       requestedExpiry
-    ) === "ok";
+    ) === "ok");
 
     if (canSatisfyFromRegistry) {
       // An existing key can satisfy this request - use session delegation (no prompt)
-      const delegationResult = await this.createSessionDelegation(plainDID, fullPath, actions, expiry, params.allowSubDelegation !== false);
+      const delegationResult = await this.createSessionDelegation(plainDID, resources, expiry, params.allowSubDelegation !== false, params.includePlacement === true);
+      if ('ok' in delegationResult && !delegationResult.ok && routingFailure(delegationResult.error)) return delegationResult;
       const childDelegationActiveError = this.retiredGraphError();
       if (childDelegationActiveError) return { ok: false, error: childDelegationActiveError };
       const parsed = handleDelegationResult(delegationResult);
@@ -751,16 +813,28 @@ export class SharingService implements ISharingService {
       // No existing key can satisfy the request - try root delegation
       try {
         const rootDelegation = await this.onRootDelegationNeeded({
+          ...(params.includePlacement ? { onPrepared: preparePlacement } : {}),
           shareKeyDID: plainDID,
           spaceId: this.session.spaceId,
           path: fullPath,
           actions,
+          resources: resources.map((resource) => ({ path: resource.path, actions: [...resource.actions] })),
           requestedExpiry,
         });
         const rootDelegationActiveError = this.retiredGraphError();
         if (rootDelegationActiveError) return { ok: false, error: rootDelegationActiveError };
 
         if (rootDelegation) {
+          // A share of several resources must be backed, resource by resource, by the root the callback signed.
+          if (resources.length > 1 && (await verifyShareRoot(rootDelegation, this.session.spaceId, keyDid, resources)) === null) {
+            return {
+              ok: false,
+              error: createError(
+                DelegationErrorCodes.PERMISSION_DENIED,
+                "The signed root delegation does not grant every shared resource",
+              ),
+            };
+          }
           delegation = rootDelegation;
           expiry = requestedExpiry;
         } else {
@@ -773,6 +847,7 @@ export class SharingService implements ISharingService {
           };
         }
       } catch (err) {
+        if (routingFailure(err)) return { ok: false, error: { ...wrapError("delegation", err), service: "delegation" } };
         // `onRootDelegationNeeded` re-opens the wallet/OpenKey signing surface
         // mid-compose, long after sign-in. An unanswered or cancelled signature
         // is a completely different problem from "you are not authorized", and
@@ -798,11 +873,18 @@ export class SharingService implements ISharingService {
       keyDid,
       delegation,
       path: fullPath,
+      ...(resources.length > 1 ? { resources } : {}),
       host: this.host,
       spaceId: this.session.spaceId,
       version: 1,
     };
 
+    if (params.includePlacement) {
+      if (!preparedPlacement) await preparePlacement(delegation);
+      shareData.placement = preparedPlacement;
+      this.assertActiveFn?.();
+      shareData.version = 2;
+    }
     // Step 4: Encode the link
     const encodedData = this.encodeLink(shareData, schema);
 
@@ -823,6 +905,50 @@ export class SharingService implements ISharingService {
   }
 
   /**
+   * The share's resources as full paths with their actions: `path`/`actions`
+   * as one resource, or `resources`. Several resources must have distinct
+   * paths and actions of one known service each.
+   * @internal
+   */
+  private resolveShareResources(params: GenerateShareParams): Result<ShareResource[], DelegationError> {
+    const invalid = (message: string): Result<never, DelegationError> => ({
+      ok: false,
+      error: createError(DelegationErrorCodes.INVALID_INPUT, message),
+    });
+    const fullPath = (path: string) => this.pathPrefix
+      ? `${this.pathPrefix}/${path}`.replace(/\/+/g, "/") // Normalize slashes
+      : path;
+    if (params.resources === undefined) {
+      if (!params.path) return invalid("path is required");
+      // Build full path with prefix (matches how KVService stores data)
+      // If pathPrefix is "demo-app" and path is "hello", fullPath is "demo-app/hello"
+      const actions = params.actions ?? DEFAULT_READ_ACTIONS;
+      if (includesDelegationAction(actions)) return invalid(SHARE_DELEGATION_ACTION_MESSAGE);
+      return { ok: true, data: [{ path: fullPath(params.path), actions }] };
+    }
+    if (params.path !== undefined || params.actions !== undefined) return invalid("Give either path and actions, or resources");
+    if (params.resources.length === 0 || params.resources.length > MAX_SHARE_RESOURCES) {
+      return invalid(`A share carries 1 to ${MAX_SHARE_RESOURCES} resources`);
+    }
+    const resources: ShareResource[] = [];
+    for (const resource of params.resources) {
+      if (!resource.path) return invalid("path is required");
+      const actions = resource.actions ?? DEFAULT_READ_ACTIONS;
+      if (includesDelegationAction(actions)) return invalid(SHARE_DELEGATION_ACTION_MESSAGE);
+      const path = fullPath(resource.path);
+      if (params.resources.length > 1) {
+        if (canonicalCapabilityPath(path) === null || path.includes("*")) return invalid("Each shared resource needs a canonical path");
+        if (actions.length === 0 || new Set(actions).size !== actions.length || inferShortServiceFromActionUrns(actions) === undefined) {
+          return invalid("Each shared resource needs distinct actions of one known TinyCloud service");
+        }
+        if (resources.some((existing) => existing.path === path)) return invalid("Shared resources must have distinct paths");
+      }
+      resources.push({ path, actions: [...actions] });
+    }
+    return { ok: true, data: resources };
+  }
+
+  /**
    * Report, without side effects, whether this session's registry authority
    * can issue the child delegation {@link generate} would create for the same
    * `path`, `actions` and `expiry` (defaults and `pathPrefix` applied the
@@ -834,10 +960,11 @@ export class SharingService implements ISharingService {
    * - `"not-covered"`: no entry covers it, or there is no session.
    *
    * It does not consult `onRootDelegationNeeded`, so a signer-backed session
-   * may still generate when this is not `"ok"`.
+   * may still generate when this is not `"ok"`. A `tinycloud.delegation` action
+   * is always `"not-covered"`: {@link generate} refuses it whatever the authority.
    */
   preflightGenerate(params: Pick<GenerateShareParams, "path" | "actions" | "expiry">): ShareDelegationPreflight {
-    if (!this.session || !params.path) return "not-covered";
+    if (!this.session || !params.path || includesDelegationAction(params.actions ?? DEFAULT_READ_ACTIONS)) return "not-covered";
     const fullPath = this.pathPrefix
       ? `${this.pathPrefix}/${params.path}`.replace(/\/+/g, "/")
       : params.path;
@@ -942,11 +1069,12 @@ export class SharingService implements ISharingService {
    */
   private async createSessionDelegation(
     delegateDID: string,
-    path: string,
-    actions: string[],
+    resources: ShareResource[],
     expiry: Date,
-    allowSubDelegation: boolean
+    allowSubDelegation: boolean,
+    deferActivation = false
   ): Promise<Delegation | Result<never, DelegationError>> {
+    const { path, actions } = resources[0];
     const activeError = this.retiredGraphError();
     if (activeError) return { ok: false, error: activeError };
 
@@ -963,94 +1091,98 @@ export class SharingService implements ISharingService {
     if (this.createDelegationWasmFn) {
       // Client-side delegation creation via WASM.
       //
-      // SharingService always issues single-resource delegations (one
-      // path, one action list). The multi-resource WASM API takes an
-      // `abilities` map shaped `Record<shortService, Record<path,
-      // actions[]>>`, so we infer the short service from the first
-      // action URN (every action in a share call shares the same
-      // service namespace by construction — KV-only, SQL-only, etc).
+      // The multi-resource WASM API takes an `abilities` map shaped
+      // `Record<shortService, Record<path, actions[]>>`. Each resource's
+      // short service is inferred from its action URNs (every action of
+      // one resource shares the same service namespace by construction —
+      // KV-only, SQL-only, etc).
       //
-      // The result comes back with a `resources` array; for a
-      // single-entry call it always has exactly one entry, and we
-      // mirror that entry's `path` + `actions` back into the flat
-      // Delegation shape that the rest of SharingService works with.
+      // The result comes back with a `resources` array; the first share
+      // resource's entry is mirrored back into the flat Delegation shape
+      // that the rest of SharingService works with.
       try {
-        if (actions.length === 0) {
-          return {
-            ok: false,
-            error: createError(
-              DelegationErrorCodes.VALIDATION_ERROR,
-              "createDelegation requires at least one action"
-            ),
-          };
-        }
-        const shortService = inferShortServiceFromActionUrns(actions);
-        if (shortService === undefined) {
-          return {
-            ok: false,
-            error: createError(
-              DelegationErrorCodes.VALIDATION_ERROR,
-              `createDelegation: cannot infer service from actions ${JSON.stringify(actions)} — expected full URNs like "tinycloud.kv/get"`
-            ),
-          };
+        const abilities: Record<string, Record<string, string[]>> = {};
+        for (const resource of resources) {
+          if (resource.actions.length === 0) {
+            return {
+              ok: false,
+              error: createError(
+                DelegationErrorCodes.VALIDATION_ERROR,
+                "createDelegation requires at least one action"
+              ),
+            };
+          }
+          const shortService = inferShortServiceFromActionUrns(resource.actions);
+          if (shortService === undefined) {
+            return {
+              ok: false,
+              error: createError(
+                DelegationErrorCodes.VALIDATION_ERROR,
+                `createDelegation: cannot infer service from actions ${JSON.stringify(resource.actions)} — expected full URNs like "tinycloud.kv/get"`
+              ),
+            };
+          }
+          (abilities[shortService] ??= {})[resource.path] = [...resource.actions];
         }
 
         const wasmResult = this.createDelegationWasmFn({
           session: this.session,
           delegateDID,
           spaceId: this.session.spaceId,
-          abilities: {
-            [shortService]: {
-              [path]: [...actions],
-            },
-          },
+          abilities,
           expirationSecs: Math.floor(expiry.getTime() / 1000),
           disableSubDelegation: !allowSubDelegation,
         });
         const childSigningActiveError = this.retiredGraphError();
         if (childSigningActiveError) return { ok: false, error: childSigningActiveError };
 
-        // Register the delegation with the server
-        const registerRes = await this.fetchFn(`${this.host}/delegate`, {
-          method: "POST",
-          headers: {
-            Authorization: wasmResult.delegation,
-          },
-        });
-        const registrationActiveError = this.retiredGraphError();
-        if (registrationActiveError) return { ok: false, error: registrationActiveError };
+        if (!deferActivation) {
+          // Register the delegation with the server
+          const register = (fetchFn: FetchFunction, host: string) => fetchFn(`${host}/delegate`, {
+            method: "POST",
+            headers: { Authorization: wasmResult.delegation },
+            redirect: "error",
+          });
+          const endToEnd = await delegationTouchesVault(wasmResult.delegation);
+          const registerRes = this.resourceTransport
+            ? await this.resourceTransport([{ resource: this.session.spaceId, access: "write" }], (target) => register(target.fetch, target.url), { endToEnd })
+            : await register(this.fetchFn, endToEnd ? endToEndNodeHost(this.host) : this.host);
+          const registrationActiveError = this.retiredGraphError();
+          if (registrationActiveError) return { ok: false, error: registrationActiveError };
 
-        if (!registerRes.ok) {
-          const errorText = await registerRes.text();
-          const registrationTextActiveError = this.retiredGraphError();
-          if (registrationTextActiveError) return { ok: false, error: registrationTextActiveError };
-          const message = `Failed to register delegation with server: ${registerRes.status} ${errorText}`;
-          if (registerRes.status === 401 || registerRes.status === 403) {
+          if (!registerRes.ok) {
+            const errorText = await registerRes.text();
+            const registrationTextActiveError = this.retiredGraphError();
+            if (registrationTextActiveError) return { ok: false, error: registrationTextActiveError };
+            const message = `Failed to register delegation with server: ${registerRes.status} ${errorText}`;
+            if (registerRes.status === 401 || registerRes.status === 403) {
+              return {
+                ok: false,
+                error: createError(
+                  DelegationErrorCodes.AUTH_UNAUTHORIZED,
+                  message,
+                  undefined,
+                  { status: registerRes.status },
+                ),
+              };
+            }
             return {
               ok: false,
               error: createError(
-                DelegationErrorCodes.AUTH_UNAUTHORIZED,
+                DelegationErrorCodes.CREATION_FAILED,
                 message,
-                undefined,
-                { status: registerRes.status },
               ),
             };
           }
-          return {
-            ok: false,
-            error: createError(
-              DelegationErrorCodes.CREATION_FAILED,
-              message,
-            ),
-          };
+
         }
 
-        // Single-entry call → resources[0] is authoritative for the
-        // flat Delegation shape. We assert length here because a
-        // zero-length result would mean the Rust side dropped our
-        // single input — that's a protocol bug, not a runtime
+        // The first share resource is authoritative for the flat
+        // Delegation shape. A missing entry would mean the Rust side
+        // dropped our input — that's a protocol bug, not a runtime
         // condition to silently coerce.
-        if (wasmResult.resources.length === 0) {
+        const primary = wasmResult.resources.find((resource) => resource.path === path) ?? wasmResult.resources[0];
+        if (!primary) {
           return {
             ok: false,
             error: createError(
@@ -1059,7 +1191,6 @@ export class SharingService implements ISharingService {
             ),
           };
         }
-        const primary = wasmResult.resources[0];
         return {
           cid: wasmResult.cid,
           delegateDID: wasmResult.delegateDID,
@@ -1073,6 +1204,7 @@ export class SharingService implements ISharingService {
           createdAt: new Date(),
         };
       } catch (err) {
+        if (routingFailure(err)) return { ok: false, error: { ...wrapError("delegation", err), service: "delegation" } };
         return {
           ok: false,
           error: createError(
@@ -1083,7 +1215,16 @@ export class SharingService implements ISharingService {
         };
       }
     } else {
-      // Server-side delegation creation (fallback)
+      // Server-side delegation creation (fallback): one path per call.
+      if (resources.length > 1) {
+        return {
+          ok: false,
+          error: createError(
+            DelegationErrorCodes.NOT_INITIALIZED,
+            "A share of several resources requires client-side delegation creation"
+          ),
+        };
+      }
       const delegationParams: CreateDelegationParams = {
         delegateDID,
         path,
@@ -1093,6 +1234,7 @@ export class SharingService implements ISharingService {
       };
 
       const delegationResult = await this.createDelegationFn!(delegationParams);
+      if (!delegationResult.ok && routingFailure(delegationResult.error)) return delegationResult;
       const delegationCreationActiveError = this.retiredGraphError();
       if (delegationCreationActiveError) return { ok: false, error: delegationCreationActiveError };
 
@@ -1110,6 +1252,21 @@ export class SharingService implements ISharingService {
 
       return delegationResult.data;
     }
+  }
+
+  private async verifiedReceivedShareResource(shareData: EncodedShareData): Promise<{ resource: string; access: ResourceAccess }> {
+    if (!shareData.delegation.authHeader
+      || shareData.delegation.spaceId !== shareData.spaceId
+      || principalDid(shareData.delegation.delegateDID) !== principalDid(shareData.keyDid)
+      || !shareKeyMatchesDid(shareData.key, shareData.keyDid)) {
+      throw new Error("Sharing-link metadata does not match its parent delegation");
+    }
+    const verified = await verifiedDelegationRouting(shareData.delegation.authHeader, shareData.delegation.cid);
+    const resource = verified.resources.find(({ resource }) => spaceIdsEqual(resource, shareData.spaceId));
+    if (!resource || verified.audienceDid !== principalDid(shareData.keyDid)) {
+      throw new Error("Sharing-link metadata does not match its signed parent");
+    }
+    return resource;
   }
 
   /**
@@ -1168,6 +1325,24 @@ export class SharingService implements ISharingService {
         ),
       };
     }
+    let resourceTransport = this.resourceTransport;
+    if (!resourceTransport) return {
+      ok: false,
+      error: createError(DelegationErrorCodes.NOT_INITIALIZED, "A resource transport is required for received shares"),
+    };
+    if (!autoSubdelegate || !useSessionKey || !this.session) {
+      try {
+        await this.verifiedReceivedShareResource(shareData);
+      } catch {
+        return { ok: false, error: createError(DelegationErrorCodes.INVALID_TOKEN, "Sharing-link metadata does not match its parent delegation") };
+      }
+    }
+
+    if (shareData.version === 2) {
+      if (!this.receivedPlacementTransport || !shareData.placement) throw new Error("Unsupported share placement envelope; update the receiver SDK");
+      await this.verifiedReceivedShareResource(shareData);
+      resourceTransport = await this.receivedPlacementTransport(shareData);
+    }
 
     // Step 2: Create KeyInfo and ingest into registry
     const keyInfo: KeyInfo = {
@@ -1178,7 +1353,6 @@ export class SharingService implements ISharingService {
       priority: 2, // Ingested keys have lowest priority
     };
 
-    this.registry.ingestKey(keyInfo, shareData.delegation, ingestOptions);
 
     // The delegation and key to use for operations
     let activeDelegation = shareData.delegation;
@@ -1199,14 +1373,14 @@ export class SharingService implements ISharingService {
         priority: 0,
       };
     }
+    this.registry.ingestKey(keyInfo, shareData.delegation, ingestOptions);
 
     // Step 4: Create pre-configured KV service for the shared path
     // Construct session from share data - no need for existing session
-    // Use the authHeader if available, otherwise fall back to constructing from CID
     const portableAuthorization = (activeDelegation as Delegation & {
       delegationHeader?: { Authorization?: string };
     }).delegationHeader?.Authorization;
-    const authHeader = portableAuthorization ?? activeDelegation.authHeader ?? `Bearer ${activeDelegation.cid}`;
+    const authHeader = portableAuthorization ?? activeDelegation.authHeader!;
     const activeSession = activeKey.type === "session" && this.session
       ? this.session
       : undefined;
@@ -1222,16 +1396,19 @@ export class SharingService implements ISharingService {
       hosts: [shareData.host],
       session: shareSession,
       invoke: this.invoke,
-      fetch: this.fetchFn,
-      pathPrefix: shareData.path,
+      fetch: createResourceTransportInvocationFetch(resourceTransport, shareSession),
+      // A share of several resources has no one prefix: its KV takes full keys.
+      ...(shareData.resources ? {} : { pathPrefix: shareData.path }),
     });
 
     const shareAccess: ShareAccess = {
+      resourceTransport,
       delegation: activeDelegation,
       key: activeKey,
       kv: kvService,
       spaceId: shareData.spaceId,
       path: shareData.path,
+      ...(shareData.resources ? { resources: shareData.resources.map((resource) => ({ path: resource.path, actions: [...resource.actions] })) } : {}),
     };
 
     return { ok: true, data: shareAccess };
@@ -1239,12 +1416,13 @@ export class SharingService implements ISharingService {
 
   async receiveV2(
     link: string,
-    options: Omit<ShareRecipientClientOptions, "trustedOrigins" | "fetch" | "invoke" | "createKVService"> = {},
+    options: Omit<ShareRecipientClientOptions, "trustedOrigins" | "fetch" | "invoke" | "createKVService" | "resourceTransport"> = {},
   ): Promise<ShareAccessV2> {
     const client = new ShareRecipientClient({
       ...options,
       trustedOrigins: this.hosts,
       fetch: this.fetchFn,
+      resourceTransport: this.resourceTransport,
       invoke: this.invoke,
       createKVService: this.createKVService,
     });
@@ -1344,9 +1522,23 @@ export class SharingService implements ISharingService {
         ),
       };
     }
+    const resourceTransport = shareData.version === 2 && this.receivedPlacementTransport
+      ? await this.receivedPlacementTransport(shareData) : this.resourceTransport;
+    if (!resourceTransport) return {
+      ok: false,
+      error: createError(DelegationErrorCodes.NOT_INITIALIZED, "A resource transport is required for received shares"),
+    };
 
-    const path = params.path ?? shareData.path;
-    if (!capabilityPathContains(shareData.path, path)) {
+    // The share's resources: the token's list, or its one `path` with the
+    // parent delegation's actions. The child covers all of them unless
+    // `params.path` narrows it to one.
+    const shareResources: ShareResource[] = shareData.resources
+      ?? [{ path: shareData.path, actions: [...shareData.delegation.actions] }];
+    const requestedPath = params.path;
+    const parents = requestedPath === undefined
+      ? shareResources
+      : shareResources.filter((resource) => capabilityPathContains(resource.path, requestedPath)).slice(0, 1);
+    if (parents.length === 0) {
       return {
         ok: false,
         error: createError(
@@ -1356,21 +1548,40 @@ export class SharingService implements ISharingService {
       };
     }
 
-    const parentActions = shareData.delegation.actions;
-    const actions = params.actions ?? [...parentActions];
-    if (
-      actions.length === 0 ||
-      new Set(actions).size !== actions.length ||
-      actions.includes("*") ||
-      actions.some((action) => !parentActions.some((parentAction) => actionContains(parentAction, action)))
-    ) {
-      return {
-        ok: false,
-        error: createError(
-          DelegationErrorCodes.PERMISSION_DENIED,
-          "Requested actions exceed the sharing-link capability"
-        ),
-      };
+    const childResources: Array<{ service: string; path: string; actions: string[] }> = [];
+    for (const parent of parents) {
+      const actions = params.actions ?? [...parent.actions];
+      if (
+        actions.length === 0 ||
+        new Set(actions).size !== actions.length ||
+        actions.includes("*") ||
+        actions.some((action) => !parent.actions.some((parentAction) => actionContains(parentAction, action)))
+      ) {
+        return {
+          ok: false,
+          error: createError(
+            DelegationErrorCodes.PERMISSION_DENIED,
+            "Requested actions exceed the sharing-link capability"
+          ),
+        };
+      }
+      if (includesDelegationAction(actions)) {
+        return {
+          ok: false,
+          error: createError(DelegationErrorCodes.INVALID_INPUT, SHARE_DELEGATION_ACTION_MESSAGE),
+        };
+      }
+      const service = inferShortServiceFromActionUrns(actions);
+      if (!service) {
+        return {
+          ok: false,
+          error: createError(
+            DelegationErrorCodes.INVALID_INPUT,
+            "Sharing-link actions must belong to one known TinyCloud service"
+          ),
+        };
+      }
+      childResources.push({ service, path: requestedPath ?? parent.path, actions });
     }
 
     const expiry = params.expiry ?? parentExpiry;
@@ -1383,17 +1594,8 @@ export class SharingService implements ISharingService {
         ),
       };
     }
-
-    const service = inferShortServiceFromActionUrns(actions);
-    if (!service) {
-      return {
-        ok: false,
-        error: createError(
-          DelegationErrorCodes.INVALID_INPUT,
-          "Sharing-link actions must belong to one known TinyCloud service"
-        ),
-      };
-    }
+    const abilities: Record<string, Record<string, string[]>> = {};
+    for (const resource of childResources) (abilities[resource.service] ??= {})[resource.path] = resource.actions;
 
     const owner = ownerFromSpaceId(shareData.spaceId);
     if (!owner) {
@@ -1407,6 +1609,7 @@ export class SharingService implements ISharingService {
     }
 
     try {
+      const parentResource = await this.verifiedReceivedShareResource(shareData);
       const parentSession: ServiceSession = {
         delegationHeader: { Authorization: shareData.delegation.authHeader },
         delegationCid: shareData.delegation.cid,
@@ -1418,7 +1621,7 @@ export class SharingService implements ISharingService {
         session: parentSession,
         delegateDID,
         spaceId: shareData.spaceId,
-        abilities: { [service]: { [path]: actions } },
+        abilities,
         expirationSecs: Math.floor(expiry.getTime() / 1000),
       });
       const childSigningActiveError = this.retiredGraphError();
@@ -1427,10 +1630,8 @@ export class SharingService implements ISharingService {
         delegateDID,
         issuerDID: principalDid(shareData.keyDid),
         parentCid: shareData.delegation.cid,
-        service,
         spaceId: shareData.spaceId,
-        path,
-        actions,
+        resources: childResources,
         expiresAt: expiry,
         parentExpiresAt: parentExpiry,
       }, this.computeCidFn);
@@ -1449,14 +1650,19 @@ export class SharingService implements ISharingService {
         headers: { Authorization: result.delegation },
         redirect: "error" as const,
       };
-      const registration = await this.fetchFn(new URL("/delegate", trustedHost).toString(), registrationInit);
+      let registeredHost: string | undefined;
+      const registration = await resourceTransport([parentResource], async (target) => {
+        const response = await target.fetch(`${target.url}/delegate`, registrationInit);
+        if (response.ok) registeredHost ??= target.url;
+        return response;
+      }, { endToEnd: await delegationTouchesVault(result.delegation) });
       const registrationActiveError = this.retiredGraphError();
       if (registrationActiveError) return { ok: false, error: registrationActiveError };
       if (!registration.ok) {
-        throw new Error(`node rejected child delegation (${registration.status})`);
+        return { ok: false, error: childRegistrationRefusal(registration.status, await registration.text().catch(() => "")) };
       }
 
-      const primary = verifiedChild.resource;
+      const primary = verifiedChild.resources.find((resource) => resource.path === childResources[0].path)!;
       return {
         ok: true,
         data: {
@@ -1475,7 +1681,7 @@ export class SharingService implements ISharingService {
             delegationHeader: { Authorization: result.delegation },
             ownerAddress: owner.address,
             chainId: owner.chainId,
-            host: trustedHost,
+            host: registeredHost!,
             resources: result.resources,
             disableSubDelegation: true,
           },
@@ -1483,12 +1689,15 @@ export class SharingService implements ISharingService {
             parentCid: shareData.delegation.cid,
             spaceId: shareData.spaceId,
             path: primary.path,
-            host: trustedHost,
+            host: registeredHost!,
             expiresAt: verifiedChild.expiresAt,
           },
         },
       };
     } catch (err) {
+      if (routingFailure(err)) return { ok: false, error: { ...wrapError("delegation", err), service: "delegation" } };
+      const retired = this.retiredGraphError();
+      if (retired) return { ok: false, error: retired };
       return {
         ok: false,
         error: createError(
@@ -1548,111 +1757,9 @@ export class SharingService implements ISharingService {
     return result.data;
   }
 
-  /**
-   * Decode and validate a link string into sharing data.
-   *
-   * Internal method that returns a Result instead of throwing.
-   * Used by receive() for proper error handling.
-   *
-   * @param link - The encoded link string (may include URL prefix)
-   * @returns Result with decoded share data or validation error
-   */
+  /** Decode and validate a link string into sharing data, as a Result (used by receive()). */
   private decodeLinkWithValidation(link: string): Result<EncodedShareData, DelegationError> {
-    // Extract the encoded data from the link
-    let encoded = link;
-
-    // Handle full URL format: https://share.example.com/share/tc1:...
-    if (link.includes("/share/")) {
-      const parts = link.split("/share/");
-      encoded = parts[parts.length - 1];
-    }
-
-    // Handle query parameter format: ?share=tc1:...
-    if (link.includes("?share=")) {
-      try {
-        const url = new URL(link);
-        encoded = url.searchParams.get("share") ?? encoded;
-      } catch {
-        return {
-          ok: false,
-          error: createError(
-            DelegationErrorCodes.INVALID_TOKEN,
-            "Invalid URL format in sharing link"
-          ),
-        };
-      }
-    }
-
-    // Remove the schema prefix
-    if (!encoded.startsWith(BASE64_PREFIX)) {
-      return {
-        ok: false,
-        error: createError(
-          DelegationErrorCodes.INVALID_TOKEN,
-          `Invalid sharing link format. Expected prefix '${BASE64_PREFIX}'`
-        ),
-      };
-    }
-
-    const base64Data = encoded.slice(BASE64_PREFIX.length);
-
-    let jsonString: string;
-    try {
-      jsonString = base64UrlDecode(base64Data);
-    } catch (err) {
-      return {
-        ok: false,
-        error: createError(
-          DelegationErrorCodes.INVALID_TOKEN,
-          `Failed to decode base64 data: ${err instanceof Error ? err.message : String(err)}`,
-          err instanceof Error ? err : undefined
-        ),
-      };
-    }
-
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(jsonString);
-    } catch (err) {
-      return {
-        ok: false,
-        error: createError(
-          DelegationErrorCodes.INVALID_TOKEN,
-          `Failed to parse share data JSON: ${err instanceof Error ? err.message : String(err)}`,
-          err instanceof Error ? err : undefined
-        ),
-      };
-    }
-
-    // Convert delegation expiry to Date before validation if it's a string
-    // This is needed because JSON.parse doesn't restore Date objects
-    if (
-      parsed &&
-      typeof parsed === "object" &&
-      "delegation" in parsed &&
-      parsed.delegation &&
-      typeof parsed.delegation === "object" &&
-      "expiry" in parsed.delegation &&
-      typeof parsed.delegation.expiry === "string"
-    ) {
-      (parsed.delegation as { expiry: Date }).expiry = new Date(parsed.delegation.expiry);
-    }
-
-    // Validate against schema
-    const validationResult = validateEncodedShareData(parsed);
-    if (!validationResult.ok) {
-      return {
-        ok: false,
-        error: createError(
-          DelegationErrorCodes.INVALID_TOKEN,
-          validationResult.error.message,
-          undefined,
-          validationResult.error.meta
-        ),
-      };
-    }
-
-    return { ok: true, data: validationResult.data };
+    return decodeShareToken(link);
   }
 }
 
@@ -1663,8 +1770,190 @@ export function createSharingService(config: SharingServiceConfig): ISharingServ
   return new SharingService(config);
 }
 
+/**
+ * Decode and validate a link string (a `tc1:` token, or a URL carrying one) into sharing data.
+ *
+ * @param link - The encoded link string (may include URL prefix)
+ * @returns Result with decoded share data or validation error
+ */
+function decodeShareToken(link: string): Result<EncodedShareData, DelegationError> {
+  const invalidLink = (message = "Invalid sharing link data"): Result<EncodedShareData, DelegationError> => ({
+    ok: false, error: { code: DelegationErrorCodes.INVALID_TOKEN, message, service: "delegation" },
+  });
+  // Extract the encoded data from the link
+  let encoded = link;
+
+  // Handle full URL format: https://share.example.com/share/tc1:...
+  if (link.includes("/share/")) {
+    const parts = link.split("/share/");
+    encoded = parts[parts.length - 1];
+  }
+
+  // Handle query parameter format: ?share=tc1:...
+  if (link.includes("?share=")) {
+    try {
+      const url = new URL(link);
+      encoded = url.searchParams.get("share") ?? encoded;
+    } catch {
+      return invalidLink("Invalid URL format in sharing link");
+    }
+  }
+
+  // Remove the schema prefix
+  if (!encoded.startsWith(BASE64_PREFIX)) {
+    return invalidLink(`Invalid sharing link format. Expected prefix '${BASE64_PREFIX}'`);
+  }
+
+  const base64Data = encoded.slice(BASE64_PREFIX.length);
+
+  let jsonString: string;
+  try {
+    jsonString = base64UrlDecode(base64Data);
+  } catch {
+    return invalidLink();
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(jsonString);
+  } catch {
+    return invalidLink();
+  }
+
+  // Convert delegation expiry to Date before validation if it's a string
+  // This is needed because JSON.parse doesn't restore Date objects
+  if (
+    parsed &&
+    typeof parsed === "object" &&
+    "delegation" in parsed &&
+    parsed.delegation &&
+    typeof parsed.delegation === "object" &&
+    "expiry" in parsed.delegation &&
+    typeof parsed.delegation.expiry === "string"
+  ) {
+    (parsed.delegation as { expiry: Date }).expiry = new Date(parsed.delegation.expiry);
+  }
+
+  if (parsed && typeof parsed === "object" && "version" in parsed && parsed.version !== 1 && parsed.version !== 2) {
+    return invalidLink("Unsupported sharing envelope version; update the receiver SDK");
+  }
+  // Validate against schema
+  const validationResult = validateEncodedShareData(parsed);
+  if (!validationResult.ok) return invalidLink();
+  const data = validationResult.data;
+  // A share of several resources lists `path` first, with the root's flat actions,
+  // and every other path once, in canonical form.
+  if (data.resources) {
+    const [first] = data.resources;
+    const paths = new Set(data.resources.map((resource) => resource.path));
+    if (
+      first.path !== data.path ||
+      !sortedEqual(first.actions, data.delegation.actions) ||
+      paths.size !== data.resources.length ||
+      data.resources.some((resource) => canonicalCapabilityPath(resource.path) === null || resource.path.includes("*"))
+    ) return invalidLink("Sharing-link resources do not match its parent delegation");
+  }
+
+  return { ok: true, data };
+}
+
+/**
+ * Check a share's root delegation against what the share claims: a wallet-signed SIWE CACAO (verified signature
+ * and CID) by the owner of `spaceId`, to the share key, granting exactly `resources` with exactly their actions.
+ * Returns the owner and the root's end, or `null`. A root signed by a session key (a compact UCAN) cannot be
+ * tied to its owner without the session's own proof, so it is `null` too.
+ */
+async function verifyShareRoot(
+  delegation: Delegation,
+  spaceId: string,
+  keyDid: string,
+  resources: readonly ShareResource[],
+): Promise<{ chainId: number; address: string; expiresAt: Date; notBefore: Date | null } | null> {
+  const owner = ownerFromSpaceId(spaceId);
+  const authorization = delegation.authHeader;
+  if (!owner || !authorization || authorization.includes(".")) return null;
+  let root: Awaited<ReturnType<typeof parseSignedSiweCacao>>;
+  try {
+    root = await parseSignedSiweCacao(authorization, delegation.cid);
+  } catch {
+    return null;
+  }
+  if (root.issuer.toLowerCase() !== `did:pkh:eip155:${owner.chainId}:${owner.address}`.toLowerCase()) return null;
+  if (!samePrincipal(root.audience, keyDid)) return null;
+  const expiresAt = root.expiresAt === undefined ? null : new Date(root.expiresAt);
+  if (!expiresAt || Number.isNaN(expiresAt.getTime())) return null;
+  const notBefore = root.notBefore === undefined ? null : new Date(root.notBefore);
+  if (notBefore && Number.isNaN(notBefore.getTime())) return null;
+  const entries = Object.entries(root.attenuation);
+  if (entries.length !== resources.length) return null;
+  const matched = new Set<ShareResource>();
+  for (const [uri, abilities] of entries) {
+    if (uri.length <= spaceId.length || !spaceIdsEqual(uri.slice(0, spaceId.length), spaceId)) return null;
+    const wanted = resources.find((resource) => !matched.has(resource)
+      && uri.slice(spaceId.length) === `/${inferShortServiceFromActionUrns(resource.actions)}/${resource.path}`);
+    if (!wanted || !sortedEqual(Object.keys(abilities), wanted.actions)) return null;
+    matched.add(wanted);
+  }
+  return { chainId: owner.chainId, address: owner.address, expiresAt, notBefore };
+}
+
+/** Whether two strings name the same principal: `false`, never a throw, when either is not a DID. */
+function samePrincipal(a: string, b: string): boolean {
+  try {
+    return principalDid(a) === principalDid(b);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Read a share token (a `tc1:` token, as a sharing link or a native share link carries it) and check it against
+ * the owner's signature, offline: the root delegation must be signed by the wallet that owns the shared space,
+ * to the token's share key, and grant exactly the token's resources. Use the result, not the token's own fields,
+ * for anything shown to a person before they claim the share. The node still decides every claim and read.
+ *
+ * Refuses (`INVALID_TOKEN`) a malformed token, one whose root does not match, one whose root was signed by a
+ * session key rather than the owner's wallet (it cannot be checked offline), one whose root is not valid yet, and
+ * (`AUTH_EXPIRED`) an ended root.
+ */
+export async function inspectShareToken(
+  token: string,
+  options: { now?: Date } = {},
+): Promise<Result<InspectedShareToken, DelegationError>> {
+  const decoded = decodeShareToken(token);
+  if (!decoded.ok) return decoded;
+  const data = decoded.data;
+  const invalid = (): Result<never, DelegationError> => ({
+    ok: false,
+    error: createError(DelegationErrorCodes.INVALID_TOKEN, "The share token is not backed by its owner's signature"),
+  });
+  if (!spaceIdsEqual(data.delegation.spaceId, data.spaceId)
+    || !samePrincipal(data.delegation.delegateDID, data.keyDid)
+    || !shareKeyMatchesDid(data.key, data.keyDid)) return invalid();
+  const resources = data.resources ?? [{ path: data.path, actions: data.delegation.actions }];
+  const root = await verifyShareRoot(data.delegation, data.spaceId, data.keyDid, resources);
+  if (!root) return invalid();
+  const now = options.now ?? new Date();
+  if (root.notBefore && root.notBefore > now) {
+    return { ok: false, error: createError(DelegationErrorCodes.INVALID_TOKEN, "The share is not valid yet") };
+  }
+  if (root.expiresAt <= now) {
+    return { ok: false, error: createError(DelegationErrorCodes.AUTH_EXPIRED, "The share has expired") };
+  }
+  return {
+    ok: true,
+    data: {
+      owner: { address: root.address, chainId: root.chainId, spaceId: data.spaceId },
+      resources: resources.map((resource) => ({ path: resource.path, actions: [...resource.actions] })),
+      accessExpiresAt: root.expiresAt,
+      rootCid: data.delegation.cid,
+    },
+  };
+}
+
+/** The owner a space id names, read the way the node reads it: `tinycloud:pkh:eip155:<chain>:<address>:<name>`. */
 function ownerFromSpaceId(spaceId: string): { chainId: number; address: string } | null {
-  const match = spaceId.match(/^tinycloud:pkh:eip155:(\d+):(0x[a-fA-F0-9]{40}):/);
+  const match = spaceId.match(/^tinycloud:pkh:eip155:([1-9]\d*):(0x[0-9a-fA-F]{40}):([^:/?#]+)$/);
   if (!match) return null;
   const chainId = Number(match[1]);
   if (!Number.isSafeInteger(chainId)) return null;
@@ -1766,21 +2055,51 @@ function decodeBase64UrlBytes(value: string): Uint8Array {
   return Uint8Array.from(Buffer.from(encoded, "base64"));
 }
 
+/**
+ * The node's refusal of a child registration as a share error: a revoked or
+ * expired parent chain gets its own code, so a recipient can tell "the owner
+ * stopped sharing" from a failure.
+ */
+function childRegistrationRefusal(status: number, body: string): DelegationError {
+  let code = "";
+  try {
+    const parsed = JSON.parse(body) as { code?: unknown };
+    if (typeof parsed.code === "string") code = parsed.code;
+  } catch {
+    // Not a JSON refusal: no code to read.
+  }
+  if (status === 401 || status === 403) {
+    if (/^(delegation|parent|ancestor)_revoked$/.test(code)) {
+      return createError(DelegationErrorCodes.REVOKED, "The owner stopped sharing this", undefined, { status });
+    }
+    // The node refuses an ended (or not yet valid) chain with this plain-text reason.
+    if (body.startsWith("Delegation expired or not yet valid")) {
+      return createError(DelegationErrorCodes.AUTH_EXPIRED, "The share has expired", undefined, { status });
+    }
+  }
+  return createError(DelegationErrorCodes.CREATION_FAILED, "Failed to create or register the child delegation", undefined, { status });
+}
+
+function sortedEqual(left: readonly string[], right: readonly string[]): boolean {
+  const a = [...left].sort();
+  const b = [...right].sort();
+  return a.length === b.length && a.every((value, index) => value === b[index]);
+}
+
 function verifySignedChild(
   result: CreateDelegationWasmResult,
   expected: {
     delegateDID: string;
     issuerDID: string;
     parentCid: string;
-    service: string;
     spaceId: string;
-    path: string;
-    actions: string[];
+    /** Every resource the child must carry, and nothing else. `service` is the short form. */
+    resources: ReadonlyArray<{ service: string; path: string; actions: string[] }>;
     expiresAt: Date;
     parentExpiresAt: Date;
   },
   computeCid: NonNullable<SharingServiceConfig["computeCid"]>,
-): { delegateDID: string; expiresAt: Date; resource: CreateDelegationWasmResult["resources"][number] } | null {
+): { delegateDID: string; expiresAt: Date; resources: CreateDelegationWasmResult["resources"] } | null {
   const parts = result.delegation.split(".");
   if (parts.length !== 3) return null;
   let payload: Record<string, unknown>;
@@ -1808,30 +2127,23 @@ function verifySignedChild(
   const att = payload.att;
   if (!att || typeof att !== "object" || Array.isArray(att)) return null;
   const entries = Object.entries(att as Record<string, unknown>);
-  if (entries.length !== 1) return null;
-  const [resourceUri, abilityValue] = entries[0];
-  const prefix = `${expected.spaceId}/${expected.service}/`;
-  if (!resourceUri.startsWith(prefix) || resourceUri.slice(prefix.length) !== expected.path) return null;
-  if (!abilityValue || typeof abilityValue !== "object" || Array.isArray(abilityValue)) return null;
-  const signedActions = Object.keys(abilityValue as Record<string, unknown>).sort();
-  const expectedActions = [...expected.actions].sort();
-  if (
-    signedActions.length !== expectedActions.length ||
-    !signedActions.every((action, index) => action === expectedActions[index])
-  ) return null;
+  if (entries.length !== expected.resources.length) return null;
+  for (const [resourceUri, abilityValue] of entries) {
+    const wanted = expected.resources.find((resource) => resourceUri === `${expected.spaceId}/${resource.service}/${resource.path}`);
+    if (!wanted) return null;
+    if (!abilityValue || typeof abilityValue !== "object" || Array.isArray(abilityValue)) return null;
+    if (!sortedEqual(Object.keys(abilityValue as Record<string, unknown>), wanted.actions)) return null;
+  }
 
-  if (principalDid(result.delegateDID) !== delegateDID || result.resources.length !== 1) return null;
+  if (principalDid(result.delegateDID) !== delegateDID || result.resources.length !== expected.resources.length) return null;
   if (result.expiry.getTime() !== expiresAt.getTime()) return null;
-  const resource = result.resources[0];
-  if (
-    resource.service !== expected.service ||
-    resource.space !== expected.spaceId ||
-    resource.path !== expected.path
-  ) return null;
-  const actualActions = [...resource.actions].sort();
-  if (
-    actualActions.length !== expectedActions.length ||
-    !actualActions.every((action, index) => action === expectedActions[index])
-  ) return null;
-  return { delegateDID, expiresAt, resource };
+  for (const wanted of expected.resources) {
+    const matches = result.resources.filter((resource) =>
+      resource.service === wanted.service &&
+      resource.space === expected.spaceId &&
+      resource.path === wanted.path,
+    );
+    if (matches.length !== 1 || !sortedEqual(matches[0].actions, wanted.actions)) return null;
+  }
+  return { delegateDID, expiresAt, resources: result.resources };
 }

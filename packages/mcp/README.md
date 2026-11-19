@@ -1,31 +1,36 @@
 # @tinycloud/mcp
 
-TinyCloud MCP server for delegated operations. It supports local stdio and a
-hosted Streamable HTTP resource server. Both transports use exact, revocable
-TinyCloud capabilities and never silently fall back to owner authority.
+TinyCloud MCP server for delegated operations. Agents that can run the CLI
+should use https://agents.tinycloud.xyz/onboarding instead. Any agent that
+supports remote MCP connects to the hosted Streamable HTTP endpoint
+`https://mcp.tinycloud.xyz/mcp`, using OpenKey OAuth; Claude and ChatGPT are
+examples. Local stdio is the alternative when you want your MCP client to
+launch the server as a local process.
+Both transports use exact, revocable TinyCloud capabilities and never silently fall back to owner authority.
+
+ChatGPT users can add `https://mcp.tinycloud.xyz/mcp` on the web under Plugins → + → Add custom MCP server; Developer Mode isn't required first.
+Availability depends on the ChatGPT plan and workspace settings. Follow
+[OpenAI's custom MCP connection guide](https://help.openai.com/en/articles/12584461-connecting-custom-mcp-servers-in-chatgpt).
+
+## Hosted Streamable HTTP
+
+Any agent that supports remote MCP can add the hosted URL and complete OpenKey
+OAuth when it supports Streamable HTTP and OAuth; in Claude, add it as a remote
+MCP connector. Generic KV/SQL reads do not require a CLI, app knowledge bundle,
+or app-specific retrieval helper.
+
+The [ten-client compatibility draft](plugin/client-compatibility.md) separates
+custom connections, local routes and official-directory requirements, with
+source versus live deployment evidence. It is not authenticated client acceptance.
 
 ## Local stdio requirements
 
-- Node.js 20 or newer
+- Node.js 22.20 or later
 - `@tinycloud/cli`
-- A delegated TinyCloud profile
+- A profile signed in with `tinycloud onboard`
 - A TinyCloud node running 1.6.0 or newer
 
-## Public ChatGPT release candidate
-
-The candidate is **not published**. Its separate endpoint is
-`https://mcp.tinycloud.xyz/chatgpt/mcp`, with exactly `tinycloud_connect`,
-`tinycloud_apps_context`, `tinycloud_apps_read`, `tinycloud_apps_write` and
-`tinycloud_apps_query`. Excluded tools are not callable by name. The existing
-broad `/mcp` endpoint and local stdio remain available for private integrations.
-ChatGPT users need no CLI, local profile or bundled skill.
-
-The public resource has its own OAuth audience, tenant state under
-`<TC_MCP_STATE_DIR>/chatgpt`, and `/chatgpt/connect` approval/callback paths.
-Deploy the corresponding OpenKey API audience and web callback registrations
-before testing the candidate. Existing broad-service approvals do not migrate
-into the public tenant store. Account connection, personal-record access and
-the optional derived SQL copy require their respective approvals.
+## Hosted personal-record behavior
 
 Context can persist an IANA timezone; query can overwrite or rebuild derived
 data. Both therefore advertise `readOnlyHint: false` and
@@ -36,30 +41,84 @@ credentials, payment-card data, government identifiers or protected health
 information. Respect declined approval and the client's destructive-action
 confirmation flow. Ask for an IANA timezone, not a city or precise location.
 
-Package sources are in `plugin/package/`. From the repository root:
 
-```bash
-python3 -m venv /tmp/tinycloud-plugin-validator
-/tmp/tinycloud-plugin-validator/bin/pip install 'jsonschema>=4,<5'
-/tmp/tinycloud-plugin-validator/bin/python packages/mcp/scripts/package-plugin.py \
-  --output /tmp/tinycloud-plugin-release
+## Reusable read consent and complete delivery
+
+The private hosted and local surfaces expose `tinycloud_auth_read_scope` and
+`tinycloud_read`. The restricted public surface is unchanged. Native
+connector grants also expose `tinycloud_read`, within their existing read-only
+capability ceiling; they cannot use it to approve broader access.
+
+For reusable access, explicitly select an existing owner space and the desired
+recursive KV prefixes and/or exact SQL databases:
+
+```json
+{
+  "space": "applications",
+  "kvPrefixes": ["research/"],
+  "databases": ["catalog"]
+}
 ```
 
-The packager validates the canonical Agent Plugins schemas, produces a
-deterministic ZIP containing only the two manifests and logo, and reports its
-SHA-256. `plugin/review-evidence.json` is deliberately excluded: test definitions
-are not passing ChatGPT evidence, and reviewer credentials never belong in the
-ZIP. The schema-valid MCP manifest relies on OAuth discovery; verify imported
-authentication and scopes in the portal rather than adding schema-invalid
-per-server extensions.
+Call `tinycloud_auth_read_scope` with that input. The ordinary request-bound
+approval flow grants KV GET/metadata/LIST and SQL read only. Slash-ended prefixes
+cover future children until expiry/revocation, not siblings; `[""]` explicitly
+selects the whole KV space. No writes are requested. Ordinary GET/HEAD calls
+remain exact and never silently escalate to subtree consent. Success reports
+`access: "not-tested"`: capability coverage is not proof of storage access.
 
-Release gates remain: explicit owner approval for default-branch merges and
-deployment; actual ChatGPT web/mobile acceptance; an independently usable
-reviewer account and synthetic fixtures; approved privacy, terms, support and
-country availability; the real walkthrough recording; publisher/domain
-verification; review approval and explicit publication. A successful local
-smoke or package validation does not satisfy those gates. Do not enable
-auto-merge or deploy around the approval requirement.
+Discover spaces through the account tools, then inspect KV prefixes or an
+exact database's schema. App knowledge is optional. Continue KV listings with
+their opaque `nextCursor`, retaining the same space, prefix and limit. A
+truncated listing without a cursor is incomplete; narrow the prefix rather
+than inventing a continuation or claiming exhaustive discovery.
+
+For complete content, call `tinycloud_read`:
+
+```json
+{
+  "resource": {
+    "kind": "kv",
+    "space": "applications",
+    "key": "research/report.json"
+  }
+}
+```
+
+SQL resources instead use `kind: "sql"`, `space`, `database`, `sql`, and optional
+`params`, `maxRows`, and `maxBytes`. Retain that original resource unchanged.
+For every nonfinal page, call again with `{ resource, ...output.continuation }`.
+Decode each `value` according to `encoding`, join ranges `[start, end)` in order,
+and check the assembled length and SHA-256 against `binding`. Do not parse a
+partial JSON page as a complete document or treat `complete: false` as success
+for the full retrieval.
+
+- Pages default to at most 12 KiB of source bytes and stay below an 80,000-byte
+  serialized output budget, leaving room for the hosted envelope. UTF-8 pages
+  end on character boundaries; arbitrary binary bytes use lossless base64.
+- KV digests cover original stored bytes. SQL digests cover normalized query
+  result JSON, not database files or original storage bytes. SQL query identity
+  binds the original SQL, parameters and supplied limits; use a deterministic
+  query/order when retrieving multiple pages.
+- Every page reacquires the bounded resource under current authority. There is
+  no content cache or bearer continuation. Changed bytes return
+  `READ_SOURCE_CHANGED`; mismatched host, owner, locator or query returns
+  `READ_CONTEXT_MISMATCH`. Do not silently restart and combine revisions.
+- Acquisition limits are unchanged: KV 1 MiB; SQL at most 1,000 rows and a
+  default 1 MiB / maximum 4 MiB result budget. Paging solves delivery limits,
+  not arbitrary-size acquisition or unbounded database export.
+- `provenance` records the representation, acquisition time, digest algorithm
+  and observed ETag when available. The digest identifies the acquired bytes;
+  the timestamp and ETag are observations, not claims of a server snapshot.
+
+For exact-source handoff, send the original resource plus `output.binding`.
+The recipient calls `tinycloud_read` with `{ resource, expected: binding }`
+from offset zero under its own authorized profile/session. The binding grants
+no authority and is portable across separately approved sessions. For SQL,
+the recipient needs the original query and parameters, not just `querySha256`.
+Locators, queries and results may be sensitive; share them only as requested.
+SDK callers use `invokeOperation` with `tinycloud.auth.read_scope@1` or
+`tinycloud.read@1`; existing CLI read commands remain unchanged.
 
 ## Install and configure
 
@@ -67,7 +126,7 @@ auto-merge or deploy around the approval requirement.
 
 Claude web, iOS, Android and other remote clients connect to
 `https://mcp.tinycloud.xyz/mcp` and authenticate through OpenKey OAuth. The
-hosted server registers 22 tools: it adds `tinycloud_connect` and four
+hosted server adds `tinycloud_connect` and four
 personal-record tools, and omits local-only `tinycloud_secrets_status` and
 `tinycloud_auth_import`.
 `tinycloud_connect` returns a short-lived browser approval URL on first use. Later
@@ -75,15 +134,55 @@ personal-record tools, and omits local-only `tinycloud_secrets_status` and
 exact requested operation; approved delegations arrive only through that flow,
 which binds them to the requesting OpenKey account and stored request.
 
-For personal records, ask naturally: “Log my weight: 80.5 kg today.”
-`tinycloud_apps_context` supplies the rules and catalog, `tinycloud_apps_read`
+The hosted server also serves a restricted surface with only `tinycloud_connect`
+and the four personal-record tools, for assistant directories: `/chatgpt/mcp`,
+`/claude/mcp`, `/grok/mcp` and `/muse/mcp` beside `/mcp`. Every address is its
+own OAuth resource with its own protected-resource metadata, approval route
+(`/<prefix>/connect`) and tenant state, so a token or approval for one opens no
+other. An address works only once OpenKey issues tokens for its audience and
+accepts its approval callback, and the server's token-status client is
+registered for it. The addresses list the same five tools. `/claude/mcp` also
+repeats each tool's `title` as `annotations.title`, where Claude's directory
+reads the listing name; the other addresses do not.
+
+For personal records, ask naturally: “Add renew passport to my todos.”
+`tinycloud_apps_context` supplies the rules and the app list, `tinycloud_apps_read`
 reads records with ETags, and `tinycloud_apps_write` creates, conditionally edits,
 moves or deletes records in ordered batches of up to ten operations.
-`tinycloud_apps_query` refreshes the optional fast copy and queries selected kinds.
-These tools are hosted-only and share the coding-agent skill's
-`xyz.tinycloud.agent-data/` records in the owner's `default` space without a
-local CLI or skill installation. First use requires connect and records approval.
-Records use one prefix grant with get/list/put/delete, not one grant per key.
+`tinycloud_apps_query` refreshes an app's optional fast copy and queries selected
+kinds of that one app.
+These tools are hosted-only and share the coding-agent skill's records without a
+local CLI or skill installation. A new app lives in the owner's `applications`
+space under `xyz.tinycloud.tinyapps.<app>/` with a discovery entry at
+`xyz.tinycloud.tinyapps.catalog/<app>/entry`, as `tc-apps` skill 0.3.11 does.
+Existing records under `xyz.tinycloud.agent-data/` in the `default` space remain
+readable and writable in place. Context lists already-authorized legacy apps and
+reuses their existing grants; a legacy-only connection does not need to approve
+the new layout first. Follow the app's `layout` and existing catalog, including
+matching meal or weight kinds, rather than creating a replacement app or moving
+records. A readable new discovery entry takes precedence over a legacy namesake.
+The connector does not migrate data.
+
+New-layout approvals are per app in the `applications` space. After connect,
+pass `app` to `tinycloud_apps_context` to approve that app's folder and app-list
+reads together. Change access adds get/put only on its exact discovery entry,
+never catalog-root writes. Omitting `app` retains per-call approvals.
+`access: "read"` requests only read access; the default `"change"` also covers
+adding, changing or deleting records. Each new-layout grant lasts 30 days and
+uses one prefix per app rather than one grant per key. Existing legacy apps
+retain their original legacy-root permission scope.
+For Health Log on hosted `/mcp`, `app: "healthlog"` bundles app-list read
+and Health Log database read/write into one task approval; `access: "read"`
+requests read only. A first meal without `app` retains three task approvals.
+`app: "recipes"` bundles app-list and Recipes-notes reads; its database is
+learned from those notes and SQL read access is requested separately.
+Recipes writes remain unsupported. The restricted public surface has no generic
+SQL or knowledge tools, so it cannot work with either app: there `app`'s
+description names no catalog slug, and `app: "healthlog"` or `app: "recipes"`
+returns `INPUT_INVALID` with `details.reason: "catalog_app_unavailable"` and the
+app's tiny-app link, without requesting any approval. The catalog rules still
+route meals, body weight and recipes to those apps, so the assistant gives the
+link rather than saving that data as generic records.
 Generic KV tools retain their exact-input scopes. The connector asks for an
 IANA timezone once, not the owner's city or precise location. In Claude
 **Settings → Connectors → TinyCloud**, set `tinycloud_apps_write` to
@@ -120,10 +219,14 @@ If the owner declines, stop rather than asking again in that conversation.
 
 For larger questions, offer “a fast, searchable copy of your records” after
 answering from KV when no copy is approved. It needs separate approval and is
-optional; KV records remain the source of truth. The exact SQL database is
-`xyz.tinycloud.agent-data.index`, with read/write/schema authority. Writes sync
-the copy when authorized or mark changed kinds stale; queries rebuild stale
-kinds before answering and return checked per-kind record counts.
+optional; KV records remain the source of truth. New-layout copies use the
+per-app database `xyz.tinycloud.tinyapps.<app>/index`. For a legacy app, pass
+`layout: "legacy"` to query its shared `xyz.tinycloud.agent-data.index` database
+in `default`; `entries` exposes full KV keys and an `app` column. Omitted layout
+still means new. Both require read/write/schema authority. Writes sync an
+authorized copy or mark changed kinds stale; queries rebuild stale kinds before
+answering and return checked per-kind record counts. Concurrent marker changes
+prevent a rebuild from claiming the copy is fresh.
 `COPY_PARTIAL` is an `ok` result listing remaining kinds; the next query resumes.
 A nonretryable `NODE_ERROR` with `error.details.reason: "copy_unavailable"`
 requires node-team resolution. Answer from KV, do not retry in a loop or rename
@@ -141,13 +244,45 @@ Run the service with an encrypted persistent volume:
 docker run --rm -p 3000:3000 \
   -e TC_MCP_PUBLIC_URL=https://mcp.example.com/mcp \
   -e TC_MCP_STATE_SECRET="$(openssl rand -hex 32)" \
+  -e TC_MCP_INTROSPECTION_URL=<introspection endpoint> \
+  -e TC_MCP_INTROSPECTION_CLIENT_ID=<client id> \
+  -e TC_MCP_INTROSPECTION_CLIENT_SECRET=<client secret> \
   -v tinycloud-mcp-state:/var/lib/tinycloud-mcp \
   ghcr.io/tinycloudlabs/tinycloud-mcp:latest
 ```
 
-Set `TC_MCP_OAUTH_METADATA_URL` for a self-hosted OpenKey issuer and
-`TC_MCP_ALLOWED_ORIGINS` when browsers call the MCP endpoint directly. The
-default TinyCloud node is `https://tee.node.tinycloud.xyz`.
+Set `TC_MCP_OAUTH_METADATA_URL` for a self-hosted OpenKey issuer. The HTTP
+endpoint, hosted or self-hosted, answers calls and CORS preflights from any
+browser Origin: a call is authorized only by an OAuth access token for
+`TC_MCP_PUBLIC_URL` in its `Authorization: Bearer` header (the server sets no
+cookies), the `Host` header must match `TC_MCP_PUBLIC_URL` (a guard against
+DNS rebinding), responses never allow credentials, and only
+`WWW-Authenticate`, `Mcp-Session-Id` and `Mcp-Protocol-Version` are exposed to
+scripts. There is no Origin allowlist to configure. The
+default TinyCloud node is `https://node.tinycloud.xyz`.
+The MCP server asks OpenKey's resource-server token introspection endpoint
+(RFC 7662) about each access token before serving a call.
+`TC_MCP_INTROSPECTION_URL` (the endpoint; HTTPS outside localhost),
+`TC_MCP_INTROSPECTION_CLIENT_ID` and `TC_MCP_INTROSPECTION_CLIENT_SECRET` (a
+registered confidential OpenKey client) are required, and the server does not
+start without them. The OAuth metadata's `introspection_endpoint` is not used.
+`TC_MCP_INTROSPECTION_AUTH_METHOD` is `basic` (default, `client_secret_basic`)
+or `post` (`client_secret_post`). Only a 200 answer with `active: true` is
+active, and only when its `sub` and `client_id` equal the verified token's and
+its `aud` is a non-empty subset of the token's audiences that includes this
+server's resource URL; any other `active: true` answer is treated like an
+inactive one. A 200 answer with `active: false` is answered with 401
+`invalid_token` and kept for that token. An active answer is reused for 30
+seconds. A 401 from the endpoint (`invalid_client`) is logged once and refused
+with 500 `server_error`. If OpenKey cannot be reached or answers otherwise
+(429, 5xx, timeout), a call is served only when OpenKey itself answered that
+same token active to this server within the last 60 seconds (and the token has
+not expired), however long the token lives; every other
+call is answered with 500 `server_error`.
+
+The account owner can see the hosted MCP's delegation, and revoke it, on the
+account site at https://account.tinycloud.xyz/delegations.
+
 Standalone defaults are `TC_MCP_DELEGATION_EXPIRY=1h` and
 `TC_MCP_APPROVAL_TTL_SECONDS=300`. Production `docker-compose.phala.yml`
 explicitly overrides these to `30d` and `900`; the container command above
@@ -160,8 +295,16 @@ include.
 TinyCloud production uses `docker-compose.phala.yml`. The manual
 `Publish hosted MCP image` workflow publishes an exact package-version image
 and deploys that image to the `tinycloud-mcp` Phala CVM. Its `production`
-environment requires `PHALA_CLOUD_API_KEY`, `CLOUDFLARE_API_TOKEN`, and a stable
-32-byte-or-longer `TC_MCP_STATE_SECRET`.
+environment requires `PHALA_CLOUD_API_KEY`, `CLOUDFLARE_API_TOKEN`, a stable
+32-byte-or-longer `TC_MCP_STATE_SECRET`, `TC_MCP_INTROSPECTION_CLIENT_ID`,
+`TC_MCP_INTROSPECTION_CLIENT_SECRET`, and `TC_MCP_NATIVE_SERVICE_CREDENTIAL`.
+
+The workflow writes a mode-`0600` complete application environment file from
+the production values and uses that same file for Phala's encrypted environment
+update and image deploy. The update preserves existing `allowed_envs` names and
+adds the deploy keys; it does not send a name-only patch. The Phala control-plane
+credential is not included in the application file or logged, and the existing
+state secret is reused unchanged.
 
 The workflow fails, before building or deploying, unless the `tinycloud-mcp` CVM
 runs the production OS image pinned in `PHALA_OS_IMAGE` / `PHALA_OS_IMAGE_HASH`
@@ -241,7 +384,7 @@ Configure a local stdio server in your MCP client:
   "mcpServers": {
     "tinycloud": {
       "command": "tinycloud-mcp",
-      "args": ["--profile", "agent"]
+      "args": ["--profile", "default", "--allow-owner-profile"]
     }
   }
 }
@@ -252,7 +395,7 @@ to select another profile.
 
 ## Tools
 
-The local server exposes 19 tools. Hosted mode exposes 22: it adds
+Hosted mode adds to the local data tools
 `tinycloud_connect`, `tinycloud_apps_context`, `tinycloud_apps_read`,
 `tinycloud_apps_write` and `tinycloud_apps_query`, and omits
 `tinycloud_secrets_status` and `tinycloud_auth_import` (local/stdio only):
@@ -260,6 +403,8 @@ The local server exposes 19 tools. Hosted mode exposes 22: it adds
 - Local and authorization state: `tinycloud_status`,
   `tinycloud_auth_status`, `tinycloud_auth_capabilities`
 - Exact permission flow: `tinycloud_auth_request`, `tinycloud_auth_import`
+- Explicit reusable read consent: `tinycloud_auth_read_scope`
+- Complete bounded KV/SQL delivery and provenance: `tinycloud_read`
 - Account discovery: `tinycloud_account_spaces_list`,
   `tinycloud_account_applications_list`
 - Bounded KV CRUD: `tinycloud_kv_list`, `tinycloud_kv_get`,
@@ -280,7 +425,7 @@ profile's stored session and reports, without reading any value, whether each
 named secret is `ready`, `pending` (with a Secret Manager `/request` setup
 link), or `consent_required` (no permission request is saved). When it cannot
 proceed, `error.details.recovery` names the next step: `sign_in` carries the
-persistent `tc --profile <P> auth login ...` command to run in a terminal, and
+persistent `tinycloud --profile <P> auth login ...` command to run in a terminal, and
 `complete_migration` carries `tool: "tinycloud_auth_capabilities"`, which you
 call once before retrying status.
 
@@ -301,8 +446,10 @@ exact, resumable request instead of widening access.
 Hosted text blocks contain the status and canonical JSON so clients that ignore
 `structuredContent` can read the result. Successful `tinycloud_secrets_get`
 values remain structured-only. Read-only and personal-record context/query results
-exceeding 100,000 characters return a nonretryable SQL/KV size error with
-narrowing guidance. Canonical write outcomes are never cut off by this cap,
+exceeding 100,000 characters return a nonretryable SQL/KV size error. Oversized
+generic GET/query results identify `tinycloud_read` as the complete-delivery
+path when that tool is bound; other results retain narrowing guidance.
+Canonical write outcomes are never cut off by this cap,
 so a completed record write is not misreported as a retryable failure.
 Call logs contain only tool name, outcome code, duration and successful replayed
 grant count—never keys, values, catalog text, SQL or parameters.
@@ -320,23 +467,18 @@ are read-only and bounded; SQL execution accepts one parameterized `INSERT`,
 `UPDATE`, or `DELETE` and requires explicit acknowledgement that the delegated
 SQL write capability is database-wide.
 
-## Delegate bootstrap
+## Sign in
 
-A new `delegate-session` profile has a key but no TinyCloud authority. Complete
-the one-time bootstrap flow before starting MCP:
-
-1. Create an exact request with `tc auth request --cap ...`.
-2. Have the owner grant that request.
-3. Import the returned delegation with `tc auth import`.
-
-After bootstrap, MCP tools can create exact permission requests and import the
-request-bound delegations. Requests and imports persist, so approval and retry
-can happen in separate processes.
+Run `tinycloud onboard` once, then start
+`tinycloud-mcp --profile <that profile> --allow-owner-profile`. MCP tools can
+then create exact permission requests and import the request-bound
+delegations. Requests and imports persist, so approval and retry can happen in
+separate processes.
 
 Each imported delegation is stored with the request it was checked against.
 Every tool call reinstalls a stored compact-UCAN delegation only when its
 signed capabilities fit inside that request, so a delegation broader than its
-binding is refused before it is activated. `tc auth import` of an artifact
+binding is refused before it is activated. `tinycloud auth import` of an artifact
 with no request binds the delegation to exactly its own signed capabilities.
 Delegations stored by earlier releases are bound once, the same way, by the
 first command that restores the profile's session; after that, a record
@@ -358,3 +500,4 @@ Secret values are excluded from TinyCloud text output, logs, errors, request
 files, delegation files, and generated artifacts. MCP hosts may retain
 structured tool results in their own transcripts, so use a client and retention
 policy appropriate for secrets.
+

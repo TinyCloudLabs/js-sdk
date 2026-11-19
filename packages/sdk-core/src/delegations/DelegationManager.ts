@@ -15,10 +15,12 @@ import type {
   InvokeFunction,
   ServiceSession,
   ServiceHeaders,
+  ResourceTransport,
+  ResourceTransportTarget,
 } from "@tinycloud/sdk-services";
+import { routingFailure, wrapError } from "@tinycloud/sdk-services";
 import {
   Result,
-  DelegationError,
   DelegationErrorCodes,
   Delegation,
   DelegationStatus,
@@ -29,38 +31,59 @@ import {
   AccountDelegationPageSchema,
   AccountDelegationQueryOptionsSchema,
   AccountDelegationQueryOptions,
+  AccountDelegationRecord,
+  SessionInvocationSigner,
   DelegationChain,
   DelegationManagerConfig,
 } from "./types";
+import { DelegationAction, createError } from "./shared";
+import type { IssuedContext } from "./issued";
+const MAX_DELEGATION_STATUS_BODY_BYTES = 16 * 1024 * 1024;
 
-/**
- * Delegation action constants.
- */
-const DelegationAction = {
-  REVOKE: "tinycloud.delegation/revoke",
-  STATUS: "tinycloud.delegation/status",
-  LIST: "tinycloud.delegation/list",
-  GET: "tinycloud.delegation/get",
-  CHECK: "tinycloud.delegation/check",
-} as const;
+async function readBoundedStatusBody(response: FetchResponse): Promise<string> {
+  const declaredLength = response.headers.get("content-length");
+  if (declaredLength !== null) {
+    const bytes = Number(declaredLength);
+    if (!Number.isSafeInteger(bytes) || bytes < 0 || bytes > MAX_DELEGATION_STATUS_BODY_BYTES) {
+      throw new Error("Delegation status response is too large");
+    }
+  }
 
-/**
- * Creates a DelegationError with the given parameters.
- */
-function createError(
-  code: string,
-  message: string,
-  cause?: Error,
-  meta?: Record<string, unknown>
-): DelegationError {
-  return {
-    code,
-    message,
-    service: "delegation",
-    cause,
-    meta,
-  };
+  const body = response.body as ReadableStream<Uint8Array> | null | undefined;
+  if (body && typeof body.getReader === "function") {
+    const reader = body.getReader();
+    const chunks: Uint8Array[] = [];
+    let size = 0;
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        size += value.byteLength;
+        if (size > MAX_DELEGATION_STATUS_BODY_BYTES) {
+          await reader.cancel();
+          throw new Error("Delegation status response is too large");
+        }
+        chunks.push(value);
+      }
+    } finally {
+      reader.releaseLock();
+    }
+    const bytes = new Uint8Array(size);
+    let offset = 0;
+    for (const chunk of chunks) {
+      bytes.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
+    return new TextDecoder().decode(bytes);
+  }
+
+  const text = await response.text();
+  if (new TextEncoder().encode(text).byteLength > MAX_DELEGATION_STATUS_BODY_BYTES) {
+    throw new Error("Delegation status response is too large");
+  }
+  return text;
 }
+
 
 /**
  * Parses the JSON body of an `/invoke` response. The node answers an
@@ -112,9 +135,14 @@ export class DelegationManager {
   private signOwnerRevocation?: (cid: string) => Promise<string>;
   private fetchFn: FetchFunction;
   private accountSpaceId?: string;
+  private sessionInvocationSigner?: SessionInvocationSigner;
+  private issuedState = { issuedQuerySupported: false };
+  private readonly resourceTransport?: ResourceTransport;
 
   /**
    * Creates a new DelegationManager instance.
+   * Standalone calls send to the host you pass and do not consult the registry.
+   * Use Node/Web objects for registry routing.
    *
    * @param config - Configuration including hosts, session, and invoke function
    */
@@ -124,8 +152,25 @@ export class DelegationManager {
     this.invoke = config.invoke;
     this.invokeAny = config.invokeAny;
     this.signOwnerRevocation = config.signOwnerRevocation;
+    this.sessionInvocationSigner = config.sessionInvocationSigner;
     this.fetchFn = config.fetch ?? globalThis.fetch.bind(globalThis);
     this.accountSpaceId = config.accountSpaceId;
+    this.resourceTransport = config.resourceTransport;
+  }
+
+  private async invocationHeaders(
+    entries: Parameters<InvokeAnyFunction>[1],
+    target?: ResourceTransportTarget,
+  ): Promise<ServiceHeaders> {
+    const headers = this.invokeAny!(this.session, entries);
+    if (!target) return headers;
+    const fields = Array.isArray(headers) ? headers : Object.entries(headers);
+    const authorization = fields.find(([name]) => name.toLowerCase() === "authorization");
+    if (!authorization) throw new Error("Delegation invocation has no authorization");
+    const signed = await target.bindAudience(authorization[1]);
+    return Array.isArray(headers)
+      ? headers.map(([name, value]): [string, string] => [name, name.toLowerCase() === "authorization" ? signed : value])
+      : { ...headers, [authorization[0]]: signed };
   }
 
   /**
@@ -158,6 +203,7 @@ export class DelegationManager {
       method: "POST",
       headers,
       body,
+      redirect: "error",
     });
   }
 
@@ -213,29 +259,36 @@ export class DelegationManager {
         };
       }
 
-      let headers: ServiceHeaders;
-      if (ownerSigner) {
-        headers = { Authorization: await ownerSigner(cid) };
-      } else {
-        const entry = {
-          resource: `urn:cid:${cid}`,
-          ...(options?.targetSpaceId === undefined ? {} : { spaceId: options.targetSpaceId }),
-          service: "delegation",
-          path: "",
-          action: DelegationAction.REVOKE,
-        } as Parameters<InvokeAnyFunction>[1][number] & { revokeAuthorityCid?: string };
-        if (options?.authorityCid !== undefined) {
-          Object.defineProperty(entry, "revokeAuthorityCid", {
-            value: options.authorityCid,
-            enumerable: false,
-          });
+      const send = async (fetchFn: FetchFunction, host: string, target?: ResourceTransportTarget) => {
+        let headers: ServiceHeaders;
+        if (ownerSigner) {
+          // Owner CACAO is already signed for its protocol role; retain its bytes.
+          headers = { Authorization: await ownerSigner(cid) };
+        } else {
+          const entry = {
+            resource: `urn:cid:${cid}`,
+            ...(options?.targetSpaceId === undefined ? {} : { spaceId: options.targetSpaceId }),
+            service: "delegation",
+            path: "",
+            action: DelegationAction.REVOKE,
+          } as Parameters<InvokeAnyFunction>[1][number] & { revokeAuthorityCid?: string };
+          if (options?.authorityCid !== undefined) {
+            Object.defineProperty(entry, "revokeAuthorityCid", {
+              value: options.authorityCid,
+              enumerable: false,
+            });
+          }
+          headers = await this.invocationHeaders([entry], target);
         }
-        headers = this.invokeAny!(this.session, [entry]);
-      }
-      const response = await this.fetchFn(`${this.host}/revoke`, {
-        method: "POST",
-        headers,
-      });
+        return fetchFn(`${host}/revoke`, { method: "POST", headers, redirect: "error" });
+      };
+      const response = this.resourceTransport
+        ? await this.resourceTransport(
+          [{ resource: options?.targetSpaceId ?? this.session.spaceId, access: options?.targetSpaceId ? "write" : "read" }],
+          (target) => send(target.fetch, target.url, target),
+          { nodeLocal: options?.targetSpaceId === undefined },
+        )
+        : await send(this.fetchFn, this.host);
 
       if (!response.ok) {
         const errorText = await response.text();
@@ -275,6 +328,7 @@ export class DelegationManager {
       }
       return { ok: true, data: parsed.data };
     } catch (error) {
+      if (routingFailure(error)) return { ok: false, error: { ...wrapError("delegation", error), service: "delegation" } };
       if (error instanceof Error && error.name === "AbortError") {
         return {
           ok: false,
@@ -307,30 +361,41 @@ export class DelegationManager {
         error: createError(DelegationErrorCodes.INVALID_INPUT, "cid is required"),
       };
     }
-    if (!this.invokeAny) {
+    const signer = this.sessionInvocationSigner;
+    if (!signer) {
       return {
         ok: false,
         error: createError(
           DelegationErrorCodes.NOT_INITIALIZED,
-          "Delegation status requires an invokeAny function that can sign the target CID"
+          "Delegation status requires a proofless session invocation signer"
         ),
       };
     }
 
     try {
-      const headers = this.invokeAny(this.session, [{
-        resource: `urn:cid:${cid}`,
-        service: "delegation",
-        path: "",
-        action: DelegationAction.STATUS,
-      }]);
-      const response = await this.fetchFn(`${this.host}/delegation/status`, {
-        method: "POST",
-        headers: { ...headers, "Content-Type": "application/json" },
-        body: JSON.stringify({ cid }),
-      });
+      const send = async (fetchFn: FetchFunction, host: string, target?: ResourceTransportTarget) => {
+        let authorization = signer.signDelegationStatus && cid === this.session.delegationCid
+          ? await signer.signDelegationStatus(cid)
+          : await signer.sign({
+              [`urn:cid:${cid}`]: { [DelegationAction.STATUS]: [{}] },
+            });
+        if (target) authorization = await target.bindAudience(authorization);
+        return fetchFn(`${host}/delegation/status`, {
+          method: "POST",
+          headers: { Authorization: authorization, "Content-Type": "application/json" },
+          body: JSON.stringify({ cid }),
+          redirect: "error",
+        });
+      };
+      const response = this.resourceTransport
+        ? await this.resourceTransport(
+            [{ resource: this.session.spaceId, access: "read" }],
+            (target) => send(target.fetch, target.url, target),
+            { nodeLocal: true, invocationSession: this.session },
+          )
+        : await send(this.fetchFn, this.host);
       if (!response.ok && response.status !== 404) {
-        const errorText = await response.text();
+        const errorText = await readBoundedStatusBody(response);
         return {
           ok: false,
           error: createError(
@@ -341,7 +406,7 @@ export class DelegationManager {
           ),
         };
       }
-      const parsed = DelegationStatusSchema.safeParse(await response.json());
+      const parsed = DelegationStatusSchema.safeParse(JSON.parse(await readBoundedStatusBody(response)));
       const responseStatusMatches = parsed.success && (
         response.status === 404
           ? parsed.data.status === "not_found" && !parsed.data.exists
@@ -360,6 +425,7 @@ export class DelegationManager {
       }
       return { ok: true, data: parsed.data };
     } catch (error) {
+      if (routingFailure(error)) return { ok: false, error: { ...wrapError("delegation", error), service: "delegation" } };
       if (error instanceof Error && error.name === "AbortError") {
         return {
           ok: false,
@@ -377,9 +443,16 @@ export class DelegationManager {
     }
   }
 
-  /** Query lifecycle-complete delegation history for the authenticated account. */
+  /**
+   * Query lifecycle-complete delegation history for the authenticated account.
+   *
+   * `scope.spaces` lists the spaces to sign `tinycloud.delegation/list` for, in order. Omitted, the
+   * account space is tried, then the session's own space. A caller that knows which of them the session
+   * holds passes only those; an empty list sends nothing and answers PERMISSION_DENIED.
+   */
   async query(
     options: AccountDelegationQueryOptions = {},
+    scope: { readonly spaces?: readonly string[] } = {},
   ): Promise<Result<AccountDelegationPage>> {
     const validated = AccountDelegationQueryOptionsSchema.safeParse(options);
     if (!validated.success) {
@@ -393,6 +466,7 @@ export class DelegationManager {
         ),
       };
     }
+    if (validated.data.direction === "issued") return this.queryIssued(validated.data);
     if (!this.invokeAny) {
       return {
         ok: false,
@@ -417,20 +491,26 @@ export class DelegationManager {
       // owner's spaces works. Sign for the account space if the session holds it there, else for the
       // session's own space (a plain OpenKey login grants only that one).
       let response: FetchResponse | undefined;
-      for (const spaceId of new Set([accountSpaceId, this.session.spaceId])) {
-        // A signing failure is not a permission refusal: it propagates as a typed error below.
-        const headers = Object.fromEntries(new Headers(this.invokeAny(this.session, [{
-          spaceId,
-          service: "delegation",
-          path: "",
-          action: DelegationAction.LIST,
-        }])).entries());
-        headers["content-type"] = "application/json";
-        response = await this.fetchFn(`${this.host}/delegation/query`, {
-          method: "POST",
-          headers,
-          body: JSON.stringify(validated.data),
-        });
+      for (const spaceId of new Set(scope.spaces ?? [accountSpaceId, this.session.spaceId])) {
+        const send = async (fetchFn: FetchFunction, host: string, target?: ResourceTransportTarget) => {
+          // Resolve this scope before creating its node-audience-bound invocation.
+          const headers = Object.fromEntries(new Headers(await this.invocationHeaders([{
+            spaceId,
+            service: "delegation",
+            path: "",
+            action: DelegationAction.LIST,
+          }], target)).entries());
+          headers["content-type"] = "application/json";
+          return fetchFn(`${host}/delegation/query`, {
+            method: "POST",
+            headers,
+            body: JSON.stringify(validated.data),
+            redirect: "error",
+          });
+        };
+        response = this.resourceTransport
+          ? await this.resourceTransport([{ resource: spaceId, access: "read" }], (target) => send(target.fetch, target.url, target), { nodeLocal: true })
+          : await send(this.fetchFn, this.host);
         if (response.status !== 403) break;
       }
       if (!response || response.status === 403) {
@@ -468,6 +548,7 @@ export class DelegationManager {
       }
       return { ok: true, data: parsed.data };
     } catch (error) {
+      if (routingFailure(error)) return { ok: false, error: { ...wrapError("delegation", error), service: "delegation" } };
       return {
         ok: false,
         error: createError(
@@ -477,6 +558,62 @@ export class DelegationManager {
         ),
       };
     }
+  }
+
+  /** The state the lazily loaded issued-delegation module reads and updates. */
+  private issuedContext(): IssuedContext {
+    return {
+      host: this.host,
+      fetchFn: this.fetchFn,
+      sessionInvocationSigner: this.sessionInvocationSigner,
+      state: this.issuedState,
+      resourceTransport: this.resourceTransport,
+      spaceId: this.session.spaceId,
+    };
+  }
+
+  /**
+   * Lists the delegations this session's own key issued (`direction: "issued"`).
+   * The implementation loads on first use.
+   */
+  private async queryIssued(
+    options: AccountDelegationQueryOptions,
+  ): Promise<Result<AccountDelegationPage>> {
+    // Deferred so bundles that never list issued delegations do not carry ./issued.
+    const issued = await import("./issued");
+    return issued.queryIssued(this.issuedContext(), options);
+  }
+
+  /**
+   * Every delegation this session's key issued, following `nextCursor` until
+   * it is absent. `maxItems` stops early once that many are collected;
+   * `untilCid` stops after the page that contains that delegation. Items come
+   * in CID order (each carries `issuedAt`). The implementation loads on first use.
+   */
+  async queryAllIssued(
+    options: Pick<AccountDelegationQueryOptions, "status" | "space"> & {
+      pageSize?: number;
+      maxItems?: number;
+      untilCid?: string;
+    } = {},
+  ): Promise<Result<AccountDelegationRecord[]>> {
+    // Deferred so bundles that never list issued delegations do not carry ./issued.
+    const issued = await import("./issued");
+    return issued.queryAllIssued((page) => this.query(page), options);
+  }
+
+  /**
+   * Revokes a delegation this session's key issued, with no proof: a UCAN
+   * signed by the session's own did:key carrying `urn:cid:<cid>` and
+   * `tinycloud.delegation/revoke`. Revoking a delegation that is already revoked
+   * succeeds. A refusal (the key is not the delegator) carries the node's
+   * message; 503 means the chain is too deep right now, retry later.
+   * The implementation loads on first use.
+   */
+  async revokeIssued(cid: string): Promise<Result<DelegationRevocationReceipt>> {
+    // Deferred so bundles that never revoke issued delegations do not carry ./issued.
+    const issued = await import("./issued");
+    return issued.revokeIssued(this.issuedContext(), cid);
   }
 
   /**
@@ -577,6 +714,7 @@ export class DelegationManager {
 
       return { ok: true, data: chain };
     } catch (error) {
+      if (routingFailure(error)) return { ok: false, error: { ...wrapError("delegation", error), service: "delegation" } };
       if (error instanceof Error && error.name === "AbortError") {
         return {
           ok: false,
@@ -670,6 +808,7 @@ export class DelegationManager {
       if (!body2.ok) return body2;
       return { ok: true, data: body2.data.allowed };
     } catch (error) {
+      if (routingFailure(error)) return { ok: false, error: { ...wrapError("delegation", error), service: "delegation" } };
       if (error instanceof Error && error.name === "AbortError") {
         return {
           ok: false,

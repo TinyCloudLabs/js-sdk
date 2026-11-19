@@ -20,6 +20,7 @@ import {
   SERVICE_SHORT_TO_LONG,
   expandActionShortNames,
 } from "./manifest";
+import { encryptionResourceContains } from "@tinycloud/sdk-services/encryption/resource";
 
 // ---------------------------------------------------------------------------
 // Errors
@@ -163,10 +164,12 @@ export function isCapabilitySubset(
     const grantedActions = matchingScope.flatMap((entry) =>
       expandActionShortNames(entry.service, entry.actions)
     );
+    const namedKeyRequest = req.service === "tinycloud.encryption" &&
+      req.path.startsWith("urn:tinycloud:encryption:") && req.path.includes("/");
     const covered = requestedActions.every((requestedAction) =>
-      grantedActions.some((grantedAction) =>
-        actionContains(grantedAction, requestedAction)
-      )
+      grantedActions.some((grantedAction) => namedKeyRequest
+        ? grantedAction === requestedAction
+        : actionContains(grantedAction, requestedAction))
     );
     if (!covered) {
       missing.push(cloneEntry(req));
@@ -196,7 +199,13 @@ function canonicalizeEntryScopeMatches(
   ) {
     return false;
   }
-  if (!pathContains(granted.path, requested.path)) {
+  const namedKeyRequest = requested.service === "tinycloud.encryption" &&
+    requested.path.startsWith("urn:tinycloud:encryption:") &&
+    requested.path.includes("/");
+  const coveredPath = namedKeyRequest
+    ? encryptionResourceContains(granted.path, requested.path)
+    : pathContains(granted.path, requested.path);
+  if (!coveredPath) {
     return false;
   }
   // There is no safe general partial ordering for arbitrary ReCap caveat

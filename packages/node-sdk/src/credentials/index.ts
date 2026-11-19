@@ -10,9 +10,13 @@ export {
   createMemoryEmailProofPendingStore,
   DEFAULT_EMAIL_PROOF_PROFILE,
   EMAIL_PROOF_CREDENTIAL_TYPE,
+  EMAIL_PROOF_PINS,
+  HELD_ACCOUNT_BINDING_PINS,
   EMAIL_PROOF_PENDING_MAX_MS,
   EmailProofError,
+  isTicketEmailProofResult,
   emailProofRequirement,
+  emailProofDescriptor,
   verifyStoredEmailProof,
   requestEmailProofCode,
 } from "./email-proof";

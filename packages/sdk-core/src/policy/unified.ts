@@ -5,6 +5,10 @@ import { CID } from "multiformats/cid";
 import { base58btc } from "multiformats/bases/base58";
 import { create as createDigest } from "multiformats/hashes/digest";
 import { z } from "zod";
+// The longest window a policy root may have (a policy session never outlives its roots, so this also bounds every session and descendant): one shared definition.
+import { POLICY_ROOT_MAX_LIFETIME_SECONDS as MAX_POLICY_ROOT_SECONDS } from "@tinycloud/share-envelope";
+import { parseEncryptionResource as parseNamedEncryptionResource } from "@tinycloud/sdk-services";
+import type { FetchFunction, ResourceTransport } from "@tinycloud/sdk-services";
 import { jcsCanonicalize } from "./jcs";
 import { httpResponseError } from "../http-error";
 
@@ -76,6 +80,7 @@ export interface UnifiedContentSource {
   readonly kvResource: string;
   readonly selector: UnifiedResourceSelector;
   readonly encryptionNetwork: string;
+  readonly encryptionKeyPath?: string;
   readonly encryptedSymmetricKeyDigestHex: string;
   readonly keyVersion: number;
   readonly mode: "mutable" | "immutable";
@@ -113,7 +118,7 @@ export interface RegisterPolicyV3Input {
   readonly rootExpiresAt: string;
   readonly enforcerDid: string;
   readonly expectedNodeAudience: string;
-  readonly fetch?: typeof fetch;
+  readonly fetch?: FetchFunction;
   readonly signal?: AbortSignal;
 }
 
@@ -441,6 +446,10 @@ function rfc3339Seconds(value: Date): string {
   return new Date(Math.floor(value.getTime() / 1000) * 1000).toISOString().replace(/\.000Z$/, "Z");
 }
 
+/**
+ * Without resourceTransport, sends to the nodeOrigin you pass and does not consult the registry.
+ * Use Node/Web resource transport for registry routing.
+ */
 export async function revokePolicyRootV3(input: {
   readonly nodeOrigin: string;
   readonly rootCid: string;
@@ -452,6 +461,8 @@ export async function revokePolicyRootV3(input: {
   readonly sign: (digest: Uint8Array) => Promise<Uint8Array>;
   readonly now?: Date;
   readonly fetch?: typeof fetch;
+  readonly spaceId?: string;
+  readonly resourceTransport?: ResourceTransport;
 }): Promise<Readonly<Record<string, unknown>>> {
   if (input.reason.length === 0) throw new Error("policy root revocation reason is required");
   const unsigned = {
@@ -464,15 +475,19 @@ export async function revokePolicyRootV3(input: {
     reason: input.reason,
     issuerDid: input.issuerDid,
   };
-  const signature = await input.sign(sha256(new TextEncoder().encode(ROOT_REVOCATION_V1_DOMAIN + jcsCanonicalize(unsigned))));
-  if (signature.length !== 64) throw new Error("policy root revocation signature must be Ed25519");
-  const fetchFn = input.fetch ?? globalThis.fetch.bind(globalThis);
-  const response = await fetchFn(new URL("/revoke", input.nodeOrigin), {
-    method: "POST",
-    redirect: "error",
-    headers: { accept: "application/json", "content-type": "application/json" },
-    body: JSON.stringify({ revocation: { ...unsigned, signature: { suite: "Ed25519", signerDid: input.issuerDid, value: encodeBase64Url(signature) } } }),
-  });
+  const send = async (fetchFn: FetchFunction, nodeOrigin: string) => {
+    const signature = await input.sign(sha256(new TextEncoder().encode(ROOT_REVOCATION_V1_DOMAIN + jcsCanonicalize(unsigned))));
+    if (signature.length !== 64) throw new Error("policy root revocation signature must be Ed25519");
+    return fetchFn(new URL("/revoke", nodeOrigin).toString(), {
+      method: "POST",
+      redirect: "error",
+      headers: { accept: "application/json", "content-type": "application/json" },
+      body: JSON.stringify({ revocation: { ...unsigned, signature: { suite: "Ed25519", signerDid: input.issuerDid, value: encodeBase64Url(signature) } } }),
+    });
+  };
+  const response = input.resourceTransport
+    ? await input.resourceTransport([{ resource: input.spaceId ?? "", access: "read" }], (target) => send(target.fetch, target.url), { nodeLocal: true, nodeDid: input.nodeAudience })
+    : await send(input.fetch ?? globalThis.fetch.bind(globalThis), input.nodeOrigin);
   if (!response.ok) throw await httpResponseError(response, "policy root revocation rejected");
   return object(await response.json(), "policy root revocation");
 }
@@ -562,12 +577,9 @@ function parseKvResource(resource: string): { space: string; path: string } {
 }
 
 function parseEncryptionResource(resource: string): void {
-  if (!resource.startsWith("urn:tinycloud:encryption:")) throw new Error("encryption capability is invalid");
-  const rest = resource.slice("urn:tinycloud:encryption:".length);
-  const separator = rest.lastIndexOf(":");
-  const ownerDid = separator < 0 ? "" : rest.slice(0, separator);
-  const network = separator < 0 ? "" : rest.slice(separator + 1);
-  if (!ownerDid.startsWith("did:") || network.length === 0 || network.includes(":") || network.includes("/") || network.includes("%") || network.includes("?") || network.includes("#")) {
+  try {
+    if (parseNamedEncryptionResource(resource).keyPath?.endsWith("/")) throw new Error("prefix");
+  } catch {
     throw new Error("encryption capability is invalid");
   }
 }
@@ -812,6 +824,8 @@ function didKeyEd25519PublicKey(value: string): Uint8Array {
  * Register a signed policy and its sibling roots with the embedded Node
  * Policy/v3 runtime. This is intentionally application-neutral: callers
  * supply policy material, while Node owns both transport endpoints.
+ * Sends to the nodeOrigin you pass and does not consult the registry.
+ * Use Node/Web registerPolicy for registry routing.
  */
 export async function registerPolicyV3(
   input: RegisterPolicyV3Input,
@@ -831,7 +845,7 @@ export async function registerPolicyV3(
     throw new Error("policy root expiry is invalid");
   }
   const bindingResponse = await fetchFn(
-    new URL("/policy/v3/enforcer-bindings", input.nodeOrigin),
+    new URL("/policy/v3/enforcer-bindings", input.nodeOrigin).toString(),
     {
       method: "POST",
       redirect: "error",
@@ -906,7 +920,7 @@ export async function registerPolicyV3(
   }
 
   const response = await fetchFn(
-    new URL("/policy/v3/policies", input.nodeOrigin),
+    new URL("/policy/v3/policies", input.nodeOrigin).toString(),
     {
       method: "POST",
       redirect: "error",
@@ -1058,12 +1072,6 @@ export async function signCompactUcanAuthorization(
     throw new Error("compact invocation lifetime must be between one and 60 seconds");
   return signCompactUcan(input);
 }
-
-/**
- * Longest window a policy root may have. A policy session never outlives its
- * roots, so this also bounds every session and descendant.
- */
-const MAX_POLICY_ROOT_SECONDS = 31 * 24 * 60 * 60;
 
 /** Sign a proofless policy root without weakening the 60-second invocation profile. */
 export async function signCompactUcanRootAuthorization(

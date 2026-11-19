@@ -287,6 +287,7 @@ export function createKvWorkerHost(deps: KvWorkerDeps): { receive(request: { id:
       store: handle.store,
       now,
       transportFor: (record) => deps.transportFor(record, handle.spec, handle.device),
+      ...(handle.spec.contentFetch === undefined ? {} : { contentFetch: handle.spec.contentFetch }),
       onCommit: () => (pages += 1),
     });
     let outcome: LocalSyncResult | undefined;

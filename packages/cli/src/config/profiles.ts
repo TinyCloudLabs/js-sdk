@@ -1,4 +1,5 @@
-import { chmod, lstat, readdir, rm } from "node:fs/promises";
+import { constants as fsConstants } from "node:fs";
+import { chmod, lstat, open, readdir, rm } from "node:fs/promises";
 import { CLI_NAME } from "@tinycloud/operations/cli-name";
 import { join } from "node:path";
 import {
@@ -32,8 +33,68 @@ import {
   listDirs,
   PRIVATE_DIR_MODE,
 } from "./storage.js";
-import type { GlobalConfig, ProfileConfig, CLIContext } from "./types.js";
+import { resolveProfilePosture, type GlobalConfig, type ProfileConfig, type CLIContext } from "./types.js";
 import { CLIError, setActiveProfileName } from "../output/errors.js";
+
+
+function isTransientProfileEntryError(error: unknown): boolean {
+  const code = (error as NodeJS.ErrnoException).code;
+  return code === "ENOENT" || code === "ENOTDIR" || code === "ELOOP" || code === "EISDIR";
+}
+
+async function secureProfileDirectory(directory: string): Promise<void> {
+  const rootFlags = fsConstants.O_RDONLY | fsConstants.O_DIRECTORY |
+    (process.platform === "linux" ? 0 : fsConstants.O_NOFOLLOW);
+  let root;
+  try {
+    root = await open(directory, rootFlags);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+    throw error;
+  }
+
+  try {
+    const info = await root.stat();
+    if (!info.isDirectory()) {
+      throw new CLIError("PROFILE_INVALID", "Profile directory is not a real directory.");
+    }
+    if ((info.mode & 0o777) !== PRIVATE_DIR_MODE) {
+      await root.chmod(PRIVATE_DIR_MODE);
+    }
+
+    const pinnedDirectory = process.platform === "linux" ? `/proc/self/fd/${root.fd}` : directory;
+    let entries;
+    try {
+      entries = await readdir(pinnedDirectory, { withFileTypes: true });
+    } catch (error) {
+      if (isTransientProfileEntryError(error)) return;
+      throw error;
+    }
+    for (const entry of entries) {
+      if (!entry.isFile()) continue;
+      let file;
+      try {
+        file = await open(
+          join(pinnedDirectory, entry.name),
+          fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW | fsConstants.O_NONBLOCK,
+        );
+      } catch (error) {
+        if (isTransientProfileEntryError(error)) continue;
+        throw error;
+      }
+      try {
+        const fileInfo = await file.stat();
+        if (fileInfo.isFile() && (fileInfo.mode & 0o777) !== 0o600) {
+          await file.chmod(0o600);
+        }
+      } finally {
+        await file.close();
+      }
+    }
+  } finally {
+    await root.close();
+  }
+}
 
 export class ProfileManager {
   // ── Initialization ──────────────────────────────────────────────────
@@ -112,12 +173,15 @@ export class ProfileManager {
    * Throws CLIError if the profile doesn't exist.
    */
   static async getProfile(name: string): Promise<ProfileConfig> {
-    const profile = await withPinnedProfileDirectory(name, (directory) =>
-      directory ? readJson<ProfileConfig>(join(directory, "profile.json")) : Promise.resolve(null));
+    const profile = await withPinnedProfileDirectory(name, async (directory) => {
+      if (!directory) return null;
+      await secureProfileDirectory(directory);
+      return readJson<ProfileConfig>(join(directory, "profile.json"));
+    });
     if (!profile) {
       throw new CLIError(
         "PROFILE_NOT_FOUND",
-        `Profile "${name}" does not exist. Create it with \`${CLI_NAME} init --name ${name}\`.`,
+        `Profile "${name}" does not exist. Create it with \`${CLI_NAME} init --key-only --name ${name}\`.`,
       );
     }
     return profile;
@@ -297,6 +361,7 @@ export class ProfileManager {
    *
    * Profile resolution: options.profile > TC_PROFILE env > config.defaultProfile > "default"
    * Host resolution:    options.host    > TC_HOST env    > discovered local node > profile.host > DEFAULT_HOST
+   * Registry URL:       TC_REGISTRY_URL env > profile.tinycloudRegistryUrl > SDK default
    *
    * Local-node discovery (TC-106) only runs when no explicit host was given
    * (`--host` / `TC_HOST`); it probes configured or registered local nodes and,
@@ -334,6 +399,14 @@ export class ProfileManager {
       if (error instanceof ProfileSymlinkError) throw error;
       // Profile may not exist yet (e.g., during `tc init`)
     }
+    const envRegistryUrl = process.env.TC_REGISTRY_URL;
+    const profileRegistryUrl = profileConfig?.tinycloudRegistryUrl;
+    const tinycloudRegistryUrl =
+      typeof envRegistryUrl === "string" && envRegistryUrl.length > 0
+        ? envRegistryUrl
+        : typeof profileRegistryUrl === "string" && profileRegistryUrl.length > 0
+        ? profileRegistryUrl
+        : undefined;
 
     const envReplication = process.env.TC_REPLICATION?.toLowerCase();
     const envEnabled = envReplication === "1" || envReplication === "true" || envReplication === "on";
@@ -363,11 +436,13 @@ export class ProfileManager {
     return {
       profile,
       host,
+      ...(tinycloudRegistryUrl === undefined ? {} : { tinycloudRegistryUrl }),
       verbose: options.verbose ?? false,
       noCache: options.noCache ?? false,
       quiet: options.quiet ?? false,
       replication,
       replicationDebug: options.replicationDebug === true || process.env.TC_REPLICATION_DEBUG === "1",
+      ...(profileConfig === undefined ? {} : { posture: resolveProfilePosture(profileConfig) }),
       ...(localDiscovery === undefined ? {} : { localDiscovery }),
     };
   }

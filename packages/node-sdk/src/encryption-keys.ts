@@ -1,0 +1,122 @@
+/**
+ * Named encryption keys for a signed-in {@link TinyCloudNode}.
+ *
+ * Lives on its own subpath (`@tinycloud/node-sdk/encryption-keys`) so the
+ * default root bundle does not carry it. Everything is dark unless the node's
+ * `/info` `features` lists `encryption-named-keys-v1`; see the client in
+ * `@tinycloud/sdk-services/encryption/named-keys` for the rules.
+ *
+ * The client signs through the node's existing raw-resource invocation path
+ * (the same one network admin and decrypt use) and reuses its encryption
+ * crypto, so both are reached through a narrow structural view of the node.
+ */
+
+import {
+  NamedKeyClient,
+  NamedKeyError,
+  type NamedKeyClientConfig,
+} from "@tinycloud/sdk-services/encryption/named-keys";
+import type { EncryptionCrypto } from "@tinycloud/sdk-services";
+import type { TinyCloudNode } from "./TinyCloudNode";
+
+export {
+  NamedKeyClient,
+  NamedKeyError,
+  buildKeyAdminFacts,
+  buildKeyDescribeFacts,
+  type DecryptManyResult,
+  type KeyCallOptions,
+  type KeyDescriptor,
+  type KeyEncryptOptions,
+  type NamedKeyEnvelope,
+  type NamedKeyErrorCode,
+  type PublicKeyDescriptor,
+} from "@tinycloud/sdk-services/encryption/named-keys";
+
+interface NodeSigningInternals {
+  readonly config?: { keyWrapV2?: boolean; requireKeyWrapV2?: boolean };
+  signRawNetworkAuthorization(input: {
+    targetNode: string;
+    networkId: string;
+    action: string;
+    facts: object;
+  }): Promise<{ authorization: string; invocationCid: string }>;
+  createEncryptionCrypto(): EncryptionCrypto;
+  /** Registry route for the network, mapped to the TEE origin and identity-checked there. */
+  encryptionDestination(networkId: string): Promise<{ url: string; nodeDid: string }>;
+}
+
+export interface CreateNamedKeyClientOptions {
+  /** Write TCW2 named-key wraps. Disabled by default. */
+  keyWrapV2?: boolean;
+  /** Require TCW2 incoming network-key wraps. Disabled by default. */
+  requireKeyWrapV2?: boolean;
+  /** Network used when a call does not name one. Defaults to the node's default network. */
+  networkId?: string;
+  /** Override `fetch` (tests). */
+  fetch?: typeof fetch;
+}
+
+/**
+ * Build a named-key client bound to a signed-in node.
+ *
+ * `signInvocation` passes the EXACT key URN as the invocation's single
+ * resource (the signer's `networkId` argument is the capability `with`); the
+ * real network id travels in the facts.
+ */
+export function createNamedKeyClient(
+  node: TinyCloudNode,
+  options: CreateNamedKeyClientOptions = {},
+): NamedKeyClient {
+  const internals = node as unknown as Partial<NodeSigningInternals>;
+  for (const hook of ["signRawNetworkAuthorization", "createEncryptionCrypto", "encryptionDestination"] as const) {
+    if (typeof internals[hook] !== "function") {
+      throw new NamedKeyError(
+        "NODE_HOOK_MISSING",
+        `TinyCloudNode.${hook} is not available; named keys cannot sign invocations`,
+      );
+    }
+  }
+  const signer = internals as NodeSigningInternals;
+  const resolvedHost = node.hosts[0];
+  if (resolvedHost === undefined) throw new Error("TinyCloud node host has not been resolved");
+  // Key calls carry public keys and key admin, so each network's calls go to
+  // its own registry route on the node's TEE-terminated origin, after the
+  // same identity check as other encryption calls, and never follow a
+  // redirect elsewhere (TC-2923).
+  const baseFetch = options.fetch ?? globalThis.fetch.bind(globalThis);
+  // Bun's `typeof fetch` also declares `preconnect`, a connection hint with no effect on requests.
+  const fetchWithoutRedirects = Object.assign(
+    (input: Parameters<typeof fetch>[0], init?: RequestInit) => baseFetch(input, { ...init, redirect: "error" }),
+    { preconnect: () => {} },
+  ) as typeof fetch;
+  const config: NamedKeyClientConfig = {
+    keyWrapV2: options.keyWrapV2 ?? signer.config?.keyWrapV2 ?? false,
+    requireKeyWrapV2: options.requireKeyWrapV2 ?? signer.config?.requireKeyWrapV2 ?? false,
+    // Not used for requests: `resolveNode` supplies every call's origin. Importing the
+    // sdk-core root for a mapping here would pull it into the lazy encryption-keys chunk.
+    host: resolvedHost,
+    resolveNode: async (networkId) => {
+      const { url, nodeDid } = await signer.encryptionDestination(networkId);
+      return { url, nodeDid };
+    },
+    crypto: signer.createEncryptionCrypto(),
+    fetch: fetchWithoutRedirects,
+    defaultNetworkId: () => options.networkId ?? node.getDefaultEncryptionNetworkId(),
+    signInvocation: (input) =>
+      signer.signRawNetworkAuthorization({
+        targetNode: input.targetNode,
+        networkId: input.resource,
+        action: input.action,
+        facts: input.facts,
+      }),
+    decryptRoot: (envelope) => {
+      const delegationCid = node.session?.delegationCid;
+      if (delegationCid === undefined) {
+        return Promise.reject(new Error("Not signed in. Call signIn() first."));
+      }
+      return node.encryption.decryptEnvelope(envelope, { proofs: [delegationCid] });
+    },
+  };
+  return new NamedKeyClient(config);
+}

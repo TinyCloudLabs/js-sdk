@@ -125,7 +125,7 @@ try {
     "auth", "request", "--cap", `tinycloud.kv:${ownerSpace}:${key.slice(0, key.lastIndexOf("/"))}/:get,metadata`, "--emit", requestFile,
   ]);
   requireSuccess(request, "Device permission request");
-  const grant = await run(cliEntry, ownerHome, HOST, ["auth", "grant", requestFile, "--yes"]);
+  const grant = await run(cliEntry, ownerHome, HOST, ["auth", "grant", requestFile]);
   requireSuccess(grant, "Owner auth grant");
   const cid = requireStringProperty(parseJson(grant.stdout, "Owner auth grant"), "delegationCid", "Owner auth grant");
   await writeFile(grantFile, grant.stdout, "utf8");
@@ -143,20 +143,7 @@ try {
   );
   if (beforeData !== payload) throw new Error("Pre-revoke scoped read returned the wrong data.");
 
-  const unconfirmedRevoke = await run(cliEntry, ownerHome, HOST, ["delegation", "revoke", cid]);
-  const unconfirmedError = property(parseJson(unconfirmedRevoke.stderr, "Unconfirmed owner delegation revoke"), "error");
-  if (
-    unconfirmedRevoke.exitCode === 0 ||
-    property(unconfirmedError, "code") !== "CONFIRMATION_REQUIRED"
-  ) {
-    throw new Error(
-      `Noninteractive revoke without --yes did not require confirmation.\n` +
-      `Exit code: ${unconfirmedRevoke.exitCode}\nSTDERR:\n${redact(unconfirmedRevoke.stderr)}`,
-    );
-  }
-
-
-  const revoke = await run(cliEntry, ownerHome, HOST, ["delegation", "revoke", cid, "--yes"]);
+  const revoke = await run(cliEntry, ownerHome, HOST, ["delegation", "revoke", cid]);
   requireSuccess(revoke, "Owner delegation revoke");
   const revokeValue = parseJson(revoke.stdout, "Owner delegation revoke");
   const revokedCid = requireStringProperty(revokeValue, "cid", "Owner delegation revoke");

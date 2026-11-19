@@ -190,7 +190,7 @@ describe("account exploration operations", () => {
 });
 
 describe("generic KV exploration operations", () => {
-  test("plans root listing exactly and returns only keys", async () => {
+  test("keeps a cursorless truncated root listing explicitly incomplete", async () => {
     const handles: string[] = [];
     const node = {
       kvForSpace(space: string) {
@@ -219,9 +219,103 @@ describe("generic KV exploration operations", () => {
         keys: ["documents/one", "documents/two"],
         count: 2,
         truncated: true,
+        nextCursor: null,
       },
     });
     expect(handles).toEqual([OWNER_APPLICATIONS]);
+  });
+
+  test("discovers every key across opaque cursor pages without widening LIST authority", async () => {
+    const operation = definition("tinycloud.kv.list");
+    const prefix = "archive/";
+    const service = new KVService();
+    const pages: Record<string, { keys: string[]; headers: Record<string, string> }> = {
+      "": {
+        keys: ["archive/a", "archive/b"],
+        headers: { "x-tinycloud-truncated": "true", "x-tinycloud-next-cursor": "opaque:second" },
+      },
+      "opaque:second": {
+        keys: ["archive/nested/c"],
+        headers: { "x-tinycloud-next-cursor": "opaque:final" },
+      },
+      "opaque:final": {
+        keys: ["archive/d", "archive/e"],
+        headers: { "x-tinycloud-truncated": "false" },
+      },
+    };
+    const requestedCursors: Array<string | null> = [];
+    service.initialize({
+      session: {
+        delegationHeader: { Authorization: "Bearer fixture" },
+        spaceId: OWNER_APPLICATIONS,
+      },
+      isAuthenticated: true,
+      invoke: (session: { spaceId: string }, serviceName: string, path: string, action: string) => {
+        expect([session.spaceId, serviceName, path, action]).toEqual([
+          OWNER_APPLICATIONS, "kv", prefix, "tinycloud.kv/list",
+        ]);
+        return { Authorization: "Bearer fixture" };
+      },
+      fetch: async (_url: unknown, init: RequestInit) => {
+        const headers = new Headers(init.headers);
+        expect(headers.get("x-tinycloud-limit")).toBe("2");
+        const cursor = headers.get("x-tinycloud-cursor");
+        requestedCursors.push(cursor);
+        if (cursor === "expired") return new Response("cursor no longer valid", { status: 400 });
+        const page = pages[cursor ?? ""];
+        if (page === undefined) throw new Error("Unknown cursor");
+        return new Response(JSON.stringify(page.keys), {
+          headers: { "content-type": "application/json", ...page.headers },
+        });
+      },
+      hosts: ["https://node.tinycloud.test"],
+      emit: () => undefined,
+    } as unknown as Parameters<KVService["initialize"]>[0]);
+    const runtime = context({
+      kvForSpace(space: string) {
+        expect(space).toBe(OWNER_APPLICATIONS);
+        return service;
+      },
+    });
+    const discovered: string[] = [];
+    let cursor: string | null = null;
+    for (let pageIndex = 0; pageIndex < 3; pageIndex += 1) {
+      const input: { space: string; prefix: string; limit: number; cursor?: string } = operation.input.parse({
+        space: OWNER_APPLICATIONS,
+        prefix,
+        limit: 2,
+        ...(cursor === null ? {} : { cursor }),
+      });
+      expect(await operation.authority(runtime, input)).toEqual([{
+        service: "tinycloud.kv",
+        space: OWNER_APPLICATIONS,
+        path: prefix,
+        actions: ["tinycloud.kv/list"],
+      }]);
+      const result = await operation.execute(runtime, input);
+      expect(result.status).toBe("ok");
+      const output = operation.output.parse(result.output);
+      expect(output.space).toBe(OWNER_APPLICATIONS);
+      expect(output.prefix).toBe(prefix);
+      expect(output.count).toBe(output.keys.length);
+      expect(output.truncated).toBe(pageIndex < 2);
+      discovered.push(...output.keys);
+      cursor = output.nextCursor;
+    }
+    expect(discovered).toEqual([
+      "archive/a", "archive/b", "archive/nested/c", "archive/d", "archive/e",
+    ]);
+    expect(requestedCursors).toEqual([null, "opaque:second", "opaque:final"]);
+    expect(cursor).toBeNull();
+    const listInput = { space: OWNER_APPLICATIONS, prefix, limit: 2 };
+    expect(await operation.execute(runtime, { ...listInput, cursor: "expired" })).toMatchObject({
+      status: "error", error: { code: "INPUT_INVALID", retryable: false },
+    });
+    expect(await operation.execute(runtime, listInput)).toMatchObject({
+      status: "ok", output: {
+        keys: ["archive/a", "archive/b"], nextCursor: "opaque:second", truncated: true,
+      },
+    });
   });
 
   test("plans and reads one exact key", async () => {
@@ -391,7 +485,7 @@ describe("generic KV exploration operations", () => {
 
   test("classifies actual KV HTTP failures for every MCP-exposed method without leaking server text", async () => {
     const inputs = [
-      ["tinycloud.kv.list", { space: "applications" }],
+      ["tinycloud.kv.list", { space: "applications", prefix: "documents/", cursor: "opaque:next" }],
       ["tinycloud.kv.get", { space: "applications", key: "documents/one" }],
       ["tinycloud.kv.head", { space: "applications", key: "documents/one" }],
       ["tinycloud.kv.put", {

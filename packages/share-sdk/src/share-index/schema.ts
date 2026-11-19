@@ -1,6 +1,7 @@
 import type { SenderShareRecord } from "../history.js";
 import { canonicalAddressSpelling } from "./agent-record.js";
-import { STORED_DELIVERY_MATERIAL_KEYS, type StoredShareRecord } from "./delivery.js";
+import { checkStoredFullShareLink, STORED_DELIVERY_MATERIAL_KEYS, type StoredShareRecord } from "./delivery.js";
+import { parseArtifactVersionPath } from "../artifact-core.js";
 
 /**
  * Index document schema v1, rows, `project()`, and the versioned agent-record
@@ -249,10 +250,10 @@ const FIELDS_BY_RECORD_V: Readonly<Record<number, { readonly required: readonly 
   1: { required: REQUIRED_V1, optional: OPTIONAL_V1 },
 };
 
-/** Whether `path` is a canonical KV path under a share prefix. */
+/** Canonical share paths and exact artifact version files use the existing path checks. Details: TC-1739 */
 export function isShareResourcePath(path: unknown): path is string {
   if (typeof path !== "string" || path.length === 0 || path.length > 1024 || /[\\%\u0000-\u001f]/.test(path)) return false;
-  if (!SHARE_RESOURCE_PREFIXES.some((prefix) => path.startsWith(prefix) && path.length > prefix.length)) return false;
+  if (!SHARE_RESOURCE_PREFIXES.some((prefix) => path.startsWith(prefix) && path.length > prefix.length) && parseArtifactVersionPath(path) === undefined) return false;
   return path.split("/").every((segment, index, all) => (segment !== "" || index === all.length - 1) && segment !== "." && segment !== "..");
 }
 
@@ -306,6 +307,17 @@ export class ShareRecordSchemaError extends Error {
   }
 }
 
+/** Whether a link embeds the sealed record: the full form (`/s/full#v=4&k=…&r=…`) or an inline payload (`p=`). */
+function carriesSealedRecord(link: string): boolean {
+  try {
+    const url = new URL(link);
+    const fragment = new URLSearchParams(url.hash.slice(1));
+    return url.pathname === "/s/full" || fragment.has("r") || fragment.has("p");
+  } catch {
+    return false;
+  }
+}
+
 /** Throws {@link ShareRecordSchemaError} when the decrypted value fails the schema. */
 export function checkAgentRecordSchema(value: unknown, context: AgentRecordSchemaContext): StoredShareRecord {
   const fail = (): never => { throw new ShareRecordSchemaError("schema"); };
@@ -327,6 +339,8 @@ export function checkAgentRecordSchema(value: unknown, context: AgentRecordSchem
   const resource = record.resource;
   if (!isObject(resource) || Object.keys(resource).length !== 2 || (resource.kind !== "exact" && resource.kind !== "prefix") || !isShareResourcePath(resource.path)) return fail();
   if (!Array.isArray(record.actions) || record.actions.length === 0 || new Set(record.actions).size !== record.actions.length || !record.actions.every((action) => typeof action === "string" && SHARE_ACTIONS.includes(action))) return fail();
+  const artifact = parseArtifactVersionPath(resource.path) !== undefined;
+  if (artifact && (resource.kind !== "exact" || record.actions.some(action => action !== "tinycloud.kv/get" && action !== "tinycloud.kv/metadata"))) return fail();
   const matcher = record.recipientMatcher;
   if (!isObject(matcher) || !(matcher.kind === "bearer" ? Object.keys(matcher).length === 1 : ["exactEmail", "emailDomain", "recipientDid"].includes(matcher.kind as string) && Object.keys(matcher).length === 2 && typeof matcher.value === "string")) return fail();
   if (!isIsoTime(record.registeredAt) || !isIsoTime(record.expiresAt) || Date.parse(record.registeredAt) >= Date.parse(record.expiresAt)) return fail();
@@ -346,16 +360,29 @@ export function checkAgentRecordSchema(value: unknown, context: AgentRecordSchem
   if (record.link !== undefined && typeof record.link !== "string") return fail();
   if (record.filename !== undefined && (typeof record.filename !== "string" || record.filename.length > 512)) return fail();
   // Each blob once (stored form, `delivery.ts`): a Policy/v3 record keeps the sealed envelope and its key, never
-  // the envelope it decrypts to nor the `/s/inline` link that re-encodes it.
+  // the envelope it decrypts to. Its `link` is the short link the sender printed, checked against the sealed
+  // material when the record is accepted. A full link carries the sealed record and the key in its fragment, so a
+  // record that stores one beside its delivery material is refused.
   if (record.deliveryMaterial !== undefined) {
     const material = record.deliveryMaterial;
-    if (!isObject(material) || Object.keys(material).length !== STORED_DELIVERY_MATERIAL_KEYS.length || !STORED_DELIVERY_MATERIAL_KEYS.every((key) => typeof material[key] === "string")) return fail();
-    if (record.link !== undefined) return fail();
+    if (!isObject(material) || !STORED_DELIVERY_MATERIAL_KEYS.every((key) => typeof material[key] === "string")
+      || Object.keys(material).some(key => !STORED_DELIVERY_MATERIAL_KEYS.includes(key) && key !== "fullLink")) return fail();
+    if (Object.hasOwn(material, "fullLink")) {
+      try { checkStoredFullShareLink(material.fullLink); } catch { return fail(); }
+    }
+    if (typeof record.link === "string" && carriesSealedRecord(record.link)) return fail();
   }
   if (record.deliveredRecipients !== undefined && (!Array.isArray(record.deliveredRecipients) || !record.deliveredRecipients.every((item) => typeof item === "string"))) return fail();
   if (record.proofs !== undefined) {
     const proofs = record.proofs;
     if (!isObject(proofs) || !Object.keys(proofs).every((key) => PROOF_STRING_FIELDS.includes(key) ? typeof proofs[key] === "string" : PROOF_OBJECT_FIELDS.includes(key) && isObject(proofs[key]))) return fail();
+  }
+  if (artifact) {
+    const proofs = record.proofs;
+    if (isObject(proofs) && proofs.ownerPolicy !== undefined) return fail();
+    if (record.deliveryMaterial !== undefined) {
+      if (record.targetKind === undefined || record.targetKind === "bearer" || (isObject(proofs) && proofs.link !== undefined)) return fail();
+    } else if (record.targetKind !== undefined && record.targetKind !== "bearer") return fail();
   }
   return record as unknown as StoredShareRecord;
 }

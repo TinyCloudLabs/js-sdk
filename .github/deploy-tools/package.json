@@ -1,0 +1,9 @@
+{
+  "name": "mcp-deploy-tools",
+  "private": true,
+  "description": "Pinned tools for the hosted MCP deployment workflow.",
+  "dependencies": {
+    "@phala/cloud": "0.3.0",
+    "phala": "1.1.22"
+  }
+}

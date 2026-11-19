@@ -27,6 +27,9 @@ export {
   SiweMessage as __replicaSiweMessage,
 } from "@tinycloud/sdk-core";
 
+/** The `replica.purge.failed` event, under a name `tcw.ts` may use (it holds no replica-named identifiers). */
+export type { ReplicaPurgeFailedEvent as LocalCopyPurgeFailedEvent } from "@tinycloud/sdk-core";
+
 /** Supplied by the optional web replica entry; importing that entry does not register it. */
 export interface BrowserReplicaPlugin {
   readonly loaders: ReplicationModuleLoaders;

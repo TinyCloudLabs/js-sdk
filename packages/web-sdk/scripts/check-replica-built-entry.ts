@@ -4,6 +4,7 @@ import { createRequire } from "node:module";
 import { join } from "node:path";
 import { IDBKeyRange, indexedDB } from "fake-indexeddb";
 import { signedRestorableSession } from "../../node-sdk/src/test-support/signed-restorable-session";
+import { unregisteredLocationRegistryResponse } from "../../node-sdk/src/test-support/unregistered-location-registry";
 import { ledgerFor } from "../../replica/src/kv-storage/ledger";
 import { createIndexedDbLifecycle } from "../../replica/src/kv-storage/lifecycle";
 import { pkhDid, type ReplicationEvent } from "@tinycloud/sdk-core";
@@ -43,7 +44,12 @@ Object.defineProperty(globalThis, "indexedDB", { configurable: true, get() {
   importTouches.worker++;
   throw new Error("core or inert optional import started replica worker");
 } };
-(globalThis as any).fetch = async () => { throw new Error("offline by fixture"); };
+const registryOrigin = "https://registry.offline.test";
+globalThis.fetch = (async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+  const metadata = unregisteredLocationRegistryResponse(input, registryOrigin, init);
+  if (metadata !== undefined) return metadata;
+  throw new Error("offline by fixture");
+}) as typeof fetch;
 const entries = new Map<string, string>();
 const backend = {
   get length() { return entries.size; },
@@ -104,7 +110,7 @@ const provider = { request: async ({ method }: { method: string }) => {
   throw new Error("unexpected provider request " + method);
 } };
 const config = {
-  sessionStorage, tinycloudHosts: ["https://offline.test"], tinycloudRegistryUrl: null,
+  sessionStorage, tinycloudHosts: ["https://offline.test"], tinycloudRegistryUrl: registryOrigin,
   autoDiscoverLocalNode: false, includeAccountRegistryPermissions: false, autoBootstrapAccount: false,
   replication: { enabled: true, prefixes: ["notes/"], storage: replicaStorage },
 };
@@ -119,12 +125,16 @@ assert.equal(gatedLoads, 0, "a successful signed replica opt-in must not fetch t
 const replicaOff = await root.TinyCloudWeb.create({ ...config, replication: undefined, persistSession: false, provider });
 assert.equal(replicaOff.replication, undefined);
 assert.equal(gatedLoads, 0, "replica-off clients must not fetch the gated-only artifact");
+const networkOnly = await root.TinyCloudWeb.create({ ...config, replication: undefined, provider });
+assert.equal((await networkOnly.restoreSession(proof.address)).status, "restored");
+const networkRead = await networkOnly.kv.get("notes/a");
+assert(!networkRead.ok, "the offline network-only control returned data");
 // A full verified owner proof can plan an initial session-parent mint, but
 // without a usable installed grant an offline get cannot return local bytes.
 const offlineRead = await web.kv.get("notes/a");
 assert(!offlineRead.ok, "offline read without an installed grant returned local bytes");
-assert.equal(offlineRead.error.code, "NETWORK_ERROR", "offline read did not fall back to the network");
-assert.equal(offlineRead.error.message, "offline by fixture", "offline read did not attempt the network");
+assert.equal(offlineRead.error.code, networkRead.error.code, "replica opt-in changed the network failure classification");
+assert.equal(offlineRead.error.message, networkRead.error.message, "replica opt-in replaced the network failure");
 assert.equal(authority.plan("notes/").path, "session", "verified owner cannot plan session-parent mint");
 const otherWallet = { request: async ({ method }: { method: string }) => {
   if (method === "eth_accounts") return ["0x0000000000000000000000000000000000000001"];
@@ -160,7 +170,7 @@ assert.equal((await sessionStorage.load(proof.address))?.replicaStamp?.incarnati
   "restore must not mint or silently repair a stale stamp");
 const gatedRead = await stale.kv.get("notes/a");
 assert.equal(gatedRead.ok, false, "a stale stamp must not serve local replica bytes");
-assert.equal(gatedRead.error.code, "NETWORK_ERROR", "gated fallback must retain the network result");
+assert.equal(gatedRead.error.code, networkRead.error.code, "gated fallback must retain the network result");
 const networkReads = gatedReads.filter(
   (event): event is Extract<ReplicationEvent, { type: "replication.read" }> => event.type === "replication.read",
 );
@@ -179,8 +189,8 @@ try {
   assert.equal((await stillNetwork.replication.status())[0].gate, "stamp_stale");
   const result = await stillNetwork.kv.get("notes/a");
   assert.equal(result.ok, false);
-  assert.equal(result.error.code, "NETWORK_ERROR");
-  assert.equal(result.error.message, "offline by fixture",
+  assert.equal(result.error.code, networkRead.error.code);
+  assert.equal(result.error.message, networkRead.error.message,
     "a missing optional observer must leave the real network KV path usable");
 } finally {
   gatedNetwork = gatedLoader;

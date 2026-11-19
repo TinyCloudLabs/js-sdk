@@ -227,6 +227,23 @@ test("invoke-level invalid input diagnostics omit attacker-controlled issue deta
   expect(JSON.stringify(result)).not.toContain(canary);
 });
 
+test("a refused input names the field and its rule; code, retryable and issue codes are unchanged", async () => {
+  definitions = [
+    createDefinition({
+      input: z.object({ name: z.string().refine((name) => name.includes("/"), "An IANA timezone is required.") }).strict(),
+    }),
+  ];
+
+  const result = await invokeOperation("tinycloud.test.get", 1, {}, { name: "Mars" });
+
+  expect(errorOf(result)).toEqual({
+    code: "INPUT_INVALID",
+    message: "The operation input is invalid. name: An IANA timezone is required.",
+    retryable: false,
+    details: { issues: [{ code: "custom" }] },
+  });
+});
+
 test("plans and persists exact missing authority before it can execute a handler", async () => {
   let handlerRan = false;
   resolver = async () => {

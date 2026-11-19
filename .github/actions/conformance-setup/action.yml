@@ -1,0 +1,74 @@
+# Shared setup for the jobs in operations-mcp.yml: toolchains, caches, install
+# and every build that the conformance steps and test files import. Each job
+# that uses it runs in a fully built tree, exactly as the single `conformance`
+# job did before it was split.
+name: Conformance setup
+description: Install toolchains and dependencies and build the packages the operations/MCP conformance jobs import.
+
+outputs:
+  rust-version:
+    description: Output of `rustc --version` with spaces replaced by dashes.
+    value: ${{ steps.rust-version.outputs.version }}
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-node@v4
+      with:
+        node-version: "20"
+    - uses: oven-sh/setup-bun@v2
+      with:
+        bun-version: "1.3.14"
+    - name: Cache Bun packages
+      uses: actions/cache@v4
+      with:
+        path: ~/.bun/install/cache
+        key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+    - name: Read Rust toolchain version
+      id: rust-version
+      shell: bash
+      run: echo "version=$(rustc --version | tr ' ' '-')" >> "$GITHUB_OUTPUT"
+    # The key names the original `conformance` job, not the running job, so
+    # every split job restores the one cache entry master already saves
+    # (the core job saves it; see operations-mcp.yml).
+    - name: Restore Rust/Cargo cache
+      uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          target
+        key: cargo-${{ runner.os }}-${{ steps.rust-version.outputs.version }}-${{ github.workflow }}-conformance-${{ hashFiles('Cargo.lock') }}
+        restore-keys: |
+          cargo-${{ runner.os }}-${{ steps.rust-version.outputs.version }}-${{ github.workflow }}-conformance-
+    - name: Install wasm-pack
+      uses: ./.github/actions/install-wasm-pack
+    - run: bun install --frozen-lockfile
+      shell: bash
+    - name: Build SDK runtime prerequisites
+      shell: bash
+      run: |
+        bun run --cwd packages/sdk-rs build:wasm:node
+        bun run --cwd packages/sdk-rs/packages/node build
+        # @tinycloud/replica's worker entry imports @tinycloud/web-sdk-wasm.
+        bun run --cwd packages/sdk-rs build:wasm:web
+        bun run --cwd packages/sdk-rs/packages/web build
+        bun run --cwd packages/bootstrap build
+        bun run --cwd packages/sdk-services build
+        bun run --cwd packages/share-envelope build
+        bun run --cwd packages/share-sdk build
+        bun run --cwd packages/sdk-core build
+        bun run --cwd packages/node-sdk build
+    # The scanners import the CLI command registry, whose `tc replica`
+    # handlers import @tinycloud/replica.
+    - name: Build operations and replica packages for source scanners
+      shell: bash
+      run: |
+        bun run --cwd packages/operations build
+        bun run --cwd packages/replica build
+    - name: Build operations, CLI, and MCP
+      shell: bash
+      run: |
+        bun run --cwd packages/courier build
+        bun run --cwd packages/cli build
+        bun run --cwd packages/mcp build

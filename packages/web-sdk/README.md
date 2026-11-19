@@ -46,6 +46,91 @@ const result = await storage.get('myKey');
 console.log(result.data); // { hello: 'world' }
 ```
 
+### Stored sessions and `signIn()`
+
+`signIn()` first restores a stored session for the connected wallet when that
+session covers every permission in the app's current manifest. If the app
+changed its manifest (for example a new permission or prefix), the stored
+session is cleared and the user is asked again, automatically. The check is
+local: it reads the session's signed permissions (and any approved runtime
+grants), and the default browser storage does not restore a session past its
+expiry. The permission check does not contact the node, so a session the node
+rejects (a 401 after a revocation or a reset, for example) is still restored.
+With OpenKey, `prepareSignIn()` makes the same check.
+
+`restoreSession()` resolves from stored state. It automatically starts a
+background hosting probe, capped at 5 seconds, and reactivates stored panel
+grants. Read `tc.spaceHosting` (`"hosted"`, `"not-hosted"` or `"unknown"`) for
+the current display hint. A stored hint applies only to the same account,
+space and host. It can be one session stale until the probe corrects it at
+runtime, and updates in storage when the signed session is next persisted.
+Older records start at `"unknown"`. The hint never grants authority or skips
+permission checks. The probe never prompts or fails the restore.
+Panel permission requests wait up to 4 seconds for stored grants to reactivate
+before showing a permission prompt.
+`signIn()` waits for the probe when it restores a session. At fresh sign-in
+the hosting answer comes from the node's activation of the new session.
+`signIn()` on a restored session whose space is `"not-hosted"` returns the
+restored session.
+
+To force a fresh consent, sign out first. `signOut()` clears the stored session
+and blocks restoring until the next sign-in succeeds, so `signIn()` prompts:
+
+```typescript
+await tc.signOut();
+await tc.signIn();
+```
+
+There is no separate "fresh sign-in" option. Calling `restoreSession()` yourself
+restores a stored session without the manifest check.
+
+Sign-out reports session-storage failures. Replica cleanup has its own recovery markers; sign-out completion alone does not certify local-copy erase. Custom/native session adapters keep their existing storage contract, including the provider's durability and boot-handling responsibilities.
+With an asynchronous custom runtime-grant store, sign-out waits for in-flight
+load/save calls to settle.
+
+### Runtime permission grants with OpenKey
+
+`requestPermissions()` (and the panel's "allow" buttons) sign each runtime grant's SIWE as a byte-exact message through
+`config.openkey.client.signMessage`, with the `keyId` of the connected OpenKey account. The SDK never sends `signMessage`
+without a `keyId`. If the client is not connected (a restored session, or a sign-in through `authorizeTinyCloud`), the SDK
+connects it first with `client.connect()`, in the configured `mode`:
+
+- **`iframe` (and `redirect`)**: the grant connects and signs in one go, in one click.
+- **`popup` (the default)**: a browser lets a page open a popup only soon after the user's click, and the user needs longer
+  than that to sign in inside the connect popup, so a sign popup opened right after it would be blocked. The first click
+  therefore connects and rejects with `OpenKeySigningKeyError` code `OPENKEY_CONNECTED_RETRY`, signing nothing. The client
+  is now connected: show your Allow button again, and the second click signs with the connected key in one popup. Once the
+  client is connected, every later grant is one click.
+
+When no single key can be named, or the client was just connected in popup mode, `requestPermissions()` rejects with
+`OpenKeySigningKeyError` before any sign request:
+
+| `code`                    | Meaning                                                                                                                             |
+| ------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| `OPENKEY_CONNECTED_RETRY` | Popup mode only. The SDK connected the client. Nothing was signed; ask the user to click Allow again.                               |
+| `OPENKEY_KEY_MISSING`     | The client is not connected and has no `connect()`, or `connect()` answered without a `keyId`.                                      |
+| `OPENKEY_KEY_AMBIGUOUS`   | The connected key's address is not the signed-in account's, or it reports no address.                                               |
+
+`OPENKEY_KEY_MISSING` and `OPENKEY_KEY_AMBIGUOUS`: connect the configured client as the signed-in account
+(`await openkey.connect()`), or sign runtime grants with `tc.setRuntimePermissionSigner(...)`. Connecting it yourself in the
+click that starts sign-in avoids the extra click. A user closing the connect dialog rejects with `@openkey/sdk`'s own plain-object rejection `{ code: "USER_CANCELLED" }` (not an `Error`, and not an `OpenKeySigningKeyError`), so tell it apart from `OPENKEY_CONNECTED_RETRY`, which is an `OpenKeySigningKeyError`. A blocked popup rejects the same way with `{ code: "POPUP_BLOCKED" }`. If
+the session ends or changes (sign-out, another account) while a dialog is open, the grant is cancelled and nothing is
+signed. The two-click flow needs a client that keeps the connect result in `lastAuth`, as `@openkey/sdk` does.
+
+## Signed registry cache
+
+The browser client stores exact owner-signed v2 registry responses beside its identity pins, under `tinycloud.registryCache.v2:<ownerKey>`. Fetch time, invalidation revision and sequence metadata are outside the signed response. Every routing decision awaits a bounded, coalesced refresh and verifies cached responses again. Only a higher verified sequence replaces signed bytes; equal-sequence renewal requires identical canonical signed meaning, not identical HTTP formatting.
+
+Registry v2 and v1 fetches use `cache: "no-store"` to bypass the browser HTTP cache. The separate signed-response cache remains independently verified and subject to the outage fallback age limit below.
+
+Custom `RegistryCacheStore` adapters implement `get`, `getRevision`, atomic `update(ownerKey, (current, revision) => ...)`, and `delete(ownerKey, expectedRevision?, maximumSequence?)`. Forward both callback arguments and every deletion argument. The default persistent adapter uses the same per-entry Web Lock and storage key for updates and invalidation. Deletion atomically writes `{ ownerKey, revision: previousRevision + 1, invalidated: true }`, including when empty; `get` hides this metadata-only tombstone while `getRevision` preserves its history. Legacy live entries without revision are revision zero. Accepted writes retain the store's revision. Conditional deletion refuses without mutation if its revision differs or the current signed sequence exceeds the supplied maximum; malformed or overflowing revisions refuse.
+
+Revision capture before lookup, atomic commit checks and final fallback checks prevent older in-flight responses from repopulating invalidated settings. Positive persisted revisions remain known-owner evidence without a sequence adapter. The independent `tinycloud.registrySequences.v2` map keeps signed maxima under its storage-key Web Lock across owners. Storage absence uses memory; unreadable/corrupt state refuses. Browsers without Web Locks must supply transactional persistent cache and sequence adapters; a separate revision counter write is not atomic enough.
+
+Warm fallback requires a canonically reverified cache younger than one hour and a transport error, timeout or HTTP 502/503/504. HTTP 500, other statuses, invalid responses and invalid cached state refuse. Authoritative HTTP4xx responses and fresh signed records without the required route remove cached settings while retaining known-owner history. With no saved settings, cold HTTP5xx, transport errors and timeouts refuse live routing instead of selecting a configured/default host. Reachable genuine absence still permits onboarding. `onRegistryFallback(reason, code?)` receives `using_cached_settings` after selecting a verified cached route, once per owner/cache; without it the SDK logs a value-free warning. Non-replicating stored-session hydration is local-only; later live operations still refresh routing. Explicit replication retains preflight. Nodes performing online admission still require their registry connection.
+
+Details: TC-2481
+
 ## Optional local KV replication
 
 Install `@tinycloud/replica`, then load and register the optional browser plugin
@@ -70,6 +155,8 @@ Importing the optional entry alone does not register loaders or touch IndexedDB.
 Duplicate registration throws immediately; enabling replication without
 registration throws at construction. Replication off requires no plugin, and a
 refused local replica does not end an otherwise valid network session.
+Set `replication.syncScope: 'prefixes'` to request sign-in sync only on the declared prefixes.
+Set `replication.contentFetch: 'lazy'` to sync entry names without downloading values; reads of values the replica does not hold go to the network. The default is `'eager'`.
 
 Use the same module format for registration and the client: importing both
 ESM and CJS root bundles in one process creates independent module registries.
@@ -272,6 +359,49 @@ and [Postgres Node size job 117210798348](https://github.com/TinyCloudLabs/js-sd
 independently reported identical root and optional gzip bytes on `e5b080d5`;
 the historical local measurements cannot set ledger ceilings.
 
+## Floating button and panel
+
+`TinyCloudWeb` adds a floating button and a panel to the page. The panel is rendered in an open shadow root, so host page styles do not reach it. It is not rendered inside an iframe or an opaque origin. In those cases, and with `ui: false`, nothing is added to the page.
+
+```typescript
+const tc = new TinyCloudWeb({
+  ui: {
+    button: true,         // default true; false hides the button only
+    toasts: true,         // default true; false shows no toasts and stops the unhandled-rejection listener; prompts still render
+    developerMode: false, // default false; shows the developer section
+    position: "bottom-right", // "bottom-right" | "bottom-left" | "bottom-center"; each "top-*" value places at the matching bottom position; an unrecognised value falls back to "bottom-right"
+    appId: "my-app",      // identity for the hide flag when no manifest is set
+  },
+});
+
+tc.ui.open();
+tc.ui.setButtonVisible(true); // show or hide the floating button at runtime
+tc.ui.close();
+tc.ui.toggle();
+tc.ui.isOpen;    // boolean
+tc.ui.available; // false in iframes, opaque origins, SSR, or when ui is false
+```
+
+`open()` also clears the user's hidden flag for the button. The hidden flag is stored per origin and app id under `tinycloud:ui:button-hidden:v1:`. The panel shows sections only for capabilities the client exposes.
+
+`ui.button` sets the initial state of the floating button, and `tc.ui.setButtonVisible(visible)` changes it at runtime: `true` shows the button now (even under `ui.button: false`) and clears the stored hidden flag, `false` hides it without writing that flag. The SDK does not store this choice; call it on load from your own setting. `open()`, `openPage()` and `toggle()` work whether the button is shown or not. On a phone the panel keeps its header inside the device safe areas, and a downward swipe on the header closes it.
+
+### Storage section and storage-full toast
+
+When the client exposes `storage.status()`, the panel shows a Storage section with the account's usage: "Room left", "Nearly full", "Storage is full", or "No limit", plus a bar and a "Manage storage" link. The link uses the status `manageUrl` only when it is https; otherwise it falls back to `https://account.tinycloud.xyz/storage`. When the storage needs permission, the section shows a neutral note with no numbers.
+
+The host also watches the own-storage `storage.full` episode. While the episode is on, the button and panel show "Storage is full", and one info toast with the manage link is shown per episode, even when the panel is closed. The toast shows again only after the episode ends and a new one starts. The episode ends only on a successful write to that storage, so a status read alone does not end it.
+
+### Toasts and notification errors
+
+Toasts render in the host panel layer and follow the same `ui` options. `ui: false` creates no host, button, toasts, or listeners. `ui: false` refuses SDK prompts (explicit opt-in); `popups: false` and `ui: { button: false, toasts: false }` keep them. `ui: { toasts: false }` shows no toasts and stops the unhandled-rejection listener, and prompts still render. `ui.position` sets placement. Toast copy is fixed text per error kind. The raw error message is written to the console. A toast auto-dismisses after 5 seconds, at most 3 show at once, and an identical visible toast is not shown twice.
+
+Consent and space-creation prompts render in the same open shadow root as the panel. Each is a `role="dialog"` with `aria-modal="true"`, named by its title and described by its explanation. Focus moves to the dialog itself, never to Approve or Create, so Enter alone cannot confirm consent. Tab and Shift+Tab stay inside the dialog. When a prompt closes, focus returns to the element that had it before the prompt opened, unless focus has moved elsewhere on the page. While a prompt is open the page's scroll is locked. Releasing the lock restores the page's previous `body` `overflow` value, so a page that set `overflow: clip` keeps it.
+
+Space creation has three modes, in this order of precedence. An explicit `spaceCreationHandler` always handles the request. Otherwise `autoCreateSpace: true` creates the space without a dialog, and `autoCreateSpace: false` creates nothing and opens no dialog. When neither is set, the default confirmation dialog opens. With `ui: false` the SDK's own prompts do not render: a consent request resolves as declined and a space-creation request resolves as dismissed, with one console warning.
+
+`notifications.throwErrors: true` rethrows the raw error message asynchronously, so global error handlers see it. Identical errors within 200 ms collapse into one throw; distinct errors each throw. It applies whenever `ui` is enabled and `ui.toasts` is not `false`, including on a framed page where the toast is dropped. It never applies with `ui: false` or `ui: { toasts: false }`. The legacy `popups`, `position`, `duration`, and `maxVisible` keys under `notifications` are removed from the TypeScript types. JavaScript callers that still pass them are mapped onto `ui` once per page load, with a console warning per key: `popups: false` becomes `ui: { button: false, toasts: false }` only when `ui` is not set. An explicit `ui` replaces that mapping as a whole, so `popups: false` with `ui: { position: 'bottom-left' }` keeps the button and toasts. `position` becomes `ui.position` unless `ui.position` is set. `duration` and `maxVisible` are ignored, and their warning says so. Migrate to `ui`.
+
 ## Basic Storage Operations
 
 ### Storing Data
@@ -384,7 +514,7 @@ const tcw = new TinyCloudWeb({ retryPolicy: { maxAttempts: 1 } });
 TinyCloud is built on these fundamental principles:
 
 - **Sovereignty** - Built so that each user controls their data outright. Requests to access or compute on that data must be explicitly permissioned.
-- **Privacy** - Data is stored, streamed, and computed upon in ways that minimize leakage with encryption strategies that ensure users do not need to trust an external party.
+- **Privacy** - Access is scoped by the capabilities you approve. Ordinary data is not end-to-end encrypted: the node that hosts a space can read it in order to serve it. Use the data vault to encrypt values before they are stored. See [Security and trust](https://docs.tinycloud.xyz/concepts/security-and-trust).
 - **Interoperability** - Embracing artifact-based formats like Markdown, JSON Canvas, CSV, and SQLite so that data remains portable and future-proof.
 - **Open Innovation** - We view AI's rapid growth as an opportunity to endow individuals with new capabilities—before these capabilities are seized exclusively by large institutions.
 
@@ -429,3 +559,13 @@ Join the TinyCloud community:
 
 - [Twitter](https://twitter.com/TinyCloudLabs)
 - [Telegram](https://t.me/+pplkv1XbbU01MDVh)
+
+### Account setup and sign-in options
+
+The web SDK includes implicit account bootstrap permissions only at the approved first-party page origins. Other origins, including generic localhost and server-rendered contexts, request the application's manifest rows without implicit account or capabilities-read rows. Explicit manifest permissions are preserved.
+
+`autoBootstrapAccount: false` disables account bootstrap and its implicit sign-in permissions, including in the node SDK. `includeAccountRegistryPermissions: false` omits the implicit account registry bundle. Setting either option to `true` does not enable first-party bootstrap at another origin. The policy uses the actual page origin, independently of a configured SIWE domain.
+
+A third-party sign-in with no registered account route returns `ACCOUNT_SETUP_REQUIRED` with `setupUrl: "https://home.tinycloud.xyz/"` before signing. Complete setup there and retry. Registry availability errors retain their existing behavior. Setup status for accounts that already have a registry record is unchanged.
+
+Details: TC-2931

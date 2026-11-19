@@ -165,6 +165,24 @@ describe("StorageFullMonitor on a full space", () => {
     expect(events).toHaveLength(2);
   });
 
+  test("clear() ends the own episode and forgets the rejection", async () => {
+    const node = fullSpaceNode("tinycloud:pkh:eip155:1:0xaaa:default");
+    const monitor = new StorageFullMonitor(
+      (spaceId) => spaceId.split(":").slice(0, 5).join(":"),
+      () => "tinycloud:pkh:eip155:1:0xaaa",
+    );
+    monitor.observe(node.context);
+    const episodes: boolean[] = [];
+    monitor.onEpisode(() => episodes.push(monitor.rejection !== undefined));
+
+    await node.kv.put("x", "1");
+    expect(monitor.rejection).toBeDefined();
+
+    monitor.clear();
+    expect(monitor.rejection).toBeUndefined();
+    expect(episodes).toEqual([true, false]);
+  });
+
   test("other failures and a throwing handler do not trip or break it", async () => {
     const node = fullSpaceNode();
     const monitor = new StorageFullMonitor();
@@ -189,32 +207,200 @@ describe("StorageFullMonitor on a full space", () => {
     }
   });
 
-  test("records each owner apart from the event; the episode ends when no owner is full", async () => {
+  test("own storage is one episode, ended only by a successful own write; delegated owners emit once each", async () => {
     const delegated = fullSpaceNode("tinycloud:pkh:eip155:1:0xbbb:shared");
     const own = fullSpaceNode("tinycloud:pkh:eip155:1:0xaaa:default");
-    const monitor = new StorageFullMonitor((spaceId) => spaceId.split(":").slice(0, 5).join(":"));
+    const monitor = new StorageFullMonitor(
+      (spaceId) => spaceId.split(":").slice(0, 5).join(":"),
+      () => "tinycloud:pkh:eip155:1:0xaaa",
+    );
     monitor.observe(delegated.context);
     monitor.observe(own.context);
     const events: StorageFullEvent[] = [];
     monitor.on((event) => events.push(event));
+    const episodes: boolean[] = [];
+    monitor.onEpisode(() => episodes.push(monitor.rejection !== undefined));
 
     await delegated.kv.put("x", "1");
-    expect(monitor.isFullFor("tinycloud:pkh:eip155:1:0xaaa:account")).toBe(false);
-    await own.kv.put("y", "1");
-    // Same owner, another space: one budget.
-    expect(monitor.isFullFor("tinycloud:pkh:eip155:1:0xaaa:account")).toBe(true);
     expect(events.map((event) => event.spaceId)).toEqual(["tinycloud:pkh:eip155:1:0xbbb:shared"]);
+    expect(monitor.rejection).toBeUndefined();
+
+    await own.kv.put("y", "1");
+    expect(monitor.rejection?.spaceId).toBe("tinycloud:pkh:eip155:1:0xaaa:default");
+    expect(episodes).toEqual([true]);
+    expect(events).toHaveLength(2);
+
+    // Same episode: no second emit. A status read clears best-effort state but not the episode.
+    await own.kv.put("y", "2");
+    monitor.clearFor("tinycloud:pkh:eip155:1:0xaaa:default");
+    await own.kv.put("y", "3");
+    expect(events).toHaveLength(2);
+    expect(monitor.rejection).toBeDefined();
+    expect(episodes).toEqual([true]);
+
+    // A read that succeeds does not end the episode: only a committing write does.
+    expect((await own.kv.get("y")).ok).toBe(true);
+    expect(monitor.rejection).toBeDefined();
+
+    // The delegated owner was never cleared, so it stays silent; cleared, it emits again.
+    await delegated.kv.put("x", "2");
+    expect(events).toHaveLength(2);
+    monitor.clearFor("tinycloud:pkh:eip155:1:0xbbb:shared");
+    await delegated.kv.put("x", "3");
+    expect(events).toHaveLength(3);
+
+    own.free();
+    expect((await own.kv.put("y", "4")).ok).toBe(true);
+    expect(monitor.rejection).toBeUndefined();
+    expect(episodes).toEqual([true, false]);
+    expect(monitor.isFullFor("tinycloud:pkh:eip155:1:0xaaa:account")).toBe(false);
+    expect(monitor.isFullFor("tinycloud:pkh:eip155:1:0xbbb:shared")).toBe(true);
+
+    delegated.free();
+    expect((await delegated.kv.put("x", "4")).ok).toBe(true);
+    expect(monitor.isFull).toBe(false);
+  });
+
+  test("onDelegated fires once per delegated owner and never for the own episode", async () => {
+    const delegated = fullSpaceNode("tinycloud:pkh:eip155:1:0xbbb:shared");
+    const own = fullSpaceNode("tinycloud:pkh:eip155:1:0xaaa:default");
+    const monitor = new StorageFullMonitor(
+      (spaceId) => spaceId.split(":").slice(0, 5).join(":"),
+      () => "tinycloud:pkh:eip155:1:0xaaa",
+    );
+    monitor.observe(delegated.context);
+    monitor.observe(own.context);
+    let delegatedCount = 0;
+    monitor.onDelegated(() => {
+      delegatedCount += 1;
+    });
+
+    await own.kv.put("y", "1");
+    expect(delegatedCount).toBe(0);
+
+    await delegated.kv.put("x", "1");
+    await delegated.kv.put("x", "2");
+    expect(delegatedCount).toBe(1);
 
     monitor.clearFor("tinycloud:pkh:eip155:1:0xbbb:shared");
-    expect(monitor.isFullFor("tinycloud:pkh:eip155:1:0xaaa:default")).toBe(true);
-    await delegated.kv.put("x", "2");
+    await delegated.kv.put("x", "3");
+    expect(delegatedCount).toBe(2);
+  });
+
+  test("a network failure during the own episode neither ends nor re-emits it", async () => {
+    const node = fullSpaceNode("tinycloud:pkh:eip155:1:0xaaa:default");
+    const monitor = new StorageFullMonitor(
+      (spaceId) => spaceId.split(":").slice(0, 5).join(":"),
+      () => "tinycloud:pkh:eip155:1:0xaaa",
+    );
+    monitor.observe(node.context);
+    const events: StorageFullEvent[] = [];
+    monitor.on((event) => events.push(event));
+    const episodes: boolean[] = [];
+    monitor.onEpisode(() => episodes.push(monitor.rejection !== undefined));
+
+    await node.kv.put("y", "1");
     expect(events).toHaveLength(1);
 
-    monitor.clearFor("tinycloud:pkh:eip155:1:0xbbb:shared");
-    monitor.clearFor("tinycloud:pkh:eip155:1:0xaaa:default");
-    expect(monitor.isFull).toBe(false);
-    await own.kv.put("y", "2");
-    expect(events).toHaveLength(2);
+    // A write that failed on the network is not a committed write.
+    node.context.emit(TelemetryEvents.SERVICE_RESPONSE, { service: "kv", action: "put", ok: false });
+    node.context.emit(TelemetryEvents.SERVICE_ERROR, {
+      service: "kv",
+      error: { code: ErrorCodes.NETWORK_ERROR, message: "down", service: "kv" },
+    });
+    expect(monitor.rejection).toBeDefined();
+    expect(episodes).toEqual([true]);
+
+    // Still the same episode: a later full rejection does not emit again.
+    expect((await node.kv.put("y", "2")).ok).toBe(false);
+    expect(events).toHaveLength(1);
+    expect(monitor.rejection).toBeDefined();
+
+    // A committed own write ends it.
+    node.context.emit(TelemetryEvents.SERVICE_RESPONSE, { service: "kv", action: "put", ok: true });
+    expect(monitor.rejection).toBeUndefined();
+    expect(episodes).toEqual([true, false]);
+  });
+
+  test("a successful delete or get does not end the own episode; a committed batchPut does", async () => {
+    const node = fullSpaceNode("tinycloud:pkh:eip155:1:0xaaa:default");
+    const monitor = new StorageFullMonitor(
+      (spaceId) => spaceId.split(":").slice(0, 5).join(":"),
+      () => "tinycloud:pkh:eip155:1:0xaaa",
+    );
+    monitor.observe(node.context);
+    const episodes: boolean[] = [];
+    monitor.onEpisode(() => episodes.push(monitor.rejection !== undefined));
+
+    await node.kv.put("y", "1");
+    expect(monitor.rejection).toBeDefined();
+
+    node.context.emit(TelemetryEvents.SERVICE_RESPONSE, { service: "kv", action: "delete", ok: true });
+    node.context.emit(TelemetryEvents.SERVICE_RESPONSE, { service: "kv", action: "get", ok: true });
+    expect(monitor.rejection).toBeDefined();
+    expect(episodes).toEqual([true]);
+
+    node.context.emit(TelemetryEvents.SERVICE_RESPONSE, { service: "kv", action: "batchPut", ok: true });
+    expect(monitor.rejection).toBeUndefined();
+    expect(episodes).toEqual([true, false]);
+  });
+
+  /** An own full space with one rejection observed, so the own episode is on. */
+  async function ownFullEpisode() {
+    const node = fullSpaceNode("tinycloud:pkh:eip155:1:0xaaa:default");
+    const monitor = new StorageFullMonitor(
+      (spaceId) => spaceId.split(":").slice(0, 5).join(":"),
+      () => "tinycloud:pkh:eip155:1:0xaaa",
+    );
+    monitor.observe(node.context);
+    const episodes: boolean[] = [];
+    monitor.onEpisode(() => episodes.push(monitor.rejection !== undefined));
+    await node.kv.put("y", "1");
+    expect(monitor.rejection).toBeDefined();
+    return { node, monitor, episodes };
+  }
+
+  test("a committed vault put ends the own episode; a vault get does not", async () => {
+    const { node, monitor, episodes } = await ownFullEpisode();
+
+    node.context.emit(TelemetryEvents.SERVICE_RESPONSE, { service: "vault", action: "get", ok: true });
+    expect(monitor.rejection).toBeDefined();
+    expect(episodes).toEqual([true]);
+
+    node.context.emit(TelemetryEvents.SERVICE_RESPONSE, { service: "vault", action: "put", ok: true });
+    expect(monitor.rejection).toBeUndefined();
+    expect(episodes).toEqual([true, false]);
+  });
+
+  test("a committed SQL execute ends the own episode", async () => {
+    const { node, monitor, episodes } = await ownFullEpisode();
+
+    node.context.emit(TelemetryEvents.SERVICE_RESPONSE, { service: "sql", action: "execute", ok: true });
+    expect(monitor.rejection).toBeUndefined();
+    expect(episodes).toEqual([true, false]);
+  });
+
+  test("a committed DuckDB execute ends the own episode", async () => {
+    const { node, monitor, episodes } = await ownFullEpisode();
+
+    node.context.emit(TelemetryEvents.SERVICE_RESPONSE, { service: "duckdb", action: "execute", ok: true });
+    expect(monitor.rejection).toBeUndefined();
+    expect(episodes).toEqual([true, false]);
+  });
+
+  test("a committed write on another owner's space leaves the own episode on", async () => {
+    const { node, monitor, episodes } = await ownFullEpisode();
+    node.context.setSession({
+      delegationHeader: { Authorization: "Bearer session" },
+      delegationCid: "bafy",
+      spaceId: "tinycloud:pkh:eip155:1:0xbbb:default",
+      verificationMethod: "did:key:test",
+      jwk: {},
+    });
+
+    node.context.emit(TelemetryEvents.SERVICE_RESPONSE, { service: "kv", action: "put", ok: true });
+    expect(monitor.rejection).toBeDefined();
+    expect(episodes).toEqual([true]);
   });
 
   test("a rejection whose space is unknown counts for every owner", async () => {

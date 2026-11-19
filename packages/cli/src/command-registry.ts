@@ -1,6 +1,7 @@
 import { Command } from "commander";
 
 import { registerAccountCommand } from "./commands/account.js";
+import { registerBugReportCommand } from "./commands/bug-report.js";
 import { registerAuthCommand } from "./commands/auth.js";
 import { registerCompletionCommand } from "./commands/completion.js";
 import { registerCourierCommand } from "./commands/courier.js";
@@ -10,13 +11,17 @@ import { registerDoctorCommand } from "./commands/doctor.js";
 import { registerDuckdbCommand } from "./commands/duckdb.js";
 import { registerEnableCommand } from "./commands/enable.js";
 import { registerAppsCommand } from "./commands/apps.js";
+import { registerFeedCommand } from "./commands/feed.js";
 import { registerInitCommand } from "./commands/init.js";
 import { registerKnowledgeCommand } from "./commands/knowledge.js";
 import { registerKvCommand } from "./commands/kv.js";
+import { registerKeysCommand } from "./commands/keys.js";
 import { registerManifestCommand } from "./commands/manifest.js";
 import { registerNodeCommand } from "./commands/node.js";
+import { registerOnboardCommand } from "./commands/onboard.js";
 import { registerProfileCommand } from "./commands/profile.js";
 import { registerReplicaCommand } from "./commands/replica.js";
+import { registerRegistryCommand } from "./commands/registry.js";
 import { registerSecretsCommand } from "./commands/secrets.js";
 import { registerShareCommand } from "./commands/share.js";
 import { registerSpaceCommand } from "./commands/space.js";
@@ -29,10 +34,12 @@ import { registerVarsCommand } from "./commands/vars.js";
 /** Register the complete Commander projection without parsing argv. */
 export function registerTinyCloudCommands(program: Command): void {
   registerInitCommand(program);
+  registerOnboardCommand(program);
   registerContextCommand(program);
   registerAuthCommand(program);
   registerEnableCommand(program);
   registerKvCommand(program);
+  registerKeysCommand(program);
   registerReplicaCommand(program);
   registerCourierCommand(program);
   registerSpaceCommand(program);
@@ -40,12 +47,14 @@ export function registerTinyCloudCommands(program: Command): void {
   registerShareCommand(program);
   registerNodeCommand(program);
   registerProfileCommand(program);
+  registerRegistryCommand(program);
   registerCompletionCommand(program);
   registerVaultCommand(program);
   registerSecretsCommand(program);
   registerVarsCommand(program);
   registerDoctorCommand(program);
   registerSqlCommand(program);
+  registerFeedCommand(program);
   registerDuckdbCommand(program);
   registerManifestCommand(program);
   registerKnowledgeCommand(program);
@@ -53,4 +62,5 @@ export function registerTinyCloudCommands(program: Command): void {
   registerUpgradeCommand(program);
   registerStatusCommand(program);
   registerAccountCommand(program);
+  registerBugReportCommand(program);
 }

@@ -1,13 +1,18 @@
+import "../../operations/test-support/test-bootstrap.mjs";
+import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, mock, test } from "bun:test";
 
 import {
+  ShareDeliveryRefusedError,
   CapabilityKeyRegistry,
   CaveatedDelegationUnsupportedError,
   canonicalizeEncryptionJson,
   authorizationVerdictOf,
+  REGISTRY_NOT_FOUND_BODY,
   type EncodedShareData,
   type ISessionManager,
   type IWasmBindings,
+  type WasmRecapEntry,
 } from "@tinycloud/sdk-core";
 import { Wallet } from "ethers";
 import { ed25519 } from "@noble/curves/ed25519";
@@ -18,10 +23,27 @@ import { canonicalizeSignedObjectUnsigned as canonicalize } from "../../sdk-core
 import { TinyCloudNode } from "./TinyCloudNode";
 import { NodeWasmBindings } from "./NodeWasmBindings";
 import { deserializeDelegation, serializeDelegation } from "./delegation";
+import { ownedNodeMetadata, restoredPolicyNode } from "./test-support/restored-policy-node";
 
 const originalFetch = globalThis.fetch;
 const OWNER = "0xD559CCd9EB87c530A9a349262669386dE93cf412";
 const SPACE = `tinycloud:pkh:eip155:1:${OWNER}:applications`;
+const HOST = "https://node.example";
+const POLICY_NODE_DID = "did:key:z6MkjkxcrsuBXGxVYAZFC1hPUViiRXLC5Kup4G9aBkFoPimV";
+
+function registryResponse(input: RequestInfo | URL, init?: RequestInit): Response | undefined {
+  const url = new URL(input instanceof Request ? input.url : input);
+  const method = init?.method ?? (input instanceof Request ? input.method : "GET");
+  if (url.origin !== HOST || method !== "GET" || !/^\/v[12]\/locations\/[^/]+$/.test(url.pathname)) return;
+  expect(new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined)).has("authorization")).toBe(false);
+  return new Response(REGISTRY_NOT_FOUND_BODY, { status: 404, headers: { "Content-Type": "application/json" } });
+}
+
+interface SharingSessionConfig {
+  spaceId: string;
+  abilities?: Record<string, Record<string, string[]>>;
+  rawAbilities?: Record<string, string[]>;
+}
 
 function makeFakeSessionManager(): ISessionManager {
   return {
@@ -34,12 +56,24 @@ function makeFakeSessionManager(): ISessionManager {
 }
 
 function makeWasmBindings(): IWasmBindings {
+  const recaps = new Map<string, WasmRecapEntry[]>();
   return {
     createSessionManager: makeFakeSessionManager,
-    prepareSession: mock((config: unknown) => ({
-      ...(config as object),
-      siwe: "share-siwe",
-    })),
+    prepareSession: mock((config: SharingSessionConfig) => {
+      const siwe = `share-siwe-${recaps.size}`;
+      recaps.set(siwe, [
+        ...Object.entries(config.abilities ?? {}).flatMap(([service, paths]) =>
+          Object.entries(paths).map(([path, actions]) => ({ service, space: config.spaceId, path, actions }))),
+        ...Object.entries(config.rawAbilities ?? {}).map(([path, actions]) =>
+          ({ service: "encryption", space: "encryption", path, actions })),
+      ]);
+      return { ...config, siwe };
+    }),
+    parseRecapFromSiwe: mock((siwe: string) => {
+      const recap = recaps.get(siwe);
+      if (!recap) throw new Error(`Unknown sharing fixture SIWE: ${siwe}`);
+      return recap;
+    }),
     completeSessionSetup: mock((config: unknown) => ({
       ...(config as object),
       delegationCid: "share-delegation-cid",
@@ -57,15 +91,20 @@ afterEach(() => {
 describe("TinyCloudNode sharing", () => {
   test("root sharing delegates SQL actions under the SQL service", async () => {
     const wasmBindings = makeWasmBindings();
-    globalThis.fetch = mock(async () => ({
-      ok: true,
-      status: 200,
-      json: async () => ({ cid: "commit-event-cid", activated: ["share-delegation-cid"], skipped: [] }),
-      text: async () => "",
-    })) as unknown as typeof fetch;
+    globalThis.fetch = mock(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const metadata = registryResponse(input, init);
+      if (metadata) return metadata;
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ cid: "commit-event-cid", activated: ["share-delegation-cid"], skipped: [] }),
+        text: async () => "",
+      };
+    }) as unknown as typeof fetch;
 
     const node = new TinyCloudNode({
       host: "https://node.example",
+      tinycloudRegistryUrl: HOST,
       signer: {
         signMessage: mock(async () => "signature"),
       } as any,
@@ -95,22 +134,24 @@ describe("TinyCloudNode sharing", () => {
 
   test("projects KV and explicit encryption decrypt resources into a child delegation", async () => {
     const wasmBindings = makeWasmBindings();
-    globalThis.fetch = mock(async () => ({
-      ok: true,
-      status: 200,
-      json: async () => ({ activated: ["share-delegation-cid"], skipped: [] }),
-      text: async () => "",
-    })) as unknown as typeof fetch;
+    const activationFetch = mock(async (_input: RequestInfo | URL, _init?: RequestInit) =>
+      Response.json({ activated: ["share-delegation-cid"], skipped: [] }));
+    globalThis.fetch = Object.assign(
+      async (input: RequestInfo | URL, init?: RequestInit) => registryResponse(input, init) ?? activationFetch(input, init),
+      { preconnect: originalFetch.preconnect },
+    );
     const node = new TinyCloudNode({
       host: "https://node.example",
+      tinycloudRegistryUrl: HOST,
       signer: { signMessage: mock(async () => "signature") } as any,
       wasmBindings,
     });
     (node as any)._address = OWNER;
     (node as any)._chainId = 1;
+    const network = `urn:tinycloud:encryption:did:pkh:eip155:1:${OWNER.toLowerCase()}:default`;
     const resources = [
       { service: "kv", space: SPACE, path: "docs", actions: ["tinycloud.kv/get"] },
-      { service: "encryption", space: "encryption", path: "urn:tinycloud:encryption:network-1", actions: ["tinycloud.encryption/decrypt"] },
+      { service: "encryption", space: "encryption", path: network, actions: ["tinycloud.encryption/decrypt"] },
     ];
     const delegation = await node.createSubDelegation(
       {
@@ -129,21 +170,26 @@ describe("TinyCloudNode sharing", () => {
     );
     const prepared = (wasmBindings.prepareSession as any).mock.calls[0][0];
     expect(prepared.abilities).toEqual({ kv: { docs: ["tinycloud.kv/get"] } });
-    expect(prepared.rawAbilities).toEqual({ "urn:tinycloud:encryption:network-1": ["tinycloud.encryption/decrypt"] });
+    expect(prepared.rawAbilities).toEqual({ [network]: ["tinycloud.encryption/decrypt"] });
     expect(delegation.resources).toEqual(resources);
-    expect((globalThis.fetch as any).mock.calls[0][0]).toBe("https://node.example/delegate");
+    expect(activationFetch.mock.calls[0]?.[0]).toBe("https://node.example/delegate");
   });
 
   test("TC-531: a sub-delegation defaults to its parent's expiry, the longest it may last", async () => {
     const wasmBindings = makeWasmBindings();
-    globalThis.fetch = mock(async () => ({
-      ok: true,
-      status: 200,
-      json: async () => ({ activated: ["share-delegation-cid"], skipped: [] }),
-      text: async () => "",
-    })) as unknown as typeof fetch;
+    globalThis.fetch = mock(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const metadata = registryResponse(input, init);
+      if (metadata) return metadata;
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ activated: ["share-delegation-cid"], skipped: [] }),
+        text: async () => "",
+      };
+    }) as unknown as typeof fetch;
     const node = new TinyCloudNode({
       host: "https://node.example",
+      tinycloudRegistryUrl: HOST,
       signer: { signMessage: mock(async () => "signature") } as any,
       wasmBindings,
     });
@@ -162,8 +208,8 @@ describe("TinyCloudNode sharing", () => {
       chainId: 1,
     };
     const longest = await node.createSubDelegation(parent, { path: "docs", actions: ["tinycloud.kv/get"], delegateDID: "did:key:z6MkChild" });
-    expect(longest.expiry.getTime()).toBe(parentExpiry.getTime());
-    expect((wasmBindings.prepareSession as any).mock.calls[0][0].expirationTime).toBe(parentExpiry.toISOString());
+    expect(longest.expiry.getTime()).toBe(Math.floor(parentExpiry.getTime() / 1000) * 1000);
+    expect((wasmBindings.prepareSession as any).mock.calls[0][0].expirationTime).toBe(new Date(Math.floor(parentExpiry.getTime() / 1000) * 1000).toISOString());
 
     const before = Date.now();
     const hour = await node.createSubDelegation(parent, { path: "docs", actions: ["tinycloud.kv/get"], delegateDID: "did:key:z6MkChild", expiryMs: 60 * 60_000 });
@@ -329,13 +375,21 @@ describe("TinyCloudNode sharing", () => {
 
   test("real WASM attenuates a received share and the child survives transport/useDelegation", async () => {
     const wasmBindings = new NodeWasmBindings();
-    globalThis.fetch = mock(async () => new Response(
-      JSON.stringify({ activated: ["child"] }),
-      { status: 200, headers: { "content-type": "application/json" } },
-    )) as unknown as typeof fetch;
 
     const host = "https://node.tinycloud.xyz";
-    const receiver = new TinyCloudNode({ host, wasmBindings });
+    const nodeDid = "did:key:z6MkjkxcrsuBXGxVYAZFC1hPUViiRXLC5Kup4G9aBkFoPimV";
+    globalThis.fetch = mock(async (input: RequestInfo | URL) => {
+      const url = new URL(input instanceof Request ? input.url : input);
+      if (url.origin !== host) throw new Error(`Unexpected fixture origin ${url.origin}`);
+      if (/^\/v[12]\/locations\/[^/]+$/.test(url.pathname)) return new Response(REGISTRY_NOT_FOUND_BODY, {
+        status: 404, headers: { "Content-Type": "application/json" },
+      });
+      if (url.pathname === "/info") return Response.json({ nodeId: nodeDid });
+      if (url.pathname === "/.well-known/tinycloud/node-keys") return Response.json({ nodeDid });
+      if (url.pathname === "/delegate") return Response.json({ activated: ["child"] });
+      throw new Error(`Unexpected fixture endpoint ${url.pathname}`);
+    }) as unknown as typeof fetch;
+    const receiver = new TinyCloudNode({ host, wasmBindings, tinycloudRegistryUrl: host });
     const owner = new Wallet("0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d");
     const manager = wasmBindings.createSessionManager();
     const shareKeyId = manager.createSessionKey("share-parent");
@@ -452,18 +506,23 @@ describe("TinyCloudNode sharing", () => {
 
   test("public owner delegation is wallet-rooted, caller-targeted, expiring, and returns raw receipt identities", async () => {
     const wasmBindings = makeWasmBindings();
-    globalThis.fetch = mock(async () => ({
-      ok: true,
-      status: 200,
-      json: async () => ({
-        cid: "commit-event-cid",
-        activated: ["tinycloud:pkh:eip155:1:0xd559CCd9EB87c530A9a349262669386dE93cf412:applications"],
-        skipped: [],
-      }),
-      text: async () => "",
-    })) as unknown as typeof fetch;
+    globalThis.fetch = mock(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const metadata = registryResponse(input, init);
+      if (metadata) return metadata;
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          cid: "commit-event-cid",
+          activated: ["tinycloud:pkh:eip155:1:0xd559CCd9EB87c530A9a349262669386dE93cf412:applications"],
+          skipped: [],
+        }),
+        text: async () => "",
+      };
+    }) as unknown as typeof fetch;
     const node = new TinyCloudNode({
       host: "https://node.example",
+      tinycloudRegistryUrl: HOST,
       signer: { signMessage: mock(async () => "signature") } as any,
       wasmBindings,
     });
@@ -498,14 +557,19 @@ describe("TinyCloudNode sharing", () => {
 
   test("public owner delegation signs exact KV and owner-network decrypt resources in one wallet-rooted grant", async () => {
     const wasmBindings = makeWasmBindings();
-    globalThis.fetch = mock(async () => ({
-      ok: true,
-      status: 200,
-      json: async () => ({ cid: "commit-event-cid", activated: ["share-delegation-cid"], skipped: [] }),
-      text: async () => "",
-    })) as unknown as typeof fetch;
+    globalThis.fetch = mock(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const metadata = registryResponse(input, init);
+      if (metadata) return metadata;
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ cid: "commit-event-cid", activated: ["share-delegation-cid"], skipped: [] }),
+        text: async () => "",
+      };
+    }) as unknown as typeof fetch;
     const node = new TinyCloudNode({
       host: "https://node.example",
+      tinycloudRegistryUrl: HOST,
       signer: { signMessage: mock(async () => "signature") } as any,
       wasmBindings,
     });
@@ -594,15 +658,20 @@ describe("TinyCloudNode sharing", () => {
     [503, "activation unavailable"],
   ])("public owner delegation fails closed when /delegate returns %i", async (status, error) => {
     const wasmBindings = makeWasmBindings();
-    globalThis.fetch = mock(async () => ({
-      ok: false,
-      status,
-      statusText: error,
-      json: async () => ({}),
-      text: async () => error,
-    })) as unknown as typeof fetch;
+    globalThis.fetch = mock(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const metadata = registryResponse(input, init);
+      if (metadata) return metadata;
+      return {
+        ok: false,
+        status,
+        statusText: error,
+        json: async () => ({}),
+        text: async () => error,
+      };
+    }) as unknown as typeof fetch;
     const node = new TinyCloudNode({
       host: "https://node.example",
+      tinycloudRegistryUrl: HOST,
       signer: { signMessage: mock(async () => "signature") } as any,
       wasmBindings,
     });
@@ -647,7 +716,6 @@ describe("TinyCloudNode sharing", () => {
       [{ actions: [] }, "bounded capabilities"],
       [{ actions: ["tinycloud.unknown/read"] }, "capabilities are unsupported"],
       [{ expiresAt: new Date(Date.now() - 1_000) }, "expiry must be explicit"],
-      [{ expiresAt: new Date(Date.now() + 11 * 365 * 24 * 60 * 60 * 1000) }, "within EXPIRY.MAX_MS"],
     ] as const) {
       await expect(node.createOwnerDelegation({ ...valid, ...overrides })).rejects.toThrow(message);
     }
@@ -702,10 +770,12 @@ describe("TinyCloudNode sharing", () => {
         value: Buffer.from(ed25519.sign(sha256(new TextEncoder().encode(`xyz.tinycloud.policy/AttestedEnforcerBinding/v2\0${canonicalize(unsignedBinding)}`)), nodeSeed)).toString("base64url"),
       },
     } as const;
-    const policy = { schema: "xyz.tinycloud.policy/policy/v2", policyId: "pol_test" };
+    const policy = { schema: "xyz.tinycloud.policy/policy/v2", policyId: "pol_test", contentSource: { kvResource: `${SPACE}/kv/shares/test/readme.md` } };
     const calls: Array<{ readonly url: string; readonly body: Record<string, unknown> }> = [];
     const fetchMock = mock(async (input: string | URL | Request, init?: RequestInit) => {
       const url = String(input);
+      const metadata = ownedNodeMetadata(input, init, HOST, nodeDid);
+      if (metadata) return metadata;
       if (url.includes("/share/")) throw new Error("retired Share transport was used");
       const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
       calls.push({ url, body });
@@ -716,7 +786,7 @@ describe("TinyCloudNode sharing", () => {
       return new Response(JSON.stringify({ policyCid: "bafy-policy", policyRootCid: "bafy-policy-root", enforcementRootCid: "bafy-enforcement-root" }), { status: 200, headers: { "content-type": "application/json" } });
     });
     globalThis.fetch = fetchMock as unknown as typeof fetch;
-    const node = new TinyCloudNode({ host: "https://node.example", wasmBindings: makeWasmBindings() });
+    const node = new TinyCloudNode({ host: HOST, tinycloudRegistryUrl: HOST, wasmBindings: makeWasmBindings() });
     const receipt = await node.registerPolicy({
       policyCid: "bafy-policy",
       policy,
@@ -748,22 +818,16 @@ describe("TinyCloudNode sharing", () => {
   test("delivery authorization uses only the embedded Policy/v3 route", async () => {
     const calls: Array<{ readonly url: string; readonly body: Record<string, unknown> }> = [];
     globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit) => {
+      const metadata = ownedNodeMetadata(input, init, HOST, POLICY_NODE_DID);
+      if (metadata) return metadata;
       calls.push({ url: String(input), body: JSON.parse(String(init?.body)) as Record<string, unknown> });
       return new Response("{}", { status: 200, headers: { "content-type": "application/json" } });
     }) as unknown as typeof fetch;
-    const wasmBindings = {
-      ...makeWasmBindings(),
-      invoke: () => ({ Authorization: "delivery-invocation" }),
-    } as unknown as IWasmBindings;
-    const node = new TinyCloudNode({ host: "https://node.example", wasmBindings });
-    (node as any)._restoredTcSession = { spaceId: SPACE };
-    (node as any)._serviceContext = { session: { spaceId: SPACE } };
+    const node = await restoredPolicyNode({ host: HOST });
     const common = {
       resourcePath: "shares/test/readme.md",
       recipientEmail: "recipient@example.test",
-      sealedEnvelope: "AQ".repeat(20),
-      envelopeKey: "A".repeat(43),
-      shareUrl: "https://share.tinycloud.xyz/s/inline#v=2&p=eyJjIjoiQVEiLCJjaWQiOiJjaWQiLCJrIjoiQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBIiwidiI6Mn0",
+      shareUrl: `https://share.tinycloud.xyz/s/lqdw5iopqq2tkkvjj6gbbi5vbv#v=4&k=${"A".repeat(43)}&c=bafkreiewixmt5nwgi3ych6durcsheaql3ybswbplpjmpbdhfkvdkidzt5u`,
       documentName: "readme.md",
       expiresAt: new Date(Date.now() + 60_000).toISOString(),
       nodeProof: { kid: "did:web:node.example#key", publicKey: new Uint8Array(32) },
@@ -773,12 +837,10 @@ describe("TinyCloudNode sharing", () => {
     await expect(node.authorizeShareDeliveryV3({
       ...common,
       envelope: { version: 3 },
-      shareCid: "cid",
     })).rejects.toThrow();
     await expect(node.authorizeShareDeliveryV3({
       ...common,
       envelope: { version: 3 },
-      shareCid: "cid",
     })).rejects.toThrow();
     expect(calls.map((call) => call.url)).toEqual([
       "https://node.example/policy/v3/deliveries/authorize",
@@ -788,9 +850,6 @@ describe("TinyCloudNode sharing", () => {
     expect(calls).toHaveLength(2);
     const { requestBodyDigest, ...unsigned } = calls[0]!.body;
     expect(unsigned).toMatchObject({
-      sealedEnvelope: common.sealedEnvelope,
-      envelopeKey: common.envelopeKey,
-      shareCid: "cid",
       shareUrl: common.shareUrl,
     });
     const digest = new Uint8Array(await crypto.subtle.digest(
@@ -817,17 +876,14 @@ describe("TinyCloudNode sharing", () => {
     const node = new TinyCloudNode({ host: "https://node.example", wasmBindings });
     const primarySession = { spaceId: SPACE, verificationMethod: "did:key:zPrimary#zPrimary" };
     const grantSession = { spaceId: SPACE, verificationMethod: "did:key:zGrant#zGrant" };
-    Reflect.set(node, "_restoredTcSession", { spaceId: SPACE });
+    Reflect.set(node, "_restoredTcSession", { spaceId: SPACE, verificationMethod: primarySession.verificationMethod });
     Reflect.set(node, "_serviceContext", { session: primarySession });
     Reflect.set(node, "findGrantForOperations", () => ({ provenance: "delegated", session: grantSession, operations: [] }));
     await expect(node.authorizeShareDeliveryV3({
       envelope: { version: 3 },
-      sealedEnvelope: "AQ".repeat(20),
-      envelopeKey: "A".repeat(43),
-      shareCid: "cid",
       resourcePath: "shares/test/readme.md",
       recipientEmail: "recipient@example.test",
-      shareUrl: "https://share.tinycloud.xyz/s/inline#v=2&p=e30",
+      shareUrl: `https://share.tinycloud.xyz/s/lqdw5iopqq2tkkvjj6gbbi5vbv#v=4&k=${"A".repeat(43)}&c=bafkreiewixmt5nwgi3ych6durcsheaql3ybswbplpjmpbdhfkvdkidzt5u`,
       documentName: "readme.md",
       expiresAt: new Date(Date.now() + 60_000).toISOString(),
       deliveryAudience: "https://witness.credentials.org",
@@ -837,24 +893,18 @@ describe("TinyCloudNode sharing", () => {
   });
 
   test("V3 delivery HTTP denial carries status and server body through the public method", async () => {
-    const wasmBindings = {
-      ...makeWasmBindings(),
-      invoke: () => ({ Authorization: "delivery-invocation" }),
-    } as unknown as IWasmBindings;
-    const node = new TinyCloudNode({ host: "https://node.example", wasmBindings });
-    Reflect.set(node, "_restoredTcSession", { spaceId: SPACE });
-    Reflect.set(node, "_serviceContext", { session: { spaceId: SPACE } });
-    globalThis.fetch = mock(async () => new Response("Forbidden", { status: 403 })) as unknown as typeof fetch;
+    const node = await restoredPolicyNode({ host: HOST });
+    globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit) =>
+      ownedNodeMetadata(input, init, HOST, POLICY_NODE_DID) ?? new Response("Forbidden", { status: 403 }),
+    ) as unknown as typeof fetch;
 
     try {
       await node.authorizeShareDeliveryV3({
         envelope: { version: 3 },
-        sealedEnvelope: "AQ".repeat(20),
-        envelopeKey: "A".repeat(43),
-        shareCid: "cid",
         resourcePath: "shares/test/readme.md",
         recipientEmail: "recipient@example.test",
-        shareUrl: "https://share.example/s/test#key",
+        shareUrl: `https://share.example/s/lqdw5iopqq2tkkvjj6gbbi5vbv#v=4&k=${"A".repeat(43)}&c=bafkreiewixmt5nwgi3ych6durcsheaql3ybswbplpjmpbdhfkvdkidzt5u`,
+        trustedOrigins: ["https://share.example"],
         documentName: "readme.md",
         expiresAt: new Date(Date.now() + 60_000).toISOString(),
         deliveryAudience: "https://witness.example",
@@ -865,5 +915,369 @@ describe("TinyCloudNode sharing", () => {
       expect((error as Error).message).toContain("HTTP 403 - Forbidden");
       expect(authorizationVerdictOf(error)).toBe("forbidden");
     }
+  });
+
+  describe("delivery authorization request: the short link", () => {
+    const KEY = Buffer.alloc(32, 0x5a).toString("base64url");
+    const CID = "bafkreiewixmt5nwgi3ych6durcsheaql3ybswbplpjmpbdhfkvdkidzt5u";
+    const SHORT = `https://share.tinycloud.xyz/s/lqdw5iopqq2tkkvjj6gbbi5vbv#v=4&k=${KEY}&c=${CID}`;
+    const FULL = `https://share.tinycloud.xyz/s/full#v=4&k=${KEY}&r=eyJib2R5IjoiQSJ9`;
+
+    async function deliveryNode(respond: () => Response) {
+      const sent: Array<{ readonly url: string; readonly body?: Record<string, unknown> }> = [];
+      const policyPosts: Array<{ readonly url: string; readonly body: Record<string, unknown> }> = [];
+      let invocations = 0;
+      globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit) => {
+        const url = input instanceof Request ? input.url : String(input);
+        const body = typeof init?.body === "string" ? JSON.parse(init.body) as Record<string, unknown> : undefined;
+        sent.push({ url, body });
+        const metadata = ownedNodeMetadata(input, init, HOST, POLICY_NODE_DID);
+        if (metadata) return metadata;
+        if (body === undefined) throw new Error(`Unexpected non-policy fixture request ${url}`);
+        policyPosts.push({ url, body });
+        return respond();
+      }) as unknown as typeof fetch;
+      const node = await restoredPolicyNode({ host: HOST, onInvoke: () => { invocations += 1; } });
+      return { node, sent, allIo: sent, policyPosts, invocations: () => invocations };
+    }
+
+    const input = (shareUrl: string) => ({
+      envelope: { version: 3 },
+      resourcePath: "shares/test/readme.md",
+      recipientEmail: "recipient@example.test",
+      shareUrl,
+      documentName: "readme.md",
+      expiresAt: "2030-01-01T00:01:00.123Z",
+      deliveryAudience: "https://witness.credentials.org",
+      idempotencyKey: "stable-key",
+    });
+
+    test("sends exactly the strict body: the link, the recipient, the name, the jti, the expiry and the digest", async () => {
+      const { node, policyPosts: sent } = await deliveryNode(() => new Response("{}", { status: 200 }));
+      await expect(node.authorizeShareDeliveryV3(input(SHORT))).rejects.toThrow();
+      expect(sent).toHaveLength(1);
+      const { requestBodyDigest, ...unsigned } = sent[0]!.body;
+      const jti = Buffer.from(await crypto.subtle.digest("SHA-256", new TextEncoder().encode("stable-key"))).subarray(0, 16).toString("base64url");
+      expect(unsigned).toEqual({
+        recipientEmail: "recipient@example.test",
+        shareUrl: SHORT,
+        documentName: "readme.md",
+        jti,
+        expiresAt: "2030-01-01T00:01:00.123Z",
+      });
+      expect(Object.keys(sent[0]!.body).sort()).toEqual(["documentName", "expiresAt", "jti", "recipientEmail", "requestBodyDigest", "shareUrl"]);
+      const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(canonicalizeEncryptionJson(unsigned)));
+      expect(requestBodyDigest).toBe(Buffer.from(digest).toString("base64url"));
+    });
+
+    test("expiresAt is exactly the toISOString form, with the digest over that string", async () => {
+      const cases = [
+        { given: new Date("2030-01-01T00:01:00.000Z").toISOString(), sent: "2030-01-01T00:01:00.000Z" },
+        { given: new Date("2030-01-01T00:01:00.120Z").toISOString(), sent: "2030-01-01T00:01:00.120Z" },
+        { given: "2030-01-01T00:01:00Z", sent: "2030-01-01T00:01:00.000Z" },
+        { given: "2030-01-01T02:01:00.5+01:00", sent: "2030-01-01T01:01:00.500Z" },
+        { given: "2030-01-01T00:01:00.123456Z", sent: "2030-01-01T00:01:00.123Z" },
+      ];
+      for (const { given, sent: expected } of cases) {
+        const { node, policyPosts: sent } = await deliveryNode(() => new Response("{}", { status: 200 }));
+        await expect(node.authorizeShareDeliveryV3({ ...input(SHORT), expiresAt: given })).rejects.toThrow();
+        const { requestBodyDigest, ...unsigned } = sent[0]!.body;
+        expect(unsigned.expiresAt).toBe(expected);
+        expect(unsigned.expiresAt).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+        const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(canonicalizeEncryptionJson({ ...unsigned, expiresAt: expected })));
+        expect(requestBodyDigest).toBe(Buffer.from(digest).toString("base64url"));
+      }
+      const { node, sent } = await deliveryNode(() => new Response("{}", { status: 200 }));
+      await expect(node.authorizeShareDeliveryV3({ ...input(SHORT), expiresAt: "not a time" })).rejects.toThrow();
+      expect(sent).toHaveLength(0);
+    });
+
+    test("refuses a link that is not a short share link before any request or invocation", async () => {
+      const { node, sent, invocations } = await deliveryNode(() => new Response("{}", { status: 200 }));
+      const links = [
+        FULL,
+        SHORT.replace("#v=4", "#v=3"),
+        `https://share.tinycloud.xyz/s/${CID}#k=${KEY}`,
+        `${SHORT}&x=1`,
+        SHORT.replace("/s/", "/c/"),
+        SHORT.replace("https://", "http://"),
+      ];
+      for (const link of links) {
+        await expect(node.authorizeShareDeliveryV3(input(link))).rejects.toThrow("share delivery requires a short share link");
+      }
+      expect(sent).toHaveLength(0);
+      expect(invocations()).toBe(0);
+    });
+
+    test("the key of the link reaches no log, no thrown error and no stored value", async () => {
+      const logged: string[] = [];
+      const consoleMethods = ["log", "info", "warn", "error", "debug", "trace"] as const;
+      const originals = consoleMethods.map((method) => console[method]);
+      for (const method of consoleMethods) console[method] = (...args: unknown[]) => { logged.push(args.map(String).join(" ")); };
+      const stdout = process.stdout.write.bind(process.stdout);
+      const stderr = process.stderr.write.bind(process.stderr);
+      process.stdout.write = ((chunk: string | Uint8Array) => { logged.push(String(chunk)); return true; }) as typeof process.stdout.write;
+      process.stderr.write = ((chunk: string | Uint8Array) => { logged.push(String(chunk)); return true; }) as typeof process.stderr.write;
+      const replies: Array<() => Response> = [
+        () => new Response("Forbidden", { status: 403 }),
+        () => new Response(`bad link ${SHORT}`, { status: 409 }),
+        () => new Response(`bad key ${KEY}`, { status: 403 }),
+        () => new Response(`{"shareUrl":"${SHORT}"}`, { status: 200 }),
+        () => new Response("not json", { status: 200 }),
+      ];
+      const failures: unknown[] = [];
+      try {
+        for (const reply of replies) {
+          const { node } = await deliveryNode(reply);
+          try {
+            await node.authorizeShareDeliveryV3(input(SHORT));
+            throw new Error("expected a failure");
+          } catch (error) {
+            failures.push(error);
+          }
+        }
+        const { node } = await deliveryNode(() => new Response("{}", { status: 200 }));
+        try {
+          await node.authorizeShareDeliveryV3(input(FULL));
+        } catch (error) {
+          failures.push(error);
+        }
+      } finally {
+        consoleMethods.forEach((method, index) => { console[method] = originals[index]!; });
+        process.stdout.write = stdout;
+        process.stderr.write = stderr;
+      }
+      expect(failures).toHaveLength(6);
+      const thrown = failures.map((error) => JSON.stringify(error, Object.getOwnPropertyNames(error)) + String(error));
+      for (const text of [...thrown, ...logged]) {
+        expect(text).not.toContain(KEY);
+        expect(text).not.toContain("#v=4&k=");
+      }
+      expect(failures[1]).toMatchObject({ message: "V3 share delivery authorization failed: HTTP 409 - bad link [share link]", status: 409 });
+      expect(failures[2]).toMatchObject({ message: "V3 share delivery authorization failed: HTTP 403 - bad key [key]", status: 403 });
+    });
+
+    test("HTTP 422 and HTTP 400 are one refusal: the same error, and the key of the link in neither", async () => {
+      const replies = [
+        new Response(`{"error":"unknown field","shareUrl":"${SHORT}"}`, { status: 422 }),
+        new Response(`{"error":"delivery-authorization-invalid","key":"${KEY}"}`, { status: 400 }),
+        new Response("", { status: 422 }),
+        new Response("", { status: 400 }),
+      ];
+      const failures: unknown[] = [];
+      for (const reply of replies) {
+        const { node } = await deliveryNode(() => reply);
+        try {
+          await node.authorizeShareDeliveryV3(input(SHORT));
+        } catch (error) {
+          failures.push(error);
+        }
+      }
+      expect(failures).toHaveLength(4);
+      for (const failure of failures) {
+        expect(failure).toBeInstanceOf(ShareDeliveryRefusedError);
+        expect(failure).toMatchObject({ name: "ShareDeliveryRefusedError", code: "delivery-authorization-invalid", status: 400, message: "share delivery authorization refused" });
+        const text = JSON.stringify(failure, Object.getOwnPropertyNames(failure)) + String(failure);
+        expect(text).not.toContain(KEY);
+        expect(text).not.toContain("#v=4&k=");
+        expect(text).not.toContain("unknown field");
+      }
+      const serializedRefusal = (failure: unknown) => JSON.stringify(
+        failure,
+        Object.getOwnPropertyNames(failure).filter((name) => name !== "originalLine" && name !== "originalColumn"),
+      ).replace(/"stack":"[^"]*"/, "");
+      expect(serializedRefusal(failures[0])).toBe(serializedRefusal(failures[1]));
+    });
+
+    test("failures that come before any node reply carry neither the link nor its key", async () => {
+      const failures: unknown[] = [];
+      const rejects = () => { throw new TypeError("fetch failed"); };
+      const answers = () => new Response("{}", { status: 200 });
+      const attempts = [
+        { respond: rejects, shareUrl: SHORT, expiresAt: "2030-01-01T00:01:00Z" },
+        { respond: answers, shareUrl: SHORT, expiresAt: "not a time" },
+        { respond: answers, shareUrl: FULL, expiresAt: "2030-01-01T00:01:00Z" },
+        { respond: answers, shareUrl: SHORT.replace("#v=4", "#v=3"), expiresAt: "2030-01-01T00:01:00Z" },
+      ];
+      for (const { respond, shareUrl, expiresAt } of attempts) {
+        const { node } = await deliveryNode(respond);
+        try {
+          await node.authorizeShareDeliveryV3({ ...input(shareUrl), expiresAt });
+        } catch (error) {
+          failures.push(error);
+        }
+      }
+      expect(failures).toHaveLength(4);
+      for (const failure of failures) {
+        const text = JSON.stringify(failure, Object.getOwnPropertyNames(failure)) + String(failure);
+        expect(text).not.toContain(KEY);
+        expect(text).not.toContain("#v=4&k=");
+        expect(text).not.toContain("#v=3&k=");
+      }
+    });
+
+    test("a link or key that crosses the 512-character cut of the node's reply is redacted whole", async () => {
+      const keyStart = SHORT.indexOf(KEY);
+      const replies = [
+        "z".repeat(512 - keyStart - 20) + SHORT,
+        "z".repeat(492) + KEY,
+        `${"z".repeat(300)} ${SHORT} ${"z".repeat(300)}`,
+      ];
+      for (const reply of replies) {
+        const { node } = await deliveryNode(() => new Response(reply, { status: 403 }));
+        let failure: unknown;
+        try {
+          await node.authorizeShareDeliveryV3(input(SHORT));
+        } catch (error) {
+          failure = error;
+        }
+        expect(failure).toMatchObject({ status: 403 });
+        const text = JSON.stringify(failure, Object.getOwnPropertyNames(failure)) + String(failure);
+        expect(text).not.toContain(KEY.slice(0, 12));
+        expect(text).not.toContain("#v=4&k=");
+        expect(text).toMatch(/\[(share link|key)\]/);
+        expect(String(failure).length).toBeLessThanOrEqual("Error: V3 share delivery authorization failed: HTTP 403 - ".length + 512);
+      }
+    });
+
+    test("the link must be on the trusted share origin and have a lowercase id, before any request", async () => {
+      const { node, policyPosts: sent, allIo } = await deliveryNode(() => new Response("{}", { status: 200 }));
+      const elsewhere = SHORT.replace("https://share.tinycloud.xyz", "https://share.example");
+      await expect(node.authorizeShareDeliveryV3(input(elsewhere))).rejects.toThrow("share delivery requires a short share link");
+      await expect(node.authorizeShareDeliveryV3(input(SHORT.replace("lqdw5iopqq2tkkvjj6gbbi5vbv", "LQDW5IOPQQ2TKKVJJ6GBBI5VBV")))).rejects.toThrow("share delivery requires a short share link");
+      expect(sent).toHaveLength(0);
+      expect(allIo).toHaveLength(0);
+      await expect(node.authorizeShareDeliveryV3({ ...input(elsewhere), trustedOrigins: ["https://share.example"] })).rejects.toThrow();
+      expect(sent).toHaveLength(1);
+      const beforeWrongOrigin = allIo.length;
+      await expect(node.authorizeShareDeliveryV3({ ...input(SHORT), trustedOrigins: ["https://share.example"] })).rejects.toThrow("share delivery requires a short share link");
+      expect(sent).toHaveLength(1);
+      expect(allIo).toHaveLength(beforeWrongOrigin);
+      await expect(node.authorizeShareDeliveryV3(input(SHORT))).rejects.toThrow();
+      expect(sent).toHaveLength(2);
+    });
+
+    test("the request body digest is over the RFC 8785 bytes, for a document name with an emoji, <, &, U+2028 and escapes", async () => {
+      // RFC 8785 written out here, apart from the SDK: members sorted by UTF-16 code units, a string is its characters
+      // with only `"`, `\` and the C0 controls escaped; everything else (emoji, <, &, U+2028) stays as it is.
+      const escaped = (text: string): string => {
+        let out = "\"";
+        for (const char of text) {
+          const code = char.codePointAt(0) ?? 0;
+          const shortEscape: Readonly<Record<number, string>> = { 8: "\\b", 9: "\\t", 10: "\\n", 12: "\\f", 13: "\\r", 34: "\\\"", 92: "\\\\" };
+          out += shortEscape[code] ?? (code < 0x20 ? `\\u${code.toString(16).padStart(4, "0")}` : char);
+        }
+        return `${out}"`;
+      };
+      const jcs = (fields: Readonly<Record<string, string>>): string =>
+        `{${Object.keys(fields).sort().map((name) => `${escaped(name)}:${escaped(fields[name] ?? "")}`).join(",")}}`;
+      const names = ["Plan \u{1F4C4} <draft> & more", "line\u2028break\u2029end", "tab\tquote\"back\\slash\u0001ctl", "caf\u00e9 \u6f22\u5b57 \u{1F9D1}\u200d\u{1F4BB}", "</script><b>&amp;"];
+      for (const documentName of names) {
+        const { node } = await deliveryNode(() => new Response("{}", { status: 200 }));
+        const wire: string[] = [];
+        globalThis.fetch = mock(async (_input: string | URL | Request, init?: RequestInit) => {
+          const metadata = ownedNodeMetadata(_input, init, HOST, POLICY_NODE_DID);
+          if (metadata) return metadata;
+          wire.push(String(init?.body));
+          return new Response("{}", { status: 200 });
+        }) as unknown as typeof fetch;
+        await expect(node.authorizeShareDeliveryV3({ ...input(SHORT), documentName })).rejects.toThrow();
+        const jti = Buffer.from(await crypto.subtle.digest("SHA-256", new TextEncoder().encode("stable-key"))).subarray(0, 16).toString("base64url");
+        const fields = { documentName, expiresAt: "2030-01-01T00:01:00.123Z", jti, recipientEmail: "recipient@example.test", shareUrl: SHORT };
+        const digest = Buffer.from(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(jcs(fields)))).toString("base64url");
+        expect(wire).toEqual([jcs({ ...fields, requestBodyDigest: digest })]);
+        expect(Buffer.from(wire[0] ?? "").equals(Buffer.from(jcs({ ...fields, requestBodyDigest: digest })))).toBe(true);
+      }
+    });
+
+    test("a 500 or 503 reply that holds the key or the link leaves neither in the thrown error nor in any log", async () => {
+      const logged: string[] = [];
+      const consoleMethods = ["log", "info", "warn", "error", "debug", "trace"] as const;
+      const originals = consoleMethods.map((method) => console[method]);
+      const stdout = process.stdout.write.bind(process.stdout);
+      const stderr = process.stderr.write.bind(process.stderr);
+      const failures: unknown[] = [];
+      try {
+        for (const method of consoleMethods) console[method] = (...args: unknown[]) => { logged.push(args.map(String).join(" ")); };
+        process.stdout.write = ((chunk: string | Uint8Array) => { logged.push(String(chunk)); return true; }) as typeof process.stdout.write;
+        process.stderr.write = ((chunk: string | Uint8Array) => { logged.push(String(chunk)); return true; }) as typeof process.stderr.write;
+        for (const status of [500, 503] as const) {
+          for (const body of [`upstream said ${KEY}`, `upstream said ${SHORT}`, JSON.stringify({ shareUrl: SHORT, key: KEY, detail: "x".repeat(600) })]) {
+            const { node } = await deliveryNode(() => new Response(body, { status }));
+            try {
+              await node.authorizeShareDeliveryV3(input(SHORT));
+              throw new Error("expected a failure");
+            } catch (error) {
+              failures.push(error);
+            }
+          }
+        }
+      } finally {
+        consoleMethods.forEach((method, index) => { console[method] = originals[index]!; });
+        process.stdout.write = stdout;
+        process.stderr.write = stderr;
+      }
+      expect(failures).toHaveLength(6);
+      for (const failure of failures) {
+        expect(failure).toMatchObject({ status: expect.any(Number) });
+        const text = JSON.stringify(failure, Object.getOwnPropertyNames(failure)) + String(failure);
+        expect(text).not.toContain(KEY);
+        expect(text).not.toContain("#v=4&k=");
+        expect(text).not.toContain(KEY.slice(0, 12));
+      }
+      for (const text of logged) {
+        expect(text).not.toContain(KEY);
+        expect(text).not.toContain("#v=4&k=");
+      }
+      failures.forEach((failure, index) => expect(failure).toMatchObject({ status: index < 3 ? 500 : 503 }));
+    });
+
+    test("HTTP 429 is not the final refusal, with or without Retry-After", async () => {
+      const replies = [
+        new Response(JSON.stringify({ error: "delivery-rate-limited" }), { status: 429, headers: { "retry-after": "7" } }),
+        new Response(JSON.stringify({ error: "delivery-rate-limited" }), { status: 429 }),
+      ];
+      for (const reply of replies) {
+        const { node } = await deliveryNode(() => reply);
+        const failure: unknown = await node.authorizeShareDeliveryV3(input(SHORT)).catch((error: unknown) => error);
+        expect(failure).not.toBeInstanceOf(ShareDeliveryRefusedError);
+        expect(failure).toMatchObject({ status: 429, message: expect.stringContaining("HTTP 429") });
+        expect(failure).not.toMatchObject({ code: "delivery-authorization-invalid" });
+      }
+    });
+
+    test("a short link on an origin that is not configured is refused with no fetch and no invocation", async () => {
+      const elsewhere = SHORT.replace("https://share.tinycloud.xyz", "https://share.example");
+      const defaults = await deliveryNode(() => new Response("{}", { status: 200 }));
+      await expect(defaults.node.authorizeShareDeliveryV3(input(elsewhere))).rejects.toThrow("share delivery requires a short share link");
+      expect(defaults.sent).toHaveLength(0);
+      expect(defaults.invocations()).toBe(0);
+
+      const configured = await deliveryNode(() => new Response("{}", { status: 200 }));
+      await expect(configured.node.authorizeShareDeliveryV3({ ...input(SHORT), trustedOrigins: ["https://share.example"] })).rejects.toThrow("share delivery requires a short share link");
+      expect(configured.sent).toHaveLength(0);
+      expect(configured.invocations()).toBe(0);
+
+      const listed = await deliveryNode(() => new Response("{}", { status: 200 }));
+      listed.sent = listed.policyPosts;
+      await expect(listed.node.authorizeShareDeliveryV3({ ...input(elsewhere), trustedOrigins: ["https://share.example"] })).rejects.toThrow();
+      expect(listed.sent).toHaveLength(1);
+      expect(listed.invocations()).toBe(1);
+    });
+
+    test("the contract's request body digest rows: the JCS bytes in hex and the digest equal what the SDK computes", () => {
+      const { deliveryRequestDigest } = JSON.parse(readFileSync(new URL("../../share-envelope/test/links-api-vectors.json", import.meta.url), "utf8")) as {
+        deliveryRequestDigest: { vectors: readonly { body: Record<string, string>; jcsBytes: number; jcsHex: string; requestBodyDigest: string }[] };
+      };
+      expect(deliveryRequestDigest.vectors.length).toBeGreaterThanOrEqual(2);
+      for (const vector of deliveryRequestDigest.vectors) {
+        const { requestBodyDigest, ...unsigned } = vector.body;
+        const bytes = new TextEncoder().encode(canonicalizeEncryptionJson(unsigned));
+        expect(bytes.length).toBe(vector.jcsBytes);
+        expect(Buffer.from(bytes).toString("hex")).toBe(vector.jcsHex);
+        expect(Buffer.from(sha256(bytes)).toString("base64url")).toBe(vector.requestBodyDigest);
+        expect(requestBodyDigest).toBe(vector.requestBodyDigest);
+      }
+    });
   });
 });

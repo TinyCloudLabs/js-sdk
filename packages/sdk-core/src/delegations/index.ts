@@ -42,6 +42,7 @@ export {
 
   // Delegation types
   Delegation,
+  RenewalStampHistory,
   DelegationStatus,
   DelegationRevocationReceipt,
   AccountDelegationResource,
@@ -54,6 +55,7 @@ export {
 
   // Configuration types
   DelegationManagerConfig,
+  SessionInvocationSigner,
   KeyProvider,
 
   // v2 types for CapabilityKeyRegistry
@@ -81,11 +83,20 @@ export {
 
 // Classes
 export { DelegationManager } from "./DelegationManager";
+export { assertRenewalNodeIdentity, verifyRenewalHistory } from "./renewal";
+export type {
+  RenewalNodeIdentity,
+  RenewalStampHistoryEntry,
+  VerifyRenewalHistoryInput,
+  VerifiedRenewalHistory,
+} from "./renewal";
 
 // v2 SharingService
 export {
   SharingService,
   createSharingService,
+  inspectShareToken,
+  InspectedShareToken,
   ISharingService,
   ShareDelegationPreflight,
   SharingServiceConfig,
@@ -171,7 +182,10 @@ export type {
 export {
   CREDENTIAL_INVITATION_REQUEST_DOMAIN,
   DELIVERY_ADMISSION_DOMAIN,
-  validateShareDeliveryAuthorizationV3Bytes,
+  ShareDeliveryRefusedError,
+  shortDeliveryLinkBodyCid,
+  verifyShareDeliveryAuthorizationV3Bytes,
+  withoutShareLink,
 } from "./share-delivery-v3";
 export type {
   ShareDeliveryAuthorizationV3Request,
@@ -192,6 +206,7 @@ export {
   authorizationMethodForTarget,
   notifyShare,
   revokeShare,
+  ShareRevocationIncompleteError,
   listShares,
   showShare,
   publishTargetShare,
@@ -213,6 +228,8 @@ export type {
   ShareDeliveryAdapter,
   ShareRevocationResult,
   ShareRevocationAdapter,
+  ShareRootRevocationFailure,
+  ShareRootRevocationState,
   ShareHistoryView,
   ShareTarget,
   TargetPublishInput,

@@ -100,6 +100,18 @@ const resolveConfig = {
   },
 };
 
+// The links reader of `@tinycloud/share-envelope` is its own file, loaded by an `import()` when a share link is first
+// resolved or published. It stays a package import (the bundle does not carry it), like the replica deferred imports
+// below; `@tinycloud/share-envelope` is a dependency of this package.
+const LINKS_REQUEST = "@tinycloud/share-envelope/links";
+const linksExternal = ({ request }, callback) => {
+  if (request === LINKS_REQUEST) {
+    callback(null, `import ${request}`);
+    return;
+  }
+  callback();
+};
+
 const baseConfig = {
   mode: isProduction ? "production" : "development",
   target: "web",
@@ -107,6 +119,7 @@ const baseConfig = {
   devtool: isProduction ? false : 'source-map',
   module: { rules },
   resolve: resolveConfig,
+  externals: [linksExternal],
   optimization: {
     splitChunks: false,
     runtimeChunk: false,
@@ -152,6 +165,8 @@ const cjsConfig = {
     library: {
       type: "commonjs2",
     },
+    // The deferred import of the links reader is a real `import()` in the CommonJS bundle too.
+    environment: { dynamicImport: true },
   },
 };
 
@@ -164,6 +179,10 @@ const replicaExternals = (moduleType) => ({ context, request }, callback) => {
   }
   if (request === "./replica-gated" && context === path.resolve(__dirname, "src")) {
     callback(null, `${moduleType} @tinycloud/web-sdk/replica-gated`);
+    return;
+  }
+  if (request === LINKS_REQUEST) {
+    callback(null, `import ${request}`);
     return;
   }
   if (request && /^@tinycloud\/replica(?:\/|$)/.test(request)) {
@@ -220,26 +239,190 @@ const gatedCjsConfig = {
   output: { ...replicaCjsConfig.output, filename: "replica-gated.cjs" },
 };
 
+// The lazy chunks are their own entries (contracts-ade §1.4 budget applies to the eager root only).
+// The root loads each by relative sibling path, at first use, and never bundles it.
+const LAZY_ENTRIES = [
+  { request: "./panel-entry", dir: "src/ui", file: "panel" },
+  { request: "./panel-data-entry", dir: "src/ui", file: "panel-data" },
+  { request: "./modals-entry", dir: "src/notifications", file: "modals" },
+];
+// sdk-core's DelegationManager loads its issued-delegation code by the package's own subpath. That code is the
+// `delegations-issued` lazy entry, so any bundle that carries the manager loads it by relative sibling path.
+const isIssuedDelegationsRequest = ({ context, request }) =>
+  request === "@tinycloud/sdk-core/delegations/issued" && context === path.resolve(__dirname, "../sdk-core/dist");
+const issuedDelegationsExternal = (type, ext) => (data, callback) => {
+  if (isIssuedDelegationsRequest(data)) {
+    callback(null, `${type} ./delegations-issued.${ext}`);
+    return;
+  }
+  callback();
+};
+const lazyLoaderExternals = (type, ext) => ({ context, request }, callback) => {
+  if (request === "../registry-verdict-cache-entry" && context === path.resolve(__dirname, "src/modules")) {
+    callback(null, `${type} ./registry-verdict-cache.${ext}`);
+    return;
+  }
+  if (request === "@tinycloud/sdk-core/share-placement" && context === path.resolve(__dirname, "../node-sdk/dist")) {
+    callback(null, `${type} ./share-placement.${ext}`);
+    return;
+  }
+  if (request === "./encryption-keys.js" && context === path.resolve(__dirname, "../node-sdk/dist")) {
+    callback(null, `${type} ./encryption-keys.${ext}`);
+    return;
+  }
+  // The hosting probe is its own file: the root carries only the call that loads it.
+  if (request === "./space-hosting.js" && context === path.resolve(__dirname, "../node-sdk/dist")) {
+    callback(null, `${type} ./space-hosting.${ext}`);
+    return;
+  }
+  // The signing half of runtime grants and the secret reads are their own files, loaded on first use.
+  if (request === "./runtime-grants.js" && context === path.resolve(__dirname, "../node-sdk/dist")) {
+    callback(null, `${type} ./runtime-grants.${ext}`);
+    return;
+  }
+  if (request === "./secret-read.js" && context === path.resolve(__dirname, "../node-sdk/dist")) {
+    callback(null, `${type} ./secret-read.${ext}`);
+    return;
+  }
+  if (isIssuedDelegationsRequest({ context, request })) {
+    callback(null, `${type} ./delegations-issued.${ext}`);
+    return;
+  }
+  if (request === "@tinycloud/sdk-core/delegations/renewal" && context === path.resolve(__dirname, "../node-sdk/dist")) {
+    callback(null, `${type} ./delegations-renewal.${ext}`);
+    return;
+  }
+  const entry = LAZY_ENTRIES.find((e) => e.request === request && context === path.resolve(__dirname, e.dir));
+  if (entry) {
+    callback(null, `${type} ./${entry.file}.${ext}`);
+    return;
+  }
+  callback();
+};
+
+// The panel code keeps @tinycloud/* external, like the replica entries. The dialogs do not: they import runtime
+// constants from @tinycloud/sdk-core, and a bare import in a chunk loaded at the first prompt would not resolve for a
+// page that loads the SDK without a bundler. So only imports made from src/ui are external.
+const lazyExternals = (moduleType, ext) => ({ context, request }, callback) => {
+  const uiDir = path.resolve(__dirname, "src/ui");
+  if (request && /^@tinycloud\//.test(request) && context && context.startsWith(uiDir)) {
+    callback(null, `${moduleType} ${request}`);
+    return;
+  }
+  // The panel shares the eager root's panel-data singleton, so both loaders see one live source.
+  if (request === "./panel-data-entry" && context === uiDir) {
+    callback(null, `${moduleType} ./panel-data.${ext}`);
+    return;
+  }
+  callback();
+};
+
+const rootEsmConfig = { ...esmConfig, externals: [linksExternal, lazyLoaderExternals("import", "mjs")] };
+const rootCjsConfig = {
+  ...cjsConfig,
+  externals: [linksExternal, lazyLoaderExternals("commonjs", "cjs")],
+  output: { ...cjsConfig.output, environment: { dynamicImport: true } },
+};
+
+// The lazy entries share one compilation per format: they share most of their module graph, and a compilation per
+// entry runs the build out of memory at the default heap.
+const lazyEntries = {
+  panel: "./src/ui/panel-entry.ts",
+  "panel-data": "./src/ui/panel-data-entry.ts",
+  modals: "./src/notifications/modals-entry.ts",
+  "encryption-keys": "./src/encryption-keys-entry.ts",
+  "space-hosting": "./src/space-hosting-entry.ts",
+  "runtime-grants": "./src/runtime-grants-entry.ts",
+  "secret-read": "./src/secret-read-entry.ts",
+  "registry-verdict-cache": "./src/registry-verdict-cache-entry.ts",
+  "delegations-issued": "./src/delegations-issued-entry.ts",
+  "delegations-renewal": "./src/delegations-renewal-entry.ts",
+};
+const notChunkLimit = (plugin) => !(plugin instanceof webpack.optimize.LimitChunkCountPlugin);
+
+// CACAO verification uses viem's deferred secp256k1 import. Keep that primitive
+// inside the already-lazy entry: a second webpack chunk creates a computed import
+// whose downstream context includes declaration files in dist/.
+const lazyModule = {
+  ...baseConfig.module,
+  rules: [...rules, {
+    test: /[\\/]viem[\\/]_esm[\\/]utils[\\/]signature[\\/]recoverPublicKey\.js$/,
+    parser: { dynamicImportMode: "eager" },
+  }],
+};
+
+const lazyEsmConfig = {
+  ...esmConfig,
+  module: lazyModule,
+  entry: lazyEntries,
+  externals: lazyExternals("module", "mjs"),
+  plugins: esmConfig.plugins.filter(notChunkLimit),
+  output: { ...esmConfig.output, filename: "[name].mjs" },
+};
+
+const lazyCjsConfig = {
+  ...cjsConfig,
+  module: lazyModule,
+  entry: lazyEntries,
+  externals: lazyExternals("commonjs", "cjs"),
+  plugins: cjsConfig.plugins.filter(notChunkLimit),
+  output: { ...cjsConfig.output, filename: "[name].cjs" },
+};
+
+const sharePlacementConfig = (config, type, ext) => ({
+  ...config,
+  module: lazyModule,
+  entry: "./src/share-placement-entry.ts",
+  externals: ({ context, request }, callback) => {
+    if (request === "./index" && context === path.resolve(__dirname, "src")) {
+      callback(null, `${type} ./index.${ext}`);
+      return;
+    }
+    callback();
+  },
+  plugins: [...config.plugins, new webpack.NormalModuleReplacementPlugin(
+    /^@tinycloud\/sdk-core$/,
+    path.resolve(__dirname, "src/share-placement-core-bridge.ts")
+  )],
+  output: { ...config.output, filename: `share-placement.${ext}` },
+});
+
 // Headless subpath (`@tinycloud/web-sdk/credentials`). Built from the base
 // configs only: no replica externals or plugins, so index/replica are unchanged.
+// `@tinycloud/sdk-core` (every subpath) stays a package import here, not a second bundled copy: the held
+// store takes an `IssuerSet` and throws `CredentialError` / `HeldCredentialError`, and those must be the same
+// objects as the ones a consumer imports from `@tinycloud/sdk-core`. It is a dependency of this package.
+const sdkCoreExternal = (type) => ({ request }, callback) => {
+  if (request && /^@tinycloud\/sdk-core(?:\/|$)/.test(request)) {
+    callback(null, `${type} ${request}`);
+    return;
+  }
+  callback();
+};
 const credentialsEsmConfig = {
   ...esmConfig,
   entry: "./src/credentials-subpath.ts",
+  externals: [linksExternal, sdkCoreExternal("module")],
   output: { ...esmConfig.output, filename: "credentials.mjs" },
 };
 const credentialsCjsConfig = {
   ...cjsConfig,
   entry: "./src/credentials-subpath.ts",
+  externals: [linksExternal, sdkCoreExternal("commonjs")],
   output: { ...cjsConfig.output, filename: "credentials.cjs" },
 };
 
 module.exports = [
-  esmConfig,
-  cjsConfig,
+  rootEsmConfig,
+  rootCjsConfig,
   replicaEsmConfig,
   replicaCjsConfig,
   gatedEsmConfig,
   gatedCjsConfig,
+  lazyEsmConfig,
+  lazyCjsConfig,
   credentialsEsmConfig,
   credentialsCjsConfig,
+  sharePlacementConfig(esmConfig, "module", "mjs"),
+  sharePlacementConfig(cjsConfig, "commonjs", "cjs"),
 ];

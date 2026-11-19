@@ -1,3 +1,4 @@
+import "../../operations/test-support/test-bootstrap.mjs";
 import { afterEach, describe, expect, mock, test } from "bun:test";
 import {
   AccountService,
@@ -203,6 +204,7 @@ function makeRecoveryHarness(fake: FakeCloud): TinyCloudNode {
     capabilityRequest: undefined,
     lastActivationSkippedSpaceIds: [] as string[],
     hosts: [HOST],
+    resolveResourceDestinations: async () => [{ url: HOST }],
     async createBootstrapSession({ spaceId }: { spaceId: string }) {
       const name = spaceName(spaceId);
       fake.at(`session:${name}`, () => fake.sessions.add(spaceId));
@@ -478,6 +480,28 @@ function installActivationTransport(fake: FakeCloud): void {
 }
 
 describe("TC-393 bootstrap recovery matrix", () => {
+  test("reports a network created by fresh bootstrap only for that sign-in", async () => {
+    const cloud = new FakeCloud();
+    const node = makeRecoveryHarness(cloud);
+    installActivationTransport(cloud);
+
+    await bootstrap(node);
+    expect(node.freshEncryptionNetworkCreated).toBe(true);
+    expect(cloud.encryptionAssumeMissing).toEqual([true]);
+
+    await bootstrap(node);
+    expect(node.freshEncryptionNetworkCreated).toBe(false);
+    expect(cloud.encryptionAssumeMissing).toEqual([true]);
+
+    const repairCloud = new FakeCloud();
+    repairCloud.hostedSpaces.add(bootstrapSpaceId("default"));
+    const repairNode = makeRecoveryHarness(repairCloud);
+    installActivationTransport(repairCloud);
+    await bootstrap(repairNode);
+    expect(repairNode.freshEncryptionNetworkCreated).toBe(false);
+    expect(repairCloud.encryptionAssumeMissing).toEqual([false]);
+  });
+
   for (const boundary of ceremonyFaultPoints) {
     test(`converges after commit-then-throw at ${boundary}`, async () => {
       const fake = new FakeCloud();
@@ -805,6 +829,7 @@ test("bootstrap host and activation failures retain the HTTP verdict", async () 
   Reflect.set(node, "auth", {
     tinyCloudSession: undefined,
     capabilityRequest: undefined,
+    resolveResourceDestinations: async () => [{ url: HOST }],
     createBootstrapSession: async () => session,
     hostOwnedSpaceResult: async () => submitHostDelegation(HOST, {}),
   });
@@ -816,7 +841,7 @@ test("bootstrap host and activation failures retain the HTTP verdict", async () 
     await run.call(node, [hostStep]);
     throw new Error("expected bootstrap host to fail");
   } catch (error) {
-    expect((error as Error).message).toContain("403 - Forbidden");
+    expect(error).toMatchObject({ cause: { success: false, status: 403 } });
     expect(authorizationVerdictOf(error)).toBe("forbidden");
   }
 
@@ -827,7 +852,7 @@ test("bootstrap host and activation failures retain the HTTP verdict", async () 
     await run.call(node, [sessionStep, activationStep]);
     throw new Error("expected bootstrap activation to fail");
   } catch (error) {
-    expect((error as Error).message).toContain("401 - session expired");
+    expect(error).toMatchObject({ cause: { success: false, status: 401 } });
     expect(authorizationVerdictOf(error)).toBe("unauthenticated");
   }
 });

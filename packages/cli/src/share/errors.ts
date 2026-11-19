@@ -22,7 +22,11 @@ export type SharePublishFailure =
   /** The Node answered a share upload 404 "Space not found": the owner space has no row there. Retryable. */
   | { readonly kind: "space-not-ready" }
   /** An addressed share's ceiling includes decrypt on the owner's encryption network; this session does not hold it. Refused before any upload or network call. */
-  | { readonly kind: "decrypt-not-held" };
+  | { readonly kind: "decrypt-not-held" }
+  /** An email share that needs an owner approval would stay readable past the policy root limit the SDK signs with: refused before asking, never shortened. */
+  | { readonly kind: "invite-access-too-long"; readonly requestedDays: number; readonly limitDays: number }
+  /** The sealed envelope was over the link limit after the policy was registered; nothing was linked. `remaining` says what could not be removed. */
+  | { readonly kind: "over-limit"; readonly remaining: readonly string[] };
 
 export class SharePublishAuthorityError extends Error {
   constructor(readonly failure: SharePublishFailure, options?: { readonly cause?: unknown }) {

@@ -5,9 +5,10 @@ import { inspectStoredDelegation, withoutBearer } from "@tinycloud/operations/de
 import type { ProfileConfig } from "../config/types.js";
 import { ExitCode } from "../config/constants.js";
 import { CLIError, cliErrorFromService } from "../output/errors.js";
-import { ensureDelegationAuthority, requirePermissionConsent, type OpenKeyAcquisition } from "../commands/auth.js";
+import { ensureDelegationAuthority, type OpenKeyAcquisition } from "../commands/auth.js";
 import { loadLocalGrantArtifacts, readGrantHistory, type StoredAdditionalDelegation } from "./permissions.js";
 import { lookupOwnerSpaceOnNode } from "./revoke-node-record.js";
+import { issuedFailure, revokeIssuedDelegation } from "../commands/delegation.js";
 
 /**
  * Lifetime of the one-use authority a revoke requests. It only has to outlast
@@ -16,13 +17,13 @@ import { lookupOwnerSpaceOnNode } from "./revoke-node-record.js";
 export const REVOKE_AUTHORITY_EXPIRY = "5m";
 
 type ScopeSource = "local-signed-grant-artifact" | "local-stored-grant" | "node-delegation-record";
-type TargetSource = "node" | "local-grant-history" | ScopeSource;
+type TargetSource = "node" | "node-issued-list" | "local-grant-history" | ScopeSource;
 
 export interface RevocationResult {
   cid: string;
   revoked: true;
   targetSpaceSource: TargetSource;
-  authorityScopeSource: "cid-resource" | ScopeSource;
+  authorityScopeSource: "cid-resource" | "own-session-key" | ScopeSource;
   authorityScopeReason: string;
 }
 
@@ -101,7 +102,6 @@ export async function revokeDelegationOnNode(params: {
   node: TinyCloudNode;
   profile: ProfileConfig;
   cid: string;
-  yes: boolean;
   localTarget?: StoredAdditionalDelegation;
   openKeyAcquisition?: OpenKeyAcquisition;
 }): Promise<RevocationResult> {
@@ -110,7 +110,6 @@ export async function revokeDelegationOnNode(params: {
     service: "tinycloud.delegation", space: `urn:cid:${cid}`, path: "", actions: ["tinycloud.delegation/revoke"],
   };
   const rawAuthorityCovered = node.hasRuntimePermissions([revokePermission]);
-  if (!rawAuthorityCovered) await requirePermissionConsent([revokePermission], params.yes);
 
   let targetFound = params.localTarget?.delegation?.cid === cid;
   let targetSpaceSource: TargetSource = targetFound ? "local-stored-grant" : "node";
@@ -146,9 +145,21 @@ export async function revokeDelegationOnNode(params: {
           cid, node, host: ctx.host,
         });
         if (!boundSpace) {
+          // The account query is closed to this session, but the node still lists what this profile's own key issued
+          // (a `feed connect` grant, for one). If it is there, that key is its delegator and revokes it with no proof.
+          const issued = await node.delegationManager.queryAllIssued({ untilCid: cid });
+          if (issued.ok && issued.data.some((delegation) => delegation.cid === cid)) {
+            await revokeIssuedDelegation(node, ctx, cid);
+            return {
+              cid, revoked: true, targetSpaceSource: "node-issued-list", authorityScopeSource: "own-session-key",
+              authorityScopeReason: "The node lists this delegation as issued by this profile's own key, so that key revoked it.",
+            };
+          }
+          // An old node cannot list issued delegations: the CID stays unknown. Any other failure is reported, never read as "not issued by you".
+          if (!issued.ok && issued.error.code !== "UNSUPPORTED_OPERATION") throw issuedFailure(issued.error, ctx.host);
           throw new CLIError(
             "TARGET_NOT_FOUND",
-            `This profile cannot list the owner's delegations on the node, so it cannot look up "${cid}", and it has no local record of that grant. Use the profile that created the grant, or revoke it from the Delegations screen of the account site (https://account.tinycloud.xyz).`,
+            `This profile can't look up "${cid}": it has no local record of that grant, and the node doesn't list it among the delegations this profile's key issued.`,
             ExitCode.NOT_FOUND,
           );
         }
@@ -167,8 +178,8 @@ export async function revokeDelegationOnNode(params: {
     try {
       const acquired = await ensureDelegationAuthority({
         ctx, profile, node, requested: [revokePermission], expiryOption: REVOKE_AUTHORITY_EXPIRY,
-        reason: `Revoke delegation ${cid}`, yes: params.yes, consentAlreadyGiven: true,
-        persist: false, openKeyAcquisition: params.openKeyAcquisition,
+        persist: false,
+        openKeyAcquisition: params.openKeyAcquisition,
       });
       commandAuthorityCid = acquired?.cid;
     } catch (error) {
@@ -189,6 +200,7 @@ export async function revokeDelegationOnNode(params: {
           "RAW_RECAP_RESOURCE_UNSUPPORTED",
           `Cannot revoke "${cid}": this CLI profile has no record of this grant and the node's record does not match the signed-in owner.`,
           ExitCode.PERMISSION_DENIED,
+          profile.authMethod === "openkey" ? { hint: "This permission can't be revoked from the CLI yet. Revoke it at https://account.tinycloud.xyz/delegations." } : undefined,
         );
       }
       fallbackSpaceId = fallback.space;
@@ -205,10 +217,7 @@ export async function revokeDelegationOnNode(params: {
           space: profile.authMethod !== "openkey" && fallback.space === node.accountSpaceId ? "default" : fallback.space,
           path: "", actions: ["tinycloud.delegation/revoke"] }],
         expiryOption: REVOKE_AUTHORITY_EXPIRY,
-        reason: fallback.source === "node-delegation-record"
-          ? `Revoke delegation ${cid} using the node's record of the owner's grant`
-          : `Revoke delegation ${cid} using its CID-bound owner-signed grant ${fallback.source === "local-stored-grant" ? "record" : "artifact"}`,
-        yes: params.yes, consentAlreadyGiven: true, persist: false,
+        persist: false,
         openKeyAcquisition: params.openKeyAcquisition,
       });
       commandAuthorityCid = acquired?.cid;

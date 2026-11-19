@@ -140,6 +140,21 @@ export type {
 // Context
 export { ServiceContext } from "./context";
 export type { ServiceContextConfig } from "./context";
+export {
+  createResourceRoutingFetch,
+  createResourceTransportInvocationFetch,
+  routeResourceRequest,
+  routingResourceOf,
+  isVaultResourceUri,
+  namesVaultResourceUri,
+  verifyResourceDestination,
+  NodeNotRespondingError,
+  NodeIdentityMismatchError,
+  ResourceNotRoutedError,
+  PartialNodeWriteError,
+  routingFailure,
+} from "./resourceRouting";
+export type { ResourceAccess, ResourceDestination, ResourceNodeInfo, ResourceRoutingConfig, ResourceTransport, ResourceTransportTarget, ResourceTransportOptions } from "./resourceRouting";
 
 // Developer request log
 export type { RequestEvent, RequestLog, RequestLogReader, RequestSink, RequestService } from "./telemetry/requestLog";
@@ -285,6 +300,11 @@ export type {
   ReplicaGuardedStore,
   ReplicaGrantPolicy,
   ReplicaLifecycleGate,
+  ReplicaLocalEraseOutcome,
+  ReplicaPurgeError,
+  ReplicaPurgeFailedEvent,
+  ReplicaPurgeLocalCopyResult,
+  ReplicaPurgeTrigger,
   ReplicaPageAdmission,
   ReplicaPartitionEraser,
   ReplicaPartitionIndexEntry,
@@ -410,6 +430,10 @@ export type {
 
 export {
   SecretsService,
+  DEFAULT_SECRET_TYPE,
+  SECRET_TYPES,
+  isSecretType,
+  secretTypeOf,
   SECRET_NAME_RE,
   canonicalizeSecretScope,
   appSecretScope,
@@ -423,7 +447,9 @@ export {
 export type {
   ISecretsService,
   SecretCatalogEntry,
+  SecretEntry,
   SecretPayload,
+  SecretType,
   SecretsError,
   ParsedSecretCatalogKey,
   ResolvedSecretPath,
@@ -436,6 +462,7 @@ export {
   EncryptionService,
   DecryptTransportResponseError,
   parseNetworkId,
+  parseEncryptionResource,
   buildNetworkId,
   isNetworkId,
   networkDiscoveryKey,
@@ -482,6 +509,7 @@ export type {
   EncryptToNetworkOptions,
   DecryptEnvelopeOptions,
   ParsedNetworkId,
+  ParsedEncryptionResource,
   BuildDecryptInvocationInput,
   BuiltDecryptInvocation,
   CanonicalJson,

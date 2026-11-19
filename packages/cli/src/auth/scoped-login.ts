@@ -1,14 +1,19 @@
+import { EXPIRY, technicalExpiryRefusal } from "@tinycloud/sdk-core";
 import { NodeWasmBindings, signedCompactUcanExpiry, type PermissionEntry } from "@tinycloud/node-sdk";
-import { isLocalOwnerProfile, ownerSessionLacksProof } from "@tinycloud/operations/profile";
+import { isLocalOwnerProfile, liveStoredLease, ownerSessionLacksProof } from "@tinycloud/operations/profile";
+import { CLI_NAME } from "@tinycloud/operations/cli-name";
 import { CLIError } from "../output/errors.js";
 import { ExitCode } from "../config/constants.js";
 import type { ProfileConfig } from "../config/types.js";
 import { parseDuration } from "../lib/duration.js";
 import { normalizePkhIdentifier } from "../lib/space.js";
 import { ENCRYPTION_MANIFEST_SPACE } from "../../../sdk-core/src/manifest.js";
-import { isRawEncryptionPermission, isVerifiedRawEncryptionPermission } from "../lib/raw-encryption.js";
-import { canonicalNetworkUrn, rawEncryptionOwnerMatches } from "../lib/owner-did.js";
+import { isDeviceDefaultDecrypt, isRawEncryptionPermission, isVerifiedRawEncryptionPermission } from "../lib/raw-encryption.js";
+import { canonicalNetworkUrn, canonicalOwnerDid, rawEncryptionOwnerMatches } from "../lib/owner-did.js";
 import { assertNoCaveatLimits } from "../lib/caveat-refusal.js";
+import { markClockDependent } from "./refusal.js";
+import { keyAbilitiesFor, parseKeysPrefix, partialKeysGrantError, type ProfileNamedKeys } from "../lib/named-keys.js";
+import { SHARE_PUBLISHING_MANIFEST_REF } from "../share/publishing-manifest.js";
 
 /** OpenKey signs a scoped delegation only when it carries this read on the session space. */
 const CAPABILITIES_READ = "tinycloud.capabilities/read";
@@ -20,12 +25,22 @@ export const CLOCK_SKEW_MS = 30_000;
 export const SIGNED_RECAP = "signed-recap";
 
 /**
- * A requested `--expiry`, as a lifetime. OpenKey signs approval time plus a
- * lifetime, so an absolute deadline cannot be honored once approval takes
- * longer than the clock-skew allowance; only durations are accepted.
+ * A requested `--expiry`, as a lifetime, and the maximum lifetime the signed request allows (today the two are the
+ * same: `grantLifetimeSeconds` is derived from `--expiry`). OpenKey signs approval time plus a lifetime, so an
+ * absolute deadline cannot be honored once approval takes longer than the clock-skew allowance; only durations are
+ * accepted.
  */
 export interface RequestedExpiry {
   readonly durationMs: number;
+}
+
+/**
+ * Lifetime a non-device `auth login --manifest` requests when `--expiry` is omitted: one hour, the shortest practical
+ * session. `builtin:share-publishing` asks for seven days instead, because every Share link it publishes ends when
+ * the publishing session ends and a published link's own default is seven days.
+ */
+export function defaultManifestLoginExpiry(manifest: string): string {
+  return manifest === SHARE_PUBLISHING_MANIFEST_REF ? "7d" : "1h";
 }
 
 /** Parse an OpenKey login `--expiry`: `30m`/`7d`/`1w` or raw milliseconds. */
@@ -41,10 +56,54 @@ export function parseRequestedExpiry(value: string | number): RequestedExpiry {
   );
 }
 
-/** Latest signed expiry the request allows, evaluated when the approval arrives. */
+/**
+ * Latest signed expiry the request allows, evaluated when the approval arrives: the request's maximum lifetime
+ * (`grantLifetimeSeconds`) from now, plus the clock-skew allowance. The signed value is compared, not the value the
+ * request proposed, so a lifetime the user changed in the approval is held to the same ceiling.
+ */
 export function expiryLimit(expiry: RequestedExpiry): number {
   return Date.now() + expiry.durationMs + CLOCK_SKEW_MS;
 }
+
+/**
+ * Latest signed expiry when no `--expiry` was given: the SDK's default session request (`EXPIRY.SESSION_MS`, 30 days)
+ * from now, plus the same clock-skew allowance, evaluated when the approval arrives.
+ */
+export function defaultExpiryLimit(): number {
+  return Date.now() + EXPIRY.SESSION_MS + CLOCK_SKEW_MS;
+}
+
+/**
+ * Whether the signed expiry is above the request's lifetime counted from the SIWE's own `Issued At` (plus the skew allowance),
+ * which does not depend on this machine's clock. An unreadable Issued At proves nothing: false.
+ */
+export function outlivesRequestFromIssuedAt(siwe: string, signedExpiry: number, expiry: RequestedExpiry): boolean {
+  const raw = [...siwe.matchAll(/^Issued At: (.+)$/gm)].at(-1)?.[1];
+  const issuedAt = raw === undefined ? NaN : Date.parse(raw);
+  return Number.isFinite(issuedAt) && signedExpiry > issuedAt + expiry.durationMs + CLOCK_SKEW_MS;
+}
+
+/**
+ * The SDK refuses a signed expiry above the `maxExpiresAt` the CLI hands it, with a plain `Error`. Report it as the
+ * same `OPENKEY_EXPIRY_EXCEEDED` the ceiling check in `verifySignedSession` raises, naming the lifetime that was
+ * requested and the latest allowed time. `defaultRequest` is true when no `--expiry` was given. Any other error is not
+ * ours: returns `undefined`.
+ */
+export function sdkMaxExpiryRefusal(error: unknown, defaultRequest = false): CLIError | undefined {
+  const message = error instanceof Error ? error.message : "";
+  const match = /^OpenKey signedMessage expiry is later than the maximum for this request \(the latest allowed is ([^)]+)\)(?:; choose an earlier expiry)?$/.exec(message);
+  if (match === null) return undefined;
+  const requested = defaultRequest
+    ? `the default ${EXPIRY.SESSION_MS / 86_400_000} day lifetime this login requested`
+    : "the requested --expiry";
+  return Object.assign(
+    new CLIError("OPENKEY_EXPIRY_EXCEEDED", `The signed session outlives ${requested} (the latest allowed is ${match[1]}). Choose an earlier lifetime in OpenKey, or re-run with a longer --expiry. No session was saved.`, ExitCode.PERMISSION_DENIED),
+    { cause: error },
+  );
+}
+
+/** A signed expiry the user chose must be more than this far from now (matches the SDK's changed-expiry check). */
+const MIN_SIGNED_REMAINING_MS = 60_000;
 
 /** OpenKey's minimum delegation lifetime; it raises anything shorter. */
 const OPENKEY_MIN_LIFETIME_SECONDS = 60;
@@ -73,9 +132,10 @@ export function pinnedOwner(profile: ProfileConfig | null | undefined): string |
 
 /**
  * Session fields that state authority. They are set only from a verified
- * proof, never copied from an OpenKey callback.
+ * proof, never copied from an OpenKey callback. `renewal` is the owner's
+ * renewal lease, saved only after the approval result's lease verified.
  */
-const TRUST_FIELDS = ["ownerDid", "permissions", "permissionsSource", "expiresAt", "expiry", "expirationTime"];
+const TRUST_FIELDS = ["ownerDid", "permissions", "permissionsSource", "expiresAt", "expiry", "expirationTime", "renewal"];
 
 /** A callback-supplied session with every authority claim removed. */
 export function withoutTrustFields(session: Record<string, unknown>): Record<string, unknown> {
@@ -123,12 +183,15 @@ export function sessionExpiresAt(session: Record<string, unknown> | null): strin
   return null;
 }
 
-export type StoredSessionState = "missing" | "expired" | "present" | "unknown-expiry" | "unverified";
+export type StoredSessionState = "missing" | "expired" | "present" | "renewed" | "unknown-expiry" | "unverified";
 
 /**
  * A stored session's state and expiry, judged the way commands restore it: a
  * signed SIWE `Expiration Time` wins over unsigned expiry metadata, otherwise
- * {@link sessionExpiresAt}. Local metadata only; never contacts the node.
+ * {@link sessionExpiresAt}. Past that, a session saved with an owner renewal
+ * lease is `renewed` until the lease's signed end, and that end is reported.
+ * Local metadata only; never contacts the node, so a stopped lease still shows
+ * as renewed until a command restores it.
  */
 export function storedSessionState(session: Record<string, unknown> | null, profile: Pick<ProfileConfig, "posture" | "authMethod"> | null): { state: StoredSessionState; expiresAt: string | null } {
   if (session === null) return { state: "missing", expiresAt: null };
@@ -138,12 +201,16 @@ export function storedSessionState(session: Record<string, unknown> | null, prof
     ? new Date(siweExpiry).toISOString()
     : sessionExpiresAt(session);
   if (expiresAt === null) return { state: "unknown-expiry", expiresAt };
-  return { state: Date.parse(expiresAt) <= Date.now() ? "expired" : "present", expiresAt };
+  if (Date.parse(expiresAt) > Date.now()) return { state: "present", expiresAt };
+  const lease = liveStoredLease(session);
+  return lease !== undefined
+    ? { state: "renewed", expiresAt: new Date(lease.expiresAt).toISOString() }
+    : { state: "expired", expiresAt };
 }
 
-/** Whether commands still use a session in this state: unexpired, or with no recorded expiry to check. */
+/** Whether commands still use a session in this state: unexpired, renewed, or with no recorded expiry to check. */
 export function sessionStateIsUsable(state: StoredSessionState): boolean {
-  return state === "present" || state === "unknown-expiry";
+  return state === "present" || state === "renewed" || state === "unknown-expiry";
 }
 
 /** Bind a logical space name (e.g. `default`) to the owner's space URI. */
@@ -174,6 +241,10 @@ export function isRawCidRevocationPermission(permission: PermissionEntry): boole
     permission.actions.includes("tinycloud.delegation/revoke");
 }
 function actionTuples(permission: PermissionEntry, ownerDid: string): string[] {
+  // A device request's default decrypt entry is what OpenKey signs as the owner's own default network.
+  if (isDeviceDefaultDecrypt({ ...permission, space: permission.space ?? "" })) {
+    return [JSON.stringify([permission.service, ENCRYPTION_MANIFEST_SPACE, normalizePkhIdentifier(`urn:tinycloud:encryption:${ownerDid}:default`), permission.actions[0]])];
+  }
   const service = permission.service.startsWith("tinycloud.") ? permission.service : `tinycloud.${permission.service}`;
   // Only a top-level network entry is a raw grant. A legacy OpenKey signed
   // decrypt nested under the owner space must remain a distinct resource.
@@ -371,12 +442,25 @@ function withCapabilitiesRead(permissions: PermissionEntry[], space: string): Pe
 export interface SignedSessionExpectations {
   /** Primary DID the approving identity must match, when known. */
   expectedOwner?: string;
-  /** Requested `--expiry`; a signed expiry beyond it (+ skew) is refused. */
+  /**
+   * The longest lifetime the signed request allows: the request's `grantLifetimeSeconds`, which is the requested
+   * `--expiry`. A signed expiry beyond it (+ skew) is refused. The user may sign a SHORTER lifetime (the SDK accepts a
+   * changed expiry, see `expiryChangeable`); a longer one is refused here unless `expiryChangeable` is set.
+   */
   expiry?: RequestedExpiry;
+  /**
+   * Set only for a request whose link carried the `expiryChangeable` opt-in (the plain paste link). OpenKey then lets
+   * the user pick any lifetime, so there is no `expiry` ceiling: the signed expiry only has to be more than 60 seconds
+   * away and one a signed message can carry (before 10000-01-01). Signed approval requests, device login and prepared
+   * logins never send the opt-in and keep the `expiry` ceiling.
+   */
+  expiryChangeable?: boolean;
   /** Grant escalation stores a portable delegation, not a login session. */
   purpose?: "grant";
-  /** Agent grant: the approval must cover every requested action, or no grant is stored. */
+  /** Agent grant: cover every requested action; additional owner-signed authority is allowed. */
   exactApproval?: boolean;
+  /** The named-key folder row this login asked for; the only encryption folder row a signed grant may carry. */
+  namedKeyRow?: ProfileNamedKeys;
 }
 
 /** What the WASM verifier returns (its binding is untyped). Caveats arrive as `Map`s. */
@@ -444,8 +528,21 @@ export function verifySignedSession(
   if (signedExpiry <= Date.now()) {
     throw new CLIError("AUTH_EXPIRED", `The approved session has expired. ${notStored}`, ExitCode.AUTH_REQUIRED);
   }
-  if (expected.expiry !== undefined && signedExpiry > expiryLimit(expected.expiry)) {
-    throw new CLIError("OPENKEY_EXPIRY_EXCEEDED", `The signed session outlives the requested --expiry. ${notStored}`, ExitCode.PERMISSION_DENIED);
+  if (expected.expiryChangeable === true) {
+    // The link told OpenKey the user may choose any lifetime, so `--expiry` is only a proposal. Whatever the owner signed
+    // is accepted as long as it is more than 60 seconds away: there is no upper bound beyond what a signed message can carry.
+    if (signedExpiry <= Date.now() + MIN_SIGNED_REMAINING_MS) {
+      throw new CLIError("OPENKEY_EXPIRY_TOO_SHORT", `The signed session lasts 60 seconds or less, too short to use. Choose a longer lifetime in OpenKey. ${notStored}`, ExitCode.PERMISSION_DENIED);
+    }
+    const technical = technicalExpiryRefusal(signedExpiry, "siwe");
+    if (technical !== null) {
+      throw new CLIError("OPENKEY_EXPIRY_UNREPRESENTABLE", `The signed session's ${technical}. ${notStored}`, ExitCode.PERMISSION_DENIED);
+    }
+  } else if (expected.expiry !== undefined && signedExpiry > expiryLimit(expected.expiry)) {
+    const exceeded = new CLIError("OPENKEY_EXPIRY_EXCEEDED", `The signed session outlives the requested --expiry. ${notStored}`, ExitCode.PERMISSION_DENIED);
+    // Counted from the signed Issued At the lifetime fits: only the local clock makes it look too long. Not a refusal to clean up after.
+    if (!outlivesRequestFromIssuedAt(data.siwe as string, signedExpiry, expected.expiry)) markClockDependent(exceeded);
+    throw exceeded;
   }
   const ownerDid = `did:pkh:eip155:${data.chainId}:${data.address}`;
   if (expected.expectedOwner && normalizePkhIdentifier(expected.expectedOwner) !== normalizePkhIdentifier(ownerDid)) {
@@ -454,7 +551,41 @@ export function verifySignedSession(
   return { ownerDid, permissions, expiresAt };
 }
 
-/** Verify signed authority, and that it stays inside the requested manifest, before a scoped login saves anything. */
+/**
+ * Set aside the one named-key folder row this login requested: the exact
+ * resource, owned by the signer, with exactly key.create and decrypt and no
+ * caveats. A partial row is refused; any other row is left for the usual checks.
+ */
+function withoutRequestedKeyRow(
+  signed: readonly PermissionEntry[], keys: ProfileNamedKeys, signerDid: string,
+): PermissionEntry[] {
+  const mismatch = (): CLIError => new CLIError("OPENKEY_SCOPE_MISMATCH",
+    `The key permission in the approval didn't match what was asked for "<folder>/", so this sign-in wasn't saved. Sign in again with \`${CLI_NAME} auth login --keys <folder>\`.`, ExitCode.PERMISSION_DENIED);
+  let expectedResource: string;
+  try {
+    expectedResource = parseKeysPrefix(keys.prefix, canonicalOwnerDid(signerDid)).resource;
+  } catch {
+    throw mismatch();
+  }
+  if (keys.resource !== expectedResource) throw mismatch();
+  const rest: PermissionEntry[] = [];
+  const actions = new Set<string>();
+  for (const permission of signed) {
+    if (!isVerifiedRawEncryptionPermission(permission) || permission.path !== expectedResource) {
+      rest.push(permission);
+      continue;
+    }
+    if (permission.caveats?.some((caveat) => Object.keys(caveat).length > 0)) throw mismatch();
+    for (const action of permission.actions) actions.add(action);
+  }
+  if (actions.size === 0) return rest;
+  const wanted = keyAbilitiesFor(keys)[expectedResource]!;
+  if ([...actions].some((action) => !wanted.includes(action))) throw mismatch();
+  if (actions.size !== wanted.length) throw partialKeysGrantError();
+  return rest;
+}
+
+/** Verify signed authority against the whole-request grant or legacy narrowed-manifest contract before saving. */
 export function verifyScopedLogin(
   data: Record<string, unknown>,
   key: object,
@@ -492,18 +623,21 @@ export function verifyScopedLogin(
   // the proof, but omit the unusable nested resource from approved authority.
   const legacyNested: PermissionEntry[] = [];
   const approved: PermissionEntry[] = [];
-  for (const permission of signed.permissions) {
+  const keyRowRest = expected.namedKeyRow === undefined
+    ? signed.permissions
+    : withoutRequestedKeyRow(signed.permissions, expected.namedKeyRow, signed.ownerDid);
+  for (const permission of keyRowRest) {
     (isLegacyNestedDecrypt(permission, requested, signed.ownerDid, spaceId) ? legacyNested : approved).push(permission);
   }
-  for (const permission of signed.permissions) {
+  for (const permission of keyRowRest) {
     if (isVerifiedRawEncryptionPermission(permission) &&
       !rawEncryptionOwnerMatches(permission.path, signed.ownerDid)) {
       throw new CLIError("OPENKEY_SCOPE_MISMATCH", `OpenKey signed decrypt for a network not owned by the approving identity. ${notStored}`, ExitCode.PERMISSION_DENIED);
     }
   }
-  // A signed action is inside the request when a requested one covers it: the
-  // same action, unrestricted or with the same caveats (OpenKey may narrow).
-  if (!scopeCovers(requested, approved, signed.ownerDid)) {
+  // Legacy manifest login may narrow the request, but cannot add authority.
+  // A whole-request grant may carry additional authority approved by the signer.
+  if (!expected.exactApproval && !scopeCovers(requested, approved, signed.ownerDid)) {
     throw new CLIError("OPENKEY_GRANT_BROADENED", `The signed grant contains authority beyond the requested ${expected.purpose === "grant" ? "grant" : "manifest"}. ${notStored}`, ExitCode.PERMISSION_DENIED);
   }
   // An agent grant stands for the whole request. An action the owner unchecked
@@ -511,8 +645,8 @@ export function verifyScopedLogin(
   if (expected.exactApproval && !scopeCovers(approved, requested, signed.ownerDid)) {
     throw new CLIError("OPENKEY_APPROVAL_NARROWER", `The approval was narrower than the request. Approve all of it, or ask the agent to request less. ${notStored}`, ExitCode.PERMISSION_DENIED);
   }
-  // The SIWE proof stays intact for validation/diagnostics. Only effective,
-  // requested authority is recorded as approved and compared on renewals.
+  // The SIWE proof stays intact for validation/diagnostics. Record only verified,
+  // effective authority, including signed extras in a whole-request grant.
   const session = withVerifiedAuthority({ ...data, jwk: key }, { ...signed, permissions: approved });
   return { session, legacyNested };
 }

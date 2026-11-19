@@ -1,3 +1,4 @@
+import "./test-bootstrap.mjs";
 // Loads the built @tinycloud/operations state entry point twice in one process,
 // as ES module and as CommonJS: two module instances, as the CLI's several
 // entry points are. While one instance holds the profile lock, the other must

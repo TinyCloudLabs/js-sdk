@@ -26,12 +26,14 @@ test("measures the canonical worker exactly once at gzip level 9", () => {
   const { dir } = fixture(bytes);
   const measured = execFileSync("gzip", ["-9", "-c"], { input: bytes }).byteLength;
   expect(checkWorkerSize(dir, measured)).toEqual({ bytes: measured, headroom: 0 });
+  expect(() => checkWorkerSize(dir, measured - 1)).toThrow(/exceeds .* by 1 bytes/);
 });
 test("uses the reviewed GitHub worker ceilings without additional headroom", () => {
-  const ledger = JSON.parse(readFileSync(join(import.meta.dir, "../../web-sdk/scripts/replica-size-ledger.json"), "utf8")) as Record<string, { worker?: { ceiling: number } } | undefined>;
+  const ledger = JSON.parse(readFileSync(join(import.meta.dir, "../../web-sdk/scripts/replica-size-ledger.json"), "utf8")) as Record<string, { worker?: { ceiling: number }; replicaWorker?: { ceiling: number } } | undefined>;
   const kvRows = Object.keys(ledger).filter((key) => key !== "tc1827ReplicaWorkerRatchet" && ledger[key]?.worker !== undefined);
   expect(MAX_WORKER_GZIP_BYTES).toBe(ledger[kvRows.at(-1)!]!.worker!.ceiling);
-  expect(MAX_REPLICA_WORKER_GZIP_BYTES).toBe(ledger.tc1827ReplicaWorkerRatchet!.worker!.ceiling);
+  const replicaRows = Object.keys(ledger).filter((key) => ledger[key]?.replicaWorker !== undefined);
+  expect(MAX_REPLICA_WORKER_GZIP_BYTES).toBe(ledger[replicaRows.at(-1)!]!.replicaWorker!.ceiling);
 });
 
 test("refuses worker size measurements from a different Bun or Rust toolchain", () => {

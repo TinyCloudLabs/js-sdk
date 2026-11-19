@@ -5,11 +5,11 @@ Spec: tinycloud-dev docs/specs/courier-v0.md (TC-707). Beta.
 
 ## Install
 
-Courier ships inside the TinyCloud CLI as `tc courier`:
+Courier ships inside the TinyCloud CLI as `tinycloud courier`:
 
 ```bash
 npm install --global @tinycloud/cli@beta
-tc courier --help
+tinycloud courier --help
 ```
 
 The standalone `courier` bin takes identical arguments and shares the same
@@ -31,41 +31,131 @@ install. Run `hash -r` if `tc` already ran in the same shell. Verify with
 `command -v tc`, or call `"$(npm prefix --global)/bin/tc"` directly.
 
 The `courier` agent skill (`skills/courier/SKILL.md`) ships with both packages;
-`npx skills add … --skill tc-cli courier` installs it next to `tc-cli` (see the
-CLI's `skills/tc-cli/INSTALL.md`).
+`npx skills add … --skill tinycloud-cli courier` installs it next to `tinycloud-cli` (see the
+CLI's `skills/tinycloud-cli/INSTALL.md`).
+
+## Guided start and invitations
+
+Paste the prompt in [`skills/courier/start.md`](skills/courier/start.md) into your
+agent. It reuses Courier setup and grants, discovers stored chats, and asks
+whether to start a new chat only when an existing chat is available.
+
+```bash
+courier start
+courier start --session <sessionId> --peer <peer>
+courier start --new "Subject"
+# Recipient: preserve the entire link, including its fragment.
+courier join '<invitation-link>' --consent
+# Equivalent incoming-link entry:
+courier start --link '<invitation-link>' --consent
+```
+
+`start` returns JSON. `active` includes the session ID; `choose-session` includes
+real stored chats; `setup-required` directs the agent to normal `init`. An incoming
+link takes precedence over discovery and new-chat flags. A refused link never
+creates a substitute chat.
+
+The signed short link has the form
+`https://courier.tinycloud.xyz/c/<id>#v=4&k=<key>&c=<sealed-body-CID>`.
+The content key stays in the fragment. Its signed header issuer must match the
+sealed body issuer; the audience is the links API origin. Configure a self-hosted
+HTTPS viewer with `COURIER_LINK_ORIGIN` and its API with
+`COURIER_LINKS_API_ORIGIN` (default `https://api.tinycloud.xyz`).
+
+After joining, use the returned peer and session ID with existing `send --thread`,
+`read`, `inbox`, and delivery commands. A guided pairing cannot send into a
+different thread or renew into broader mailbox access. Existing manual pairing
+continues to use its original mailbox scope.
+
+Details: TC-1543
 
 ## Setup and identity
 
 Courier uses a dedicated `did:key` agent identity, one per OS user. The owner
 approves its restricted `agents`-space grant in OpenKey; Courier never stores
 the owner's private key. Courier keeps its own profile and does not use tc
-profiles, so `tc courier` takes no tc options (`tc -p x courier …` exits 2).
+profiles, so `tinycloud courier` takes no TinyCloud CLI options (`tinycloud -p x courier …` exits 2).
 
 ```bash
-tc courier init --paste --handle alice
-# Open the printed OpenKey URL, approve, and paste the XXXX-XXXX code (or the full grant).
-tc courier pair start bob
-tc courier pair accept --file a.json
-tc courier send bob --new "Subject" --ask "…" --file handoff.md
-tc courier inbox && tc courier read <threadId>
-tc courier task new --peer bob --thread <id> --state working --ask a1
-tc courier request <threadId> --peer bob --task <id> --verb merge --target owner/repo#12 --head-sha <40-lowercase-hex> --base master --summary "Merge PR 12" --why "…"
-tc courier orders bob
+tinycloud courier init --request --handle alice
+# Send the printed "openkeyUrl" (https://openkey.so/a/…) to the owner, then collect the approval:
+tinycloud courier init --wait
+tinycloud courier pair start bob
+tinycloud courier pair accept --file a.json
+tinycloud courier send bob --new "Subject" --ask "…" --file handoff.md
+tinycloud courier inbox && tinycloud courier read <threadId>
+tinycloud courier task new --peer bob --thread <id> --state working --ask a1
+tinycloud courier request <threadId> --peer bob --task <id> --verb merge --target owner/repo#12 --head-sha <40-lowercase-hex> --base master --summary "Merge PR 12" --why "…"
+tinycloud courier orders bob
 ```
 
-`init` without `--paste` starts an interactive loopback grant flow. `--request`
-prints the OpenKey URL and the agent key as JSON; `--grant-file f|-` installs a
-grant from a file or stdin. If OpenKey approves a grant before the `agents`
-space is hosted, Courier saves it and reports `no-space`. Complete setup by
+`init --request` creates an OpenKey approval request (sealed at the links API,
+the same flow `tinycloud onboard` uses), saves it in `$COURIER_HOME/approval-pending.json`
+(owner-only) and prints the agent key and `openkeyUrl` as JSON; stderr shows the link
+again alone on a line, to copy verbatim (never retype it: a grant whose scopes differ
+from the request, such as a changed hooks path, is refused with `[grant-too-broad]`).
+There is no code to copy back. `init --wait [--timeout <duration, at most 9m>]` polls OpenKey
+(every 2 s) with a proof signed by the agent key, decrypts the result, checks that
+it answers this request, installs the grant, and only then acknowledges it to
+OpenKey. The default timeout is 60 s: at the deadline it exits 8 and prints
+`{"pending":{"step":1,"of":1,"approvalUrl":…,"expiresAt":…}}` on stdout, and the next
+`init --wait` resumes the same request (no new link, no second approval). Exit 8 is not a failure: the approval is still pending. Send the owner the `pending.approvalUrl` (the same link as `openkeyUrl`), ask them to approve it, then re-run `courier init --wait --timeout 60s`. Repeat while it exits 8. Any other non-zero exit is an error: stderr carries `[code]`. The
+approved result is saved encrypted in the pending record before any install work,
+so a killed process resumes from disk. A request that holds an approval is never
+replaced by a run with other flags; a short-link renewal approved by a different owner than the
+one that holds the grant is refused (`--rotate-key` binds a new owner; the legacy `--grant-file`/`--paste` import is not owner-pinned). OpenKey keeps an approved result for 10
+minutes: after that `init --wait` reports `[approval-result-expired]` and you run
+`init --request` again; an expired request reports `[approval-expired]`.
+If a grant is refused, nothing was installed; tell the owner to revoke the listed delegation at account.tinycloud.xyz/delegations, then run `init --request` for a new link. The refusal on stderr (`[grant-too-broad]`, `[grant-incomplete]`, `[grant-too-long]`, `[bad-grant]`, `[approval-result-invalid]`) names the delegation's CID and what was too broad or different; the agent cannot revoke it, and the header, signature and keys are never printed.
+`init` without flags still starts an interactive loopback grant flow (same
+machine only) and `--paste` shows the long `/delegate` link; `--grant-file f|-`
+installs a grant from a file or stdin (a successful import discards an open short-link request, a refused one leaves it). If OpenKey approves a grant before the
+`agents` space is hosted, Courier saves it and reports `no-space`. Complete setup by
 signing in at the Share view, or from a wallet profile run
-`tc space host agents`, then use `init --resume` without requesting another
-approval. Run `init` again to renew the owner-approved grant, or
+`tinycloud space host agents`, then use `init --resume` without requesting another
+approval. Run `init --request` again to renew the owner-approved grant, or
 `init --rotate-key` to replace the agent key and re-pair every peer.
-If OpenKey reports the space is still being set up, `init` waits up to about 2.5 minutes; otherwise use `init --resume`.
+If OpenKey reports the space is still being set up, `init --wait` waits for it
+within its `--timeout`; the legacy `init` flows wait about 2.5 minutes; otherwise use `init --resume`.
+An OpenKey `XXXX-XXXX` code works once. Courier saves the redeemed grant (`<COURIER_HOME>/pending-grant.json`, owner-only, public fields) before installing it, so if `init` is killed after the redeem, run it again with the same code or use `init --resume`; no second approval is needed. The saved copy is deleted once the grant and profile are saved, and ignored after the grant expires.
+
+An interrupted write can leave a private-key-bearing `key.json`, `rotation.json`
+or `approval-pending.json` temp file and its owner-only `.identity` sidecar.
+Courier scrubs a temp only when the recorded machine and host match. After
+that gate, it requires either a true boot-ID change, or `ESRCH` proving the
+writer is gone (on Linux, only when the PID namespace also matches). Missing
+or uncertain identity is preserved with manual recovery guidance for the current platform:
+POSIX `rm -f -- '…'` or PowerShell `Remove-Item -LiteralPath '…' -Force`.
+Run the printed command only after confirming no Courier writer anywhere is
+active that could be writing the temp or sidecar, including on another host or
+PID namespace.
+
+Pairing binds a peer by its Courier `did:key`, not by owner DID: two Courier
+agents of the same owner (two profiles, two agent keys) pair exactly like two
+owners, through the same explicit `pair start`/`pair accept` exchange. An
+artifact from the agent's own courier DID is refused.
+
+If your inbound peer delegation has expired but the other side is still paired,
+that side can renew only its existing outbound scope and hand you a fresh C
+artifact:
+
+```bash
+tinycloud courier pair renew bob --renew-artifact > renewal.json
+# Send renewal.json to bob over the existing trusted handoff channel.
+tinycloud courier pair accept --file renewal.json
+```
+
+The export requires an already-paired handle and always emits a fresh delegation
+for that same Courier DID, space, mailbox and session scope; it does not read or
+renew the exporting side's inbound delegation. The receiver may install the C
+artifact for that exact existing peer only. The signed peer delegation remains
+limited to its existing mailbox scope and at most seven days.
+By default, exporting is rate-limited to one renewal per peer in 20 hours. Use
+`--force` only when the same peer needs an immediate additional artifact.
 
 ### OpenKey short codes
 
-After a passkey approval, OpenKey shows a short `XXXX-XXXX` code. `init --paste`
+After a passkey approval on the old `/delegate` link, OpenKey shows a short `XXXX-XXXX` code. `init --paste`
 and `init --grant-file -` accept it as well as the full JSON or base64 grant.
 Courier redeems the code at `<OpenKey API host>/api/delegation-codes/<code>`
 (redirects are refused) and installs the result only if it is bound to the
@@ -106,7 +196,7 @@ code within 5 minutes. The second call (`status: "acquired"`) returns `issuedAt`
 | Setting | Flag | Env | Stored | Default |
 |---|---|---|---|---|
 | Profile dir | — | `COURIER_HOME` | — | `~/.courier` |
-| Node host | `init --host` | `COURIER_HOST` (first init only) | `profile.host` | `https://tee.node.tinycloud.xyz` |
+| Node host | `init --host` | `COURIER_HOST` (first init only) | `profile.host` | `https://node.tinycloud.xyz` |
 | OpenKey | `init --openkey-host` | `COURIER_OPENKEY_HOST` | `profile.openkeyHost` | `https://openkey.so` |
 | OpenKey API (short codes) | `init --openkey-api-host` | `COURIER_OPENKEY_API_HOST` | not stored | `https://api.openkey.so` for `https://openkey.so`, otherwise the OpenKey host |
 
@@ -122,27 +212,70 @@ For the OpenKey API host it is flag > env > derived. `TC_HOME`, `TC_PROFILE`,
   `to/<me>/`, and one on your own `me/approvals/`, each on 25 s tickets
   (`--ticket`). A hook signals that something changed; the watcher then lists
   the peer's messages, and that listing is the source of truth.
-- **Catch up.** Every `--poll` seconds (default 60, not 5 minutes) and at
-  start, it lists each peer's `threads/` prefix in full and diffs it against
-  `to/<peer>/receipts.json`. A subscription that is refused (for example an
-  expired delegation) backs off and the poll keeps delivering.
+- **Catch up.** At start, and every 5 minutes while every subscription is
+  healthy, it lists each peer's `threads/` prefix in full and diffs it against
+  `to/<peer>/receipts.json`; a write whose hook event was missed is delivered by
+  the next one. When a subscription fails or ends, the watcher catches up at
+  once and lists everything every `--poll` seconds (default 60) until a new
+  stream has delivered an event or lasted one ticket. In between, each
+  `--poll` cycle lists again only a peer (or approvals) whose last sync did not
+  finish. A subscription that is refused (for example an expired delegation)
+  backs off and the poll keeps delivering.
+- **Authority.** Every 5 minutes, separately from the catch-up, the watcher
+  checks each peer's renewal and authority on the node, so detecting an idle
+  revocation and cleaning up sibling grants takes up to 5 minutes; the node
+  itself refuses revoked grants at once. That window is for noticing only:
+  importing what a peer sent, waking an agent for it and writing an inform to
+  it each take a fresh check on the node first (no cached verdict), and a
+  removed or refused peer's queued wake or inform is dropped and logged. A
+  check that cannot confirm access (a node error, a timeout) does nothing:
+  the item stays queued and is retried on the next pass, for up to 24 hours.
+  A wake or inform held that long is dropped and logged; imports keep
+  retrying, since the peer's messages stay in its space. After 24 hours
+  without a verdict the human gets one notice for that peer
+  (`access-unverified`), not repeated until a check succeeds and access is
+  lost again. With
+  `--poll` above 5 minutes, this check and the retry of a peer whose sync did
+  not finish still run every 5 minutes. A hook event for a
+  peer's renewal marker (`pairing/delegation.json`) reads the marker and checks
+  that peer at once. A refusal reads the marker and checks the peer at once,
+  and retries only under a different grant; otherwise the refusal is final.
+  The marker is also read on the 5-minute schedule.
 - **Deliver.** Each new message is copied create-only into
   `me/mirror/<peer>/threads/<id>/msg/`, the peer's `meta.json` and tasks are
   copied next to it (`task/` is overwritten until the task is terminal), and
   the receipts file is updated. The view reads only this mirror.
 - **Wake.** After `--debounce` seconds (default 30, never later than twice that
   after the first message) the thread gets one wake carrying all its new
-  messages. `inform` messages never wake. Pending wakes live in
-  `me/state/watch.json`, so a restart does not lose them.
+  messages. `inform` messages never wake. Pending wakes live in the agent's
+  own `watch.json` (see below), so a restart does not lose them. What the
+  watcher already knows (receipted message ids, mirrored meta, when each
+  renewal marker was read, when wake claims were pruned) is kept in
+  `<COURIER_HOME>/watch-cache/<agent did:key id>.json` (owner-only), so a
+  restart or a `watch --once` run doesn't fetch it again. It is bound to this
+  agent's DID and space. Each peer's facts carry the DID, space and session they
+  were learned under, and are dropped, never relabelled, once that peer is a
+  different agent, space or session. Only eligible peers' facts are kept. Facts are kept per peer, so two peers that
+  use the same name for this agent never share them.
 
 Every step logs one JSON object per line on stdout (`start`, `hook-event`,
 `delivered` with `via` and `latencyMs`, `waking` with `wakeLatencyMs` (send to
 adapter start), `woke` with `runMs`, errors). `--once` does a single catch-up pass,
-wakes immediately and exits. Run one watcher per profile.
+wakes immediately and exits. Run one watcher per Courier agent.
+
+Each Courier agent keeps its watcher state under its own key,
+`me/state/agents/<its did:key id>/` (`watch.json`, `paused/`, `wake-claims/`),
+so two agents of one owner can share the space and run their watchers at the
+same time. On an agent's first start with this version, the watcher copies the
+old shared `me/state/` records that concern its own peers into its keys
+(create-only, so the copy is safe to repeat) and leaves the shared records in
+place. `courier pause` and `courier resume` also read a thread's shared pause
+marker and copy it the same way, so a thread paused before the upgrade stays
+paused until a human resumes it; `courier resume` deletes both markers.
 
 Wake claims keep a second watcher from waking what the first is waking. Before
 an adapter runs, the watcher takes a create-only claim
-(`me/state/wake-claims/<peer>/<thread>/<first message>.json`) naming itself:
+(`me/state/agents/<agent>/wake-claims/<peer>/<thread>/<first message>.json`) naming itself:
 a profile id kept in `<COURIER_HOME>/watcher-id` (created once, machine-local:
 never copy or sync a `COURIER_HOME` between machines, or two watchers would
 share an id), a run id and its pid.
@@ -160,16 +293,62 @@ share an id), a run id and its pid.
   minutes) across all the processes a wake starts (`paseo ls` then `send`,
   claude's retry without `--resume`), so a wake always ends before its claim
   can be taken over.
-- The state file (`me/state/watch.json`) is written with if-match. A second
-  watcher that writes it with a stale etag stops with `state-conflict` (exit 1)
-  and releases any claim it had taken.
+- The agent's `watch.json` is written with if-match. A second watcher of the
+  same agent that writes it with a stale etag stops subscribing, waking and
+  writing, releases any claim it had taken and logs `standby` once. It does not
+  exit, because a service manager with `Restart=always` would restart it into a
+  full catch-up each time. It reads `watch.json` once per window (5 minutes,
+  doubling to 30) and takes over, with one catch-up, only after a whole window
+  in which the other watcher wrote nothing. Meanwhile the other watcher, which
+  belongs to the same agent, keeps that agent's messages watched. `--once`
+  still exits with `state-conflict` (exit 1).
+- A state write that fails without a 412 (lost reply, timeout,
+  `outcome_unknown`) may still have been applied, so the watcher reads the
+  state back before its next write: its own body or no change carries on;
+  anything else is a `state-conflict` as above. The conflict shows at the
+  watcher's next own write (a message, a notice retry, the hourly or daily
+  prune), which can be long after the other process wrote.
 
 Wakes are at-least-once: a crash between a wake and the state write wakes that
 thread again on restart (the new watcher takes the dead one's claim).
 When a subscription is re-opened the watcher also runs a catch-up sync two
 seconds later (the SDK's hook stream exposes no "connected" signal, only
-events); the SDK's own ticket renewals are invisible to it, and the poll covers
-those gaps.
+events); the SDK's own ticket renewals are invisible to it, and the 5-minute
+catch-up covers those gaps.
+
+`courier read` keeps the messages and thread meta it has read (both are
+create-only) in `<COURIER_HOME>/read-cache/<agent did:key id>/<thread>.json`
+(owner-only). Reading the thread again lists only the peer's side and fetches
+only new entries and the tasks, which can change. Entries are fetched in
+bounded batches, each one `tinycloud.kv/get` invocation: up to 16 messages or
+meta of at most 2 MiB each, or 4 tasks of at most 8 MiB each, so no response
+exceeds 32 MiB.
+Each entry is still checked on its own. When one value in a batch is over its cap, the node refuses the batch, and
+Courier reads that batch's keys once more one by one, with the same cap. That key is then reported by id, never its
+content (`entry-too-large` in `courier read`, `message-too-large` in `courier inbox`, `ignored` with reason `too-large`
+once per watcher process for a message, thread meta or task, an `intake-error` in intake), and every other entry is read
+as usual. A cache directory that can't be made owner-only is not used: everything is fetched. `courier inbox` skips a
+message whose thread or message id in the peer's key isn't a safe id (letters, digits, `-` and `_`, at most 64): it is
+not fetched, listed or receipted, and is reported as `bad-message` with the id escaped, as the watcher already skips it.
+Your own side comes from a local owner-space record of the writes made under
+your thread roots (`send`, the outbox, pause notices, `task`, `request`, a
+session's meta) in `read-cache/<agent>/owner-space/<thread>/`; that record
+is used for an hour after a listing of your side, then your side is listed
+again. A peer's renewal marker is read at most every 5 minutes per thread.
+`courier read --full` lists both sides and fetches everything again. Messages
+are create-only; a later overwrite of the same key isn't shown. One agent's
+cache stays within 64 MiB, files older than 7 days are not used, and a missing
+or unreadable file is rebuilt. The local caches (`read-cache/`,
+`watch-cache/`) are used only if `COURIER_HOME` is a real directory of yours,
+not a symlink, and every directory above it up to `/` is owned by root or you
+and not writable by group or others. A sticky directory such as `/tmp` is
+allowed when the directory just below it is yours and owner-only. This is the
+rule ssh's StrictModes uses. Otherwise the caches are not used and everything
+is fetched. Each cache directory is opened without following a symlink, is
+made owner-only through that handle, and is checked again right before every
+read, write or delete. `courier revoke`, a recorded refusal, an owner
+revocation and `init --rotate-key` delete the cache and the watcher's local
+knowledge, through the same checked directories.
 
 ### Wake adapters
 
@@ -350,7 +529,7 @@ loop) neither counts nor is ever blocked.
 When a thread has used its budget, the next message that would wake it pauses it
 instead:
 
-1. a marker is written at `me/state/paused/<peer>/<thread>.json` (so the pause
+1. a marker is written at `me/state/agents/<agent>/paused/<peer>/<thread>.json` (so the pause
    survives restarts and is visible to the view and to `courier resume`);
 2. an `inform` "thread paused" message goes to the peer (machine-readable
    `notice: "thread-paused"`; it never wakes the peer's agent);
@@ -479,7 +658,7 @@ publish, push and credential-access commands. Approved PR merges run through
 Never approvable: `courier pair`, `courier revoke`, `courier init`,
 `courier pause`, `courier resume` (the wake budget is the reply loop's breaker:
 an agent must not lift its own pause), `courier watch` (an agent must not start
-a watcher, which could wake agents without the guard), all also as `tc courier …`;
+a watcher, which could wake agents without the guard), all also as `tinycloud courier …`;
 `courier approval` without `--peek` (it would consume without execution),
 `courier broker` and `courier guard`; privilege/session tools, Secret Bridge; and starting another agent (see below).
 
@@ -578,7 +757,8 @@ tags) are for the owner. GitHub API writes refuse except literal POSTs to
 issue/PR comment endpoints; gh repo sync/run rerun/secrets, npm unpublish and
 dist-tag, semantic-release, wrangler rollback/delete/secrets and phala cvms
 writes refuse. Loopback requests and nested agent npm packages refuse too.
-`--wake exec --unguarded` cannot start an agent CLI as its first word.
+`--wake exec --unguarded` cannot start an agent CLI as its first word unless
+`--agent-cli` is also passed, and never `claude` or `paseo` (see below).
 
 **Installing it.** `courier watch --wake claude` writes
 `<COURIER_HOME>/guard/settings.json` on every start and passes it as
@@ -628,6 +808,66 @@ install a guard, so it is refused unless you pass `--unguarded`, and it says
 cannot merge, deploy or publish. On a Paseo host, set `--paseo-provider claude`
 (the default) and leave `--wake paseo` to install the guard; do not use
 `--paseo-provider` with another agent.
+
+**Other agent CLIs.** The guard is a Claude Code hook, so `codex`, `opencode`,
+`omp`, `gemini`, `cursor-agent`, `amp`, `aider` and `goose` have no guarded
+adapter. To wake one, pass `--agent-cli` as well:
+
+```bash
+courier watch --wake exec --unguarded --agent-cli \
+  --exec 'codex exec "$COURIER_PROMPT"' --home-file .codex/auth.json --cwd ~/agents/analyst
+```
+
+> **Warning.** `--unguarded --agent-cli` puts content written by someone outside
+> your machine (a peer's message) into an agent that can act: run commands,
+> read files, call services. Nothing checks what it does with that content.
+> Use it only with an agent that holds no credentials beyond its own model
+> login, in a sandbox (a separate OS account or container with nothing else to
+> reach). If the agent can merge, deploy, publish or reach your accounts, use
+> `--wake claude` or `--wake paseo` instead: they are guarded.
+
+`$COURIER_PROMPT` is the same wake prompt the Claude adapter sends, plus the
+unguarded notice. `--agent-cli` is the owner accepting that nothing checks what
+that agent does with a peer's message: it can run any command its own CLI
+allows and read anything the watcher's OS user can read, by path, whatever
+`HOME` says. Run such a watcher under an OS account that holds only what the
+agent may use, and restrict the agent with its own CLI's sandbox or approval
+flags inside `--exec`. `claude` and `paseo` stay refused under `exec` with or
+without the flag: use their guarded adapters.
+
+The clean HOME holds no model login for an `exec` wake. `--env-pass NAME` passes
+one environment variable, for a CLI that takes an API key. `--home-file <path>`
+(repeatable, relative to your HOME) copies one file into it on every wake, mode
+0600, and only the known model-login file of a supported agent CLI is accepted;
+anything else is refused, at start-up and again on every wake:
+
+| Agent CLI | `--home-file` accepts |
+| --- | --- |
+| `codex` | `.codex/auth.json` |
+| `gemini` | `.gemini/oauth_creds.json` (newer versions may keep it in the OS keychain: then there is no file) |
+| `opencode` | `.local/share/opencode/auth.json` |
+| `amp` | `.local/share/amp/secrets.json` |
+| `goose` | `.config/goose/secrets.yaml` (only when goose uses file storage; its default is the keyring) |
+| `aider` | `.aider/oauth-keys.env` |
+| `omp`, `cursor-agent` | nothing: `omp` keeps its login in a database with every account and its state, and Cursor does not publish where `cursor-agent` keeps its credentials. Use `--env-pass` or run the agent under its own account |
+
+When `--exec` starts one of these CLIs only that CLI's file is accepted; for any
+other command (a wrapper script) any file in the table is. Settings files are
+not logins and are refused (they can name MCP servers, hooks or extensions that
+run commands), as are shell start-up files, credential stores and owner state
+(`.ssh`, `.aws`, `.npmrc`, `.netrc`, `.config/gh`, `.config/git`, `.omp`,
+`.tinycloud`, `.gnupg`, `.docker`, `.kube`, `.config/gcloud`, `.paseo`, Claude and
+MCP settings). A symbolic link is refused, whether it is the file or a
+directory above it: name the real file inside your HOME. `--wake claude` takes
+no `--home-file`; its login (`.claude/.credentials.json`) is copied automatically
+and is refused the same way if it is a link or sits behind one: copy the real file
+into place.
+
+The agent owns its clean HOME between wakes, so Courier also checks it: before it
+makes, removes or writes a path there, every component is checked without
+following links. A link the agent left behind is removed (the link only, never what
+it points at) and the wake logs `removed a symbolic link the agent left in its
+clean HOME: <path>`. A clean HOME that is itself a link is refused.
 
 Executable allowances require an identity recorded by the guard: the resolved
 path and device/inode of the installed tool. A basename such as `gh`, `git` or
@@ -715,6 +955,10 @@ courier intake --once --queue-dir <dir> --state-dir <dir> --peers-file <file>
 courier intake --interval 60 --queue-dir <dir> --state-dir <dir> --peers-file <file>
 ```
 
+`--interval` (default 60 s) is how often an active intake reads. A cycle that
+queues nothing doubles the wait, up to 5 minutes (or the interval, if that is
+longer); the first cycle that queues something returns to the interval.
+
 Defaults for `--queue-dir`, `--state-dir` and `--peers-file` are under
 `<COURIER_HOME>/intake/`. Only peers with status `paired` are read. `intake.lock` in the state directory allows one
 intake process per state directory: a live holder always refuses a second start, a lock whose pid is gone is broken,
@@ -743,8 +987,9 @@ already exists. A message id more than 10 minutes ahead of local time is not rec
 the cursor moves past it, so it is retried only when the cursor next wraps around the mirror. A mirror key whose
 message or thread id is not a ULID is logged as `intake-skip` (`bad-id`) and gets no marker. A message id whose
 time cannot be decoded gets a `bad-id` done marker. A fetched row that is malformed, or whose `messageId` or
-`contextId` does not match its key, gets a `mismatch` done marker. A message whose processing throws is logged
-as `intake-error`, and the cursor still moves past it. Existing history is not queued if you run
+`contextId` does not match its key, gets a `mismatch` done marker. A message over 2 MiB is logged as `intake-error`
+(`too-large`, with its thread and message id) and gets a `too-large` done marker; the other messages are queued. A
+message whose processing throws is logged as `intake-error`, and the cursor still moves past it. Existing history is not queued if you run
 `courier intake --init-from-now` first. It marks the current mirror messages of each paired peer as done (outcome
 `init`), and it refuses to run again while a paired peer has done entries unless `--force` is given. Without it, the
 first cycle works through the backlog from the oldest id inside the 7-day window, 200 rows per cycle.
@@ -798,9 +1043,13 @@ Messages and tasks are A2A v1.0 JSON with the
 `xyz.tinycloud.courier/` in the owner's `agents` space.
 
 Inbound text and JSON `notice`/`authority` fields identify peer content as
-counterparty data, never as an owner's instruction. Message roles are assigned
-from thread/task ownership. The `courier` skill documents the authority rules
-and handoff shape. The view is TC-711.
+counterparty data, never as an owner's instruction. In `courier read` output,
+`authority: "self"` means the entry is under this agent's thread root in the
+owner's space: it was written by an agent of the same owner. That may be this
+agent or another agent of the same owner, because same-owner agents are one
+principal, as their grants are. Message roles are assigned from thread/task
+ownership. The `courier` skill documents the authority rules and handoff shape.
+The view is TC-711.
 
 ## References
 
@@ -815,7 +1064,7 @@ const code = await main(["inbox", "--json"], { prog: "courier" }); // 0, 1 (erro
 ```
 
 `prog` names Courier in usage text and hints; the TinyCloud CLI passes
-`tc courier`. The package also exports the grant, pairing, inbox and authority
+`tinycloud courier`. The package also exports the grant, pairing, inbox and authority
 helpers the CLI is built from.
 
 ## Development
@@ -826,9 +1075,17 @@ bun run --cwd packages/courier test       # offline
 bun run --cwd packages/courier test:live  # manual only
 ```
 
+`test` runs every test file under a fresh `/var/tmp/tc1920.*` home (`test/setup-home.mjs`, preloaded with `node --import`) and sets `COURIER_TEST=1`. With `COURIER_TEST=1`, a Courier home outside `COURIER_TEST_HOME` is refused with `test-home-escape`; without it nothing changes.
+
 `test:live` (`scripts/happy-path.mjs`) proves the flow end to end with two
 fresh throwaway identities on the production `https://tee.node.tinycloud.xyz`,
 including a grant installed through a short code served by a local fake
 OpenKey API. It is not part of `test` or CI.
 
 Details: TC-712
+
+### Pairing access and renewal
+
+Each side of a pairing gives the other read access for up to 30 days at a time. While your own access to TinyCloud is live, Courier renews your side before it runs out. To stop sharing with a peer, revoke the pairing.
+
+Courier requests owner approval ahead of the owner's grant ending; approve it in OpenKey, then run `courier init --wait`. After access expires, a new pairing is required. A watcher starting with expired owner access makes no network requests; use `courier init --request` for the normal owner approval flow.
