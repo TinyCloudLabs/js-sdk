@@ -157,12 +157,20 @@ export function routingResourceOf(uri: string): string {
 
 /**
  * Vault values and their names: the vault namespaces in any space, and the
- * whole `secrets` space (its root listing names every secret). Their traffic
- * may only use origins whose TLS terminates inside the node (TC-2944).
+ * whole `secrets` space (its root listing names every secret). Their traffic,
+ * including grants that name them, may only use origins whose TLS terminates
+ * inside the node (TC-2944). Accepts a signed resource URI or a bare space id.
  */
 const VAULT_KV_PATH = /^kv\/(?:vault|keys|grants)(?:\/|$)/;
 
-function isVaultResourceUri(uri: string, resource: string): boolean {
+export function isVaultResourceUri(uri: string): boolean {
+  if (uri.startsWith("urn:tinycloud:encryption:")) return false;
+  let resource: string;
+  try {
+    resource = routingResourceOf(uri);
+  } catch {
+    return false;
+  }
   if (!resource.startsWith("tinycloud:")) return false;
   if (resource.endsWith(":secrets")) return true;
   return VAULT_KV_PATH.test(uri.slice(uri.indexOf(resource) + resource.length + 1));
@@ -181,7 +189,7 @@ function invocationResources(authorization: string): { resources: Array<{ resour
     if (typeof abilities !== "object" || abilities === null || Array.isArray(abilities)) throw new ResourceNotRoutedError(uri);
     for (const action of Object.keys(abilities)) {
       const resource = routingResourceOf(uri);
-      endToEnd ||= isVaultResourceUri(uri, resource);
+      endToEnd ||= isVaultResourceUri(uri);
       // Only named, known read abilities are reads. Unknown abilities must not broaden a read-only membership.
       const read = /^(tinycloud\.(kv\/(get|list|metadata|head|sync)|sql\/(read|export)|duckdb\/(read|describe|export)|capabilities\/read|space\/(list|info)|hooks\/list))$/.test(action);
       const access: ResourceAccess = resource.startsWith("urn:tinycloud:encryption:") ? "encryption" : action === "tinycloud.space/host" ? "host" : read ? "read" : "write";

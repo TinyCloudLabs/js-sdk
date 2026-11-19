@@ -54,7 +54,8 @@ import { bases } from "multiformats/basics";
 import { ed25519 } from "@noble/curves/ed25519";
 import { ShareRecipientClient } from "./ShareRecipientClient";
 import type { ShareAccessV2, ShareRecipientClientOptions } from "./recipient-types";
-import { spaceIdsEqual, verifiedDelegationRouting } from "./portable";
+import { delegationTouchesVault, spaceIdsEqual, verifiedDelegationRouting } from "./portable";
+import { endToEndNodeHost } from "../tinycloud-node";
 import { parseSignedSiweCacao } from "./cacao";
 
 // ---------------------------------------------------------------------------
@@ -1128,9 +1129,10 @@ export class SharingService implements ISharingService {
             headers: { Authorization: wasmResult.delegation },
             redirect: "error",
           });
+          const endToEnd = await delegationTouchesVault(wasmResult.delegation);
           const registerRes = this.resourceTransport
-            ? await this.resourceTransport([{ resource: this.session.spaceId, access: "write" }], (target) => register(target.fetch, target.url))
-            : await register(this.fetchFn, this.host);
+            ? await this.resourceTransport([{ resource: this.session.spaceId, access: "write" }], (target) => register(target.fetch, target.url), { endToEnd })
+            : await register(this.fetchFn, endToEnd ? endToEndNodeHost(this.host) : this.host);
           const registrationActiveError = this.retiredGraphError();
           if (registrationActiveError) return { ok: false, error: registrationActiveError };
 
@@ -1633,7 +1635,7 @@ export class SharingService implements ISharingService {
         const response = await target.fetch(`${target.url}/delegate`, registrationInit);
         if (response.ok) registeredHost ??= target.url;
         return response;
-      });
+      }, { endToEnd: await delegationTouchesVault(result.delegation) });
       const registrationActiveError = this.retiredGraphError();
       if (registrationActiveError) return { ok: false, error: registrationActiveError };
       if (!registration.ok) {

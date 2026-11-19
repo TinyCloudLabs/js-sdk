@@ -1,8 +1,9 @@
 import "../../operations/test-support/test-bootstrap.mjs";
 import { afterEach, expect, test } from "bun:test";
-import { ed25519 } from "@noble/curves/ed25519";
+import { ed25519, x25519 } from "@noble/curves/ed25519";
 import { base58btc } from "multiformats/bases/base58";
 import {
+  importPortableDelegation,
   pkhDid,
   registryOwnerKeyV2,
   signLocationRecordV2,
@@ -21,6 +22,7 @@ const TEE = "https://tee.node.tinycloud.xyz";
 const CUSTOM = "https://self-hosted.test";
 const NODE_DID = `did:key:${base58btc.encode(Uint8Array.from([0xed, 0x01, ...ed25519.getPublicKey(new Uint8Array(32).fill(7))]))}`;
 const KV_ABILITIES = { kv: { "": ["tinycloud.kv/get", "tinycloud.kv/put", "tinycloud.kv/list", "tinycloud.kv/del", "tinycloud.kv/metadata"] } };
+const NETWORK_PUBLIC_KEY = x25519.getPublicKey(new Uint8Array(32).fill(9));
 const owner = new PrivateKeySigner(PROOF_PRIVATE_KEY);
 const originalFetch = globalThis.fetch;
 
@@ -30,7 +32,7 @@ afterEach(() => {
 
 type Attempt = { url: string; redirect: RequestRedirect | undefined; invocation?: string };
 
-async function fixture(options: { routedUrl?: string; teeDown?: boolean } = {}) {
+async function fixture(options: { routedUrl?: string; teeDown?: boolean; invokeStatus?: number } = {}) {
   const routedUrl = options.routedUrl ?? PROXIED;
   const proof = await signedRestorableSession({ abilities: KV_ABILITIES, ownedSpaceAbilities: { secrets: KV_ABILITIES } });
   const payload: LocationRecordV2Payload = {
@@ -54,7 +56,16 @@ async function fixture(options: { routedUrl?: string; teeDown?: boolean } = {}) 
     if (url.pathname === "/info") return Response.json({ protocol: 1, version: "1.0.0", features: [], nodeId: NODE_DID });
     if (url.pathname === "/.well-known/tinycloud/node-keys") return Response.json({ nodeDid: NODE_DID });
     if (url.pathname === "/delegate") return Response.json({});
-    if (url.pathname === "/invoke") return new Response("", { status: 404 });
+    if (url.pathname.startsWith("/encryption/networks/")) {
+      const networkId = decodeURIComponent(url.pathname.slice("/encryption/networks/".length));
+      return Response.json({
+        networkId, ownerDid: payload.subject, name: "default", members: [{ nodeId: NODE_DID, role: "primary" }],
+        threshold: { n: 1, t: 1 }, state: "active", publicEncryptionKey: Buffer.from(NETWORK_PUBLIC_KEY).toString("base64"),
+        alg: "x25519-aes256gcm/v1", keyVersion: 1, keyBackend: "local-one-of-one",
+        createdAt: "2026-11-19T00:00:00.000Z", updatedAt: "2026-11-19T00:00:00.000Z",
+      });
+    }
+    if (url.pathname === "/invoke") return new Response("", { status: options.invokeStatus ?? 404 });
     throw new Error(`Unexpected fixture request ${url.href}`);
   }) as typeof fetch;
   const node = new TinyCloudNode({ signer: owner, wasmBindings: new NodeWasmBindings(), tinycloudRegistryUrl: REGISTRY, autoDiscoverLocalNode: false });
@@ -87,6 +98,19 @@ test("vault reads, listings, metadata and deletes on the proxied production name
   expect(attempts.every((attempt) => attempt.redirect === "error")).toBe(true);
 });
 
+test("vault writes and key and grant requests on the proxied production name go only to the TEE origin", async () => {
+  const { node, attempts } = await fixture({ invokeStatus: 200 });
+  expect(await node.vault.put("api-key", "value")).toMatchObject({ ok: true });
+  await node.kv.put("vault/raw", "ciphertext");
+  await node.kv.get("keys/signing");
+  await node.kv.list({ prefix: "grants/" });
+  const writes = invocations(attempts);
+  expect(writes.length).toBeGreaterThanOrEqual(4);
+  expect(attempts.some((attempt) => new URL(attempt.url).pathname.startsWith("/encryption/networks/"))).toBe(true);
+  expect(origins(attempts)).toEqual(new Set([TEE]));
+  expect(attempts.every((attempt) => attempt.redirect === "error")).toBe(true);
+});
+
 test("ordinary data keeps the routed production name", async () => {
   const { node, attempts } = await fixture();
   await node.kv.get("notes");
@@ -98,8 +122,37 @@ test("a TEE failure fails the vault call and never reaches the proxied name", as
   const result = await node.vault.get("api-key", { source: "network" });
   expect(result.ok).toBe(false);
   expect(await node.kv.get("vault/api-key")).toMatchObject({ ok: false, error: { code: "NODE_NOT_RESPONDING" } });
+  expect((await node.vault.list()).ok).toBe(false);
+  expect((await node.vault.head("api-key")).ok).toBe(false);
+  expect((await node.vault.put("api-key", "value")).ok).toBe(false);
   expect(attempts.length).toBeGreaterThan(0);
+  expect(attempts.filter((attempt) => new URL(attempt.url).origin === PROXIED)).toEqual([]);
   expect(origins(attempts)).toEqual(new Set([TEE]));
+});
+
+test("grants are posted to the TEE origin when they name vault data or cannot be read, and keep their route otherwise", async () => {
+  const posted: string[] = [];
+  const redirects: Array<RequestRedirect | undefined> = [];
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    posted.push(new URL(input instanceof Request ? input.url : String(input)).origin);
+    redirects.push(init?.redirect);
+    return Response.json({ activated: [], skipped: [] });
+  }) as typeof fetch;
+  const ordinary = await signedRestorableSession({ abilities: KV_ABILITIES });
+  const secrets = await signedRestorableSession({ abilities: KV_ABILITIES, ownedSpaceAbilities: { secrets: KV_ABILITIES } });
+  const vaultPath = await signedRestorableSession({ abilities: { kv: { "vault/api-key": ["tinycloud.kv/get"] } } });
+  const unreadable = { Authorization: "not-a-signed-grant" };
+  const importOn = (delegationHeader: { Authorization: string }) => importPortableDelegation(globalThis.fetch, PROXIED, {
+    cid: "bafy-grant", delegationHeader, ownerAddress: ordinary.address, chainId: 1,
+    spaceId: ordinary.spaceId, path: "", actions: ["tinycloud.kv/get"], expiry: new Date(Date.now() + 60_000),
+    delegateDID: NODE_DID,
+  });
+
+  for (const header of [ordinary.delegationHeader, secrets.delegationHeader, vaultPath.delegationHeader, unreadable]) {
+    await importOn(header);
+  }
+  expect(posted).toEqual([PROXIED, TEE, TEE, TEE]);
+  expect(redirects).toEqual(["error", "error", "error", "error"]);
 });
 
 test("a self-hosted node keeps its own origin for vault traffic", async () => {

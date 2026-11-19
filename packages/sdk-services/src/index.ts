@@ -145,6 +145,7 @@ export {
   createResourceTransportInvocationFetch,
   routeResourceRequest,
   routingResourceOf,
+  isVaultResourceUri,
   verifyResourceDestination,
   NodeNotRespondingError,
   NodeIdentityMismatchError,
