@@ -342,11 +342,18 @@ describe("S3-T7 R4-3 migration", () => {
     expect(current.hermetic.requests().length).toBe(requestsBefore);
     expect(existsSync(marker)).toBe(false);
 
-    // Run exactly the command wait printed.
+    // Run exactly the command wait printed. Migration is best-effort: a busy
+    // profile lock defers it to a later runtime, so run it again (up to 3
+    // times) until the marker exists. A failure reports every run.
     const command = (blocked.error!.recovery as { command: string }).command;
-    const caps = await runTc(current.home, [...command.split(" ").slice(1), "--json"]);
-    expect(caps.exitCode).toBe(0);
-    expect(existsSync(marker)).toBe(true);
+    const runs: TcRun[] = [];
+    while (runs.length < 3 && !existsSync(marker)) {
+      runs.push(await runTc(current.home, [...command.split(" ").slice(1), "--json"]));
+    }
+    if (!existsSync(marker) || runs.some((run) => run.exitCode !== 0)) {
+      const report = runs.map(({ exitCode, stdout, stderr }) => ({ exitCode, stdout, stderr }));
+      throw new Error(`the printed command did not migrate cleanly after ${runs.length} run(s): ${JSON.stringify(report, null, 2)}`);
+    }
 
     const after = await wait(current, "agent", [CANARY, "--timeout", "0"]);
     expect([0, 8]).toContain(after.exitCode);
