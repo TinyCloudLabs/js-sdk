@@ -6,6 +6,8 @@ agents.tinycloud.xyz serves every TinyCloud skill and pins the CLI version they'
 
 Follow https://agents.tinycloud.xyz/onboarding. It installs the pinned TinyCloud CLI and this skill. Run the CLI as `tinycloud`; on Linux, `tc` is iproute2 traffic control at `/usr/sbin/tc`.
 
+If the installer prints `TC_INSTALL_FAILED permission denied`, stop. Send the owner the `TC_INSTALL_FAILED` and `TC_CAUSE` lines word for word, and never run `sudo`, `chmod` or `chown` yourself.
+
 `tc` remains a deprecated compatibility alias for the same executable. Existing commands, flags, exit codes, and stdout are unchanged; a POSIX alias invocation prints one notice to stderr, leaving piped JSON intact. Prefer `tinycloud` for new commands.
 
 To install this skill, or `courier` for `tinycloud courier`, without the guide:
