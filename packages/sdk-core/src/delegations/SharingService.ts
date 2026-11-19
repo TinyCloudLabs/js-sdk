@@ -96,6 +96,15 @@ function inferShortServiceFromActionUrns(
   return short;
 }
 
+/**
+ * A share link never carries a `tinycloud.delegation` action (TC-3286): whoever holds the link must not be able
+ * to revoke, create, list or renew delegations with it. A holder's own revoke is a separate, explicit grant.
+ */
+const SHARE_DELEGATION_ACTION_MESSAGE = "A share link can't carry tinycloud.delegation actions";
+function includesDelegationAction(actions: readonly string[]): boolean {
+  return actions.some((action) => action.startsWith("tinycloud.delegation/"));
+}
+
 // =============================================================================
 // Constants
 // =============================================================================
@@ -467,7 +476,8 @@ export interface SharingServiceConfig {
  * Whether a session can issue a sharing delegation from its own authority:
  * `"ok"` (an uncaveated entry covers it), `"caveated"` (only caveated entries
  * cover it; their caveats cannot be carried into a child delegation) or
- * `"not-covered"`.
+ * `"not-covered"` (no entry covers it, or it asks for a `tinycloud.delegation`
+ * action, which no share link carries).
  */
 export type ShareDelegationPreflight = "ok" | "caveated" | "not-covered";
 
@@ -912,7 +922,9 @@ export class SharingService implements ISharingService {
       if (!params.path) return invalid("path is required");
       // Build full path with prefix (matches how KVService stores data)
       // If pathPrefix is "demo-app" and path is "hello", fullPath is "demo-app/hello"
-      return { ok: true, data: [{ path: fullPath(params.path), actions: params.actions ?? DEFAULT_READ_ACTIONS }] };
+      const actions = params.actions ?? DEFAULT_READ_ACTIONS;
+      if (includesDelegationAction(actions)) return invalid(SHARE_DELEGATION_ACTION_MESSAGE);
+      return { ok: true, data: [{ path: fullPath(params.path), actions }] };
     }
     if (params.path !== undefined || params.actions !== undefined) return invalid("Give either path and actions, or resources");
     if (params.resources.length === 0 || params.resources.length > MAX_SHARE_RESOURCES) {
@@ -922,6 +934,7 @@ export class SharingService implements ISharingService {
     for (const resource of params.resources) {
       if (!resource.path) return invalid("path is required");
       const actions = resource.actions ?? DEFAULT_READ_ACTIONS;
+      if (includesDelegationAction(actions)) return invalid(SHARE_DELEGATION_ACTION_MESSAGE);
       const path = fullPath(resource.path);
       if (params.resources.length > 1) {
         if (canonicalCapabilityPath(path) === null || path.includes("*")) return invalid("Each shared resource needs a canonical path");
@@ -947,10 +960,11 @@ export class SharingService implements ISharingService {
    * - `"not-covered"`: no entry covers it, or there is no session.
    *
    * It does not consult `onRootDelegationNeeded`, so a signer-backed session
-   * may still generate when this is not `"ok"`.
+   * may still generate when this is not `"ok"`. A `tinycloud.delegation` action
+   * is always `"not-covered"`: {@link generate} refuses it whatever the authority.
    */
   preflightGenerate(params: Pick<GenerateShareParams, "path" | "actions" | "expiry">): ShareDelegationPreflight {
-    if (!this.session || !params.path) return "not-covered";
+    if (!this.session || !params.path || includesDelegationAction(params.actions ?? DEFAULT_READ_ACTIONS)) return "not-covered";
     const fullPath = this.pathPrefix
       ? `${this.pathPrefix}/${params.path}`.replace(/\/+/g, "/")
       : params.path;
@@ -1549,6 +1563,12 @@ export class SharingService implements ISharingService {
             DelegationErrorCodes.PERMISSION_DENIED,
             "Requested actions exceed the sharing-link capability"
           ),
+        };
+      }
+      if (includesDelegationAction(actions)) {
+        return {
+          ok: false,
+          error: createError(DelegationErrorCodes.INVALID_INPUT, SHARE_DELEGATION_ACTION_MESSAGE),
         };
       }
       const service = inferShortServiceFromActionUrns(actions);

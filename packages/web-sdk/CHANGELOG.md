@@ -1,5 +1,49 @@
 # @tinycloudlabs/web-sdk
 
+## 3.13.0-beta.7
+
+### Minor Changes
+
+- 9f3ca26: `DelegatedAccess` (from `useDelegation`) can read Secrets-app secrets through the delegation: `access.encryption` and `access.readSecret({ name, scope? })`, which returns the same `SecretReadResult` as `TinyCloudNode.readSecret`. A read needs `tinycloud.kv/get` on the secret's record and `tinycloud.encryption/decrypt` in the delegation. The decrypt permission isn't limited to that secret: it covers the owner's default network.
+
+  The new `@tinycloud/node-sdk/runtime-grants` and `@tinycloud/node-sdk/secret-read` entry points are internal: don't import them directly, as they can change in any release.
+
+  Details: TC-3338
+
+- 9f3ca26: `grantRuntimePermissions` (and `TinyCloudWeb.requestPermissions`) asks for one approval for a request across several spaces and returns one `PortableDelegation` per space. A requested space that isn't set up is never created: the call throws `MissingSpacesError` (`code: "SPACE_NOT_FOUND"`, `missingSpaceIds`, and `delegations` for the spaces that were granted). A space this account doesn't own throws before any approval (`code: "SPACE_NOT_OWNED"`). `MissingSpacesError` is exported from `@tinycloud/node-sdk`, `@tinycloud/node-sdk/core` and `@tinycloud/web-sdk`.
+
+  Details: TC-3338
+
+### Patch Changes
+
+- Updated dependencies [9f3ca26]
+- Updated dependencies [9f3ca26]
+  - @tinycloud/node-sdk@3.13.0-beta.7
+
+## 3.13.0-beta.6
+
+### Patch Changes
+
+- @tinycloud/node-sdk@3.13.0-beta.6
+- @tinycloud/replica@0.4.6-beta.1
+- @tinycloud/sdk-core@3.13.0-beta.6
+
+## 3.13.0-beta.5
+
+### Patch Changes
+
+- Updated dependencies [c7741ab]
+  - @tinycloud/sdk-core@3.13.0-beta.5
+  - @tinycloud/node-sdk@3.13.0-beta.5
+
+## 3.13.0-beta.4
+
+### Patch Changes
+
+- Updated dependencies [1f961e4]
+  - @tinycloud/sdk-core@3.13.0-beta.4
+  - @tinycloud/node-sdk@3.13.0-beta.4
+
 ## 3.13.0-beta.3
 
 ### Minor Changes
