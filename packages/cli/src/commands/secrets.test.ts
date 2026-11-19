@@ -1427,7 +1427,7 @@ describe("CLI secrets commands", () => {
     await runSecretsCommand(["secrets", "list"]);
 
     expect(recorded.listCalls).toEqual([undefined, undefined]);
-    expect(recorded.approvalReasons).toEqual(["Allow `tc secrets list`."]);
+    expect(recorded.approvalReasons).toEqual(["See the names of your secrets."]);
     expect(recorded.approvalReasons[0]).not.toMatch(/tinycloud\.[a-z0-9_-]+:/i);
     expect(recorded.permissionRequests).toEqual([
       {
@@ -1501,7 +1501,7 @@ describe("CLI secrets commands", () => {
       { name: "ANTHROPIC_API_KEY", options: undefined },
       { name: "ANTHROPIC_API_KEY", options: undefined },
     ]);
-    expect(recorded.approvalReasons).toEqual(["Allow `tc secrets get ANTHROPIC_API_KEY`."]);
+    expect(recorded.approvalReasons).toEqual(["Read the secret ANTHROPIC_API_KEY."]);
     expect(recorded.approvalReasons[0]).not.toMatch(/tinycloud\.[a-z0-9_-]+:/i);
     expect(recorded.permissionRequests).toEqual([
       {

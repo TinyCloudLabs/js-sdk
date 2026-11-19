@@ -54,8 +54,8 @@ export const ONBOARD_STEPS: ReadonlyArray<{
 export function registerOnboardCommand(program: Command): void {
   program
     .command("onboard")
-    .description("Set up this computer with its owner's OpenKey approval and a starting grant for 30 days. Prints a short approval link, automatically retrieves and verifies the result, saves it durably, then acknowledges delivery. Re-run an interrupted command to resume.")
-    .option("--with <tasks>", "Tasks to authorize: apps (default), feed (Home/feed only), or apps,feed")
+    .description("Sets up this computer with its owner's OpenKey approval and a 30-day starting grant. Prints a short approval link, then collects, checks and saves the result. An interrupted run resumes when the same command runs again.")
+    .option("--with <tasks>", "Tasks to authorize: apps (default), feed (the Feed only) or apps,feed")
     .option("--code <code>", "Manual fallback return code only; automatic short-link approvals do not produce a code")
     .option("--timeout <duration>", APPROVAL_TIMEOUT_OPTION_DESCRIPTION)
     .action(async (options, cmd) => {
@@ -101,7 +101,7 @@ export function registerOnboardCommand(program: Command): void {
         };
 
         for (const [index, step] of steps.entries()) {
-          const reason = `TinyCloud onboarding, step ${index + 1} of ${steps.length}: ${step.asks}`;
+          const reason = step.asks;
           currentStep = index + 1;
           const session = await ProfileManager.getSession(ctx.profile) as Record<string, unknown> | null;
           if (!sessionStateIsUsable(storedSessionState(session, profile).state)) {

@@ -344,7 +344,7 @@ describe("a profile this command created and removed leaves no directory and no 
     registerOnboardCommand(program);
     await capturing(() => program.parseAsync(["node", "tc", "--profile", profileName, "onboard", "--with", "feed"], { from: "node" }));
     expect(acquisitionReasons).toEqual([
-      "TinyCloud onboarding, step 1 of 1: Use Home and your feed, and discover your spaces and apps, for 30 days.",
+      "Set up TinyCloud on this computer: use your Feed and see your spaces and apps, for 30 days.",
     ]);
     expect(acquisitionReasons[0]).not.toMatch(/tinycloud\.[a-z0-9_-]+:/i);
     expect(recordedErrors).toEqual([expect.objectContaining({ code: "OPENKEY_PROOF_INVALID" })]);
@@ -742,7 +742,7 @@ describe("ensureDelegationAuthority: a refused approval of an established profil
     await expect(ensure(profile, [request("default"), request("applications")], { openKeyAcquisition: omittedDefault as never }))
       .rejects.toMatchObject({
         code: "OPENKEY_APPROVAL_NARROWER",
-        message: expect.stringContaining('The owner did not approve access to "default". This task needs all requested spaces.'),
+        message: expect.stringContaining('The owner didn\'t approve access to "default", and this task needs every requested space, so no session was saved.'),
       });
     expect(approvals).toBe(1);
     expect(files(profileName)).toEqual({ key: true, pending: false, session: false });

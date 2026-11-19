@@ -395,7 +395,7 @@ export function validateLoginPermissions(permissions: PermissionEntry[]): void {
     typeof p.path !== "string" || !p.actions?.length ||
     p.actions.some((action) => !action.startsWith(`${p.service}/`)),
   )) {
-    throw new CLIError("INVALID_LOGIN_SCOPE", "Login requires non-empty permissions in named TinyCloud spaces (raw tinycloud.encryption network entries may accompany them).", ExitCode.USAGE_ERROR);
+    throw new CLIError("INVALID_LOGIN_SCOPE", "Sign-in needs permissions in at least one named TinyCloud space (encryption network entries can be included too).", ExitCode.USAGE_ERROR);
   }
 }
 
@@ -608,6 +608,7 @@ export function verifyScopedLogin(
   expected: SignedSessionExpectations = {},
 ): { session: VerifiedScopedSession; legacyNested: PermissionEntry[] } {
   const notStored = expected.purpose === "grant" ? "No grant was stored." : "No scoped session was saved.";
+  const soNotStored = expected.purpose === "grant" ? "so no grant was stored." : "so no session was saved.";
   let signed: SignedSession;
   try {
     signed = verifySignedSession(data, key, sessionDid, expected);
@@ -630,7 +631,7 @@ export function verifyScopedLogin(
     .map(p => normalizePkhIdentifier(ownerSpaceId(p.space ?? "", signed.ownerDid))))].sort();
   const primary = spaces.find(space => space.endsWith(":applications")) ?? spaces[0];
   if (primary && normalizePkhIdentifier(spaceId) !== primary) {
-    throw new CLIError("OPENKEY_SCOPE_MISMATCH", `The approved primary route differs from the requested space. ${notStored}`, ExitCode.PERMISSION_DENIED);
+    throw new CLIError("OPENKEY_SCOPE_MISMATCH", `OpenKey approved a different space than the one requested, ${soNotStored}`, ExitCode.PERMISSION_DENIED);
   }
   if (spaces.length > 1 || data.requestedSpaces !== undefined) {
     const entries = data.requestedSpaces;
@@ -643,7 +644,7 @@ export function verifyScopedLogin(
         (entry.spacePending !== undefined && entry.spacePending !== true) ||
         (entry.spaceError !== undefined && typeof entry.spaceError !== "string")) ||
       (data.spaceReady === true) !== entries.every(entry => entry.spaceReady === true)) {
-      throw new CLIError("OPENKEY_SCOPE_MISMATCH", `OpenKey's requested-space status differs from the requested spaces. ${notStored}`, ExitCode.PERMISSION_DENIED);
+      throw new CLIError("OPENKEY_SCOPE_MISMATCH", `OpenKey's approval doesn't match the requested spaces, ${soNotStored}`, ExitCode.PERMISSION_DENIED);
     }
   }
   // Old OpenKey signs requested decrypt inside the session space rather than
@@ -679,8 +680,8 @@ export function verifyScopedLogin(
       .filter(permission => !approvedSpaces.has(normalizePkhIdentifier(ownerSpaceId(permission.space ?? "default", signed.ownerDid))))
       .map(permission => permission.space ?? "default"))];
     const message = missingSpaces.length > 0
-      ? `The owner did not approve access to ${missingSpaces.map(space => `"${space}"`).join(", ")}. This task needs all requested spaces. ${notStored}`
-      : `The approval was narrower than the request. Approve all of it, or ask the agent to request less. ${notStored}`;
+      ? `The owner didn't approve access to ${missingSpaces.map(space => `"${space}"`).join(", ")}, and this task needs every requested space, ${soNotStored}`
+      : `The approval was narrower than the request, ${soNotStored}`;
     throw new CLIError("OPENKEY_APPROVAL_NARROWER", message, ExitCode.PERMISSION_DENIED);
   }
   // The SIWE proof stays intact for validation/diagnostics. Only effective,

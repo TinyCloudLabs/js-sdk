@@ -320,8 +320,12 @@ async function ensureSecretsNode(
 }
 
 function secretCommandReason(action: SecretAction, name?: string): string {
-  const verb = action === "del" ? "delete" : action;
-  return `Allow \`tc secrets ${verb}${name ? ` ${name}` : ""}\`.`;
+  switch (action) {
+    case "list": return "See the names of your secrets.";
+    case "get": return name ? `Read the secret ${name}.` : "Read your secrets.";
+    case "put": return name ? `Save the secret ${name}.` : "Save secrets.";
+    case "del": return name ? `Delete the secret ${name}.` : "Delete secrets.";
+  }
 }
 
 async function runSecretOperation<T>(params: {

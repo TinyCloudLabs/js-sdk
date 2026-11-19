@@ -431,7 +431,7 @@ function validateDevicePermissions(permissions: PermissionEntry[]): void {
   const spaces = new Set(permissions.filter(permission => !isRawEncryptionPermission(permission))
     .map(permission => normalizePkhIdentifier(permission.space!)));
   if (spaces.size !== 1) {
-    throw new CLIError("INVALID_LOGIN_SCOPE", "Device authorization requires permissions in one TinyCloud space.", ExitCode.USAGE_ERROR);
+    throw new CLIError("INVALID_LOGIN_SCOPE", "Device sign-in needs permissions in exactly one TinyCloud space.", ExitCode.USAGE_ERROR);
   }
 }
 
