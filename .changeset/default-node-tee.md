@@ -9,6 +9,6 @@
 "@tinycloud/vfs": patch
 ---
 
-Default node is `https://tee.node.tinycloud.xyz`. The CLI, the hosted MCP server, Courier, the node SDK and the VFS provider use it when no host is set. Profiles that already store a host keep it.
+The node SDK, sdk-core, the server package and the VFS provider use `https://tee.node.tinycloud.xyz` when no host is set, the same default as the CLI, the hosted MCP server and Courier. Profiles and configs that already name a host keep it.
 
 Details: TC-2923
