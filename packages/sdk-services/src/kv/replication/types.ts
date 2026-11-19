@@ -1,5 +1,5 @@
 import type { Result, FetchFunction } from "../../types";
-import type { KVGetOptions, KVListOptions, KVResponse } from "../types";
+import type { KVGetOptions, KVListEntry, KVListOptions, KVResponse } from "../types";
 import type { ReplicaGateReason, ReplicaLifecycleGate, ReplicaPurgeLocalCopyResult, ReplicaSessionStamp } from "./lifecycle";
 import type { ReplicaQuotaSpec } from "./quota";
 import type { ReplicaConsentAnchor, ReplicaGrantPolicy } from "./grantPolicyTypes";
@@ -457,6 +457,7 @@ export interface KVReplicationDeps {
 
 export interface KVListPage {
   keys: string[];
+  entries?: KVListEntry[];
   truncated?: boolean;
   nextCursor?: string;
 }
