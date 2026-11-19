@@ -3653,12 +3653,12 @@ export const approvedTc3286ShareNoDelegationActionsRoot: LogoutRatchet = {
   "reason": "SharingService refuses tinycloud.delegation actions in share links (sharing.generate, the child delegation a recipient creates from a received link, and preflightGenerate); sdk-core is bundled into the web-sdk root. Canonical Node 22/Bun 1.3.14 CI on #1043 (800a57fb, master 400cf7f1 merged in) measured index.mjs 1528939 and index.cjs 1462340 gzip -9 bytes: +103 and +48 over the TC-3285 ceilings 1528836 and 1462292. No other ceiling moves. Details: TC-3286"
 };
 
-/** The exact TC-3284 per-secret named-key root allowance from canonical CI. */
+/** The exact TC-3284 per-secret named-key root allowance on the combined source. */
 const approvedTc3284PerSecretRoot: LogoutRatchet = {
   "label": "per-secret named keys (TC-3284)",
-  "ruling": "test-ruling: TC-858 ratchet row tc3284PerSecretRoot. Naomi approved the exact #1050 canonical CI root gzip bytes with no margin.",
-  "base": "991ddb560d494e0b61424bff2b2c7e28541e522b",
-  "sourceCommits": ["141fa54869c360e55c6b8c4255f19bac989d4b79"],
+  "ruling": "test-ruling: TC-858 ratchet row tc3284PerSecretRoot. Naomi approved the exact combined-root gzip bytes after the #1043 master merge, with no margin.",
+  "base": "60d5e44335681892fe2c302a5e521215616b4ba9",
+  "sourceCommits": ["141fa54869c360e55c6b8c4255f19bac989d4b79", "bfd6eb8b0503ab267fb49e514a8beb58674b3bbd"],
   "canonicalCI": {
     "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44418619173",
     "jobs": [
@@ -3667,10 +3667,10 @@ const approvedTc3284PerSecretRoot: LogoutRatchet = {
     ]
   },
   "root": {
-    "delta": { "index.mjs": 1965, "index.cjs": 1553 },
-    "ceiling": { "index.mjs": 1530801, "index.cjs": 1463845 }
+    "delta": { "index.mjs": 2064, "index.cjs": 1772 },
+    "ceiling": { "index.mjs": 1531003, "index.cjs": 1464112 }
   },
-  "reason": "The named-key Secrets APIs and exact read delegation ship in the web-sdk root. SQLite and PostgreSQL canonical CI agree on the aggregate gzip -9 bytes. No non-root ceiling moves."
+  "reason": "The named-key Secrets APIs and exact read delegation ship in the web-sdk root. The linked SQLite and PostgreSQL CI jobs measured the pre-merge runtime. A local production build with Node 22, Bun 1.3.14 and Rust 1.99.0 on the combined source measured index.mjs 1531003 and index.cjs 1464112 gzip -9 bytes. No non-root ceiling moves."
 };
 
 export const approvedLedgerRows: Record<string, unknown> = {
