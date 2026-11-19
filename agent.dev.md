@@ -180,7 +180,8 @@ version metadata and make the immutable release checkout fail the clean-tree pub
   canonical write outcomes must not be truncated. Package/review state lives
   under `packages/mcp/plugin`. Default-branch merges and deployment require
   explicit owner approval; never enable auto-merge or bypass that gate.
-- `/claude/mcp`, `/grok/mcp` and `/muse/mcp` are the same restricted surface as
+- `/claude/mcp`, `/grok/mcp`, `/muse/mcp`, `/perplexity/mcp`, `/mistral/mcp` and
+  `/copilot/mcp` are the same restricted surface as
   `/chatgpt/mcp`, one address per assistant directory (`RESTRICTED_ADDRESS_PREFIXES`
   in `packages/mcp/src/http.ts`). Each is its own OAuth audience with its own
   approval route and tenant state. A new prefix needs the matching OpenKey
@@ -189,6 +190,24 @@ version metadata and make the immutable release checkout fail the clean-tree pub
   directory's review asks for goes on that address only: `/claude/mcp` repeats
   each tool's title as `annotations.title` (`ANNOTATION_TITLE_PREFIXES`), and
   the other addresses' `tools/list` must stay byte-identical.
+- `/gemini/mcp` (Google's Connected Apps registry) is restricted the same way
+  but lists its own eleven typed tools from `packages/mcp/src/gemini-tools.ts`,
+  because Google's policy rules out instructions in a result, model-written SQL
+  and a batch tool, and ignores structured content. The tools call the same
+  `tinycloud.apps.*` operations and build keys with the layout helpers exported
+  from `@tinycloud/operations/tc-apps`. Google snapshots tools and instructions
+  at publication: once a version is published, never edit that file or
+  `gemini-tools.snapshot.json` to make the snapshot test pass. Serve the next
+  version from a new prefix with its own file (new OpenKey audience, callback
+  and token-status registration, as for any prefix).
+- `offline_access` is never a required scope: adding it to `requiredScopes`
+  refuses every token without it. `/mistral/mcp` and `/perplexity/mcp` name it
+  as a hint in the challenge and resource metadata only
+  (`REFRESH_SCOPE_HINT_PREFIXES`), because those clients ask for the scopes
+  they are shown and OpenKey issues a refresh token only with it. MCP SEP-2207
+  advises against the hint, so keep it off the other addresses, and never turn
+  it on for an address that already has connections (`invalid_scope` for
+  clients registered without it).
 - TC-2393's hosted-client requirements and source/live evidence are in
   `packages/mcp/plugin/client-compatibility.md`. Keep custom connection support
   separate from official-directory acceptance; metadata is not authenticated QA.

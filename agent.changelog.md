@@ -3,6 +3,16 @@
 Track changes to agent-facing development guidance for the TinyCloud JavaScript SDK. Add a concise
 entry when `agent.dev.md` or related agent workflow expectations change.
 
+## 2026-11-19
+
+- Added the restricted addresses `/perplexity/mcp`, `/mistral/mcp` and
+  `/copilot/mcp` (the same five tools as `/chatgpt/mcp`) and `/gemini/mcp`,
+  which lists its own typed tools for Google's Connected Apps policy.
+  `agent.dev.md` records that the Gemini tool file and its snapshot are frozen
+  once a version is published and that a change is a new address, and the rule
+  for the `offline_access` hint on `/mistral/mcp` and `/perplexity/mcp`. The
+  other five addresses are unchanged.
+
 ## 2026-11-17
 
 - TC-2416: the restricted addresses no longer offer or accept a catalog app in

@@ -563,29 +563,36 @@ test("challenges unauthenticated MCP requests with resource metadata", async () 
   expect(response.headers.get("access-control-allow-origin")).toBeNull();
 });
 
-for (const prefix of ["chatgpt", "claude", "grok", "muse"]) {
+// The addresses that also name offline_access; see REFRESH_SCOPE_HINT_PREFIXES in http.ts.
+const REFRESH_HINTED = ["mistral", "perplexity"];
+for (const prefix of ["chatgpt", "claude", "grok", "muse", "perplexity", "mistral", "copilot", "gemini"]) {
   test(`/${prefix}/mcp discovery and challenges bind its own resource audience`, async () => {
     const app = await testApp();
     const metadata = await app.fetch(request(`/.well-known/oauth-protected-resource/${prefix}/mcp`));
     expect(metadata.status).toBe(200);
     const metadataDocument = await metadata.json() as Record<string, unknown>;
+    const scopes = REFRESH_HINTED.includes(prefix) ? ["tinycloud:mcp", "offline_access"] : ["tinycloud:mcp"];
     expect(metadataDocument).toMatchObject({
       resource: `https://mcp.test/${prefix}/mcp`,
       authorization_servers: ["https://openkey.test/api/auth"],
-      scopes_supported: ["tinycloud:mcp"],
     });
+    expect(metadataDocument.scopes_supported).toEqual(scopes);
     expect(metadataDocument.bearer_methods_supported).toBeUndefined();
     const unauthenticated = await app.fetch(request(`/${prefix}/mcp`, { method: "POST" }));
     expect(unauthenticated.status).toBe(401);
-    expect(unauthenticated.headers.get("www-authenticate")).toContain(
+    const challenge = unauthenticated.headers.get("www-authenticate");
+    expect(challenge).toContain(
       `resource_metadata="https://mcp.test/.well-known/oauth-protected-resource/${prefix}/mcp"`,
     );
+    // The challenge names what a token must carry. Only the addresses whose client would otherwise never ask for a
+    // refresh token also name offline_access, as a hint; every other address, and every one with connections, does not.
+    expect(challenge).toContain(`scope="${scopes.join(" ")}"`);
   });
 }
 
 test("an address no assistant was given is not a resource", async () => {
   const app = await testApp();
-  for (const path of ["/gemini/mcp", "/.well-known/oauth-protected-resource/gemini/mcp", "/claude", "/claude/mcp/extra"]) {
+  for (const path of ["/unlisted/mcp", "/.well-known/oauth-protected-resource/unlisted/mcp", "/claude", "/claude/mcp/extra", "/gemini", "/gemini/mcp/v2"]) {
     expect((await app.fetch(request(path, { method: path.endsWith("/mcp") ? "POST" : "GET" }))).status, path).toBe(404);
   }
 });

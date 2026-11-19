@@ -33,8 +33,9 @@ source versus live deployment evidence. It is not authenticated client acceptanc
 ## Hosted personal-record behavior
 
 Context can persist an IANA timezone; query can overwrite or rebuild derived
-data. Both therefore advertise `readOnlyHint: false` and
-`destructiveHint: true`. Private personal-record operations advertise
+data. Both therefore advertise `readOnlyHint: false`, and `destructiveHint:
+false` because neither deletes a record; only `tinycloud_apps_write` is
+destructive. Private personal-record operations advertise
 `openWorldHint: false`; this is not a claim that the hosted service cannot see
 plaintext. Use these tools only for requested personal-record tasks, not
 credentials, payment-card data, government identifiers or protected health
@@ -136,14 +137,35 @@ which binds them to the requesting OpenKey account and stored request.
 
 The hosted server also serves a restricted surface with only `tinycloud_connect`
 and the four personal-record tools, for assistant directories: `/chatgpt/mcp`,
-`/claude/mcp`, `/grok/mcp` and `/muse/mcp` beside `/mcp`. Every address is its
+`/claude/mcp`, `/grok/mcp`, `/muse/mcp`, `/perplexity/mcp`, `/mistral/mcp` and
+`/copilot/mcp` beside `/mcp`. Every address is its
 own OAuth resource with its own protected-resource metadata, approval route
 (`/<prefix>/connect`) and tenant state, so a token or approval for one opens no
 other. An address works only once OpenKey issues tokens for its audience and
 accepts its approval callback, and the server's token-status client is
-registered for it. The addresses list the same five tools. `/claude/mcp` also
+registered for it. These addresses list the same five tools. `/claude/mcp` also
 repeats each tool's `title` as `annotations.title`, where Claude's directory
-reads the listing name; the other addresses do not.
+reads the listing name; the other addresses do not. `/mistral/mcp` and
+`/perplexity/mcp` also name `offline_access` beside `tinycloud:mcp` in their
+401 challenge and resource metadata, as a hint to a client that asks only for
+the scopes it is shown: OpenKey issues a refresh token only with that scope.
+A token still needs `tinycloud:mcp` alone.
+
+`/gemini/mcp` is the address for Google's Connected Apps registry and is the
+one restricted address with its own tools. Google does not allow a result to
+carry instructions, a tool that runs model-written SQL, or one tool that
+batches different actions, and it does not read structured content. So this
+address lists eleven typed tools (`tinycloud_connect`, `tinycloud_list_apps`,
+`tinycloud_get_app`, `tinycloud_list_records`, `tinycloud_set_timezone`,
+`tinycloud_create_app`, `tinycloud_create_kind`, `tinycloud_create_record`,
+`tinycloud_update_record`, `tinycloud_move_record`, `tinycloud_delete_record`)
+that build the record keys, ids and catalog entries themselves and call the
+same personal-record operations. Results are one JSON text part, never the
+rules text; every tool that writes is marked destructive, so Gemini asks first;
+Health Log, Recipes and the searchable copy are not offered. Google snapshots
+the tools and instructions when a version is published, so they are literals
+in `src/gemini-tools.ts` pinned by `src/gemini-tools.snapshot.json`: a change
+after publication is a new address, not an edit.
 
 For personal records, ask naturally: “Add renew passport to my todos.”
 `tinycloud_apps_context` supplies the rules and the app list, `tinycloud_apps_read`

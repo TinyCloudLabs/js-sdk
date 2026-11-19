@@ -38,6 +38,7 @@ import {
   NATIVE_SERVICE_CREDENTIAL_HEADER,
   serviceCredentialMatches,
 } from "./native-auth.js";
+import { GEMINI_INSTRUCTIONS, registerGeminiTools } from "./gemini-tools.js";
 import { MCP_SERVER_NAME } from "./server.js";
 import { createJsonSchemaValidator, registerTinyCloudTools } from "./tools.js";
 import type { McpOperationInvocation } from "./tools.js";
@@ -70,9 +71,18 @@ export interface HostedMcpApp {
  * plugin's, and one for each assistant directory that lists TinyCloud, so a
  * change one directory's review demands does not alter what another lists.
  * Each is its own OAuth resource at `<prefix>/mcp` with its own approval route
- * and tenant state. All register the same tools.
+ * and tenant state. All register the same tools, except Gemini's.
  */
-const RESTRICTED_ADDRESS_PREFIXES = ["chatgpt", "claude", "grok", "muse"] as const;
+const RESTRICTED_ADDRESS_PREFIXES = [
+  "chatgpt", "claude", "grok", "muse", "perplexity", "mistral", "copilot", "gemini",
+] as const;
+
+/**
+ * The address listed in Google's Connected Apps registry. Google's policy
+ * rules out the shared tools (instructions in a result, model-written SQL, a
+ * batch tool), so it serves its own fixed set; see `gemini-tools.ts`.
+ */
+const GEMINI_ADDRESS_PREFIX = "gemini";
 
 /**
  * Addresses whose tools repeat their title as `annotations.title`. Claude's
@@ -80,6 +90,21 @@ const RESTRICTED_ADDRESS_PREFIXES = ["chatgpt", "claude", "grok", "muse"] as con
  * when it is missing. The other directories list the tools as they are.
  */
 const ANNOTATION_TITLE_PREFIXES: ReadonlySet<string> = new Set(["claude"]);
+
+/**
+ * Addresses whose 401 challenge and resource metadata also name `offline_access`.
+ * OpenKey issues a refresh token only when the client asks for that scope.
+ * Mistral was seen asking for exactly the scopes the challenge names, so
+ * without it a connection there ends with the 12-hour access token; the same
+ * is expected of Perplexity, which is not yet seen. This is a hint only: the
+ * scope a token must carry stays `tinycloud:mcp`. MCP's SEP-2207 advises
+ * resource servers against naming it (a refresh token is the client's wish,
+ * not the resource's), so it stays off everywhere else. Never add an address
+ * that already has connections: a client registered with `tinycloud:mcp`
+ * alone is refused (`invalid_scope`) when it starts asking for more.
+ */
+const REFRESH_SCOPE_HINT_PREFIXES: ReadonlySet<string> = new Set(["mistral", "perplexity"]);
+const REFRESH_SCOPE = "offline_access";
 
 export function createHostedMcpApp(config: HostedMcpConfig): HostedMcpApp {
   if (config.nativeServiceCredential !== undefined &&
@@ -102,7 +127,11 @@ export function createHostedMcpApp(config: HostedMcpConfig): HostedMcpApp {
       nativeServiceCredential: undefined,
       stateDir: join(config.stateDir, prefix),
       approvalPath: connectUrl.pathname,
-    }, restrictedUrl, "public", statusFor(restrictedUrl), ANNOTATION_TITLE_PREFIXES.has(prefix));
+    }, restrictedUrl, "public", statusFor(restrictedUrl), {
+      annotationTitles: ANNOTATION_TITLE_PREFIXES.has(prefix),
+      geminiTools: prefix === GEMINI_ADDRESS_PREFIX,
+      refreshScopeHint: REFRESH_SCOPE_HINT_PREFIXES.has(prefix),
+    });
     surfaces.push(restricted);
     for (const owned of [
       restrictedUrl,
@@ -126,7 +155,11 @@ function createHostedSurface(
   resourceUrl: URL,
   surface: "hosted" | "public",
   tokenStatus: TokenStatusChecker | undefined,
-  annotationTitles = false,
+  { annotationTitles = false, geminiTools = false, refreshScopeHint = false }: {
+    readonly annotationTitles?: boolean;
+    readonly geminiTools?: boolean;
+    readonly refreshScopeHint?: boolean;
+  } = {},
 ): HostedMcpApp {
   const connectPath = config.approvalPath ?? "/connect";
   const callbackPath = `${connectPath}/callback`;
@@ -166,11 +199,26 @@ function createHostedSurface(
         jsonSchemaValidator: validator,
         instructions: nativeOwner === undefined
           ? surface === "public"
-            ? "Use TinyCloud only for the user's requested task. Call tinycloud_connect first. If an operation returns authority_required, present approval.url and wait for the user's approval before retrying. If approval is declined, stop that operation. For personal records, call tinycloud_apps_context first. Never request or store passwords, API keys, authentication codes, government identifiers, payment-card data, or protected health information."
+            ? geminiTools
+              ? GEMINI_INSTRUCTIONS
+              : "Use TinyCloud only for the user's requested task. Call tinycloud_connect first. If an operation returns authority_required, present approval.url and wait for the user's approval before retrying. If approval is declined, stop that operation. For personal records, call tinycloud_apps_context first. Never request or store passwords, API keys, authentication codes, government identifiers, payment-card data, or protected health information."
             : "Call tinycloud_connect first. If an operation returns authority_required, present approval.url and wait for approval before retrying unchanged. For personal records such as weight, workouts, goals or todos, call tinycloud_apps_context first. Other app data can be discovered with account-space listing, KV cursors and SQL schema/query tools without a knowledge bundle. If the user wants reusable read access, explicitly select prefixes/databases with tinycloud_auth_read_scope; never silently broaden a key read. Use tinycloud_read for complete bounded KV/SQL delivery and replay its continuation with the original resource."
           : "Use only the user's requested connector-transcript data. The signed TinyCloud grant authorizes read-only SQL and transcript KV reads. Use tinycloud_read for large values, retaining the original resource and returned digest-bound continuation.",
       },
     );
+    if (geminiTools) {
+      registerGeminiTools(server, {
+        profile: "agent",
+        explicitProfile: true,
+        allowOwnerProfile: false,
+        stateRoot,
+        beforeOperation: () => store.validateTenant(subject, ownerDids),
+        transformOperationResult: (result: unknown, invocation: McpOperationInvocation) =>
+          store.decorateAuthorityResult(subject, ownerDids, result, invocation),
+        connect: () => store.connectStatus(subject, ownerDids),
+      }, validator);
+      return server;
+    }
     registerTinyCloudTools(server, {
       surface,
       profile: "agent",
@@ -200,7 +248,7 @@ function createHostedSurface(
     oauthMetadata: config.oauthMetadata,
     resourceServerUrl: resourceUrl,
     serviceDocumentationUrl: new URL("https://docs.tinycloud.xyz/cli/mcp"),
-    scopesSupported: [REQUIRED_SCOPE],
+    scopesSupported: refreshScopeHint ? [REQUIRED_SCOPE, REFRESH_SCOPE] : [REQUIRED_SCOPE],
     resourceName: surface === "public" ? "TinyCloud personal records" : "TinyCloud hosted MCP",
   };
   const discoveryRoutes = surface === "hosted"
@@ -560,7 +608,8 @@ function createHostedSurface(
       if (url.pathname !== resourceUrl.pathname) return json({ error: "Not found" }, 404);
       if (request.method === "OPTIONS") return mcpCors(new Response(null, { status: 204 }), request);
       const auth = await authenticate(request);
-      return mcpCors(auth instanceof Response ? auth : await handler.fetch(request, { authInfo: auth }), request);
+      if (!(auth instanceof Response)) return mcpCors(await handler.fetch(request, { authInfo: auth }), request);
+      return mcpCors(refreshScopeHint ? withRefreshScopeHint(auth) : auth, request);
     },
     close: () => handler.close(),
   };
@@ -659,6 +708,15 @@ function canonicalResourceUrl(url: URL): URL {
   resource.pathname = resource.pathname.replace(/\/+$/, "") || "/mcp";
   if (resource.pathname === "/") resource.pathname = "/mcp";
   return resource;
+}
+
+/** The bearer challenge with `offline_access` beside the required scope; what a token must carry is unchanged. */
+function withRefreshScopeHint(challenge: Response): Response {
+  const header = challenge.headers.get("www-authenticate");
+  if (header === null) return challenge;
+  const headers = new Headers(challenge.headers);
+  headers.set("www-authenticate", header.replace(`scope="${REQUIRED_SCOPE}"`, `scope="${REQUIRED_SCOPE} ${REFRESH_SCOPE}"`));
+  return new Response(challenge.body, { status: challenge.status, statusText: challenge.statusText, headers });
 }
 
 function requiredState(url: URL): string {
