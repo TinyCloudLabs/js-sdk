@@ -69,7 +69,7 @@ const FEED_DATABASES = "xyz.tinycloud.tinychat/feed/";
 function feedSteps(lifetime: string): OnboardStep[] {
   return [{
     space: "applications",
-    asks: `Create and use your agents' feed databases, and hear about new answers, for ${lifetime}.`,
+    asks: `Set up TinyCloud on this computer: use your Feed, for ${lifetime}.`,
     permissions: [
       { service: "tinycloud.sql", space: "applications", path: FEED_REGISTRY, actions: sql(["read", "write", "schema"]) },
       { service: "tinycloud.sql", space: "applications", path: FEED_DATABASES, actions: sql(["read", "write", "schema"]) },
@@ -87,7 +87,7 @@ function parseOnboardExpiry(raw: unknown): { expiry: string; words: string } | u
   }
   const expiry = match[0];
   if (parseDuration(expiry) > MAX_EXPIRY_MS) {
-    throw new CLIError("INVALID_EXPIRY", `--expiry can be at most 30 days (30d): that is the longest an OpenKey approval lasts.`, ExitCode.USAGE_ERROR);
+    throw new CLIError("INVALID_EXPIRY", `--expiry can be at most 30 days (30d), the longest an OpenKey approval lasts.`, ExitCode.USAGE_ERROR);
   }
   const unit = { m: "minute", h: "hour", d: "day", w: "week" }[match[2]!]!;
   return { expiry, words: `${match[1]} ${unit}${match[1] === "1" ? "" : "s"}` };
@@ -96,7 +96,7 @@ function parseOnboardExpiry(raw: unknown): { expiry: string; words: string } | u
 /** What this run asks for: the starting grant (default) or one goal's set, for the default or the requested lifetime. Refused before anything is created. */
 export function onboardPlan(goal: unknown, expiryOption: unknown): { steps: OnboardStep[]; expiry: string } {
   if (goal !== undefined && goal !== "feed") {
-    throw new CLIError("INVALID_OPTIONS", `--for takes "feed" (the only goal so far), not ${JSON.stringify(goal)}. Leave it out for the full starting grant.`, ExitCode.USAGE_ERROR);
+    throw new CLIError("INVALID_OPTIONS", `--for takes "feed", not ${JSON.stringify(goal)}. Leave it out for the full starting grant.`, ExitCode.USAGE_ERROR);
   }
   const requested = parseOnboardExpiry(expiryOption);
   const expiry = requested?.expiry ?? (goal === undefined ? ONBOARD_EXPIRY : GOAL_EXPIRY);
