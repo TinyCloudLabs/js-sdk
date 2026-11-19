@@ -153,12 +153,14 @@ describe("ServiceGraphLifetime leaves no per-request abort listener", () => {
     assert.equal(listeners(graph.signal), baseline);
   });
 
-  test("a fetch that throws synchronously leaves no listener and still throws synchronously", () => {
+  // The node hands the graph an async fetch wrapper (`fetchForGraph`, from master), so a transport that throws before it
+  // returns a promise reaches the caller as a rejection, never a synchronous throw.
+  test("a fetch that throws before returning a promise leaves no listener and the request rejects", async () => {
     const graph = graphFor(() => {
       throw new Error("no network stack");
     });
     const baseline = listeners(graph.signal);
-    assert.throws(() => graph.fetch(URL, { signal: fresh() }), /no network stack/);
+    await assert.rejects(graph.fetch(URL, { signal: fresh() }), /no network stack/);
     assert.equal(listeners(graph.signal), baseline);
   });
 
