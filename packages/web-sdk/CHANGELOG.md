@@ -1,5 +1,13 @@
 # @tinycloudlabs/web-sdk
 
+## 3.13.1-beta.0
+
+### Patch Changes
+
+- 8bfd1d1: The permission prompt can name the app a request is for (`onBehalfOf`) and can hide the "Do not show me again for 30 days" option.
+
+  Details: TC-3448
+
 ## 3.13.0
 
 ### Minor Changes

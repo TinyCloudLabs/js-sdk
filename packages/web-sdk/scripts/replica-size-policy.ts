@@ -488,7 +488,7 @@ export type Ledger = {
   tc3286ShareNoDelegationActionsRoot?: LogoutRatchet;
   tc2944VaultPathClassifierRoot?: LogoutRatchet;
   tc3448OnBehalfPromptRoot?: LogoutRatchet;
-  tc3150GiveBackRoot?: LogoutRatchet;
+  tc2490OneApprovalRoot?: LogoutRatchet;
   tc2773LazyRestoreReplicaWorker?: Omit<WorkerRatchet, "worker"> & { replicaWorker: { delta: number; ceiling: number } };
 };
 
@@ -1131,7 +1131,7 @@ export function ancestryPins(root: Ledger, hasGatedOnly: boolean): Array<{ row: 
   if (root.tc3286ShareNoDelegationActionsRoot !== undefined) pins.push({ row: "tc3286ShareNoDelegationActionsRoot", pin: root.tc3286ShareNoDelegationActionsRoot.sourceCommits.at(-1)! });
   if (root.tc2944VaultPathClassifierRoot !== undefined) pins.push({ row: "tc2944VaultPathClassifierRoot", pin: root.tc2944VaultPathClassifierRoot.sourceCommits.at(-1)! });
   if (root.tc3448OnBehalfPromptRoot !== undefined) pins.push({ row: "tc3448OnBehalfPromptRoot", pin: root.tc3448OnBehalfPromptRoot.sourceCommits.at(-1)! });
-  if (root.tc3150GiveBackRoot !== undefined) pins.push({ row: "tc3150GiveBackRoot", pin: root.tc3150GiveBackRoot.sourceCommits.at(-1)! });
+  if (root.tc2490OneApprovalRoot !== undefined) pins.push({ row: "tc2490OneApprovalRoot", pin: root.tc2490OneApprovalRoot.sourceCommits.at(-1)! });
   if (hasGatedOnly) pins.push({ row: "gatedOnlyRatchet", pin: approvedGatedOnlyRatchet.sourceCommit });
   return pins;
 }
@@ -1244,7 +1244,7 @@ export function rootCeilings(root: Ledger): Array<{ row: string; ceiling: GzipSi
     ["tc3286ShareNoDelegationActionsRoot", root.tc3286ShareNoDelegationActionsRoot?.root.ceiling],
     ["tc2944VaultPathClassifierRoot", root.tc2944VaultPathClassifierRoot?.root.ceiling],
     ["tc3448OnBehalfPromptRoot", root.tc3448OnBehalfPromptRoot?.root.ceiling],
-    ["tc3150GiveBackRoot", root.tc3150GiveBackRoot?.root.ceiling],
+    ["tc2490OneApprovalRoot", root.tc2490OneApprovalRoot?.root.ceiling],
   ];
   return rows.flatMap(([row, ceiling]) => ceiling === undefined ? [] : [{ row, ceiling }]);
 }
@@ -3699,24 +3699,24 @@ export const approvedTc3448OnBehalfPromptRoot: LogoutRatchet = {
   "reason": "The web-sdk permission prompt can name the app a request is for and hide the 30-day option (PermissionRequestModal, requestPermissionsCore). Canonical Node 22/Bun 1.3.14 CI on #1095 (8bfd1d1b, master c2f4cc76) measured index.mjs 1529672 and index.cjs 1462669 gzip -9 bytes: +47 and +56 over the TC-2944 ceilings 1529625 and 1462613. No other ceiling moves. Details: TC-3448"
 };
 
-/** The exact TC-3150 holder give-back root allowance from canonical CI. */
-export const approvedTc3150GiveBackRoot: LogoutRatchet = {
-  "label": "an agent can give back a grant it was issued (TC-3150)",
-  "ruling": "size-ruling: TC-3150 row tc3150GiveBackRoot index.mjs 1530290 (+618), index.cjs 1463245 (+576) gzip bytes over the tc3448 ceilings, CI's canonical figure. Details: TC-3150",
+/** The exact TC-2490 one-approval multi-space session root allowance from canonical CI. */
+export const approvedTc2490OneApprovalRoot: LogoutRatchet = {
+  "label": "one OpenKey approval for a multi-space session (TC-2490)",
+  "ruling": "size-ruling: TC-2490 row tc2490OneApprovalRoot index.mjs 1529858 (+186), index.cjs 1462849 (+180) gzip bytes over the tc3448 ceilings, CI's canonical figure. Details: TC-2490",
   "base": "c5a7f854291974630f3595aa1ef45466beca67c6",
-  "sourceCommits": ["e0d1a181e6d8c780d77f62b5e9ea7f1c91c14770"],
+  "sourceCommits": ["53e4dc7884c2e5336e57d8c6e901619896a3ddc0"],
   "canonicalCI": {
-    "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44594702287",
+    "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44600709897",
     "jobs": [
-      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44594702287/job/135809856858",
-      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44594702287/job/135809857060"
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44600709897/job/135831028234",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44600709897/job/135831028201"
     ]
   },
   "root": {
-    "delta": { "index.mjs": 618, "index.cjs": 576 },
-    "ceiling": { "index.mjs": 1530290, "index.cjs": 1463245 }
+    "delta": { "index.mjs": 186, "index.cjs": 180 },
+    "ceiling": { "index.mjs": 1529858, "index.cjs": 1462849 }
   },
-  "reason": "TinyCloudNode.delegateTo takes a holderMayRevoke option and returns a revokeControl, so an agent can revoke a grant it was issued; node-sdk is bundled into the web-sdk root. Canonical Node 22/Bun 1.3.14 CI on #1049 (e0d1a181, master c5a7f854 merged in) measured index.mjs 1530290 and index.cjs 1463245 gzip -9 bytes: +618 and +576 over the TC-3448 ceilings 1529672 and 1462669. No other ceiling moves. Details: TC-3150"
+  "reason": "TinyCloudNode accepts a signed session grant spanning several of the owner's spaces, keeps each resource's own space in portable grants, and picks a manifest sign-in's primary space among its own requested spaces; node-sdk is bundled into the web-sdk root. Canonical Node 22/Bun 1.3.14 CI on #1060 (53e4dc78, master c5a7f854 merged in) measured index.mjs 1529858 and index.cjs 1462849 gzip -9 bytes: +186 and +180 over the TC-3448 ceilings 1529672 and 1462669. No other ceiling moves. Details: TC-2490"
 };
 
 export const approvedLedgerRows: Record<string, unknown> = {
@@ -3828,7 +3828,7 @@ export const approvedLedgerRows: Record<string, unknown> = {
   tc3286ShareNoDelegationActionsRoot: approvedTc3286ShareNoDelegationActionsRoot,
   tc2944VaultPathClassifierRoot: approvedTc2944VaultPathClassifierRoot,
   tc3448OnBehalfPromptRoot: approvedTc3448OnBehalfPromptRoot,
-  tc3150GiveBackRoot: approvedTc3150GiveBackRoot,
+  tc2490OneApprovalRoot: approvedTc2490OneApprovalRoot,
 };
 
 /** Only a git merge-base ledger may retain the pre-correction toolchain. */
@@ -4333,10 +4333,10 @@ export function validateLedger(value: Ledger, historicalBase = false): void {
         JSON.stringify(value.tc3448OnBehalfPromptRoot) !== JSON.stringify(approvedTc3448OnBehalfPromptRoot))) {
     throw new Error("Only the exact TC-3448 root admission is approved.");
   }
-  if (value.tc3150GiveBackRoot !== undefined &&
+  if (value.tc2490OneApprovalRoot !== undefined &&
       (!value.tc3448OnBehalfPromptRoot ||
-        JSON.stringify(value.tc3150GiveBackRoot) !== JSON.stringify(approvedTc3150GiveBackRoot))) {
-    throw new Error("Only the exact TC-3150 root admission is approved.");
+        JSON.stringify(value.tc2490OneApprovalRoot) !== JSON.stringify(approvedTc2490OneApprovalRoot))) {
+    throw new Error("Only the exact TC-2490 root admission is approved.");
   }
 }
 
@@ -5289,10 +5289,10 @@ export function validateTc3448OnBehalfPromptRootTransition(base?: LogoutRatchet,
   }
 }
 
-/** The exact TC-3150 holder give-back root admission is introduced once and immutable. */
-export function validateTc3150GiveBackRootTransition(base?: LogoutRatchet, current?: LogoutRatchet): void {
-  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc3150GiveBackRoot) ||
+/** The exact TC-2490 one-approval root admission is introduced once and immutable. */
+export function validateTc2490OneApprovalRootTransition(base?: LogoutRatchet, current?: LogoutRatchet): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc2490OneApprovalRoot) ||
       base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
-    throw new Error("The TC-3150 root admission may be introduced once and cannot change later.");
+    throw new Error("The TC-2490 root admission may be introduced once and cannot change later.");
   }
 }

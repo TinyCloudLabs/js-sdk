@@ -1,8 +1,8 @@
 import { expect, test } from "bun:test";
 
-import { ONBOARD_STEPS } from "./onboard.js";
+import { onboardingPermissions } from "../auth/onboarding-scope.js";
 
-const applications = ONBOARD_STEPS.find((step) => step.space === "applications")!;
+const applications = { permissions: onboardingPermissions("apps").filter((entry) => entry.space === "applications") };
 
 // Whether a requested entry covers `action` on `path` (an empty entry path covers the whole space).
 const covers = (step: typeof applications, service: string, action: string, path: string) =>
