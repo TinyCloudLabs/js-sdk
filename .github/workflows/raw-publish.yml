@@ -17,6 +17,9 @@ jobs:
   publish:
     name: Raw Publish
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
     steps:
       - uses: actions/checkout@v4
         with:
@@ -41,6 +44,7 @@ jobs:
         run: bun run build
         env:
           BUILD_SETUP_ENABLED: true
+          NODE_OPTIONS: --max-old-space-size=6144
 
       - name: Resolve workspace:* versions
         run: |

@@ -20,6 +20,7 @@ import { TinyCloudNode } from "./TinyCloudNode";
 import { mintCompactDelegation } from "./test-support/compact-delegation";
 import { createHermeticEncryptedNode } from "./test-support/hermetic-encrypted-node";
 import { PROOF_PRIVATE_KEY, signedRestorableSession, withRecapCaveat } from "./test-support/signed-restorable-session";
+import { signedLocationRecordForTest, signedRegistryResponseForTest } from "./test-support/restored-policy-node";
 import {
   startUnregisteredLocationRegistry,
   unregisteredLocationRegistryResponse,
@@ -78,11 +79,17 @@ describe("TinyCloudNode.restoreSession session-key lifecycle", () => {
     const ownerDid = pkhDid(proof.address, proof.chainId);
     const nodeDid = proof.verificationMethod.split("#", 1)[0]!;
     const networkId = `urn:tinycloud:encryption:${ownerDid}:default`;
+    const route = (host: string, sequence: number) => signedLocationRecordForTest({
+      ownerDid, ownerPrivateKey: PROOF_PRIVATE_KEY, host, nodeDid,
+      spaces: [proof.spaceId], sequence,
+    });
+    let record = await route("https://one.example", 1);
     globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit) => {
-      const registryResponse = unregisteredLocationRegistryResponse(input, locationRegistry.url.origin, init);
+      const registryResponse = signedRegistryResponseForTest(input, init, locationRegistry.url.origin, record);
       if (registryResponse) return registryResponse;
       const url = new URL(input instanceof Request ? input.url : String(input));
       if (url.pathname === "/info") return Response.json({ nodeId: nodeDid });
+      if (url.pathname === "/.well-known/tinycloud/node-keys") return Response.json({ nodeDid });
       if (!url.pathname.startsWith("/encryption/networks/")) {
         throw new Error(`Unexpected fetch: ${url}`);
       }
@@ -113,6 +120,7 @@ describe("TinyCloudNode.restoreSession session-key lifecycle", () => {
         ok: true, data: { networkId, ownerDid, keyVersion: 1 },
       });
 
+      record = await route("https://two.example", 2);
       await node.restoreSession({ ...proof, tinycloudHosts: ["https://two.example"] });
       expect(await node.encryption.discoverNetwork(networkId)).toMatchObject({
         ok: true, data: { networkId, ownerDid, keyVersion: 2 },
@@ -505,23 +513,45 @@ describe("TinyCloudNode.restoreSession session-key lifecycle", () => {
   test("prepares and activates public child delegations at each restored host without hydration I/O", async () => {
     const fixture = await createHermeticEncryptedNode();
     const activationRequests: string[][] = [[], []];
+    const nodeDid = (await fixture.owner.activeNodeIdentity()).nodeDid;
+    const registryRequests: string[] = [];
+    let record: Awaited<ReturnType<typeof signedLocationRecordForTest>> | undefined;
+    const registry = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch(request): Response {
+        registryRequests.push(`${request.method} ${new URL(request.url).pathname}`);
+        return (record && signedRegistryResponseForTest(request, undefined, registry.url.origin, record)) ??
+          unregisteredLocationRegistryResponse(request, registry.url.origin) ??
+          new Response("Unexpected registry fixture request", { status: 400 });
+      },
+    });
     const fronts = activationRequests.map((requests) => Bun.serve({
       hostname: "127.0.0.1",
       port: 0,
       fetch(request) {
         const url = new URL(request.url);
         requests.push(`${request.method} ${url.pathname}`);
-        return fetch(new Request(`${fixture.host}${url.pathname}${url.search}`, request));
+        return fetch(new Request(`${fixture.host}${url.pathname}${url.search}`, request), { redirect: "error" });
       },
     }));
     try {
       const restored = new TinyCloudNode({
         signer: new PrivateKeySigner(fixture.ownerPrivateKey),
         wasmBindings: new NodeWasmBindings(),
-        tinycloudRegistryUrl: fixture.host,
+        tinycloudRegistryUrl: registry.url.origin,
         autoDiscoverLocalNode: false,
       });
       for (const [index, front] of fronts.entries()) {
+        record = await signedLocationRecordForTest({
+          ownerDid: fixture.ownerDid,
+          ownerPrivateKey: fixture.ownerPrivateKey,
+          host: front.url.origin,
+          nodeDid,
+          spaces: [fixture.ownerRestorableSession.spaceId, fixture.accountSpaceId, fixture.applicationsSpaceId],
+          sequence: index + 1,
+        });
+        const beforeRegistry = [...registryRequests];
         const beforeBackend = fixture.requests();
         const beforeFronts = activationRequests.map((requests) => [...requests]);
         await restored.restoreSession({
@@ -530,6 +560,7 @@ describe("TinyCloudNode.restoreSession session-key lifecycle", () => {
         });
         expect(fixture.requests()).toEqual(beforeBackend);
         expect(activationRequests).toEqual(beforeFronts);
+        expect(registryRequests).toEqual(beforeRegistry);
         await restored.delegateTo(fixture.unrelatedAudience, [...fixture.permissions], {
           onPrepared: async (prepared) => {
             expect(prepared.host).toBe(front.url.origin);
@@ -539,7 +570,7 @@ describe("TinyCloudNode.restoreSession session-key lifecycle", () => {
         expect(activationRequests[1 - index]).toEqual(beforeFronts[1 - index]);
       }
     } finally {
-      fronts.forEach((front) => front.stop(true));
+      await Promise.all([...fronts.map((front) => front.stop(true)), registry.stop(true)]);
       fixture.stop();
     }
   });
@@ -985,6 +1016,7 @@ describe("TinyCloudNode.restoreSession session-key lifecycle", () => {
     try {
       const restored = new TinyCloudNode({
         tinycloudRegistryUrl: locationRegistry.url.origin,
+        host: fixture.host,
         wasmBindings: new NodeWasmBindings(),
       });
       await restored.restoreSession(fixture.restorableSession);

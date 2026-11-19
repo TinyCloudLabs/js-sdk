@@ -2,6 +2,7 @@ import { canonicalize, signCompactUcanAuthorization, toBase64Url } from "@tinycl
 import { sha256 } from "@noble/hashes/sha256";
 import type { ShareKeySigner } from "./share-key-signer.js";
 import { ShareRootError, errorMessage, parseOwnerDid, readJsonCapped, sameOwner, seconds, type Owner } from "./share-root.js";
+import { encryptionNodeOrigin } from "./encryption-origin.js";
 
 /**
  * One encryption network per addressed share (TC-1423, PERSHARE-NETWORK
@@ -77,7 +78,7 @@ export type ShareNetworkLookup =
 
 /** `GET /encryption/networks/<id>`: `absent` on 404, else the descriptor's state (not yet validated). */
 export async function lookupShareNetwork(nodeOrigin: string, networkId: string, fetchFn: FetchFn): Promise<ShareNetworkLookup> {
-  const response = await fetchFn(new URL(`/encryption/networks/${encodeURIComponent(networkId)}`, nodeOrigin), { redirect: "error" });
+  const response = await fetchFn(new URL(`/encryption/networks/${encodeURIComponent(networkId)}`, encryptionNodeOrigin(nodeOrigin)), { redirect: "error" });
   if (response.status === 404) return { state: "absent" };
   if (!response.ok) throw new ShareRootError("node-refused", `share network lookup failed: HTTP ${response.status}`);
   let body: unknown;
@@ -150,7 +151,7 @@ export async function sendNetworkAdmin(input: NetworkAdminInput): Promise<number
     sign: input.signer.sign,
   });
   const path = input.action === NETWORK_CREATE_ABILITY ? "/encryption/networks" : `/encryption/networks/${encodeURIComponent(input.networkId)}/revoke`;
-  const response = await input.fetch(new URL(path, input.nodeOrigin), {
+  const response = await input.fetch(new URL(path, encryptionNodeOrigin(input.nodeOrigin)), {
     method: "POST",
     redirect: "error",
     headers: { Authorization: invocation.authorization, ...(input.action === NETWORK_CREATE_ABILITY ? { "content-type": "application/json" } : {}) },

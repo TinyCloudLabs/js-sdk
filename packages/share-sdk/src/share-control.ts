@@ -3,6 +3,7 @@ import { keccak_256 } from "@noble/hashes/sha3";
 import { ownerRootCacaoCid } from "./owner-root-cacao.js";
 import { createDelegatedShareKey, type DelegatedShareKey } from "./owner-policy.js";
 import { NETWORK_REVOKE_ABILITY, isPerShareNetworkOf, nodeDidOf, retireShareNetwork } from "./share-network.js";
+import { encryptionNodeOrigin } from "./encryption-origin.js";
 import { ShareRootError, errorMessage, isRevokeReceiptFor, parseOwnerDid, requireNodeOrigin, sameOwner, seconds, type Owner } from "./share-root.js";
 
 /**
@@ -340,7 +341,8 @@ export async function runShareControlBatch(input: {
     if (!imported.ok) throw new ShareRootError("node-refused", `owner control import failed: HTTP ${imported.status} ${(await imported.text()).slice(0, 120)}`);
     await imported.body?.cancel();
 
-    const nodeDid = await nodeDidOf(nodeOrigin, fetchFn);
+    // The retirement goes to the TEE origin, so its audience comes from there too (TC-2923).
+    const nodeDid = await nodeDidOf(encryptionNodeOrigin(nodeOrigin), fetchFn);
     const signer = { did: key.did, sign: (data: Uint8Array) => key.sign(data) };
     const networks: ShareControlResult["networks"][number][] = [];
     for (const target of batch.targets) {
