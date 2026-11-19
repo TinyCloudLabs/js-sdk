@@ -123,8 +123,9 @@ export async function revokeAsDelegate(node: TinyCloudNode, ctx: { profile: stri
 
 /**
  * The holder gives back a grant with the revoke-only grant it was issued with. The stored grant and revoke grant are dropped
- * only after the node answered 200 or said it has no such delegation (NOT_FOUND: nothing left to give back, so the stale
- * records go). Any other failure, a refusal or a network error included, leaves both for a retry.
+ * only after the node answered 200, or after a "not found" answer is confirmed by the node's own status for the delegation
+ * (revoked or expired). The node never answers 404 for a delegation it does not have, so a bare 404 is a wrong host or a proxy
+ * and the access may still be live. Any other failure, a refusal or a network error included, leaves both for a retry.
  */
 export async function giveBackDelegation(
   node: TinyCloudNode, ctx: { profile: string; host: string }, cid: string, control: StoredRevokeControl,
@@ -151,6 +152,14 @@ export async function giveBackDelegation(
       );
     }
     if (result.error.code !== "NOT_FOUND") throw issuedFailure(result.error, ctx.host);
+    const confirmed = await node.delegationManager.status(cid);
+    if (!confirmed.ok || (confirmed.data.status !== "revoked" && confirmed.data.status !== "expired")) {
+      throw new CLIError(
+        "GIVE_BACK_NOT_CONFIRMED",
+        `The node answered "not found" when giving back ${cid}, so this access may still be active. Nothing was removed from this profile. Try again, and check that --host is the node that issued it.`,
+        ExitCode.ERROR,
+      );
+    }
   }
   await removeHeldDelegation(ctx.profile, cid);
   await removeRevokeControl(ctx.profile, cid);

@@ -96,10 +96,11 @@ for (const [label, answer, code] of [
   });
 }
 
-test("a delegation the node no longer has clears the stale local rows, so the holder is not left with a record that cannot be revoked", async () => {
+test("a delegation the node confirms is revoked clears the stale local rows, so the holder is not left with a record that cannot be revoked", async () => {
   const profile = "holder-gone";
   await holderProfile(profile);
   const { node } = nodeAnswering({ ok: false, error: { code: "NOT_FOUND", message: "gone" } });
+  (node as unknown as { delegationManager: { status: unknown } }).delegationManager.status = async () => ({ ok: true, data: { cid: TARGET, status: "revoked" } });
   expect(await revokeAsDelegate(node, ctx(profile), TARGET)).toMatchObject({ cid: TARGET, revoked: true, authority: "revoke-grant", alreadyGone: true });
   expect(await heldGrants(profile)).toEqual([]);
   expect(await loadRevokeControls(profile)).toEqual([]);

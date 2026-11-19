@@ -113,6 +113,10 @@ export const NODE_WITHOUT_GIVE_BACK_WARNING = (command: string): string =>
 export const OVER_31_DAYS_WARNING = (command: string): string =>
   `Connections longer than 31 days can't let the agent give back its access. The connection works, and you can still revoke it yourself:\n  ${command}`;
 
+/** The message when the agent's DID is a wallet DID: the give-back grant is signed for a `did:key` holder only. */
+export const WALLET_DID_WARNING = (command: string): string =>
+  `This agent has a wallet DID, so it can't be given a grant to hand back its own access. The connection works, and you can revoke it yourself:\n  ${command}`;
+
 /** `value` as one shell word: left plain when it is only safe characters, otherwise in single quotes with embedded quotes escaped. */
 export function shellWord(value: string): string {
   return /^[A-Za-z0-9_@%+=:,./-]+$/.test(value) ? value : `'${value.replaceAll("'", `'\\''`)}'`;
@@ -136,6 +140,11 @@ export async function delegateWithGiveBack(
   withdraw: (cid: string) => Promise<unknown>,
   warn: (line: string) => void = (line) => { process.stderr.write(`${line}\n`); },
 ): Promise<Pick<Awaited<ReturnType<TinyCloudNode["delegateTo"]>>, "delegation" | "revokeControl">> {
+  if (!recipient.startsWith("did:key:")) {
+    const granted = await node.delegateTo(recipient, permissions, options);
+    warn(WALLET_DID_WARNING(command(granted.delegation.cid)));
+    return granted;
+  }
   if (options.expiry > GIVE_BACK_MAX_MS) {
     const granted = await node.delegateTo(recipient, permissions, options);
     warn(OVER_31_DAYS_WARNING(command(granted.delegation.cid)));
