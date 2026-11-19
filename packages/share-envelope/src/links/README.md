@@ -78,8 +78,7 @@ command entries). A kept-by-clock `hold` is a flag, not a phase: the next run re
 
 `APPROVAL_EXIT`: completed 0, lapsed / gone / abandoned / denied 3, refused 5, unreachable 6, unexpected / internal 7, pending 8,
 clock 12. `exitCodeOf` returns 6 for a `completed` outcome with an `ack-pending` or `ack-expired` warning: the grant is saved, but
-OpenKey never confirmed the ack. The CLI and Courier still print and exit with their own numbers until they adopt the machine;
-`collectApprovalResult` and `refuse` are unchanged until then.
+OpenKey never confirmed the ack.
 
 `unexpected` and `clock` outcomes carry `grantSaved: true` when the entry is `committed`: the caller's commit already succeeded and only
 the acknowledgement is outstanding (for example a 401 on the ack). An adapter must not report a failed sign-in for it. The entry is
@@ -88,9 +87,9 @@ kept until `purgeAt`, then ends `completed` with an `ack-expired` warning (exit 
 ### The file
 
 `approval-pending.v2.json` (`APPROVAL_FILE`), version 2: `{ version: 2, entries: [...], unrecognized: [...] }`. It does not reuse the v1
-name `approval-pending.json` (`LEGACY_APPROVAL_FILE`): a published tc reads that name as its v1 array with no version check, and v2
-content there makes it fail on every run. `loadApprovalFiles` reads both names: the v1 file (the CLI's array or Courier's object) is
-migrated into the v2 file, the v2 file is written, and only then is the v1 file deleted; a v1 file an older tc writes later is merged
+name `approval-pending.json` (`LEGACY_APPROVAL_FILE`): published CLI versions read that name as their own v1 file. `loadApprovalFiles`
+reads both names: the v1 file (the CLI's array or Courier's object) is
+migrated into the v2 file, the v2 file is written, and only then is the v1 file deleted; a v1 file an older CLI writes later is merged
 again on the next load (a repeated `requestId` is set aside). Logout and the key sweep delete both names (`discardApprovalFiles`),
 whatever they hold.
 Given a profile's sign-out time (`signedOutAt`), approval loading drops any pending request made before it, including one left by an older CLI. A sign-in started after the sign-out is kept.
