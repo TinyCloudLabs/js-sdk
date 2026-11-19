@@ -39,6 +39,12 @@ test("loading a legacy profile tightens its directory and files without followin
   await writeFile(outsideFile, "{}", { mode: 0o644 });
   await symlink(outsideFile, join(profileDir, "external.json"));
   await chmod(profileDir, 0o755);
+  // mkdir/writeFile modes are masked by the umask; chmod is not.
+  await chmod(lockDir, 0o755);
+  await chmod(outsideFile, 0o644);
+  for (const file of ["profile.json", "key.json", "config.json", ".atomic.tmp"]) {
+    await chmod(join(profileDir, file), 0o644);
+  }
 
   expect((await ProfileManager.getProfile("legacy")).name).toBe("legacy");
 
