@@ -29,12 +29,29 @@
     "@tinycloud/sdk-services-test": "21.0.5"
   },
   "changesets": [
+    "auth-request-fresh",
     "auth-request-grant-timeout",
     "auth-request-stale-link",
     "auth-retry-grant-hint",
+    "card-md-cli",
+    "delegated-access-encryption",
+    "feed-disconnect",
+    "mcp-agent-discovery",
     "native-share-recording-links",
+    "node-default-host",
     "node-sdk-delegate-not-before",
     "node-sdk-registry-sync-busy",
-    "tc-3141-legacy-list-lazy"
+    "onboard-rerun-space-recheck",
+    "owner-revoke-issued-fallback",
+    "revoke-issued-space-not-found",
+    "runtime-permissions-one-approval",
+    "share-links-no-delegation-actions",
+    "share-size-limit-95-mib",
+    "tc-2652-profile-show-output",
+    "tc-2653-profile-loading",
+    "tc-2749-bounded-courier-messages",
+    "tc-3141-legacy-list-lazy",
+    "tc-3285-secret-types",
+    "vault-dedicated-address"
   ]
 }

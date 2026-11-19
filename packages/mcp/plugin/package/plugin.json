@@ -28,7 +28,7 @@
         "test_cases": {
           "positive": [
             {
-              "description": "P01: Fresh connection and explicit timezone setting.",
+              "description": "P01: Fresh connection and explicit timezone setting. Sign-in works only from the connector's own sign-in window, and each sign-in lasts one hour.",
               "prompt": "Connect TinyCloud, use Europe/London as my timezone, and show my personal apps.",
               "tools_triggered": "tinycloud_connect, tinycloud_apps_context, tinycloud_apps_read as needed",
               "expected_behavior": "Complete actual OAuth and required OpenKey approvals, return this account's catalog, and persist Europe/London. No CLI installation or credential pasting."

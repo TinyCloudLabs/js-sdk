@@ -1485,15 +1485,23 @@ async function readLatestTurn(directory: string): Promise<TurnState | number | "
  * thrown: it says nothing about the turn. `done` is read before `held`,
  * which every writer creates first, so a turn read as done is never misread
  * as void.
+ *
+ * A missing owner record is damage only if the directory is there on a second
+ * read too. A turn number can be removed and published again (a paused
+ * process does it): the directory may appear between the failed read and the
+ * look at it, and it appears whole, with its owner record inside.
  */
 async function readTurn(directory: string, slot: number): Promise<TurnState | "damaged" | null> {
   const path = join(directory, String(slot));
-  let text: string;
-  try {
-    text = await readFile(join(path, "owner.json"), "utf8");
-  } catch (error) {
-    if (!isErrno(error, "ENOENT") && !isErrno(error, "ENOTDIR")) throw error;
-    return await exists(path) ? "damaged" : null;
+  let text: string | undefined;
+  for (let attempt = 0; text === undefined; attempt++) {
+    try {
+      text = await readFile(join(path, "owner.json"), "utf8");
+    } catch (error) {
+      if (!isErrno(error, "ENOENT") && !isErrno(error, "ENOTDIR")) throw error;
+      if (!await exists(path)) return null;
+      if (attempt > 0) return "damaged";
+    }
   }
   let owner: (RecordedProcess & { token?: unknown; after?: unknown }) | null;
   try {
