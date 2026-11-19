@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { checkForUpdate, selectUpdateVersion, updateCommand } from "./auto-update.js";
+import { checkForUpdate, selectUpdateVersion, updateNotice } from "./auto-update.js";
 
 const HOSTILE_VERSIONS = [
   "1.8.0-beta.9\u001b[2J\u001b]0;pwned\u0007",
@@ -76,6 +76,6 @@ test("the registry request uses the encoded scope form and a valid response is r
     });
     expect(urls).toEqual(["https://registry.npmjs.org/@tinycloud%2fcli/beta"]);
     expect(result).toBe("1.8.0-beta.9");
-    expect(updateCommand("npm-global", result!)).toMatch(/^[A-Za-z0-9 @/.-]+$/);
+    expect(updateNotice("npm-global", "1.8.0-beta.8", result!)).toBe("TinyCloud CLI 1.8.0-beta.9 is available. This is 1.8.0-beta.8, installed with npm.");
   });
 });

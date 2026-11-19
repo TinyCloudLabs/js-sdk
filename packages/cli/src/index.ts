@@ -33,7 +33,7 @@ registerUpdateNoticeFinalizer(async () => {
   await new Promise<void>((resolve) => process.stderr.write("", () => resolve()));
   const packagePath = fileURLToPath(new URL("../", import.meta.url));
   const installKind = detectInstallKind(packagePath, process.cwd(), homedir());
-  process.stderr.write(`${updateNotice(installKind, version, available, packagePath)}\n`);
+  process.stderr.write(`${updateNotice(installKind, version, available)}\n`);
   await new Promise<void>((resolve) => process.stderr.write("", () => resolve()));
 });
 import { theme } from "./output/theme.js";

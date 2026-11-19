@@ -121,22 +121,17 @@ export function detectInstallKind(packagePath: string, workingDirectory: string,
   return "unknown";
 }
 
-export function updateCommand(kind: InstallKind, version: string, packagePath?: string): string {
-  switch (kind) {
-    case "npm-global": return `npm install --global @tinycloud/cli@${version}`;
-    case "bun-global": return `bun install --global @tinycloud/cli@${version}`;
-    case "npx": return `npx --yes @tinycloud/cli@${version}`;
-    case "homebrew": {
-      const formula = /\/Cellar\/([A-Za-z0-9@+._-]+)\//.exec(packagePath?.replaceAll("\\", "/") ?? "")?.[1] ?? "tinycloud-cli";
-      return `brew upgrade ${formula}`;
-    }
-    case "project": return `npm install --save-dev @tinycloud/cli@${version}`;
-    case "unknown": return `npm install --global @tinycloud/cli@${version}`;
-  }
-}
+const INSTALL_METHOD: Record<Exclude<InstallKind, "unknown">, string> = {
+  "npm-global": "npm",
+  "bun-global": "bun",
+  npx: "npx",
+  homebrew: "Homebrew",
+  project: "this project's npm dependencies",
+};
 
-export function updateNotice(kind: InstallKind, currentVersion: string, availableVersion: string, packagePath?: string): string {
-  return `TinyCloud CLI ${availableVersion} is available (you have ${currentVersion}). To update, run: ${updateCommand(kind, availableVersion, packagePath)}`;
+export function updateNotice(kind: InstallKind, currentVersion: string, availableVersion: string): string {
+  const method = kind === "unknown" ? "" : `, installed with ${INSTALL_METHOD[kind]}`;
+  return `TinyCloud CLI ${availableVersion} is available. This is ${currentVersion}${method}.`;
 }
 
 let finishNotice: (() => Promise<void>) | undefined;

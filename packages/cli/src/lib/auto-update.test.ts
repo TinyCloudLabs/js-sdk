@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { mkdtemp, rm, utimes, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { checkForUpdate, detectInstallKind, isAutoUpdateEnabled, selectUpdateVersion, updateCommand } from "./auto-update.js";
+import { checkForUpdate, detectInstallKind, isAutoUpdateEnabled, selectUpdateVersion, updateNotice } from "./auto-update.js";
 
 test("stable CLI selects only a newer stable latest release", () => {
   expect(selectUpdateVersion("1.6.5", {
@@ -188,15 +188,20 @@ test("stable and beta installs keep independent daily caches", async () => {
   }
 });
 
-test("install type selects an exact manual update command", () => {
+test("install type selects the install method named in the notice, with no command", () => {
   expect(detectInstallKind("/opt/homebrew/Cellar/tinycloud-cli/1.6.5/lib/node_modules/@tinycloud/cli", "/project", "/home/agent")).toBe("homebrew");
   expect(detectInstallKind("/home/agent/.bun/install/global/node_modules/@tinycloud/cli", "/project", "/home/agent")).toBe("bun-global");
   expect(detectInstallKind("/home/agent/.npm/_npx/abc/node_modules/@tinycloud/cli", "/project", "/home/agent")).toBe("npx");
   expect(detectInstallKind("/project/node_modules/@tinycloud/cli", "/project", "/home/agent")).toBe("project");
   expect(detectInstallKind("/home/agent/.nvm/versions/node/v22/lib/node_modules/@tinycloud/cli", "/project", "/home/agent")).toBe("npm-global");
-  expect(updateCommand("npm-global", "1.6.6")).toBe("npm install --global @tinycloud/cli@1.6.6");
-  expect(updateCommand("bun-global", "1.7.0-beta.31")).toBe("bun install --global @tinycloud/cli@1.7.0-beta.31");
-  expect(updateCommand("npx", "1.6.6")).toBe("npx --yes @tinycloud/cli@1.6.6");
-  expect(updateCommand("project", "1.6.6")).toBe("npm install --save-dev @tinycloud/cli@1.6.6");
-  expect(updateCommand("homebrew", "1.6.6")).toBe("brew upgrade tinycloud-cli");
+  const kinds = ["npm-global", "bun-global", "npx", "homebrew", "project", "unknown"] as const;
+  expect(updateNotice("npm-global", "1.6.5", "1.6.6")).toBe("TinyCloud CLI 1.6.6 is available. This is 1.6.5, installed with npm.");
+  expect(updateNotice("bun-global", "1.6.5", "1.6.6")).toBe("TinyCloud CLI 1.6.6 is available. This is 1.6.5, installed with bun.");
+  expect(updateNotice("npx", "1.6.5", "1.6.6")).toBe("TinyCloud CLI 1.6.6 is available. This is 1.6.5, installed with npx.");
+  expect(updateNotice("homebrew", "1.6.5", "1.6.6")).toBe("TinyCloud CLI 1.6.6 is available. This is 1.6.5, installed with Homebrew.");
+  expect(updateNotice("project", "1.6.5", "1.6.6")).toBe("TinyCloud CLI 1.6.6 is available. This is 1.6.5, installed with this project's npm dependencies.");
+  expect(updateNotice("unknown", "1.6.5", "1.6.6")).toBe("TinyCloud CLI 1.6.6 is available. This is 1.6.5.");
+  for (const kind of kinds) {
+    expect(updateNotice(kind, "1.6.5", "1.6.6")).not.toMatch(/\brun\b|install --|npx --yes|brew upgrade|bun install|npm install/i);
+  }
 });
