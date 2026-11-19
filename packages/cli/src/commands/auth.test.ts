@@ -96,6 +96,8 @@ const recorded = {
       permissions?: unknown[];
       expiry?: string | number;
       reason?: string;
+      expectedOwner?: string;
+      requestExpiresMs?: number;
     };
   }>,
   localSignIns: [] as Array<{ privateKey: string; host: string }>,
@@ -2326,6 +2328,86 @@ describe("OpenKey primary key (TC-705)", () => {
     expect(recorded.errors).toEqual([expect.objectContaining({ code: "OPENKEY_OWNER_MISMATCH" })]);
     expect(sessions.has("default")).toBe(false);
     expect(profiles.get("default")?.ownerDid).toBeUndefined();
+  });
+
+  describe("--request-expires: the one-tap approval link's window (TC-3070)", () => {
+    const HOUR = 3_600_000;
+    const nothingStored = () => {
+      expect(recorded.startAuthFlows).toEqual([]);
+      expect(sessions.has("default")).toBe(false);
+      expect(profiles.get("default")?.ownerDid).toBeUndefined();
+      expect(keys.get("default")).toBe(key);
+    };
+    const login = (...args: string[]) => runAuthCommand(["auth", "login", "--method", "openkey", "--no-popup", ...args]);
+
+    test("with no --request-expires the login asks for no window, so the link keeps its one-hour default", async () => {
+      openKeyDelegation = signedBy(primaryOwner, { primary: true });
+      await login();
+      expect(recorded.errors).toEqual([]);
+      expect(recorded.startAuthFlows).toHaveLength(1);
+      expect("requestExpiresMs" in recorded.startAuthFlows[0]!.options).toBe(false);
+    });
+
+    test("up to an hour needs no pinned owner and reaches the approval request", async () => {
+      openKeyDelegation = signedBy(primaryOwner, { primary: true });
+      await login("--request-expires", "30m");
+      expect(recorded.errors).toEqual([]);
+      expect(recorded.startAuthFlows[0]?.options.requestExpiresMs).toBe(30 * 60_000);
+      expect(recorded.startAuthFlows[0]?.options.expectedOwner).toBeUndefined();
+    });
+
+    test("more than an hour without --owner is refused before any approval is requested", async () => {
+      openKeyDelegation = signedBy(primaryOwner, { primary: true });
+      await login("--request-expires", "3h");
+      expect(recorded.errors).toEqual([expect.objectContaining({ code: "REQUEST_EXPIRES_NEEDS_OWNER" })]);
+      nothingStored();
+    });
+
+    test("more than twelve hours is refused, with --owner as well", async () => {
+      openKeyDelegation = signedBy(otherOwner, { primary: false });
+      await login("--request-expires", "13h", "--owner", otherOwner);
+      expect(recorded.errors).toEqual([expect.objectContaining({ code: "REQUEST_EXPIRES_TOO_LONG" })]);
+      nothingStored();
+    });
+
+    test("a window over an hour with --owner reaches the approval request together with the pinned owner", async () => {
+      openKeyDelegation = signedBy(otherOwner, { primary: false });
+      await login("--request-expires", "12h", "--owner", otherOwner);
+      expect(recorded.errors).toEqual([]);
+      expect(recorded.startAuthFlows[0]?.options.requestExpiresMs).toBe(12 * HOUR);
+      expect(recorded.startAuthFlows[0]?.options.expectedOwner).toBe(otherOwner);
+      expect(sessions.has("default")).toBe(true);
+      expect(profiles.get("default")?.ownerDid).toBe(otherOwner);
+    });
+
+    test("another account approving a long-window link fails the login and stores nothing", async () => {
+      openKeyDelegation = signedBy(primaryOwner, { primary: true });
+      await login("--request-expires", "4h", "--owner", otherOwner);
+      expect(recorded.startAuthFlows).toHaveLength(1);
+      expect(recorded.startAuthFlows[0]?.options.requestExpiresMs).toBe(4 * HOUR);
+      expect(recorded.errors).toEqual([expect.objectContaining({ code: "OPENKEY_OWNER_MISMATCH" })]);
+      expect(sessions.has("default")).toBe(false);
+      expect(profiles.get("default")?.ownerDid).toBeUndefined();
+      expect(keys.get("default")).toBe(key);
+    });
+
+    test("a malformed window is a usage error", async () => {
+      await login("--request-expires", "soon");
+      expect(recorded.errors).toEqual([expect.objectContaining({ code: "INVALID_REQUEST_EXPIRES" })]);
+      nothingStored();
+    });
+
+    test("--paste, --device and --method local do not use the link: the option is refused", async () => {
+      await runAuthCommand(["auth", "login", "--method", "openkey", "--paste", "--request-expires", "30m"]);
+      await runAuthCommand(["auth", "login", "--device", "--manifest", "builtin:share-publishing", "--request-expires", "30m"]);
+      await runAuthCommand(["auth", "login", "--method", "local", "--request-expires", "30m"]);
+      expect(recorded.errors).toEqual([
+        expect.objectContaining({ code: "INVALID_ARGUMENT", message: expect.stringContaining("--paste") }),
+        expect.objectContaining({ code: "INVALID_ARGUMENT", message: expect.stringContaining("--device") }),
+        expect.objectContaining({ code: "INVALID_ARGUMENT", message: expect.stringContaining("applies only to an OpenKey login") }),
+      ]);
+      nothingStored();
+    });
   });
 
   test("a plain login without --owner requests the default abilities plus delegation/list on the default space", async () => {
