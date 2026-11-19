@@ -116,6 +116,9 @@ export interface FeedListenerOptions {
   signal: AbortSignal;
   // Low-frequency ticket renewal, not an idle response SELECT loop.
   renewalSeconds?: number;
+  // Return after the first drain that attempted at least one new handoff,
+  // so a caller whose runtime wakes on process exit gets one batch per run.
+  once?: boolean;
 }
 
 // Registry, view state, and preferences belong to the owner's separate store.

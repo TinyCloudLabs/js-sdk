@@ -36,3 +36,13 @@ test('GitHub writes, tags, registries, deploy tools, nested agents and loopback 
 test('--unguarded exec cannot start an agent CLI as its first word', () => {
   for (const command of ['claude -p hi', '/bin/codex exec hi', '"omp" -p hi', 'paseo run']) assert.throws(() => wakeConfig(parseArgs(['--wake', 'exec', '--exec', command, '--unguarded']), 'alice'), /agent CLI/);
 });
+
+test('--agent-cli lets --unguarded exec start an agent CLI that has no guarded adapter; claude and paseo stay refused', () => {
+  const cfg = (...argv) => wakeConfig(parseArgs(['--wake', 'exec', '--unguarded', ...argv]), 'alice');
+  for (const command of ['/bin/codex exec hi', '"omp" -p hi', 'opencode run hi', 'gemini -p hi']) {
+    assert.throws(() => cfg('--exec', command), /without --agent-cli/, command);
+    assert.equal(cfg('--exec', command, '--agent-cli').agentCli, true, command);
+  }
+  for (const command of ['claude -p hi', 'paseo run']) assert.throws(() => cfg('--exec', command, '--agent-cli'), /use the guarded --wake (claude|paseo) adapter/, command);
+  for (const wake of ['claude', 'paseo', 'none']) assert.throws(() => wakeConfig(parseArgs(['--wake', wake, '--agent-cli']), 'alice'), /only applies with --wake exec/, wake);
+});

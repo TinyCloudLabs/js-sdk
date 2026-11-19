@@ -8,7 +8,7 @@ import {
   listenFeedResponses, newFeedMessageSchema, newFeedResponseSchema, publishFeedCard, readFeedResponsePayload, recordFeedHandling, resolveFeedCard,
 } from "@tinycloud/sdk-services/feed";
 import type { Result } from "@tinycloud/sdk-services";
-import type { FeedResponsePayload, FeedSource, NewFeedMessage, NewFeedResponse } from "@tinycloud/sdk-services/feed";
+import type { FeedResponse, FeedResponsePayload, FeedSource, NewFeedMessage, NewFeedResponse } from "@tinycloud/sdk-services/feed";
 import { ProfileManager } from "../config/profiles.js";
 import { ensureAuthenticated } from "../lib/sdk.js";
 import { resolveFeedSpace } from "../feed/space.js";
@@ -17,7 +17,7 @@ import { outputJson } from "../output/formatter.js";
 import { cliErrorFromService, handleError } from "../output/errors.js";
 import { openFeedHandoff } from "../feed/local.js";
 import type { LocalFeedHandoff } from "../feed/local.js";
-import { runFeedRunner } from "../feed/runner.js";
+import { parseFeedRunner, printFeedResponse, runFeedRunner } from "../feed/runner.js";
 import { connectFeedAgent } from "../feed/connection.js";
 import { exportFeedRawSnapshot } from "../feed/export.js";
 import { importFeedPreparedBundle } from "../feed/import.js";
@@ -73,11 +73,17 @@ publish/respond/message/handling read JSON files carrying full card/revision/iss
 and response IDs. Retain the same response ID when retrying a saved answer or message.
 Messages never answer cards; saving an answer is not acknowledgement or completion.
 
-watch requires Bun or Node.js 22.13+ (built-in SQLite). --runner is a JSON argv array,
-never a shell command. The runner receives allowlisted response-header JSON and must
-exit zero only after durable acceptance. Uncertain delivery remains unconfirmed and
-is never automatically repeated. Renewal reconciles durable rows at most every five
-minutes while connected; hook notifications are wakeups, not replay or execution proof.
+watch requires Bun or Node.js 22.13+ (built-in SQLite). It subscribes to response hooks,
+reconnects on its own, and keeps a durable per-recipient ledger, so a restart delivers only
+responses that recipient has not had. Without --runner it prints each response header as
+one JSON line on stdout. --runner is a JSON argv array, never a shell command; the runner
+receives allowlisted response-header JSON on stdin and must exit zero only after durable
+acceptance. --once exits after the first batch it hands off, to wake a runtime whose tools
+return when a command exits. Uncertain delivery remains unconfirmed and is never
+automatically repeated. Renewal reconciles durable rows at most every five minutes while
+connected; hook notifications are wakeups, not replay or execution proof. stdout lines
+carry the owner's response content, as sensitive as the runner's stdin: never pipe them
+into shared logs.
 Private typed payloads are saved atomically with respond/message --payload-file and read
 explicitly with feed payload. Default notifications include metadata, never payload data.
 
@@ -248,32 +254,36 @@ slash prefix and output are explicit; source get/sync grants are separate from f
       } catch (error) { return handleError(error); }
     });
 
-  agentOptions(feed.command("watch").description("Agent: deliver durable owner responses to an external argv runner"))
+  agentOptions(feed.command("watch").description("Agent: deliver durable owner responses as JSON lines or to an external argv runner"))
     .requiredOption("--recipient <id>", "Stable runtime recipient identity used by the handoff ledger")
-    .requiredOption("--runner <json>", "JSON argv array, e.g. '[\"node\",\"agent-handler.js\"]'")
+    .option("--runner <json>", "JSON argv array run once per response, e.g. '[\"node\",\"agent-handler.js\"]' (default: print JSON lines)")
+    .option("--once", "Exit after the first batch of new responses is handed off")
     .option("--handoff <path>", "Durable local SQLite handoff path (default: profile feed ledger)")
     .action(async (options, command) => {
       let local: LocalFeedHandoff | undefined;
       const abort = new AbortController();
       const stop = () => abort.abort();
+      // The hooks service waits out reconnect backoff on unref'd timers, so when the
+      // node ends an idle stream (about every 60 s) nothing else holds the event loop
+      // and Node would exit 0 mid-watch. Hold it until the watch ends.
+      const alive = setInterval(() => {}, 60_000);
       try {
-        const argv: unknown = JSON.parse(options.runner);
-        if (!Array.isArray(argv) || argv.length === 0 || argv.some((item) => typeof item !== "string") || !argv[0]) {
-          throw new Error("--runner must be a nonempty JSON string argv array");
-        }
+        const runner = options.runner === undefined ? undefined : parseFeedRunner(options.runner);
         const { profile, node, space, responses, resources } = await context(command);
         const directory = await ProfileManager.ensureProfileDir(profile.profile);
         local = await openFeedHandoff(options.handoff ?? join(directory, `feed-${options.agent}.sqlite`));
         process.on("SIGINT", stop);
         process.on("SIGTERM", stop);
-        const runner: [string, ...string[]] = [argv[0], ...argv.slice(1)];
+        const deliver = runner === undefined ? printFeedResponse
+          : (response: FeedResponse) => runFeedRunner(runner, response, abort.signal);
         await listenFeedResponses({
-          responses, handoff: local.handle, recipient: options.recipient, hooks: node.hooks,
+          responses, handoff: local.handle, recipient: options.recipient, hooks: node.hooks, once: options.once === true,
           subscription: { space, service: "sql", pathPrefix: resources.responseResource },
-          signal: abort.signal, deliver: (response) => runFeedRunner(runner, response, abort.signal),
+          signal: abort.signal, deliver,
         });
       } catch (error) { return handleError(error); }
       finally {
+        clearInterval(alive);
         process.off("SIGINT", stop);
         process.off("SIGTERM", stop);
         local?.close();

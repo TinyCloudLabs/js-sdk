@@ -1,3 +1,5 @@
+import { assertEpisodeGrant } from './interim-owner.js';
+import { verifyOwnerRenewal } from './owner-renewal.js';
 import { randomUUID } from 'node:crypto';
 import {
   ackApprovalResult, checkApprovalResultBinding, collectApprovalResult, createApprovalRequest, DEFAULT_LINKS_API_ORIGIN, discoverApprovalResult, generateRelayKey,
@@ -9,7 +11,7 @@ import { canonicalJson } from './canonical.js';
 import { cmd } from './program.js';
 import { CourierError } from './errors.js';
 import { AGENT_GRANT, AGENT_GRANT_EXPIRY } from './keys.js';
-import { profileDir, type AgentKey, type Profile } from './profile.js';
+import { profileDir, loadKey, withProfileTransaction, type AgentKey, type Profile } from './profile.js';
 import {
   ackRef, clearPending, holdsApproval, knownResult, loadPendingForWrite, markCommitted, recordResultEnvelope, recordResultRef, resultEnvelopeOf,
   resultSeen, savePending, stageOf, approvalPhase, type PendingGrantRequest,
@@ -169,6 +171,14 @@ async function createPending(profile: Profile, want: WantedRequest): Promise<Pen
  * replacing it would discard an approval the owner already gave.
  */
 export async function requestApproval(profile: Profile, key: AgentKey, expiry: string | undefined, options: { openkeyApiHost?: string } = {}): Promise<PendingGrantRequest> {
+  return withProfileTransaction(async current => {
+    if (loadKey().did !== key.did || current.courierDid !== profile.courierDid) throw new CourierError('profile-changed', 'The Courier key changed while requesting approval.');
+    return requestApprovalInTransaction(current, key, expiry, options);
+  });
+}
+
+/** Call only inside the shared profile transaction, including automated owner requests. */
+export async function requestApprovalInTransaction(profile: Profile, key: AgentKey, expiry: string | undefined, options: { openkeyApiHost?: string } = {}): Promise<PendingGrantRequest> {
   const want = wanted(profile, key, expiry, options.openkeyApiHost);
   const existing = loadPendingForWrite();
   if (existing && existing.request.issuer === want.signer.did) {
@@ -201,21 +211,24 @@ function expiredError(): CourierError {
  * is asked about once (see settleLapsed) and dropped and reported only when OpenKey too says it is expired.
  */
 export async function waitApproval(profile: Profile, key: AgentKey, expiry: string | undefined, options: Pick<WaitOptions, 'openkeyApiHost'> = {}): Promise<{ pending: PendingGrantRequest; resumed: boolean }> {
-  const want = wanted(profile, key, expiry, options.openkeyApiHost);
-  const existing = loadPendingForWrite();
-  if (existing && existing.request.issuer === want.signer.did) {
-    if (holdsApproval(existing)) return { pending: existing, resumed: true };
-    if (matches(existing, profile, want)) {
-      if (requestLapsed(existing)) {
-        if (await settleLapsed(existing, key) === 'expired') {
-          clearPending();
-          throw expiredError();
+  return withProfileTransaction(async current => {
+    if (loadKey().did !== key.did || current.courierDid !== profile.courierDid) throw new CourierError('profile-changed', 'The Courier key changed while requesting approval.');
+    const want = wanted(current, key, expiry, options.openkeyApiHost);
+    const existing = loadPendingForWrite();
+    if (existing && existing.request.issuer === want.signer.did) {
+      if (holdsApproval(existing)) return { pending: existing, resumed: true };
+      if (matches(existing, current, want)) {
+        if (requestLapsed(existing)) {
+          if (await settleLapsed(existing, key) === 'expired') {
+            clearPending();
+            throw expiredError();
+          }
         }
+        return { pending: existing, resumed: true };
       }
-      return { pending: existing, resumed: true };
     }
-  }
-  return { pending: await createPending(profile, want), resumed: false };
+    return { pending: await createPending(current, want), resumed: false };
+  });
 }
 
 function resultGoneError(): CourierError {
@@ -259,7 +272,7 @@ async function verifiedPayload(profile: Profile, pending: PendingGrantRequest, k
     const opened = await openRelayResult(resultEnvelopeOf(pending), pending.requestId, pending.relayPrivateKey);
     const claimedCid = (opened.delegation as { delegationCid?: unknown } | null | undefined)?.delegationCid;
     delegationCid = typeof claimedCid === 'string' && claimedCid !== '' ? claimedCid : undefined;
-    const checked = checkApprovalResultBinding(opened, { requestId: pending.requestId, bodyCid: pending.bodyCid, request: pending.request });
+    const checked = checkApprovalResultBinding(opened, { requestId: pending.requestId, bodyCid: pending.bodyCid, request: pending.request, allowExpiredRenewal: true });
     const payload = parseGrantPayload(checked.delegation, key);
     assertBoundToKey(checked.delegation, key);
     if (`did:pkh:eip155:${payload.chainId}:${payload.address}`.toLowerCase() !== checked.ownerDid.toLowerCase()) {
@@ -276,6 +289,10 @@ async function verifiedPayload(profile: Profile, pending: PendingGrantRequest, k
     // A renewal stays with the owner that holds the grant: with no code to paste back, whoever approves the link first would win.
     if (profile.ownerDid && checked.ownerDid.toLowerCase() !== profile.ownerDid.toLowerCase()) {
       throw new CourierError('approval-result-invalid', `This agent is bound to owner ${profile.ownerDid}, but a different owner (${checked.ownerDid}) approved the request. Send the link only to the owner, privately. If the owner changed on purpose, run \`${cmd('init --rotate-key --request')}\` it replaces the agent key, clears every pairing (peers must be re-paired by hand) and deletes grant.json.`);
+    }
+    if (checked.renewal) {
+      await verifyOwnerRenewal(payload, checked.ownerDid, checked.renewal);
+      payload.renewal = checked.renewal;
     }
     return payload;
   } catch (error) {
@@ -335,6 +352,7 @@ export async function completeApproval(profile: Profile, key: AgentKey, pending:
       savePending(pending); // the encrypted result is on disk before any install work
     }
     const payload = await verifiedPayload(profile, pending, key);
+    assertEpisodeGrant(pending, payload);
     const spaceTimeoutMs = Math.min(MAX_SPACE_WAIT_MS, Math.max(MIN_SPACE_WAIT_MS, options.deadline + SPACE_GRACE_MS - Date.now()));
     let spaceError: CourierError | undefined;
     try {
@@ -357,4 +375,14 @@ export async function completeApproval(profile: Profile, key: AgentKey, pending:
   }
   await acknowledge(pending, key);
   return 'done';
+}
+
+/** A stable pre-create binding; the saved episode also records the full actual request hash. */
+export function approvalIntent(profile: Profile, key: AgentKey): string {
+  const want = wanted(profile, key, undefined, undefined);
+  return canonicalJson({ ...requestSpec(profile, want), lifetime: want.lifetime, apiOrigin: want.apiOrigin, linkApiOrigin: want.linkApiOrigin, openkeyOrigin: want.openkeyOrigin });
+}
+
+export function matchesApprovalIntent(pending: PendingGrantRequest, profile: Profile, key: AgentKey): boolean {
+  return matches(pending, profile, wanted(profile, key, undefined, undefined));
 }

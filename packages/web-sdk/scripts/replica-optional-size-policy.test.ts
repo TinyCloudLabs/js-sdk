@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import {
   compactFixOptionalAllowance, correctedOptionalAllowance, hardeningOptionalAllowance, tc1413OptionalAllowance, tc1432OptionalAllowance, tc1475OptionalAllowance, masterDriftOptionalAllowance, tc1789OptionalAllowance, tc2043OptionalAllowance, tc1888OptionalAllowance, validateIntroducedOptionalSources,
-  tc2096OptionalAllowance, tc2096LazyOptionalAllowance,
+  tc2096OptionalAllowance, tc2096LazyOptionalAllowance, tc2481OfflineOptionalAllowance,
   validateOptionalEntryTransition, validateOptionalLedger, type OptionalLedger,
 } from "./replica-optional-size-policy";
 import { approvedMasterDriftRatchet, approvedTc1432Ratchet, approvedTc1475Ratchet, approvedTc1789Ratchet, approvedTc2043SyncScopeRatchet, approvedTc1888PurgeLocalCopyRatchet, approvedTc2096RepairBackoffRatchet, approvedTc2096LazyContentRatchet } from "./replica-size-policy";
@@ -11,9 +11,12 @@ import { evaluateOptionalBudget, validateTc2481WebOptionalTransition } from "./r
 import type { Ledger } from "./replica-size-policy";
 
 const finalShipped = JSON.parse(readFileSync(resolve(import.meta.dir, "replica-optional-size-ledger.json"), "utf8")) as OptionalLedger;
+delete finalShipped.tc2931;
+finalShipped.entries = finalShipped.entries.filter((entry) => entry.pr !== "#945");
+finalShipped.allowance = { ...tc2481OfflineOptionalAllowance };
 // Keep earlier admissions in their original context; final3e0 controls use the live ledger below.
 const shipped = structuredClone(finalShipped);
-shipped.entries = shipped.entries.filter((entry) => entry.pr !== "#873");
+shipped.entries = shipped.entries.slice(0, shipped.entries.findIndex((entry) => entry.pr === "#873"));
 shipped.allowance["replica.cjs"] = 68370;
 // Historical cases retain the last pre-Web-routing allowance and metadata.
 // The #872-era controls below use `shipped`; final3e0 controls use `finalShipped`.
@@ -509,6 +512,20 @@ describe("TC-2096 lazy content fetch optional allowance", () => {
 
 describe("TC-2481 Web routing exact optional admission", () => {
   const root = JSON.parse(readFileSync(resolve(import.meta.dir, "replica-size-ledger.json"), "utf8")) as Ledger;
+    delete root.tc2931BootstrapScope;
+    delete root.tc2923EncryptionTeeOriginRoot;
+    delete root.tc2949PanelChunkRecoveryRoot;
+    delete root.tc2970RegistryVerdictCacheRoot;
+    delete root.tc2913OpenKeyContinuationRoot;
+    delete root.tc2987RegistryAbsentReadsRoot;
+    delete root.tc3076ChildExpiryRoot;
+    delete root.tc3168V1DefaultNodeRoot;
+    delete root.tc3172DelegateNotBeforeRoot;
+    delete root.tc3194NativeShareLinksRoot;
+    delete root.tc3243SdkOwnsBusyRetryRoot;
+    delete root.tc3285SecretTypesRoot;
+    delete root.tc3030FirstPartyOriginsRoot;
+    delete root.tc2937SharePlacementRoot;
   delete root.tc2481OfflineReplicaTransport;
   root.entries = root.entries.filter((entry) => entry.pr !== "#873");
   root.allowance["index.mjs"] = 388;
@@ -678,15 +695,29 @@ describe("TC-2481 final3e0 optional accounting admission", () => {
   const observed = { "replica.mjs": 53129, "replica.cjs": 68401, "activation.mjs": 19143, "activation.cjs": 20115 };
   const fixture = () => {
     const root = JSON.parse(readFileSync(resolve(import.meta.dir, "replica-size-ledger.json"), "utf8")) as Ledger;
+    delete root.tc2931BootstrapScope;
+    delete root.tc2923EncryptionTeeOriginRoot;
+    delete root.tc2949PanelChunkRecoveryRoot;
+    delete root.tc2970RegistryVerdictCacheRoot;
+    delete root.tc2913OpenKeyContinuationRoot;
+    delete root.tc2987RegistryAbsentReadsRoot;
+    delete root.tc3076ChildExpiryRoot;
+    delete root.tc3168V1DefaultNodeRoot;
+    delete root.tc3172DelegateNotBeforeRoot;
+    delete root.tc3194NativeShareLinksRoot;
+    delete root.tc3243SdkOwnsBusyRetryRoot;
+    delete root.tc3285SecretTypesRoot;
+    delete root.tc3030FirstPartyOriginsRoot;
+    delete root.tc2937SharePlacementRoot;
     root.allowance = { "index.mjs": 391, "index.cjs": 861 };
-    root.entries = root.entries.filter((entry) => entry.pr !== "#873");
+    root.entries = root.entries.slice(0, root.entries.findIndex((entry) => entry.pr === "#873"));
     root.entries.push({
       pr: "#873", ticket: "TC-2481", "index.mjs": 99, "index.cjs": 104,
       note: "Naomi, TC-2523, 2026-11-08: #873 registry_unavailable refusal plus offline mapping, +99/+104 root (base e21 → 3e0d9322)",
     });
     const optional = structuredClone(finalShipped);
     optional.allowance["replica.cjs"] = 68401;
-    optional.entries = optional.entries.filter((entry) => entry.pr !== "#873");
+    optional.entries = optional.entries.slice(0, optional.entries.findIndex((entry) => entry.pr === "#873"));
     optional.entries.push({
       pr: "#873", ticket: "TC-2481", "replica.mjs": -2, "replica.cjs": 31,
       "activation.mjs": 0, "activation.cjs": 1, note: "Actual3e0 controlled merge-base deltas; Naomi, TC-2523, 2026-11-08.",
@@ -754,5 +785,16 @@ describe("TC-2481 final3e0 optional accounting admission", () => {
       mutate(changed);
       expect(() => evaluateOptionalBudget(changed, root, observed)).toThrow();
     }
+  });
+
+  it("accepts the newest shipped optional row through the same entry-transition validation the check applies", () => {
+    const newest = finalShipped.entries.at(-1)!;
+    const delta = {
+      "replica.mjs": newest["replica.mjs"], "replica.cjs": newest["replica.cjs"],
+      "activation.mjs": newest["activation.mjs"], "activation.cjs": newest["activation.cjs"],
+    };
+    expect(() => validateOptionalEntryTransition(finalShipped.entries.slice(0, -1), finalShipped.entries, delta, newest.pr)).not.toThrow();
+    expect(() => validateOptionalEntryTransition(finalShipped.entries.slice(0, -1), finalShipped.entries, { ...delta, "replica.cjs": delta["replica.cjs"] + 1 }, newest.pr)).toThrow();
+    expect(() => validateOptionalEntryTransition(finalShipped.entries.slice(0, -1), finalShipped.entries, delta, "#0")).toThrow();
   });
 });

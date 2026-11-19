@@ -4,7 +4,7 @@
 
 import { describe, expect, it, mock, beforeEach, afterEach } from "bun:test";
 import { authorizationVerdictOf } from "@tinycloud/sdk-services";
-import { activateSessionWithHost, fetchPeerId } from "./space";
+import { activateSessionWithHost, fetchPeerId, submitHostDelegation } from "./space";
 
 /**
  * The real `fetch`, captured at import time before any test replaces it.
@@ -106,39 +106,7 @@ describe("activateSessionWithHost", () => {
     expect(result.error).toBe("Bad Gateway");
   });
 
-  it("sends POST to {host}/delegate with delegation header", async () => {
-    (globalThis.fetch as any).mockResolvedValueOnce(
-      mockFetchResponse({ activated: [], skipped: [] }, { status: 200 })
-    );
 
-    await activateSessionWithHost(TEST_HOST, TEST_DELEGATION_HEADER);
-
-    expect(globalThis.fetch).toHaveBeenCalledTimes(1);
-    expect(globalThis.fetch).toHaveBeenCalledWith(
-      `${TEST_HOST}/delegate`,
-      {
-        method: "POST",
-        headers: TEST_DELEGATION_HEADER,
-      }
-    );
-  });
-
-  it("composes correct URL with localhost host", async () => {
-    const localhostHost = "http://localhost:8000";
-    (globalThis.fetch as any).mockResolvedValueOnce(
-      mockFetchResponse({ activated: [], skipped: [] }, { status: 200 })
-    );
-
-    await activateSessionWithHost(localhostHost, TEST_DELEGATION_HEADER);
-
-    expect(globalThis.fetch).toHaveBeenCalledWith(
-      "http://localhost:8000/delegate",
-      {
-        method: "POST",
-        headers: TEST_DELEGATION_HEADER,
-      }
-    );
-  });
 });
 
 describe("fetchPeerId HTTP failures", () => {
@@ -487,3 +455,58 @@ describe("activateSessionWithHost single-flight (TC-332)", () => {
     expect((await retry).success).toBe(true);
   });
 });
+
+it("activation refuses an HTTP redirect without forwarding its credential", async () => {
+  const requests: Array<{ path: string; method: string; authorization: boolean }> = [];
+  const server = Bun.serve({
+    hostname: "127.0.0.1", port: 0,
+    fetch(request) {
+      const path = new URL(request.url).pathname;
+      requests.push({ path, method: request.method, authorization: request.headers.has("authorization") });
+      return path === "/delegate"
+        ? new Response(null, { status: 307, headers: { Location: "/unexpected" } })
+        : Response.json({ activated: [], skipped: [] });
+    },
+  });
+  const previousFetch = globalThis.fetch;
+  globalThis.fetch = REAL_FETCH;
+  try {
+    const result = await activateSessionWithHost(server.url.origin, TEST_DELEGATION_HEADER).catch((error: unknown) => error);
+    expect(requests).toEqual([{ path: "/delegate", method: "POST", authorization: true }]);
+    expect(result).toBeInstanceOf(Error);
+  } finally {
+    globalThis.fetch = previousFetch;
+    await server.stop(true);
+  }
+});
+
+for (const operation of ["host-delegation", "peer-identity"] as const) {
+  it(`${operation} refuses redirects instead of following an endpoint-supplied destination`, async () => {
+    const requests: Array<{ path: string; authorization: boolean }> = [];
+    const space = "tinycloud:pkh:eip155:1:0x0000000000000000000000000000000000000001:default";
+    const firstPath = operation === "host-delegation" ? "/delegate" : `/peer/generate/${encodeURIComponent(space)}`;
+    const server = Bun.serve({
+      hostname: "127.0.0.1", port: 0,
+      fetch(request) {
+        const path = new URL(request.url).pathname;
+        requests.push({ path, authorization: request.headers.has("authorization") });
+        return path === "/unexpected"
+          ? new Response("did:key:z6MkjkxcrsuBXGxVYAZFC1hPUViiRXLC5Kup4G9aBkFoPimV")
+          : new Response(null, { status: 307, headers: { Location: "/unexpected" } });
+      },
+    });
+    const previousFetch = globalThis.fetch;
+    globalThis.fetch = REAL_FETCH;
+    try {
+      const action = operation === "host-delegation"
+        ? submitHostDelegation(server.url.origin, TEST_DELEGATION_HEADER)
+        : fetchPeerId(server.url.origin, space);
+      const result = await action.catch((error: unknown) => error);
+      expect(requests).toEqual([{ path: firstPath, authorization: operation === "host-delegation" }]);
+      expect(result).toBeInstanceOf(Error);
+    } finally {
+      globalThis.fetch = previousFetch;
+      await server.stop(true);
+    }
+  });
+}

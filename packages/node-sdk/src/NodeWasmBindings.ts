@@ -10,10 +10,12 @@
 import {
   invoke,
   invokeAny,
+  invokeDelegationStatus,
   computeCid,
   prepareSession,
   completeSessionSetup,
   validatePersistedSession,
+  validatePersistedSessionForRenewal,
   validateSessionGrant,
   ensureEip55,
   makeSpaceId,
@@ -58,11 +60,15 @@ export class NodeWasmBindings implements IWasmBindings {
 
   invoke = invoke;
   invokeAny = invokeAny;
+  invokeDelegationStatus = invokeDelegationStatus;
   computeCid = computeCid;
   prepareSession = prepareSession;
   completeSessionSetup = completeSessionSetup;
   validatePersistedSession(proof: PersistedSessionProof) {
     return validatePersistedSession(proof);
+  }
+  validatePersistedSessionForRenewal(proof: PersistedSessionProof) {
+    return validatePersistedSessionForRenewal(proof);
   }
   validateSessionGrant(proof: PersistedSessionProof) {
     return validateSessionGrant(proof);

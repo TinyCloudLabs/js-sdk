@@ -20,12 +20,12 @@ const TAGLINES = [
   "Your data, your keys, your cloud.",
   "Self-sovereign storage for the modern web.",
   "The cloud you actually own.",
-  "Encrypted by default, decentralized by design.",
+  "Scoped by default, decentralized by design.",
   "Where your data answers only to you.",
-  "End-to-end encrypted. No exceptions.",
+  "Agents get the scopes you approve.",
   "Like S3 but you hold the keys.",
   "Privacy isn't a feature. It's the architecture.",
-  "Sovereign storage, zero knowledge.",
+  "One data layer for your apps and agents.",
   "Your .env is safe here — we use real cryptography.",
   // Playful / nerdy
   "UCAN do anything.",
@@ -36,7 +36,7 @@ const TAGLINES = [
   "Have you tried turning your keys off and on again?",
   "All your base are belong to you.",
   "In UCAN we trust.",
-  "0 knowledge, 100% confidence.",
+  "Know the scope before you grant it.",
   "Keeping secrets since 2024.",
 ];
 

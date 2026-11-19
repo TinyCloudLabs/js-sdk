@@ -1,11 +1,5 @@
-/**
- * The two places personal records can live, chosen per app (the same rule as the tc-apps skill's `layout.sh`):
- * - `legacy`: space `default`, root `xyz.tinycloud.agent-data/`, one shared SQL copy.
- * - `new`: space `applications`, one root per app `xyz.tinycloud.tinyapps.<app>/`, a discovery entry under
- *   `xyz.tinycloud.tinyapps.catalog/`, and one SQL copy per app at `<root>index`.
- */
+/** Personal records remain in their original layout; discovery entries select the new layout. */
 export type Layout = "legacy" | "new";
-
 export const TC_APPS_LEGACY_ROOT = "xyz.tinycloud.agent-data/";
 export const TC_APPS_LEGACY_DATABASE = "xyz.tinycloud.agent-data.index";
 export const TC_APPS_ID_PREFIX = "xyz.tinycloud.tinyapps.";
@@ -17,9 +11,6 @@ const CHARS = /^[A-Za-z0-9/._~:+@=,-]+$/;
 const NAME = /^[a-z0-9-]+$/;
 const NEW_APP = /^[a-z][a-z0-9-]*$/;
 
-export function spaceName(layout: Layout): "default" | "applications" {
-  return layout === "legacy" ? "default" : "applications";
-}
 export function legacyApp(value: string): boolean { return NAME.test(value) && value !== "catalog" && value !== "index-stale"; }
 export function newApp(value: string): boolean { return NEW_APP.test(value) && !TC_APPS_RESERVED_APPS.includes(value); }
 function kindName(value: string): boolean { return NAME.test(value) && value !== "catalog" && value !== "index-stale"; }
@@ -27,25 +18,25 @@ function kindName(value: string): boolean { return NAME.test(value) && value !==
 export function appId(app: string): string { return `${TC_APPS_ID_PREFIX}${app}`; }
 export function appRoot(app: string): string { return `${appId(app)}/`; }
 export function discoveryKey(app: string): string { return `${TC_APPS_DISCOVERY_ROOT}${app}/entry`; }
-export function catalogKey(layout: Layout, app: string, kind?: string): string {
+export function catalogKey(app: string, kind?: string, layout: Layout = "new"): string {
   const base = layout === "legacy" ? `${TC_APPS_LEGACY_ROOT}catalog/${app}` : `${appRoot(app)}catalog`;
   return kind === undefined ? base : `${base}/${kind}`;
 }
-export function catalogPrefix(layout: Layout, app: string): string { return `${catalogKey(layout, app)}/`; }
-export function recordPrefix(layout: Layout, app: string, kind: string): string {
+export function catalogPrefix(app: string, layout: Layout = "new"): string { return `${catalogKey(app, undefined, layout)}/`; }
+export function recordPrefix(app: string, kind: string, layout: Layout = "new"): string {
   return layout === "legacy" ? `${TC_APPS_LEGACY_ROOT}${app}/${kind}/` : `${appRoot(app)}${kind}/`;
 }
-export function staleKey(layout: Layout, app: string, kind: string): string {
+export function staleKey(app: string, kind: string, layout: Layout = "new"): string {
   return layout === "legacy" ? `${TC_APPS_LEGACY_ROOT}index-stale/${app}/${kind}` : `${appRoot(app)}index-stale/${kind}`;
 }
-export function stalePrefix(layout: Layout, app: string): string {
+export function stalePrefix(app: string, layout: Layout = "new"): string {
   return layout === "legacy" ? `${TC_APPS_LEGACY_ROOT}index-stale/` : `${appRoot(app)}index-stale/`;
 }
-export function indexDatabase(layout: Layout, app: string): string {
+export function indexDatabase(app: string, layout: Layout = "new"): string {
   return layout === "legacy" ? TC_APPS_LEGACY_DATABASE : `${appRoot(app)}index`;
 }
-/** The key as stored in the SQL copy: legacy rows keep the full key, per-app rows drop the app root. */
-export function copyKey(layout: Layout, app: string, key: string): string {
+/** Legacy SQL rows retain full keys; new copies use keys relative to their app root. */
+export function copyKey(app: string, key: string, layout: Layout = "new"): string {
   return layout === "legacy" ? key : key.slice(appRoot(app).length);
 }
 
@@ -61,15 +52,14 @@ function segments(key: string, prefix: boolean): string[] | undefined {
   return parts.some((part) => part === "." || part === "..") ? undefined : parts;
 }
 
-/** Split `<root>/<rest>` into the layout, app (new layout only) and the segments after it. */
+/** Locate the existing storage layout without rewriting the key. */
 function locate(key: string): { layout: Layout; app?: string; rest: string } | undefined {
   if (key.startsWith(TC_APPS_LEGACY_ROOT)) return { layout: "legacy", rest: key.slice(TC_APPS_LEGACY_ROOT.length) };
   if (!key.startsWith(TC_APPS_ID_PREFIX)) return undefined;
   const slash = key.indexOf("/");
   if (slash < 0) return undefined;
   const app = key.slice(TC_APPS_ID_PREFIX.length, slash);
-  if (app === "catalog") return { layout: "new", app, rest: key.slice(slash + 1) };
-  return newApp(app) ? { layout: "new", app, rest: key.slice(slash + 1) } : undefined;
+  return app === "catalog" || newApp(app) ? { layout: "new", app, rest: key.slice(slash + 1) } : undefined;
 }
 
 /** Parse one exact record, catalog, discovery or stale-marker key; `undefined` when it is not a valid personal-record key. */
@@ -85,9 +75,7 @@ export function parseKey(key: string): KeyParts | undefined {
       if (parts.length === 3 && legacyApp(second!) && NAME.test(third!)) return { layout: "legacy", area: "catalog", app: second!, kind: third! };
       return undefined;
     }
-    if (first === "index-stale") {
-      return parts.length === 3 && legacyApp(second!) && NAME.test(third!) ? { layout: "legacy", area: "stale", app: second!, kind: third! } : undefined;
-    }
+    if (first === "index-stale") return parts.length === 3 && legacyApp(second!) && NAME.test(third!) ? { layout: "legacy", area: "stale", app: second!, kind: third! } : undefined;
     if (parts.length !== 4 || !legacyApp(first!) || !NAME.test(second!) || !NAME.test(third!)) return undefined;
     return { layout: "legacy", area: "record", app: first!, kind: second!, folder: third!, id: fourth! };
   }
@@ -105,7 +93,7 @@ export function parseKey(key: string): KeyParts | undefined {
   return { layout: "new", area: "record", app, kind: first!, folder: second!, id: third! };
 }
 
-/** The layout and app a prefix lists, when it is a valid personal-record prefix; the app is absent for a whole root. */
+/** Parse an existing-layout listing prefix, including the shared legacy root. */
 export function parsePrefix(prefix: string): { layout: Layout; app?: string; discovery?: true } | undefined {
   const where = locate(prefix);
   if (!where) return undefined;
@@ -133,12 +121,4 @@ export function parsePrefix(prefix: string): { layout: Layout; app?: string; dis
   if (first === "catalog") return rest.length === 1 ? { layout: "new", app: where.app! } : undefined;
   if (rest.length > 2 || !kindName(first!) || (second !== undefined && !NAME.test(second))) return undefined;
   return { layout: "new", app: where.app! };
-}
-
-/** Where a legacy catalog or record key of `app` goes in the new layout (the same mapping as the skill's `migrate.sh`). */
-export function moveKey(app: string, legacyKey: string): string {
-  const catalog = catalogKey("legacy", app);
-  if (legacyKey === catalog) return catalogKey("new", app);
-  if (legacyKey.startsWith(`${catalog}/`)) return `${catalogKey("new", app)}/${legacyKey.slice(catalog.length + 1)}`;
-  return `${appRoot(app)}${legacyKey.slice(`${TC_APPS_LEGACY_ROOT}${app}/`.length)}`;
 }

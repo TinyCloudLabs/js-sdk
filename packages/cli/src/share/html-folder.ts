@@ -229,7 +229,7 @@ function problemError(problems: readonly FolderProblem[]): CLIError {
   return new CLIError(
     first.code,
     `folder has ${problems.length} ${noun}: ${listed}${more}`,
-    first.code === "UNSAFE_PATH" ? 8 : 2,
+    2,
     { hint: first.code === "UNSAFE_PATH" ? "Rename these files to plain names without control, invisible or direction-changing characters." : "Symbolic links and special files are never followed or read; copy the real files into the folder." },
   );
 }
@@ -311,7 +311,7 @@ export function htmlFolderError(error: ArtifactBundleError): CLIError {
   return new CLIError(
     pathProblem ? "UNSAFE_PATH" : "INVALID_ARGUMENT",
     `folder cannot be published as one page: ${error.message.replace(/^artifact /, "")}${file === "" ? "" : ` (${file}${reference})`}`,
-    pathProblem ? 8 : 2,
+    2,
   );
 }
 

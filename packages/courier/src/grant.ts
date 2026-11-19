@@ -1,3 +1,6 @@
+import { assertRenewalAdmissionLeadTime, recoverAdmittedRenewal } from './renewal-recovery.js';
+import { assertOwnerRenewalIdentity, signedLeaseExpiry, verifyOwnerRenewal } from './owner-renewal.js';
+import type { ApprovalRenewal } from '@tinycloud/share-envelope/links';
 import { createServer } from 'node:http';
 import { createInterface } from 'node:readline';
 import { TinyCloudNode, NodeWasmBindings, publicJwk } from '@tinycloud/node-sdk';
@@ -28,6 +31,7 @@ export interface DelegateRequest {
 }
 
 export interface GrantPayload {
+  renewal?: ApprovalRenewal;
   delegationHeader: { Authorization: string };
   delegationCid: string;
   spaceId: string;
@@ -295,9 +299,9 @@ function ownerSpaceId(payload: GrantPayload): string {
 async function restoreVerifiedGrant(profile: Profile, key: AgentKey, payload: GrantPayload): Promise<{ node: TinyCloudNode; expiresAt: Date }> {
   const times = siweTimes(payload.siwe);
   const expiresAt = times.expiresAt;
-  if (!expiresAt || expiresAt.getTime() <= Date.now()) throw new CourierError('bad-grant', 'OpenKey grant is missing a future SIWE expiry.');
+  if (!expiresAt || (!payload.renewal && expiresAt.getTime() <= Date.now())) throw new CourierError('bad-grant', 'OpenKey grant is missing a future SIWE expiry.');
   const node = new TinyCloudNode(nodeOpts(profile.host));
-  await node.restoreSession({
+  const sessionData = {
     delegationHeader: payload.delegationHeader,
     delegationCid: payload.delegationCid,
     spaceId: payload.spaceId,
@@ -309,8 +313,27 @@ async function restoreVerifiedGrant(profile: Profile, key: AgentKey, payload: Gr
     signature: payload.signature,
     expiresAt: expiresAt.toISOString(),
     tinycloudHosts: [profile.host],
-  });
-  assertAgentGrant(node.getVerifiedSessionCapabilities(), times);
+  };
+  const late = expiresAt.getTime() <= Date.now();
+  if (payload.renewal && late) {
+    await verifyOwnerRenewal(payload, `did:pkh:eip155:${payload.chainId}:${payload.address}`, payload.renewal);
+    await recoverAdmittedRenewal(node, sessionData, payload.renewal.receipt.leaseAuthorization);
+  } else await node.restoreSession(sessionData);
+  if (payload.renewal) {
+    await verifyOwnerRenewal(payload, `did:pkh:eip155:${payload.chainId}:${payload.address}`, payload.renewal);
+    const identity = await node.renewalNodeIdentity();
+    assertOwnerRenewalIdentity(payload.renewal, identity);
+    // Verified late-crash recovery already proved admission; only new admission needs scheduler headroom.
+    if (!late) assertRenewalAdmissionLeadTime(expiresAt);
+    // Admission is replayable before the first renewal stamp exists.
+    const { admitOwnerRenewalLease } = await import('@tinycloud/sdk-core/delegations/renewal');
+    if (!late) await admitOwnerRenewalLease({ host: profile.host, originalAuthorization: payload.delegationHeader.Authorization,
+      originalCid: payload.delegationCid, ownerDid: `did:pkh:eip155:${payload.chainId}:${payload.address}`,
+      agentDid: profile.courierDid, spaceId: payload.spaceId, nodeIdentity: identity,
+      leaseAuthorization: payload.renewal.receipt.leaseAuthorization, leaseCid: payload.renewal.receipt.leaseCid,
+      leaseExpiresAt: await signedLeaseExpiry(payload.renewal) });
+  }
+  assertAgentGrant(node.getVerifiedSessionCapabilities(), times, payload.renewal ? Math.min(Date.now(), expiresAt.getTime() - 1) : Date.now());
   if (node.credentialHolderDid !== profile.courierDid) {
     throw new CourierError('bad-grant', `Grant holder ${node.credentialHolderDid} does not match courier key ${profile.courierDid}.`);
   }
@@ -365,6 +388,7 @@ export function noSpaceError(profile: Profile): CourierError {
 function ownerGrant(payload: GrantPayload, expiresAt: Date): OwnerGrant {
   return {
     v: 1,
+    ...(payload.renewal ? { renewal: payload.renewal } : {}),
     delegationHeader: payload.delegationHeader,
     delegationCid: payload.delegationCid,
     spaceId: payload.spaceId,
@@ -381,6 +405,7 @@ function ownerGrant(payload: GrantPayload, expiresAt: Date): OwnerGrant {
 
 function grantPayload(grant: OwnerGrant): GrantPayload {
   return {
+    ...(grant.renewal ? { renewal: grant.renewal } : {}),
     delegationHeader: grant.delegationHeader,
     delegationCid: grant.delegationCid,
     spaceId: grant.spaceId,

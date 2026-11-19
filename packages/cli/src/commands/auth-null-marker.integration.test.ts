@@ -60,10 +60,12 @@ test("failed network-only revoke retains credentials, then successful retry shre
   let mode: "fail" | "success" = "fail";
   let sessionFile = "";
   let keyFile = "";
+  const nodeDid = "did:key:z6MkfhoxdzVTa6fLWMgEJNiRJomE5grMqkWyHiRbU9Tt7mAq";
   const node = Bun.serve({ port: 0, async fetch(request) {
     const path = new URL(request.url).pathname;
     if (/^\/v[12]\/locations\//.test(path)) return Response.json({ error: "location record not found" }, { status: 404 });
-    if (path === "/info") return Response.json({ protocol: 1, version: "1.0.0", features: [] });
+    if (path === "/info") return Response.json({ protocol: 1, version: "1.0.0", features: [], nodeId: nodeDid });
+    if (path === "/.well-known/tinycloud/node-keys") return Response.json({ nodeDid });
     if (path === "/delegate" && request.method === "POST") return Response.json({ activated: [], skipped: [] });
     if (path === "/revoke" && request.method === "POST") {
       expect(await readFile(sessionFile, "utf8")).toContain("delegationCid");

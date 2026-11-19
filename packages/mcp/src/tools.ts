@@ -4,8 +4,9 @@ import { join } from "node:path";
 import { fromJsonSchema, type McpServer, type ToolAnnotations } from "@modelcontextprotocol/server";
 import { AjvJsonSchemaValidator } from "@modelcontextprotocol/server/validators/ajv";
 import { invokeOperation } from "@tinycloud/operations";
+import { TC_APPS_CATALOG_APPS } from "@tinycloud/operations/tc-apps";
 
-import { toMcpToolResult, type McpToolResult } from "./results.js";
+import { toMcpToolResult, type CanonicalOperationResult, type McpToolResult } from "./results.js";
 import { logToolCall } from "./logging.js";
 import { toMcpJsonSchema } from "./schemas.js";
 
@@ -35,7 +36,6 @@ export const TOOL_NAMES = [
   "tinycloud_apps_read",
   "tinycloud_apps_write",
   "tinycloud_apps_query",
-  "tinycloud_apps_move",
 ] as const;
 
 export type ToolName = (typeof TOOL_NAMES)[number];
@@ -57,6 +57,8 @@ export interface McpStartupSelection {
   readonly beforeOperation?: () => Promise<void>;
   /** Hosted transports may attach a browser approval URL to canonical results. */
   readonly transformOperationResult?: (result: unknown, invocation: McpOperationInvocation) => Promise<unknown>;
+  /** Repeat each tool's title as `annotations.title`, for a directory that takes the listing name from there. */
+  readonly annotationTitles?: boolean;
 }
 
 export interface McpOperationInvocation {
@@ -333,7 +335,7 @@ export const TOOL_BINDINGS: readonly ToolBinding[] = [
     operationVersion: 1,
     readOnlyHint: false,
     idempotentHint: true,
-    destructiveHint: true,
+    destructiveHint: false,
     openWorldHint: false,
     surfaces: ["hosted", "public"],
   },
@@ -363,19 +365,9 @@ export const TOOL_BINDINGS: readonly ToolBinding[] = [
     operationVersion: 1,
     readOnlyHint: false,
     idempotentHint: true,
-    destructiveHint: true,
-    openWorldHint: false,
-    surfaces: ["hosted", "public"],
-  },
-  {
-    name: "tinycloud_apps_move",
-    operationId: "tinycloud.apps.move",
-    operationVersion: 1,
-    readOnlyHint: false,
-    idempotentHint: true,
     destructiveHint: false,
     openWorldHint: false,
-    surfaces: ["hosted"],
+    surfaces: ["hosted", "public"],
   },
 ] as const;
 
@@ -389,6 +381,50 @@ const definitions = new Map(generatedCatalog.operations.map((operation) => [
   },
 ]));
 
+/** The generic tools a catalog app (Health Log, Recipes) is worked through, as the personal-app rules direct. */
+const CATALOG_APP_TOOLS: readonly ToolName[] = [
+  "tinycloud_knowledge_list", "tinycloud_knowledge_read", "tinycloud_sql_query", "tinycloud_sql_execute",
+];
+/** `tinycloud_apps_context`'s `app` where catalog apps cannot be served: the catalog's sentence without their slugs. */
+const APP_WITHOUT_CATALOG_APPS = "Pass one existing personal app id to request its task access together.";
+
+/** A copy of an object schema with one property's description replaced; the shared catalog schema is never mutated. */
+function withPropertyDescription(
+  schema: Record<string, unknown>,
+  property: string,
+  description: string,
+): Record<string, unknown> {
+  const properties = schema.properties as Record<string, Record<string, unknown>> | undefined;
+  const current = properties?.[property];
+  if (current === undefined) throw new Error(`Generated operations catalog has no ${property} input to describe.`);
+  return { ...schema, properties: { ...properties, [property]: { ...current, description } } };
+}
+
+/**
+ * The answer to `tinycloud_apps_context` naming a catalog app on a surface without that app's tools: where the
+ * app is, in the envelope of an input the kernel refuses. Nothing is planned, so no approval is requested.
+ */
+function catalogAppRefusal(
+  binding: ToolBinding,
+  profile: string,
+  input: unknown,
+): CanonicalOperationResult | undefined {
+  const app = typeof input === "object" && input !== null ? (input as { app?: unknown }).app : undefined;
+  if (typeof app !== "string" || !Object.hasOwn(TC_APPS_CATALOG_APPS, app)) return undefined;
+  const { title, link } = TC_APPS_CATALOG_APPS[app]!;
+  return {
+    status: "error",
+    operation: { operationId: binding.operationId, operationVersion: binding.operationVersion },
+    context: { profile, host: "unresolved", posture: "unauthenticated" },
+    error: {
+      code: "INPUT_INVALID",
+      message: `${title} is not available through this connector. Its page is ${link}. If the user asked for ${title}, tell them so and give them that link. For any other personal records, call tinycloud_apps_context without app.`,
+      retryable: false,
+      details: { reason: "catalog_app_unavailable", app, link },
+    },
+  };
+}
+
 export function createJsonSchemaValidator(): AjvJsonSchemaValidator {
   return new AjvJsonSchemaValidator();
 }
@@ -401,14 +437,20 @@ export function registerTinyCloudTools(
   const bindings = TOOL_BINDINGS.filter((binding) =>
     bindingSurfaces(binding).includes(selection.surface) &&
     (selection.allowedTools === undefined || selection.allowedTools.includes(binding.name)));
+  // A surface that does not register the catalog apps' tools neither offers those apps nor asks to approve them.
+  const servesCatalogApps = CATALOG_APP_TOOLS.every((name) => bindings.some((binding) => binding.name === name));
   for (const binding of bindings) {
     const operation = definitions.get(`${binding.operationId}@${binding.operationVersion}`);
     if (operation === undefined) {
       throw new Error(`Generated operations catalog is missing ${binding.operationId}@${binding.operationVersion}.`);
     }
 
+    const offersCatalogApps = servesCatalogApps || binding.operationId !== "tinycloud.apps.context";
+    const inputJsonSchema = offersCatalogApps
+      ? operation.input
+      : withPropertyDescription(operation.input, "app", APP_WITHOUT_CATALOG_APPS);
     const inputSchema = fromJsonSchema(
-      operation.input as Parameters<typeof fromJsonSchema>[0],
+      inputJsonSchema as Parameters<typeof fromJsonSchema>[0],
       validator,
     );
     const outputSchema = fromJsonSchema(
@@ -416,6 +458,7 @@ export function registerTinyCloudTools(
       validator,
     );
     const annotations: ToolAnnotations = {
+      ...(selection.annotationTitles === true ? { title: operation.title } : {}),
       readOnlyHint: binding.readOnlyHint,
       idempotentHint: binding.idempotentHint,
       destructiveHint: binding.destructiveHint,
@@ -436,21 +479,26 @@ export function registerTinyCloudTools(
         const metrics = { replayedGrants: 0 };
         let code = "INTERNAL_ERROR";
         try {
-          await selection.beforeOperation?.();
-          const result = await invokeOperation(
-            binding.operationId,
-            binding.operationVersion,
-            invocationTargetForMcp(selection),
-            input,
-            metrics,
-          );
-          const projected = selection.transformOperationResult === undefined
-            ? result
-            : await selection.transformOperationResult(result, {
-              operationId: binding.operationId,
-              operationVersion: binding.operationVersion,
+          let projected: unknown = offersCatalogApps
+            ? undefined
+            : catalogAppRefusal(binding, selection.profile, input);
+          if (projected === undefined) {
+            await selection.beforeOperation?.();
+            const result = await invokeOperation(
+              binding.operationId,
+              binding.operationVersion,
+              invocationTargetForMcp(selection),
               input,
-            });
+              metrics,
+            );
+            projected = selection.transformOperationResult === undefined
+              ? result
+              : await selection.transformOperationResult(result, {
+                operationId: binding.operationId,
+                operationVersion: binding.operationVersion,
+                input,
+              });
+          }
           const response = toMcpToolResult(projected, bindings, {
             surface: selection.surface === "local" ? "local" : "hosted",
             readOnly: binding.readOnlyHint,

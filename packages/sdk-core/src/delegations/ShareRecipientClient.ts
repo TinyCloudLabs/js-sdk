@@ -297,7 +297,8 @@ export class ShareRecipientClient {
         : this.policyInvocationSigner(portableDelegation);
       if (portableDelegation !== undefined) {
         if (this.options.importDelegation === undefined) {
-          await importPortableDelegation(this.fetchFn, envelope.origin, portableDelegation);
+          if (!this.options.resourceTransport) throw new ShareAccessError("SHARE_SESSION_ROUTING_REQUIRED", "A resource transport is required for received shares");
+          await importPortableDelegation(this.fetchFn, envelope.origin, portableDelegation, this.options.resourceTransport);
         } else {
           const imported = await this.options.importDelegation(portableDelegation);
           if (imported !== undefined) {
