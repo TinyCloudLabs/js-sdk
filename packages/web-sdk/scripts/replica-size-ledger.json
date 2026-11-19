@@ -3417,5 +3417,23 @@
       "ceiling": { "index.mjs": 1529672, "index.cjs": 1462669 }
     },
     "reason": "The web-sdk permission prompt can name the app a request is for and hide the 30-day option (PermissionRequestModal, requestPermissionsCore). Canonical Node 22/Bun 1.3.14 CI on #1095 (8bfd1d1b, master c2f4cc76) measured index.mjs 1529672 and index.cjs 1462669 gzip -9 bytes: +47 and +56 over the TC-2944 ceilings 1529625 and 1462613. No other ceiling moves. Details: TC-3448"
+  },
+  "tc3150GiveBackRoot": {
+    "label": "an agent can give back a grant it was issued (TC-3150)",
+    "ruling": "size-ruling: TC-3150 row tc3150GiveBackRoot index.mjs 1530290 (+618), index.cjs 1463245 (+576) gzip bytes over the tc3448 ceilings, CI's canonical figure. Details: TC-3150",
+    "base": "c5a7f854291974630f3595aa1ef45466beca67c6",
+    "sourceCommits": ["e0d1a181e6d8c780d77f62b5e9ea7f1c91c14770"],
+    "canonicalCI": {
+      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44594702287",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44594702287/job/135809856858",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44594702287/job/135809857060"
+      ]
+    },
+    "root": {
+      "delta": { "index.mjs": 618, "index.cjs": 576 },
+      "ceiling": { "index.mjs": 1530290, "index.cjs": 1463245 }
+    },
+    "reason": "TinyCloudNode.delegateTo takes a holderMayRevoke option and returns a revokeControl, so an agent can revoke a grant it was issued; node-sdk is bundled into the web-sdk root. Canonical Node 22/Bun 1.3.14 CI on #1049 (e0d1a181, master c5a7f854 merged in) measured index.mjs 1530290 and index.cjs 1463245 gzip -9 bytes: +618 and +576 over the TC-3448 ceilings 1529672 and 1462669. No other ceiling moves. Details: TC-3150"
   }
 }
