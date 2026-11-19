@@ -285,6 +285,7 @@ export class ProfileManager {
   static async getKey(name: string): Promise<object | null> {
     return withPinnedProfileDirectory(name, async (directory) => {
       if (!directory) return null;
+      await secureProfileDirectory(directory);
       const profileFile = join(directory, "profile.json");
       if ((await readJson<ProfileConfig>(profileFile))?.authSignedOut === true) return null;
       const key = await readJson<object>(join(directory, "key.json"));
@@ -317,6 +318,7 @@ export class ProfileManager {
   static async getSession(name: string): Promise<object | null> {
     return withPinnedProfileDirectory(name, async (directory) => {
       if (!directory) return null;
+      await secureProfileDirectory(directory);
       const profileFile = join(directory, "profile.json");
       if ((await readJson<ProfileConfig>(profileFile))?.authSignedOut === true) return null;
       const session = await readSession<object>(name);
