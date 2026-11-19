@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { readFeedCardMd } from "@tinycloud/sdk-services/feed";
 import type { FeedCardMd, FeedDatabase, FeedReadDatabase } from "@tinycloud/sdk-services/feed";
 import { CARD_MD_DEFAULT, CARD_MD_DEFAULT_VERSION } from "./card-md-default.js";
+import { safeBlock, safeInline } from "../output/safe-text.js";
 
 /** The owner's own copy, one row, in the Feed's namespace. Agents get a copy of the row in their response database. */
 export const CARD_MD_RESOURCE = "xyz.tinycloud.tinychat/feed/card_md";
@@ -13,7 +14,8 @@ export const DEFAULT_CARD_MD = { text: CARD_MD_DEFAULT, version: CARD_MD_DEFAULT
 /** A card.md as shown to an agent; `default` is set only on the bundled default. */
 export type ShownCardMd = Pick<FeedCardMd, "text" | "version"> & { default?: true };
 
-const seenPath = (directory: string, agent: string) => join(directory, `feed-card-md-${agent}.json`);
+// encodeURIComponent: a token with a path separator cannot leave the profile directory.
+const seenPath = (directory: string, agent: string) => join(directory, `feed-card-md-${encodeURIComponent(agent)}.json`);
 
 /** The card.md version this profile last showed for this agent token, or undefined. A damaged file counts as never shown. */
 export async function seenCardMdVersion(directory: string, agent: string): Promise<string | undefined> {
@@ -81,10 +83,14 @@ export async function cardMdOrDefaultForPublish(db: FeedReadDatabase, directory:
   return showOnce(card, directory, agent);
 }
 
-/** What stderr shows once per changed version. An owner who cleared card.md is a change too. */
+/**
+ * What stderr shows once per changed version. An owner who cleared card.md is a change too. The text is the owner's,
+ * but it reaches a terminal, so control, escape and bidi characters are shown as escapes (newlines and tabs stay).
+ */
 export function cardMdChangedText(card: ShownCardMd): string {
-  if (card.default === true) return `The owner hasn't set a card.md, so this is the default (${card.version}):\n${card.text}`;
-  return card.text === "" ? `The owner's card.md changed (${card.version}): it's now empty.` : `The owner's card.md changed (${card.version}):\n${card.text}`;
+  const version = safeInline(card.version);
+  if (card.default === true) return `The owner hasn't set a card.md, so this is the default (${version}):\n${safeBlock(card.text)}`;
+  return card.text === "" ? `The owner's card.md changed (${version}): it's now empty.` : `The owner's card.md changed (${version}):\n${safeBlock(card.text)}`;
 }
 
 // The same table and upsert the Feed uses for every copy, so the Feed's later copy of the same version changes nothing.
