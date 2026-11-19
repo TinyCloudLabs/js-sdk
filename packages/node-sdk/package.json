@@ -1,6 +1,6 @@
 {
   "name": "@tinycloud/node-sdk",
-  "version": "3.13.0-beta.4",
+  "version": "3.13.0-beta.9",
   "description": "TinyCloud SDK for Node.js with configurable authorization strategies",
   "author": "TinyCloud, Inc.",
   "license": "EGPL",
@@ -37,6 +37,26 @@
       "require": {
         "types": "./dist/space-hosting.d.cts",
         "default": "./dist/space-hosting.cjs"
+      }
+    },
+    "./runtime-grants": {
+      "import": {
+        "types": "./dist/runtime-grants.d.ts",
+        "default": "./dist/runtime-grants.js"
+      },
+      "require": {
+        "types": "./dist/runtime-grants.d.cts",
+        "default": "./dist/runtime-grants.cjs"
+      }
+    },
+    "./secret-read": {
+      "import": {
+        "types": "./dist/secret-read.d.ts",
+        "default": "./dist/secret-read.js"
+      },
+      "require": {
+        "types": "./dist/secret-read.d.cts",
+        "default": "./dist/secret-read.cjs"
       }
     },
     "./credential-pending-store": {
@@ -109,11 +129,11 @@
     "test:integration": "echo 'Integration tests live in tests/node-sdk workspace'"
   },
   "dependencies": {
-    "@tinycloud/share-sdk": "1.6.0-beta.0",
+    "@tinycloud/share-sdk": "1.6.0-beta.1",
     "@tinycloud/share-envelope": "1.6.0",
-    "@tinycloud/replica": "0.4.6-beta.0",
-    "@tinycloud/sdk-services": "3.13.0-beta.3",
-    "@tinycloud/sdk-core": "3.13.0-beta.4",
+    "@tinycloud/replica": "0.4.6-beta.2",
+    "@tinycloud/sdk-services": "3.13.0-beta.8",
+    "@tinycloud/sdk-core": "3.13.0-beta.9",
     "@tinycloud/node-sdk-wasm": "1.7.9",
     "siwe": "^3.0.0"
   },
