@@ -99,6 +99,8 @@
     { "command": "vault delete <key>", "status": "legacy" },
     { "command": "vault list", "status": "legacy" },
     { "command": "vault head <key>", "status": "legacy" },
+    { "command": "skill", "status": "legacy" },
+    { "command": "skill save", "status": "legacy" },
     { "command": "secrets", "status": "legacy" },
     { "command": "secrets network", "status": "legacy" },
     { "command": "secrets network show [nameOrNetworkId]", "status": "legacy" },

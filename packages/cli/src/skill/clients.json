@@ -1,0 +1,22 @@
+{
+  "folders": {
+    "shared": { "user": "~/.agents/skills", "project": ".agents/skills" },
+    "claude": { "user": "{CLAUDE_CONFIG_DIR|~/.claude}/skills", "project": ".claude/skills" },
+    "hermes": { "user": "~/.hermes/skills", "project": ".hermes/skills" },
+    "amp": { "user": "~/.config/agents/skills", "project": ".agents/skills" },
+    "openclaw": { "user": "{OPENCLAW_STATE_DIR|~/.openclaw}/skills", "project": null }
+  },
+  "clients": {
+    "amp": { "label": "Amp", "folders": ["shared", "amp"], "present": "~/.config/amp" },
+    "claude-code": { "label": "Claude Code", "folders": ["claude"], "present": "{CLAUDE_CONFIG_DIR|~/.claude}" },
+    "codex": { "label": "Codex", "folders": ["shared"], "present": "~/.codex" },
+    "copilot": { "label": "GitHub Copilot", "folders": ["shared"], "present": "~/.copilot" },
+    "cursor": { "label": "Cursor", "folders": ["shared"], "present": "~/.cursor" },
+    "gemini": { "label": "Gemini CLI", "folders": ["shared"], "present": "~/.gemini" },
+    "hermes": { "label": "Hermes", "folders": ["shared", "hermes"], "present": "~/.hermes" },
+    "omp": { "label": "OMP", "folders": ["shared"], "present": "~/.omp" },
+    "openclaw": { "label": "OpenClaw", "folders": ["shared", "openclaw"], "present": "{OPENCLAW_STATE_DIR|~/.openclaw}" },
+    "opencode": { "label": "OpenCode", "folders": ["shared"], "present": "~/.config/opencode" },
+    "agents": { "label": "other clients that read .agents/skills", "folders": ["shared"], "present": null }
+  }
+}

@@ -4,13 +4,14 @@ import { CLI_NAME } from "@tinycloud/operations/cli-name";
 import { Command } from "commander";
 import { handleError } from "./output/errors.js";
 import { emitBanner } from "./output/banner.js";
+import { showAboutOnce } from "./output/teach.js";
 import { closeReplication } from "./lib/replication-registry.js";
 
 const { version } = JSON.parse(
   readFileSync(new URL("../package.json", import.meta.url), "utf-8")
 );
 import { theme } from "./output/theme.js";
-import { setJsonOutputRequested, shouldOutputJson, outputWarnings } from "./output/formatter.js";
+import { setJsonOutputRequested, outputWarnings } from "./output/formatter.js";
 import { ProfileManager } from "./config/profiles.js";
 import { configureShareCommandServices, registerShareCommand } from "./commands/share.js";
 import { createShareAuthorityAdapters } from "./share/adapters.js";
@@ -68,6 +69,9 @@ program
   .option("--no-diagnostic-logs", "Don't record a CLI log for this command");
 
 
+// Set by the preAction hook when this run may show the first-run text; shown by the postAction hook once the command has succeeded.
+let aboutPending: { signedIn: boolean } | undefined;
+
 program.hook("preAction", async (hookedCommand, actionCommand) => {
   const opts = hookedCommand.optsWithGlobals();
   setJsonOutputRequested(opts.json === true);
@@ -77,11 +81,23 @@ program.hook("preAction", async (hookedCommand, actionCommand) => {
   if (!opts.quiet && !isShareCommand) {
     emitBanner(version);
   }
+  // The first command in a config folder that succeeds says what TinyCloud is and what the CLI can do, once, on stderr
+  // after its own output (see the postAction hook), so an error is never preceded by it and stderr stays one JSON
+  // document. An explicit --json, --quiet or TC_HIDE_BANNER=1 keeps stderr as it was; a piped stdout alone does not.
+  aboutPending = undefined;
+  const savedCheck = fullCommandName(actionCommand) === "skill save" && actionCommand.opts().check === true;
+  if (!opts.quiet && opts.json !== true && !isShareCommand && !savedCheck && process.env.TC_HIDE_BANNER !== "1") {
+    let signedIn = fullCommandName(actionCommand) === "onboard";
+    if (!signedIn) {
+      try {
+        signedIn = await ProfileManager.profileExists(opts.profile || (await ProfileManager.getConfig()).defaultProfile);
+      } catch {
+        // No config folder yet: this computer is not signed in.
+      }
+    }
+    aboutPending = { signedIn };
+  }
 
-  // Config guard — warn if not configured for auth-required commands
-  const commandName = hookedCommand.name();
-  const isRootCommand = hookedCommand === program;
-  const fullCommand = fullCommandName(hookedCommand);
   setDiagnosticCommandContext({
     command: fullCommandName(actionCommand),
     args: process.argv.slice(2),
@@ -89,29 +105,14 @@ program.hook("preAction", async (hookedCommand, actionCommand) => {
     cliVersion: version,
   });
   commandStartedAt = Date.now();
-  const skipGuard = isRootCommand || ["init", "doctor", "completion", "help", "upgrade", "status"].includes(commandName) ||
-                    fullCommand === "profile create" || fullCommand === "registry show";
-  if (!skipGuard && !opts.quiet && !shouldOutputJson()) {
-    try {
-      const config = await ProfileManager.getConfig();
-      const profileName = opts.profile || config.defaultProfile;
-      const hasProfile = await ProfileManager.profileExists(profileName);
-      if (!hasProfile) {
-        process.stderr.write(theme.warn("⚠ No profile configured.") + " " + theme.muted(`Run: ${CLI_NAME} init`) + "\n\n");
-      } else {
-        const key = await ProfileManager.getKey(profileName);
-        if (!key) {
-          process.stderr.write(theme.warn("⚠ No key found.") + " " + theme.muted(`Run: ${CLI_NAME} init`) + "\n\n");
-        }
-      }
-    } catch {
-      // Config dir doesn't exist yet — that's fine, commands will handle it
-    }
-  }
 });
 
 program.hook("postAction", async (_hookedCommand, actionCommand) => {
   outputWarnings([]);
+  if (aboutPending && (process.exitCode === undefined || process.exitCode === 0)) {
+    showAboutOnce({ dir: CONFIG_DIR, cli: CLI_NAME, signedIn: aboutPending.signedIn });
+  }
+  aboutPending = undefined;
   if (actionCommand.name() === "bug-report") return;
   await appendDiagnosticLog({
     root: CONFIG_DIR,
