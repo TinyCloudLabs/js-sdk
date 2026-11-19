@@ -480,6 +480,13 @@ export type Ledger = {
   tc2937SharePlacementRoot?: LogoutRatchet;
   tc3030FirstPartyOriginsRoot?: LogoutRatchet;
   tc3076ChildExpiryRoot?: LogoutRatchet;
+  tc3168V1DefaultNodeRoot?: LogoutRatchet;
+  tc3172DelegateNotBeforeRoot?: LogoutRatchet;
+  tc3194NativeShareLinksRoot?: LogoutRatchet;
+  tc3243SdkOwnsBusyRetryRoot?: LogoutRatchet;
+  tc3285SecretTypesRoot?: LogoutRatchet;
+  tc3286ShareNoDelegationActionsRoot?: LogoutRatchet;
+  tc2944VaultPathClassifierRoot?: LogoutRatchet;
   tc2773LazyRestoreReplicaWorker?: Omit<WorkerRatchet, "worker"> & { replicaWorker: { delta: number; ceiling: number } };
 };
 
@@ -1114,6 +1121,13 @@ export function ancestryPins(root: Ledger, hasGatedOnly: boolean): Array<{ row: 
   if (root.tc2937SharePlacementRoot !== undefined) pins.push({ row: "tc2937SharePlacementRoot", pin: root.tc2937SharePlacementRoot.sourceCommits.at(-1)! });
   if (root.tc3030FirstPartyOriginsRoot !== undefined) pins.push({ row: "tc3030FirstPartyOriginsRoot", pin: root.tc3030FirstPartyOriginsRoot.sourceCommits.at(-1)! });
   if (root.tc3076ChildExpiryRoot !== undefined) pins.push({ row: "tc3076ChildExpiryRoot", pin: root.tc3076ChildExpiryRoot.sourceCommits.at(-1)! });
+  if (root.tc3168V1DefaultNodeRoot !== undefined) pins.push({ row: "tc3168V1DefaultNodeRoot", pin: root.tc3168V1DefaultNodeRoot.sourceCommits.at(-1)! });
+  if (root.tc3172DelegateNotBeforeRoot !== undefined) pins.push({ row: "tc3172DelegateNotBeforeRoot", pin: root.tc3172DelegateNotBeforeRoot.sourceCommits.at(-1)! });
+  if (root.tc3194NativeShareLinksRoot !== undefined) pins.push({ row: "tc3194NativeShareLinksRoot", pin: root.tc3194NativeShareLinksRoot.sourceCommits.at(-1)! });
+  if (root.tc3243SdkOwnsBusyRetryRoot !== undefined) pins.push({ row: "tc3243SdkOwnsBusyRetryRoot", pin: root.tc3243SdkOwnsBusyRetryRoot.sourceCommits.at(-1)! });
+  if (root.tc3285SecretTypesRoot !== undefined) pins.push({ row: "tc3285SecretTypesRoot", pin: root.tc3285SecretTypesRoot.sourceCommits.at(-1)! });
+  if (root.tc3286ShareNoDelegationActionsRoot !== undefined) pins.push({ row: "tc3286ShareNoDelegationActionsRoot", pin: root.tc3286ShareNoDelegationActionsRoot.sourceCommits.at(-1)! });
+  if (root.tc2944VaultPathClassifierRoot !== undefined) pins.push({ row: "tc2944VaultPathClassifierRoot", pin: root.tc2944VaultPathClassifierRoot.sourceCommits.at(-1)! });
   if (hasGatedOnly) pins.push({ row: "gatedOnlyRatchet", pin: approvedGatedOnlyRatchet.sourceCommit });
   return pins;
 }
@@ -1218,6 +1232,13 @@ export function rootCeilings(root: Ledger): Array<{ row: string; ceiling: GzipSi
     ["tc2937SharePlacementRoot", root.tc2937SharePlacementRoot?.root.ceiling],
     ["tc3030FirstPartyOriginsRoot", root.tc3030FirstPartyOriginsRoot?.root.ceiling],
     ["tc3076ChildExpiryRoot", root.tc3076ChildExpiryRoot?.root.ceiling],
+    ["tc3168V1DefaultNodeRoot", root.tc3168V1DefaultNodeRoot?.root.ceiling],
+    ["tc3172DelegateNotBeforeRoot", root.tc3172DelegateNotBeforeRoot?.root.ceiling],
+    ["tc3194NativeShareLinksRoot", root.tc3194NativeShareLinksRoot?.root.ceiling],
+    ["tc3243SdkOwnsBusyRetryRoot", root.tc3243SdkOwnsBusyRetryRoot?.root.ceiling],
+    ["tc3285SecretTypesRoot", root.tc3285SecretTypesRoot?.root.ceiling],
+    ["tc3286ShareNoDelegationActionsRoot", root.tc3286ShareNoDelegationActionsRoot?.root.ceiling],
+    ["tc2944VaultPathClassifierRoot", root.tc2944VaultPathClassifierRoot?.root.ceiling],
   ];
   return rows.flatMap(([row, ceiling]) => ceiling === undefined ? [] : [{ row, ceiling }]);
 }
@@ -3512,6 +3533,146 @@ export const approvedTc3076ChildExpiryRoot: LogoutRatchet = {
   "reason": "useDelegation, createSubDelegation and grantRuntimePermissions hold a child's expiry to its parent's whole second, through one rounding helper and a refusal for a delegation with under a second left; node-sdk is bundled into the web-sdk root. Canonical Node 22/Bun 1.3.14 CI on #993 (711903b3, based on master ef1c9d3b) measured index.mjs 1525966 and index.cjs 1460286 gzip -9 bytes: +76 over the TC-3030 ceiling 1525890 for index.mjs, and index.cjs is under its ceiling 1460319, which stays. No other ceiling moves. Details: TC-3076"
 };
 
+/** The exact TC-3168 v1 default-node root allowance from canonical CI. */
+export const approvedTc3168V1DefaultNodeRoot: LogoutRatchet = {
+  "label": "v1-only owner on the default node keeps its 3.11 route (TC-3168)",
+  "ruling": "TC-3168 size ruling: a ratchet row in the TC-3076 pattern for #1024's exact canonical CI bytes; index.mjs +124 B and index.cjs +198 B over the TC-3076 ceilings, each under the 800 B per-row cap. Details: TC-3168",
+  "base": "d8f2d10a36fb4ebe201ae33d27b21ff39cbc24e5",
+  "sourceCommits": ["47ea08a52142a303152d38c290f2361f763f3e8e"],
+  "canonicalCI": {
+    "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44135735800",
+    "jobs": [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44135735800/job/134224638801",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44135735800/job/134224638829"
+    ]
+  },
+  "root": {
+    "delta": { "index.mjs": 124, "index.cjs": 198 },
+    "ceiling": { "index.mjs": 1526090, "index.cjs": 1460517 }
+  },
+  "reason": "A verified v1-only registry record that names only the default node routes there as in 3.11, through an explicit legacy marker on the registered verdict and the node-sdk automatic-setup gate; node-sdk is bundled into the web-sdk root. Canonical Node 22/Bun 1.3.14 CI on #1024 (47ea08a5, based on master d8f2d10a) measured index.mjs 1526090 and index.cjs 1460517 gzip -9 bytes: +124 and +198 over the TC-3076 ceilings 1525966 and 1460319. No other ceiling moves. Details: TC-3168"
+};
+
+/** The exact TC-3172 delegateTo notBefore root allowance from canonical CI. */
+export const approvedTc3172DelegateNotBeforeRoot: LogoutRatchet = {
+  "label": "delegateTo notBefore option on the node-sdk (TC-3172)",
+  "ruling": "TC-3172 size ruling: a ratchet row in the TC-3168 pattern for #1025's exact canonical CI bytes; index.mjs +173 B and index.cjs +160 B over the TC-3168 ceilings, each under the 800 B per-row cap. Details: TC-3172",
+  "base": "875e26acdc1444d4f1c144efbf692d68c8ba2cb8",
+  "sourceCommits": ["0fab85aac8cf09b4bace5c3460b0788c1d6de980"],
+  "canonicalCI": {
+    "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44165332811",
+    "jobs": [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44165332811/job/134329745596",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44165332811/job/134329747802"
+    ]
+  },
+  "root": {
+    "delta": { "index.mjs": 173, "index.cjs": 160 },
+    "ceiling": { "index.mjs": 1526263, "index.cjs": 1460677 }
+  },
+  "reason": "TinyCloudNode.delegateTo takes an optional notBefore that is validated and passed through to the delegation's nbf, with the refusals for an invalid date, a time at or after expiry, and a future start; node-sdk is bundled into the web-sdk root. Canonical Node 22/Bun 1.3.14 CI on #1025 (0fab85aa, based on master 875e26ac) measured index.mjs 1526263 and index.cjs 1460677 gzip -9 bytes: +173 and +160 over the TC-3168 ceilings 1526090 and 1460517. No other ceiling moves. Details: TC-3172"
+};
+
+/** The exact TC-3194 native share links root allowance from canonical CI. */
+export const approvedTc3194NativeShareLinksRoot: LogoutRatchet = {
+  "label": "native share links on the sdk-core (TC-3194)",
+  "ruling": "Naomi's TC-3194 size ruling (policy review): a ratchet row in the TC-3172 pattern for #1033's exact canonical CI bytes; index.mjs +2196 B and index.cjs +1288 B over the TC-3172 ceilings, approved above the 800 B per-row cap for native share links instead of lazy-loading them. Details: TC-3194",
+  "base": "0b5a6bc84b7c3e3fdbd9f392d009ca1e08e42d1f",
+  "sourceCommits": ["ffa4b6a082609de3b57cedf4d747fad2e2f5d253"],
+  "canonicalCI": {
+    "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44203379707",
+    "jobs": [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44203379707/job/134462959549",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44203379707/job/134462959979"
+    ]
+  },
+  "root": {
+    "delta": { "index.mjs": 2196, "index.cjs": 1288 },
+    "ceiling": { "index.mjs": 1528459, "index.cjs": 1461965 }
+  },
+  "reason": "SharingService grants several resources in one share, signs one recipient child over all of them, and adds inspectShareToken, which checks a share token offline against the owner's wallet signature and returns the owner, the resources, when access ends and the root CID; sdk-core and node-sdk are bundled into the web-sdk root. Canonical Node 22/Bun 1.3.14 CI on #1033 (ffa4b6a0, based on master 0b5a6bc8) measured index.mjs 1528459 and index.cjs 1461965 gzip -9 bytes: +2196 and +1288 over the TC-3172 ceilings 1526263 and 1460677. No other ceiling moves. Details: TC-3194"
+};
+
+/** The exact TC-3243 account registry sync busy-retry root allowance from canonical CI. */
+export const approvedTc3243SdkOwnsBusyRetryRoot: LogoutRatchet = {
+  "label": "account registry sync leaves busy retries to the SDK (TC-3243)",
+  "ruling": "TC-3243 size ruling (Naomi): a ratchet row in the TC-3194 pattern for #1038's exact canonical CI bytes over #1033's ceilings; index.mjs +150 B and index.cjs +108 B over the TC-3194 ceilings, each under the 800 B per-row cap. Details: TC-3243",
+  "base": "23953408e6724fa5f488e67e6c418c50bca83fb3",
+  "sourceCommits": ["42eeab4a2f342a2c6213cc69340eb8c87413147d"],
+  "canonicalCI": {
+    "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44226922450",
+    "jobs": [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44226922450/job/134542228469",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44226922450/job/134542228412"
+    ]
+  },
+  "root": {
+    "delta": { "index.mjs": 150, "index.cjs": 108 },
+    "ceiling": { "index.mjs": 1528609, "index.cjs": 1462073 }
+  },
+  "reason": "TinyCloudNode's account registry sync stops, with a warning, on a node busy or timeout answer that the SDK has already retried, instead of retrying it again; node-sdk is bundled into the web-sdk root. Canonical Node 22/Bun 1.3.14 CI on #1038 (42eeab4a, based on master 23953408) measured index.mjs 1528609 and index.cjs 1462073 gzip -9 bytes: +150 and +108 over the TC-3194 ceilings 1528459 and 1461965. No other ceiling moves. Details: TC-3243"
+};
+
+/** The exact TC-3285 secret type root allowance from canonical CI. */
+export const approvedTc3285SecretTypesRoot: LogoutRatchet = {
+  "label": "optional secret type and getEntry (TC-3285)",
+  "ruling": "TC-3285 size ruling (Naomi): a ratchet row in the TC-3243 pattern for #1042's exact canonical CI bytes over the TC-3243 ceilings; index.mjs +227 B and index.cjs +219 B, each under the 800 B per-row cap. Details: TC-3285",
+  "base": "b758e712acf147bc3b2f801418b78c3bea4bf917",
+  "sourceCommits": ["342ac278df3699db027e0ab54ae2340d3d05f3b5"],
+  "canonicalCI": {
+    "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44376412165",
+    "jobs": [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44376412165/job/135056649418",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44376412165/job/135056650074"
+    ]
+  },
+  "root": {
+    "delta": { "index.mjs": 227, "index.cjs": 219 },
+    "ceiling": { "index.mjs": 1528836, "index.cjs": 1462292 }
+  },
+  "reason": "SecretsService reads a secret's optional type (getEntry) and validates the type on put; sdk-services, sdk-core, node-sdk and web-sdk expose it and are bundled into the web-sdk root. The TOTP helpers are a separate subpath and are not in the root. Canonical Node 22/Bun 1.3.14 CI on #1042 (342ac278, based on master ae9a23c9) measured index.mjs 1528836 and index.cjs 1462292 gzip -9 bytes: +227 and +219 over the TC-3243 ceilings 1528609 and 1462073. No other ceiling moves. Details: TC-3285"
+};
+
+/** The exact TC-3286 share-links-without-delegation-actions root allowance from canonical CI. */
+export const approvedTc3286ShareNoDelegationActionsRoot: LogoutRatchet = {
+  "label": "share links never carry tinycloud.delegation actions (TC-3286)",
+  "ruling": "TC-3286 size ruling (Naomi): a ratchet row in the #1038 pattern for #1043's exact canonical CI bytes, restated over the TC-3285 ceilings after #1042 merged first; index.mjs +103 B and index.cjs +48 B over the TC-3285 ceilings, each under the 800 B per-row cap. Details: TC-3286",
+  "base": "400cf7f1652d079abb5c8382736f9c2ba8c4cb6a",
+  "sourceCommits": ["800a57fbd0239558c5783d77c761b3132de2da31"],
+  "canonicalCI": {
+    "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44392278215",
+    "jobs": [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44392278215/job/135112809282",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44392278215/job/135112809572"
+    ]
+  },
+  "root": {
+    "delta": { "index.mjs": 103, "index.cjs": 48 },
+    "ceiling": { "index.mjs": 1528939, "index.cjs": 1462340 }
+  },
+  "reason": "SharingService refuses tinycloud.delegation actions in share links (sharing.generate, the child delegation a recipient creates from a received link, and preflightGenerate); sdk-core is bundled into the web-sdk root. Canonical Node 22/Bun 1.3.14 CI on #1043 (800a57fb, master 400cf7f1 merged in) measured index.mjs 1528939 and index.cjs 1462340 gzip -9 bytes: +103 and +48 over the TC-3285 ceilings 1528836 and 1462292. No other ceiling moves. Details: TC-3286"
+};
+
+/** The exact TC-2944 vault-path classifier root allowance from canonical CI. */
+export const approvedTc2944VaultPathClassifierRoot: LogoutRatchet = {
+  "label": "vault paths classified by what they cover, for the dedicated vault address (TC-2944)",
+  "ruling": "size-ruling: Naomi 2026-11-19, TC-2944: web-sdk root bundle growth from the vault-path classifier accepted at CI's measured numbers (about +700 / +330 B); security routing. Details: TC-2944",
+  "base": "e7e5d47bf76ea6c5a851c57bec470c108725299b",
+  "sourceCommits": ["f5259377681da055a78d5a4508176f939b4eaa35"],
+  "canonicalCI": {
+    "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44533528238",
+    "jobs": [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44533528238/job/135592824606",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44533528238/job/135592824800"
+    ]
+  },
+  "root": {
+    "delta": { "index.mjs": 686, "index.cjs": 273 },
+    "ceiling": { "index.mjs": 1529625, "index.cjs": 1462613 }
+  },
+  "reason": "The vault routing classifier (sdk-services resourceRouting, sdk-core delegation classification, node-sdk activation routing) reads which resources a request or grant names or covers by their ancestors, so a request or grant that reaches vault data goes to the dedicated vault address; sdk-services, sdk-core and node-sdk are bundled into the web-sdk root. Canonical Node 22/Bun 1.3.14 CI on #1069 (f5259377, master e7e5d47b merged in) measured index.mjs 1529625 and index.cjs 1462613 gzip -9 bytes: +686 and +273 over the TC-3286 ceilings 1528939 and 1462340 (+722 and +361 over the merge base). No other ceiling moves. Details: TC-2944"
+};
+
 export const approvedLedgerRows: Record<string, unknown> = {
   phase2Ratchet: approvedPhase2,
   fixRequiredRatchet: approvedFixRequiredRatchet,
@@ -3613,6 +3774,13 @@ export const approvedLedgerRows: Record<string, unknown> = {
   tc2937SharePlacementRoot: approvedTc2937SharePlacementRoot,
   tc3030FirstPartyOriginsRoot: approvedTc3030FirstPartyOriginsRoot,
   tc3076ChildExpiryRoot: approvedTc3076ChildExpiryRoot,
+  tc3168V1DefaultNodeRoot: approvedTc3168V1DefaultNodeRoot,
+  tc3172DelegateNotBeforeRoot: approvedTc3172DelegateNotBeforeRoot,
+  tc3194NativeShareLinksRoot: approvedTc3194NativeShareLinksRoot,
+  tc3243SdkOwnsBusyRetryRoot: approvedTc3243SdkOwnsBusyRetryRoot,
+  tc3285SecretTypesRoot: approvedTc3285SecretTypesRoot,
+  tc3286ShareNoDelegationActionsRoot: approvedTc3286ShareNoDelegationActionsRoot,
+  tc2944VaultPathClassifierRoot: approvedTc2944VaultPathClassifierRoot,
 };
 
 /** Only a git merge-base ledger may retain the pre-correction toolchain. */
@@ -4076,6 +4244,41 @@ export function validateLedger(value: Ledger, historicalBase = false): void {
       (!value.tc3030FirstPartyOriginsRoot ||
         JSON.stringify(value.tc3076ChildExpiryRoot) !== JSON.stringify(approvedTc3076ChildExpiryRoot))) {
     throw new Error("Only Naomi's exact TC-3076 root admission is approved.");
+  }
+  if (value.tc3168V1DefaultNodeRoot !== undefined &&
+      (!value.tc3076ChildExpiryRoot ||
+        JSON.stringify(value.tc3168V1DefaultNodeRoot) !== JSON.stringify(approvedTc3168V1DefaultNodeRoot))) {
+    throw new Error("Only the exact TC-3168 root admission is approved.");
+  }
+  if (value.tc3172DelegateNotBeforeRoot !== undefined &&
+      (!value.tc3168V1DefaultNodeRoot ||
+        JSON.stringify(value.tc3172DelegateNotBeforeRoot) !== JSON.stringify(approvedTc3172DelegateNotBeforeRoot))) {
+    throw new Error("Only the exact TC-3172 root admission is approved.");
+  }
+  if (value.tc3194NativeShareLinksRoot !== undefined &&
+      (!value.tc3172DelegateNotBeforeRoot ||
+        JSON.stringify(value.tc3194NativeShareLinksRoot) !== JSON.stringify(approvedTc3194NativeShareLinksRoot))) {
+    throw new Error("Only the exact TC-3194 root admission is approved.");
+  }
+  if (value.tc3243SdkOwnsBusyRetryRoot !== undefined &&
+      (!value.tc3194NativeShareLinksRoot ||
+        JSON.stringify(value.tc3243SdkOwnsBusyRetryRoot) !== JSON.stringify(approvedTc3243SdkOwnsBusyRetryRoot))) {
+    throw new Error("Only the exact TC-3243 root admission is approved.");
+  }
+  if (value.tc3285SecretTypesRoot !== undefined &&
+      (!value.tc3243SdkOwnsBusyRetryRoot ||
+        JSON.stringify(value.tc3285SecretTypesRoot) !== JSON.stringify(approvedTc3285SecretTypesRoot))) {
+    throw new Error("Only the exact TC-3285 root admission is approved.");
+  }
+  if (value.tc3286ShareNoDelegationActionsRoot !== undefined &&
+      (!value.tc3285SecretTypesRoot ||
+        JSON.stringify(value.tc3286ShareNoDelegationActionsRoot) !== JSON.stringify(approvedTc3286ShareNoDelegationActionsRoot))) {
+    throw new Error("Only the exact TC-3286 root admission is approved.");
+  }
+  if (value.tc2944VaultPathClassifierRoot !== undefined &&
+      (!value.tc3286ShareNoDelegationActionsRoot ||
+        JSON.stringify(value.tc2944VaultPathClassifierRoot) !== JSON.stringify(approvedTc2944VaultPathClassifierRoot))) {
+    throw new Error("Only the exact TC-2944 root admission is approved.");
   }
 }
 
@@ -4961,5 +5164,61 @@ export function validateTc3076ChildExpiryRootTransition(base?: LogoutRatchet, cu
   if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc3076ChildExpiryRoot) ||
       base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
     throw new Error("The TC-3076 root admission may be introduced once and cannot change later.");
+  }
+}
+
+/** The exact TC-3168 v1 default-node root admission is introduced once and immutable. */
+export function validateTc3168V1DefaultNodeRootTransition(base?: LogoutRatchet, current?: LogoutRatchet): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc3168V1DefaultNodeRoot) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The TC-3168 root admission may be introduced once and cannot change later.");
+  }
+}
+
+/** The exact TC-3172 delegateTo notBefore root admission is introduced once and immutable. */
+export function validateTc3172DelegateNotBeforeRootTransition(base?: LogoutRatchet, current?: LogoutRatchet): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc3172DelegateNotBeforeRoot) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The TC-3172 root admission may be introduced once and cannot change later.");
+  }
+}
+
+/** The exact TC-3194 native share links root admission is introduced once and immutable. */
+export function validateTc3194NativeShareLinksRootTransition(base?: LogoutRatchet, current?: LogoutRatchet): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc3194NativeShareLinksRoot) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The TC-3194 root admission may be introduced once and cannot change later.");
+  }
+}
+
+/** The exact TC-3243 account registry sync busy-retry root admission is introduced once and immutable. */
+export function validateTc3243SdkOwnsBusyRetryRootTransition(base?: LogoutRatchet, current?: LogoutRatchet): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc3243SdkOwnsBusyRetryRoot) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The TC-3243 root admission may be introduced once and cannot change later.");
+  }
+}
+
+/** The exact TC-3285 secret type root admission is introduced once and immutable. */
+export function validateTc3285SecretTypesRootTransition(base?: LogoutRatchet, current?: LogoutRatchet): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc3285SecretTypesRoot) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The TC-3285 root admission may be introduced once and cannot change later.");
+  }
+}
+
+/** The exact TC-3286 share-links-without-delegation-actions root admission is introduced once and immutable. */
+export function validateTc3286ShareNoDelegationActionsRootTransition(base?: LogoutRatchet, current?: LogoutRatchet): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc3286ShareNoDelegationActionsRoot) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The TC-3286 root admission may be introduced once and cannot change later.");
+  }
+}
+
+/** The exact TC-2944 vault-path classifier root admission is introduced once and immutable. */
+export function validateTc2944VaultPathClassifierRootTransition(base?: LogoutRatchet, current?: LogoutRatchet): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc2944VaultPathClassifierRoot) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The TC-2944 root admission may be introduced once and cannot change later.");
   }
 }

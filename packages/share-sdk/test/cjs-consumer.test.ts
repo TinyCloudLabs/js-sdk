@@ -24,7 +24,7 @@ describe("CommonJS consumer of @tinycloud/share-sdk", () => {
   const entries = Object.entries(manifest.exports).filter(([, condition]) => condition.require !== undefined);
 
   it("declares the entries it smoke-tests", () => {
-    expect(entries.map(([subpath]) => subpath)).toEqual([".", "./artifact", "./html-bundle", "./share-root", "./share-index", "./web-recipient"]);
+    expect(entries.map(([subpath]) => subpath)).toEqual([".", "./artifact", "./html-bundle", "./share-root", "./share-index", "./native-link", "./web-recipient"]);
   });
 
   for (const [subpath] of entries) {

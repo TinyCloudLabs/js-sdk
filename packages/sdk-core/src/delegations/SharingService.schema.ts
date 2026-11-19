@@ -48,6 +48,11 @@ const LegacyEncodedShareDataSchema = z.object({
   delegation: DelegationSchema,
   /** Resource path this link grants access to */
   path: z.string().min(1, "path is required"),
+  /** Every resource of a share of several, `path` first (absent on a one-resource share) */
+  resources: z.array(z.object({
+    path: z.string().min(1),
+    actions: z.array(z.string().min(1)).min(1),
+  })).min(2).max(16).optional(),
   /** TinyCloud host URL */
   host: z.string().url("host must be a valid URL"),
   /** Space ID */

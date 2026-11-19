@@ -9,7 +9,7 @@ import type { ProfileManager as ProfileManagerType } from "../config/profiles.js
 import type { createShareAuthorityAdapters as ShareAuthorityAdapterFactory } from "./adapters.js";
 import type { createHermeticEncryptedNode as HermeticEncryptedNodeFactory } from "../../../node-sdk/src/test-support/hermetic-encrypted-node";
 import type { PrivateKeySigner as PrivateKeySignerType } from "@tinycloud/node-sdk";
-import { pkhDid, registryOwnerKeyV2, signLocationRecordV2 } from "@tinycloud/sdk-core";
+import { DEFAULT_TINYCLOUD_FALLBACK_HOST, endToEndNodeHost, pkhDid, registryOwnerKeyV2, signLocationRecordV2 } from "@tinycloud/sdk-core";
 import { createNativeShare, parseNativeShareUrl } from "@tinycloud/share-sdk";
 
 type FixtureServer = {
@@ -201,17 +201,37 @@ afterAll(async () => {
   if (privateRoot) await rm(privateRoot, { recursive: true, force: true });
 });
 
-test("Native bearer receive refuses an unregistered owner before dispatch; Details: TC-2594", async () => {
+test("Native bearer receive reads a verified-unregistered owner's share from the default node; Details: TC-2594, TC-3181", async () => {
   if (!fixture || !registryServer) throw new Error("test fixture is not ready");
   routeRecord = undefined;
-  const ownerRequestCount = fixture.requests().length;
+  unapprovedOrigins.length = 0;
+  const ownerInvocationCount = fixture.invocations().length;
   const registryRequestCount = registryRequests.length;
   const attackerRequestCount = attackerRequests.length;
-  const rejected = await readerFor(profileName("missing"))(ownerLink).then(() => false, () => true);
+  // The fixture node answers for the default node's origins (its vault origin too: share paths are vault paths), so nothing reaches the real one.
+  const defaultNodeRequests: string[] = [];
+  const guardedFetch = globalThis.fetch;
+  const fixtureHost = fixture.host;
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = new URL(input instanceof Request ? input.url : String(input));
+    if (url.origin !== DEFAULT_TINYCLOUD_FALLBACK_HOST && url.origin !== endToEndNodeHost(DEFAULT_TINYCLOUD_FALLBACK_HOST)) return guardedFetch(input, init);
+    defaultNodeRequests.push(url.pathname);
+    const target = new URL(`${url.pathname}${url.search}`, fixtureHost).toString();
+    return input instanceof Request ? guardedFetch(new Request(target, input), init) : guardedFetch(target, init);
+  }) as typeof globalThis.fetch;
+  let result: NativeReadResult;
+  try {
+    result = await readerFor(profileName("missing"))(ownerLink);
+  } finally {
+    globalThis.fetch = guardedFetch;
+  }
 
-  expect(rejected).toBe(true);
+  expect(result.bytes).toEqual(EXPECTED_BYTES);
   expect(registryRequests.length).toBeGreaterThan(registryRequestCount);
-  expect(fixture.requests().slice(ownerRequestCount)).toEqual([]);
+  expect(defaultNodeRequests).toContain("/invoke");
+  expect(fixture.invocations().slice(ownerInvocationCount).some((invocation) =>
+    invocation.action === "tinycloud.kv/get" && invocation.path === SHARE_PATH
+  )).toBe(true);
   expect(attackerRequests.slice(attackerRequestCount)).toEqual([]);
   expect(unapprovedOrigins).toEqual([]);
 });
@@ -219,6 +239,7 @@ test("Native bearer receive refuses an unregistered owner before dispatch; Detai
 test("Native bearer receive ignores a mismatched link host and uses the signed route; Details: TC-2594", async () => {
   if (!fixture || !attackerServer) throw new Error("test fixture is not ready");
   routeRecord = signedLocationRecord;
+  unapprovedOrigins.length = 0;
   const ownerRequestCount = fixture.requests().length;
   const ownerInvocationCount = fixture.invocations().length;
   const attackerRequestCount = attackerRequests.length;
@@ -236,6 +257,7 @@ test("Native bearer receive ignores a mismatched link host and uses the signed r
 test("Native bearer receive reads bytes over a signed registry route; Details: TC-2594", async () => {
   if (!fixture) throw new Error("test fixture is not ready");
   routeRecord = signedLocationRecord;
+  unapprovedOrigins.length = 0;
   const invocationCount = fixture.invocations().length;
   const result = await readerFor(profileName("registered"))(ownerLink);
 
