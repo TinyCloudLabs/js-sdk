@@ -141,6 +141,18 @@ jobs:
           TC_REPLICATION_E2E_NODE_BIN: ${{ runner.temp }}/tinycloud
         run: bash "$GITHUB_WORKSPACE/.github/scripts/run-private-tests.sh" bun test --max-concurrency=1 packages/cli/src/commands/agent-grant.timeout.e2e.test.ts
 
+      - name: Run isolated Secrets e2e against TinyCloud node 1.26.10
+        env:
+          TC_REPLICATION_E2E_NODE_BIN: ${{ runner.temp }}/tinycloud-node-x86_64-unknown-linux-gnu/tinycloud
+        run: |
+          archive="$RUNNER_TEMP/tinycloud-node-x86_64-unknown-linux-gnu.tar.xz"
+          curl --fail --silent --show-error --location \
+            https://github.com/TinyCloudLabs/tinycloud-node/releases/download/v1.26.10/tinycloud-node-x86_64-unknown-linux-gnu.tar.xz \
+            --output "$archive"
+          printf '%s  %s\n' 45e83b9e954c388c0ab7d62cf03e406eaa21de01c6b4118ab05c0071c995aa91 "$archive" | sha256sum --check
+          tar -xJf "$archive" -C "$RUNNER_TEMP"
+          bash "$GITHUB_WORKSPACE/.github/scripts/run-private-tests.sh" bun test --max-concurrency=1 --test-name-pattern TC-3284 packages/node-sdk/src/delegateTo.e2e.test.ts
+
       - name: Save Rust/Cargo cache
         if: github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/')
         uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0

@@ -278,6 +278,24 @@ describe("SecretsService", () => {
     });
   });
 
+  it("keeps the legacy and isolated catalogs separate, including namesakes", async () => {
+    const vault = new MockVault();
+    vault.listPage = mock(async ({ prefix }: VaultListOptions = {}) => ({
+      ok: true as const,
+      data: {
+        keys: prefix === "secrets-isolated/" ? ["API_KEY", "NEW_KEY"] : ["API_KEY"],
+        truncated: false,
+      },
+    }));
+    const secrets = new SecretsService(vault);
+
+    expect(await secrets.listAll()).toEqual({ ok: true, data: [{ name: "API_KEY" }] });
+    expect(await secrets.listAll({ isolated: true })).toEqual({
+      ok: true,
+      data: [{ name: "API_KEY", isolated: true }, { name: "NEW_KEY", isolated: true }],
+    });
+  });
+
   it("fails instead of looping when a node repeats a continuation cursor", async () => {
     const vault = new MockVault();
     // An older node ignores the request cursor and serves page one again.

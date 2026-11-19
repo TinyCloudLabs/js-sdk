@@ -26,6 +26,7 @@ export interface SecretCatalogEntry {
   name: string;
   /** Omitted for the global secret namespace. */
   scope?: string;
+  isolated?: true;
 }
 
 export type SecretsError = VaultError | ServiceError;
@@ -54,6 +55,6 @@ export interface ISecretsService {
     options?: SecretScopeOptions,
   ): Promise<Result<void, SecretsError>>;
   list(options?: SecretScopeOptions): Promise<Result<string[], SecretsError>>;
-  /** List global and scoped secrets without decrypting their values. */
-  listAll(): Promise<Result<SecretCatalogEntry[], SecretsError>>;
+  /** List global and scoped secrets in one namespace without decrypting their values. */
+  listAll(options?: Pick<SecretScopeOptions, "isolated">): Promise<Result<SecretCatalogEntry[], SecretsError>>;
 }

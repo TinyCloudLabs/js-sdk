@@ -15,7 +15,7 @@ import {
   secretTypeOf,
 } from "./secretTypes";
 import {
-  canonicalizeSecretScope,
+  resolveSecretListPrefix,
   parseSecretCatalogKey,
   resolveSecretPath,
   SECRET_NAME_RE,
@@ -151,8 +151,7 @@ export class SecretsService implements ISecretsService {
   ): Promise<Result<string[], SecretsError>> {
     let prefix: string;
     try {
-      const scope = canonicalizeSecretScope(options?.scope);
-      prefix = scope === undefined ? "secrets/" : `secrets/scoped/${scope}/`;
+      prefix = resolveSecretListPrefix(options).slice("vault/".length);
     } catch (error) {
       return invalidSecretInput(
         error instanceof Error ? error.message : String(error),
@@ -173,7 +172,10 @@ export class SecretsService implements ISecretsService {
     };
   }
 
-  async listAll(): Promise<Result<SecretCatalogEntry[], SecretsError>> {
+  async listAll(
+    options?: Pick<SecretScopeOptions, "isolated">,
+  ): Promise<Result<SecretCatalogEntry[], SecretsError>> {
+    const prefix = resolveSecretListPrefix(options).slice("vault/".length);
     const entries = new Map<string, SecretCatalogEntry>();
     // A node older than bounded list paging ignores the cursor and returns the
     // same page again; a repeated cursor would loop forever, so it fails.
@@ -182,7 +184,7 @@ export class SecretsService implements ISecretsService {
 
     do {
       const result = await this.vault.listPage({
-        prefix: "secrets/",
+        prefix,
         removePrefix: true,
         limit: 1000,
         source: "network",
@@ -195,7 +197,8 @@ export class SecretsService implements ISecretsService {
       for (const key of result.data.keys) {
         const entry = parseSecretCatalogKey(key);
         if (!entry) continue;
-        entries.set(`${entry.scope ?? ""}\u0000${entry.name}`, entry);
+        const id = `${entry.scope ?? ""}\u0000${entry.name}`;
+        entries.set(id, options?.isolated ? { ...entry, isolated: true } : entry);
       }
 
       cursor = result.data.truncated ? result.data.nextCursor : undefined;

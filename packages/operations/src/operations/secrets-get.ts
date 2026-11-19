@@ -34,6 +34,7 @@ const SecretsGetInputSchema: z.ZodType<SecretsGetInput> = z.object({
   name: z.string(),
   scope: z.string().optional(),
   space: z.string().optional(),
+  isolated: z.boolean().optional().describe("Read a secret that has its own encryption key"),
 }).strict().superRefine((input, context) => {
   try {
     resolveSecretReference(input);
@@ -93,6 +94,15 @@ async function planSecretGet(
     context.runtime.node,
     context.summary.space,
   );
+  const getRequirement: CapabilityRequirement = {
+    service: "tinycloud.kv",
+    space: reference.space,
+    path: reference.permissionPath,
+    actions: ["tinycloud.kv/get"],
+  };
+  // The SDK verifies decrypt authority for the record's key under the same grant.
+  if (reference.isolated === true) return [getRequirement];
+
   let networkSpace = reference.space;
   if (input.space === undefined) {
     try {
@@ -105,18 +115,11 @@ async function planSecretGet(
       // the runtime path supplies the owner space before production planning.
     }
   }
-  const networkId = resolveEncryptionNetworkId(context.runtime.node, networkSpace);
-
   return [
-    {
-      service: "tinycloud.kv",
-      space: reference.space,
-      path: reference.permissionPath,
-      actions: ["tinycloud.kv/get"],
-    },
+    getRequirement,
     {
       service: "tinycloud.encryption",
-      path: networkId,
+      path: resolveEncryptionNetworkId(context.runtime.node, networkSpace),
       actions: ["tinycloud.encryption/decrypt"],
     },
   ];
@@ -149,6 +152,7 @@ async function executeSecretGet(
       space: reference.space,
       name: reference.name,
       ...(reference.scope === undefined ? {} : { scope: reference.scope }),
+      ...(reference.isolated === true ? { isolated: true } : {}),
     });
   } catch (error) {
     return {
@@ -173,8 +177,14 @@ function classifySecretRead(
     case "ok":
       return { status: "ok", output: { value: result.value } };
     case "not_found":
+      if (reference.isolated === true) {
+        return { status: "error", error: operationError("KV_NOT_FOUND", "The isolated secret is not set.") };
+      }
       return missingSecretOutcome(reference, localOwner);
     case "permission_required":
+      if (reference.isolated === true) {
+        return { status: "error", error: operationError("PERMISSION_DENIED", "Permission denied while reading the isolated secret.") };
+      }
       return {
         status: "authority_required",
         missing: [result.hint as unknown as CapabilityRequirement],
@@ -292,7 +302,11 @@ function resolveEncryptionNetworkId(node: unknown, space: string): string {
   }
   if (typeof fallback === "string" && fallback.length > 0) return fallback;
 
-  throw new OperationInvocationError(
+  throw unresolvedEncryptionNetwork();
+}
+
+function unresolvedEncryptionNetwork(): OperationInvocationError {
+  return new OperationInvocationError(
     operationError(
       "ENCRYPTION_NETWORK_UNRESOLVED",
       "The encryption network for the target secrets space could not be resolved.",
@@ -305,7 +319,6 @@ interface SecretReadingNode {
     space: string;
     name: string;
     scope?: string;
+    isolated?: boolean;
   }): Promise<SecretReadResult>;
-  getEncryptionNetworkIdForSpace?: (spaceId: string) => unknown;
-  getDefaultEncryptionNetworkId?: () => unknown;
 }

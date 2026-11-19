@@ -8,6 +8,7 @@ import type {
   DecryptCapabilityProof,
   IEncryptionService,
 } from "../encryption";
+import type { NamedKeyClient } from "../encryption/namedKeys";
 import type { PermissionHint, ServiceError } from "../types";
 import type { RoutingFailure } from "../resourceRouting";
 
@@ -16,6 +17,8 @@ export interface VaultNetworkEncryptionConfig {
   networkId: string;
   /** TinyCloud encryption module used for local encrypt and node-mediated decrypt. */
   service: IEncryptionService;
+  /** Named-key client resolved lazily for isolated secrets. */
+  namedKeys?: () => Pick<NamedKeyClient, "encrypt" | "decrypt">;
   /** Proof material presented to the encryption module for decrypt requests. */
   decryptCapabilityProof?:
     | DecryptCapabilityProof

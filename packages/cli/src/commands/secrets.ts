@@ -3,12 +3,24 @@ import { CLI_NAME } from "@tinycloud/operations/cli-name";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { constants as osConstants, homedir, hostname, userInfo } from "node:os";
+// Keep the value import compatible with legacy node-sdk test doubles.
+import * as nodeSdk from "@tinycloud/node-sdk";
 import {
   type PermissionEntry,
   type PortableDelegation,
   type TinyCloudNode,
 } from "@tinycloud/node-sdk";
-import { appSecretScope, SECRET_TYPES } from "@tinycloud/sdk-core";
+import {
+  appSecretScope,
+  isSecretNamedKeyPath,
+  resolveSecretPath as resolveSdkSecretPath,
+  secretNamedKeyPath,
+  SECRET_TYPES,
+  spaceIdsEqual,
+  type ResolvedSecretPath,
+} from "@tinycloud/sdk-core";
+import { routingFailure } from "@tinycloud/sdk-services";
+import { parseEncryptionResource } from "@tinycloud/sdk-services/encryption/resource";
 import { invokeOperation } from "@tinycloud/operations";
 import { isLocalOwnerProfile, liveStoredLease, ownerSessionLacksProof } from "@tinycloud/operations/profile";
 import {
@@ -82,6 +94,7 @@ export type CanonicalSecretGetResult = Awaited<ReturnType<typeof invokeOperation
 
 interface SecretScopeOptions {
   scope?: string;
+  isolated?: boolean;
   source?: "network";
 }
 
@@ -238,15 +251,11 @@ function canonicalizeSecretScope(scope: string | undefined): string | undefined 
   return canonical;
 }
 
-// Mirrors `resolveSecretPath()` in @tinycloud/sdk-services/src/secrets/paths.ts.
-// The `vault/` prefix is the wire-level KV path that DataVaultService writes
-// to (see DataVaultService.put), and is what `tinycloud.vault` permissions
-// expand to via vaultActionExpansion() in sdk-core/src/manifest.ts. Keep this
-// helper in sync with the SDK's `permissionPaths.vault` shape.
+/** Resolve the SDK path while preserving the CLI's classified usage errors. */
 function resolveSecretPath(
   name: string,
   options: SecretScopeOptions = {},
-): { name: string; scope?: string; vaultKey: string; permissionPaths: { vault: string } } {
+): ResolvedSecretPath {
   const normalizedName = name.trim();
   if (!SECRET_NAME_RE.test(normalizedName)) {
     throw new CLIError(
@@ -257,17 +266,15 @@ function resolveSecretPath(
   }
 
   const scope = canonicalizeSecretScope(options.scope);
+  if (options.isolated) return resolveSdkSecretPath(normalizedName, { scope, isolated: true });
   const vaultKey = scope === undefined
     ? `secrets/${normalizedName}`
     : `secrets/scoped/${scope}/${normalizedName}`;
-
   return {
     name: normalizedName,
-    ...(scope !== undefined ? { scope } : {}),
+    ...(scope === undefined ? {} : { scope }),
     vaultKey,
-    permissionPaths: {
-      vault: `vault/${vaultKey}`,
-    },
+    permissionPaths: { vault: `vault/${vaultKey}` },
   };
 }
 
@@ -445,6 +452,7 @@ interface CanonicalSecretGetParams {
   name: string;
   scope?: string;
   space?: string;
+  isolated?: boolean;
   options: { privateKey?: string };
   label: string;
   openKeyAcquisition?: OpenKeyAcquisition;
@@ -456,7 +464,7 @@ async function canonicalSecretGet(
 ): Promise<CanonicalSecretGetResult> {
   const auth = authOptions(params.options);
   let ownerNode: TinyCloudNode | undefined;
-  if (!auth?.privateKey) {
+  if (!auth?.privateKey && !params.isolated) {
     const profile = await ProfileManager.getProfile(params.ctx.profile).catch(() => null);
     if (profile) {
       const posture = resolveProfilePosture(profile);
@@ -481,16 +489,18 @@ async function canonicalSecretGet(
     name: params.name,
     ...(params.scope === undefined ? {} : { scope: params.scope }),
     ...(params.space === undefined ? {} : { space: params.space }),
+    ...(params.isolated ? { isolated: true } : {}),
   };
 
   const invoke = async () => collect(await withSpinner(
     params.label,
-    () => auth?.privateKey
+    () => auth?.privateKey && !params.isolated
       ? invokeSecretsGetWithLocalAuthorityRetry(target, input)
       : invokeOperation("tinycloud.secrets.get", 1, target, input),
   ));
   let first = await invoke();
   if (first.status === "error" &&
+    !params.isolated &&
     first.error.code === "SESSION_NOT_FOUND" &&
     auth?.privateKey === undefined) {
     const profile = await ProfileManager.getProfile(params.ctx.profile);
@@ -505,6 +515,7 @@ async function canonicalSecretGet(
     }
   }
   if (first.status !== "authority_required") return first;
+  if (params.isolated) return first;
   // The operations-owned explicit-key path should never return an authority
   // request. Keep this guard for the legacy no-key path only.
   if (auth?.privateKey !== undefined) return first;
@@ -541,7 +552,7 @@ async function canonicalSecretGet(
 export function invokeCommanderSecretGetAdapter(params: {
   readonly profile: string;
   readonly host?: string;
-  readonly input: { readonly name: string; readonly scope?: string; readonly space?: string };
+  readonly input: { readonly name: string; readonly scope?: string; readonly space?: string; readonly isolated?: boolean };
 }): Promise<CanonicalSecretGetResult> {
   return invokeCanonicalSecretGet({
     ctx: {
@@ -556,6 +567,7 @@ export function invokeCommanderSecretGetAdapter(params: {
     name: params.input.name,
     ...(params.input.scope === undefined ? {} : { scope: params.input.scope }),
     ...(params.input.space === undefined ? {} : { space: params.input.space }),
+    ...(params.input.isolated ? { isolated: true } : {}),
     options: {},
     label: "",
   });
@@ -564,6 +576,7 @@ export function invokeCommanderSecretGetAdapter(params: {
 function throwCanonicalSecretGetError(
   result: CanonicalSecretGetResult,
   name: string,
+  isolated = false,
 ): never {
   switch (result.status) {
     case "authority_required":
@@ -593,7 +606,7 @@ function throwCanonicalSecretGetError(
           "AUTH_REQUIRED",
           "Not signed in to TinyCloud.",
           ExitCode.AUTH_REQUIRED,
-          { hint: `Sign in with: ${CLI_NAME} --profile ${result.context.profile} auth login` },
+          isolated ? undefined : { hint: `Sign in with: ${CLI_NAME} --profile ${result.context.profile} auth login` },
         );
       }
       if (result.error.code === "NODE_NOT_RESPONDING" || result.error.code === "DECRYPTION_DEPENDENCY_UNAVAILABLE") {
@@ -610,7 +623,8 @@ function throwCanonicalSecretGetError(
       if (result.error.code === "PERMISSION_HINT_INVALID") {
         throw new CLIError(result.error.code, result.error.message, ExitCode.PERMISSION_DENIED);
       }
-      throw withSignInHint(cliErrorFromService(result.error), result.context.profile, result.context.posture);
+      const error = cliErrorFromService(result.error);
+      throw isolated ? error : withSignInHint(error, result.context.profile, result.context.posture);
     case "ok":
       throw new Error("Expected a failed canonical secret result.");
   }
@@ -657,10 +671,11 @@ function delegationCoversPath(
   permissions: PermissionEntry[],
   path: string,
   space: string = SECRETS_SPACE,
+  matchesSpace = spaceMatches,
 ): boolean {
   return permissions.some((permission) => {
     if (permission.service !== "tinycloud.kv") return false;
-    if (!permissionTargetsSpace(permission, space)) return false;
+    if (!permissionTargetsSpace(permission, space, matchesSpace)) return false;
     if (!hasPermissionAction(permission.actions, secretCapabilityAction("get"))) return false;
     return permission.path === path || (permission.path.endsWith("/") && path.startsWith(permission.path));
   });
@@ -670,12 +685,25 @@ function spaceMatches(granted: string, requested: string): boolean {
   return granted === requested;
 }
 
-function permissionTargetsSpace(permission: PermissionEntry, expectedSpace: string): boolean {
+function isolatedSpaceMatches(granted: string, requested: string): boolean {
+  // `--delegation` can supply the owner of the default secrets space, but
+  // isolated key derivation always needs a full, owner-bound space ID.
+  if (!/^tinycloud:(?:did:)?[a-z0-9]+:[^/]+:[^:/]+$/.test(granted)) return false;
+  return requested === SECRETS_SPACE
+    ? granted.endsWith(`:${SECRETS_SPACE}`)
+    : spaceIdsEqual(granted, requested);
+}
+
+function permissionTargetsSpace(
+  permission: PermissionEntry,
+  expectedSpace: string,
+  matchesSpace = spaceMatches,
+): boolean {
   if (permission.service !== "tinycloud.kv") return false;
   if (typeof permission.space !== "string") return false;
   const space = permission.space.trim();
   if (space === "") return false;
-  return spaceMatches(space, expectedSpace);
+  return matchesSpace(space, expectedSpace);
 }
 
 function delegationCoversDecrypt(
@@ -858,6 +886,7 @@ function selectDelegationCandidate(
   source: string,
   secretPath: string,
   space: string = SECRETS_SPACE,
+  matchesSpace = spaceMatches,
 ): DelegationCandidate {
   const liveCandidates = candidates.filter((candidate) => candidate.delegation.expiry.getTime() > Date.now());
   if (liveCandidates.length === 0) {
@@ -869,7 +898,7 @@ function selectDelegationCandidate(
   }
 
   const secretsSpaceCandidates = liveCandidates.filter((candidate) =>
-    candidate.permissions.some((permission) => permissionTargetsSpace(permission, space))
+    candidate.permissions.some((permission) => permissionTargetsSpace(permission, space, matchesSpace))
   );
   if (secretsSpaceCandidates.length === 0) {
     throw new CLIError(
@@ -880,7 +909,7 @@ function selectDelegationCandidate(
   }
 
   const exact = secretsSpaceCandidates.find((candidate) =>
-    delegationCoversPath(candidate.permissions, secretPath, space)
+    delegationCoversPath(candidate.permissions, secretPath, space, matchesSpace)
   );
   if (exact) {
     return exact;
@@ -897,6 +926,7 @@ async function resolveDelegatedSecretSource(
   source: string,
   secretPath: string,
   space: string = SECRETS_SPACE,
+  matchesSpace = spaceMatches,
 ): Promise<ResolvedDelegatedSecretSource> {
   const candidates = await loadDelegationCandidates(source);
   if (candidates.length === 0) {
@@ -907,7 +937,7 @@ async function resolveDelegatedSecretSource(
     );
   }
 
-  const selected = selectDelegationCandidate(candidates, source, secretPath, space);
+  const selected = selectDelegationCandidate(candidates, source, secretPath, space, matchesSpace);
   return { ...selected, source };
 }
 
@@ -1075,6 +1105,96 @@ async function readDelegatedSecretValue(params: {
   return parseDecryptedSecretPayload(decrypted.data, params.secretPath);
 }
 
+async function readDelegatedIsolatedSecret(params: {
+  node: TinyCloudNode;
+  delegation: PortableDelegation;
+  host: string;
+  target: SecretReadTarget;
+}): Promise<string> {
+  const { node, delegation, host, target } = params;
+  const requestedSpace = target.legacySpaceUri ?? SECRETS_SPACE;
+  let signedSpace: string | undefined;
+  try {
+    // Pass only the runtime activation interface: the legacy session-only
+    // `useDelegation` branch must never run for an isolated secret.
+    await nodeSdk.activateValidatedRuntimeDelegation({
+      sessionDid: node.sessionDid,
+      computeDelegationCid: node.computeDelegationCid.bind(node),
+      getRuntimePermissionDelegations: () => node.getRuntimePermissionDelegations(),
+      useRuntimeDelegation: node.useRuntimeDelegation.bind(node),
+      verifySessionGrant: node.verifySessionGrant.bind(node),
+      refreshRegistryForCapabilities: node.refreshRegistryForCapabilities.bind(node),
+      resolveRegisteredDelegationHost: node.resolveRegisteredDelegationHost.bind(node),
+    }, delegation, {
+      host,
+      authorize: (permissions) => {
+        const kv = permissions.find((permission) =>
+          permissionTargetsSpace(permission, requestedSpace, isolatedSpaceMatches) &&
+          permission.path === target.secretPath &&
+          permission.actions.includes(SECRET_KV_ABILITIES.get),
+        );
+        if (kv?.space === undefined) return false;
+        const keyStem = secretNamedKeyPath(kv.space, target.vaultKey);
+        if (keyStem === undefined) return false;
+        const network = parseEncryptionResource(node.getEncryptionNetworkIdForSpace(kv.space));
+        if (network.kind !== "network") return false;
+        const matchesKey = permissions.some((permission) => {
+          if (permission.service !== "tinycloud.encryption" ||
+              !permission.actions.includes(SECRET_DECRYPT_CAPABILITY)) return false;
+          try {
+            const resource = parseEncryptionResource(permission.path);
+            return resource.kind === "key" &&
+              resource.networkId === network.networkId &&
+              isSecretNamedKeyPath(keyStem, resource.path);
+          } catch {
+            return false;
+          }
+        });
+        if (!matchesKey) return false;
+        signedSpace = kv.space;
+        return true;
+      },
+    });
+  } catch (error) {
+    if (routingFailure(error)) throw error;
+    throw new CLIError(
+      "PERMISSION_DENIED",
+      "The selected delegation could not authorize reading this isolated secret.",
+      ExitCode.PERMISSION_DENIED,
+    );
+  }
+
+  if (signedSpace === undefined) {
+    throw new CLIError("PERMISSION_DENIED", "The selected delegation lacks an exact isolated secret grant.", ExitCode.PERMISSION_DENIED);
+  }
+
+  // `useRuntimeDelegation` activates only the verified authority. Pin this
+  // CID in both node read phases, even when the profile already has grants.
+  const result = await node.readSecret({
+    space: signedSpace,
+    name: target.name,
+    ...(target.scope === undefined ? {} : { scope: target.scope }),
+    isolated: true,
+    delegationCid: delegation.cid,
+  });
+  switch (result.status) {
+    case "ok":
+      return result.value;
+    case "not_found":
+      throw new CLIError("NOT_FOUND", `Secret "${target.name}" not found.`, ExitCode.NOT_FOUND);
+    case "permission_required":
+      throw new CLIError("PERMISSION_DENIED", "Permission denied while reading the isolated secret.", ExitCode.PERMISSION_DENIED);
+    case "node_unreachable":
+      throw new CLIError("NODE_NOT_RESPONDING", "Your storage server isn't responding. Try again in a minute.", ExitCode.NETWORK_ERROR);
+    case "decrypt_failed":
+    case "invalid_payload":
+      throw new CLIError("SECRET_DECRYPT_FAILED", "The secret could not be decrypted.");
+    case "read_failed":
+    case "corrupt_envelope":
+      throw new CLIError("SECRET_READ_FAILED", "The secret ciphertext could not be read.");
+  }
+}
+
 /** Past its original grant; a session saved with an owner renewal lease counts as live until the lease's signed end. */
 function isStoredSessionExpired(session: object): boolean {
   const record = session as Record<string, unknown>;
@@ -1165,6 +1285,7 @@ function outputSecretDoctor(result: SecretDoctorResult): void {
 interface SecretReadOptions {
   scope?: string;
   space?: string;
+  isolated?: boolean;
   delegation?: string;
   privateKey?: string;
 }
@@ -1176,6 +1297,7 @@ interface SecretReadTarget {
   scope?: string;
   legacySpaceUri?: string;
   secretPath: string;
+  vaultKey: string;
 }
 
 async function resolveSecretReadTarget(
@@ -1185,8 +1307,15 @@ async function resolveSecretReadTarget(
 ): Promise<SecretReadTarget> {
   const scopeOptions = resolveSecretScope(options);
   const legacySpaceUri = await resolveSecretSpace(options.space, ctx.profile);
-  const resolved = resolveSecretPath(name, scopeOptions);
-  return { name, scopeOptions, scope: resolved.scope, legacySpaceUri, secretPath: resolved.permissionPaths.vault };
+  const resolved = resolveSecretPath(name, options.isolated ? { ...scopeOptions, isolated: true } : scopeOptions);
+  return {
+    name,
+    scopeOptions,
+    scope: resolved.scope,
+    legacySpaceUri,
+    secretPath: resolved.permissionPaths.vault,
+    vaultKey: resolved.vaultKey,
+  };
 }
 
 /**
@@ -1208,9 +1337,18 @@ async function readSecret(params: {
       options.delegation,
       target.secretPath,
       target.legacySpaceUri ?? SECRETS_SPACE,
+      options.isolated ? isolatedSpaceMatches : spaceMatches,
     );
     const effectiveHost = params.host ?? delegated.delegation.host ?? ctx.host;
     const delegatedCtx = { ...ctx, host: effectiveHost };
+    if (options.isolated) {
+      const node = await ensureAuthenticated(delegatedCtx, authOptions(options));
+      const value = await withSpinner(
+        `Getting secret ${name}...`,
+        () => readDelegatedIsolatedSecret({ node, delegation: delegated.delegation, host: effectiveHost, target }),
+      );
+      return { value };
+    }
     // Decide D4 before the node exists: the profile or an explicit key.
     const local = effectiveLocal(await ProfileManager.getProfile(ctx.profile).catch(() => null), options);
     const node = await ensureSecretsNode(delegatedCtx, options);
@@ -1246,6 +1384,7 @@ async function readSecret(params: {
     name,
     ...(target.scopeOptions?.scope === undefined ? {} : { scope: target.scopeOptions.scope }),
     ...(spaceUri === undefined ? {} : { space: spaceUri }),
+    ...(options.isolated ? { isolated: true } : {}),
     options,
     label: `Getting secret ${name}...`,
     openKeyAcquisition: params.openKeyAcquisition,
@@ -1253,7 +1392,7 @@ async function readSecret(params: {
 
   if (result.status !== "ok") {
     try {
-      throwCanonicalSecretGetError(result, name);
+      throwCanonicalSecretGetError(result, name, options.isolated);
     } catch (error) {
       throw withOperationWarnings(error, result.warnings);
     }
@@ -1609,6 +1748,7 @@ export function registerSecretsCommand(
     .command("get <name>")
     .description("Get a secret value")
     .option("--scope <scope>", "Logical secret scope")
+    .option("--isolated", "Read a secret that has its own encryption key")
     .option("--space <name|uri>", "Target a non-default secrets space (short name or full URI)")
     .option("--raw", "Output raw value (no JSON wrapping)")
     .option("--value-only", "Output only the secret value (alias for --raw)")
@@ -1624,7 +1764,7 @@ export function registerSecretsCommand(
         const secret = await readSecret({ ctx, host: globalOpts.host, target, options, openKeyAcquisition });
         const value = secret.value;
 
-        if (options.delegation) {
+        if (options.delegation && !options.isolated) {
           if (options.output) {
             await writePrivateOutput(options.output, value, "Secret output");
             outputJson({ name, written: options.output });
@@ -1671,6 +1811,7 @@ export function registerSecretsCommand(
       (value: string, previous: string[] | undefined) => [...(previous ?? []), value],
     )
     .option("--scope <scope>", "Logical secret scope")
+    .option("--isolated", "Read a secret that has its own encryption key")
     .option("--space <name|uri>", "Target a non-default secrets space (short name or full URI)")
     .option("--delegation <source>", "Delegation file path or imported profile name")
     .option("--private-key <hex>", "Ethereum private key (or set TC_PRIVATE_KEY)")

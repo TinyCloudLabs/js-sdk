@@ -289,6 +289,10 @@ export interface KeyEncryptOptions extends KeyCallOptions {
   keyWrapV2?: boolean;
   aad?: Uint8Array;
   metadata?: Record<string, string>;
+  /** Provision the key first and use its returned public descriptor. */
+  ensureKey?: boolean;
+  /** Strict provisioning instead of `ensureKey`: create fresh or describe without creating. */
+  keyMode?: "create" | "existing";
 }
 
 export type DecryptManyResult =
@@ -681,11 +685,23 @@ export class NamedKeyClient {
     plaintext: Uint8Array,
     options?: KeyEncryptOptions,
   ): Promise<NamedKeyEnvelope> {
-    // The node answers a public GET under `apps/` with 404 `key_not_found`, so
-    // an app key's public key is read through the authenticated describe.
-    const descriptor = isAppKeyPath(path)
-      ? await this.describePublic(path, options)
-      : await this.getPublicKey(path, options);
+    let descriptor: PublicKeyDescriptor;
+    if (options?.keyMode !== undefined) {
+      const key = options.keyMode === "create"
+        ? await this.createKey(path, options)
+        : await this.describeKey(path, { ...options, ability: KEY_CREATE_ABILITY });
+      if (key === null) {
+        throw new NamedKeyError("KEY_NOT_FOUND", `key ${safeEcho(path)} does not exist`, { status: 404 });
+      }
+      descriptor = assertEnsuredDescriptor(key, isAppKeyPath(path) ? "deletable" : "deterministic");
+    } else {
+      // App public keys require an authenticated describe, not the public GET.
+      descriptor = options?.ensureKey
+        ? await this.ensureKey(path, options)
+        : isAppKeyPath(path)
+          ? await this.describePublic(path, options)
+          : await this.getPublicKey(path, options);
+    }
     const { crypto } = this.config;
     const symmetricKey = crypto.randomBytes(32);
     const ciphertext = crypto.authEncrypt(symmetricKey, plaintext, options?.aad);

@@ -441,6 +441,9 @@ export {
   parseSecretCatalogKey,
   resolveSecretListPrefix,
   resolveSecretPath,
+  secretNamedKeyPath,
+  isSecretNamedKeyPath,
+  SECRET_KEY_APP_ID,
 } from "./secrets";
 export type {
   ISecretsService,

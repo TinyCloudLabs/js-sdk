@@ -1752,6 +1752,15 @@ export class TinyCloudWeb {
     return this.dispatchCurrentNode((node) => node.delegateTo(did, permissions, options));
   };
 
+  /** Issue one exact read delegation for an existing isolated secret. */
+  async delegateSecretRead(
+    recipientDid: string,
+    name: string,
+    options?: { scope?: string; expiry?: string | number },
+  ): Promise<DelegateToResult> {
+    return this.dispatchCurrentNode((node) => node.delegateSecretRead(recipientDid, name, options));
+  }
+
   materializeDelegation = async (
     did: string,
     request?: ComposedManifestRequest,
