@@ -72,7 +72,7 @@ export function agentDiscoveryRoutes(
   const connection = ${JSON.stringify(connection)};
   modelContext.registerTool({
     name: ${JSON.stringify(WEBMCP_TOOL_NAME)},
-    description: "Get the hosted TinyCloud MCP endpoint, its transport and OAuth discovery, the connection documentation, and the local stdio alternative shown on this page.",
+    description: "Returns how to connect to TinyCloud MCP: the hosted endpoint, its transport, OAuth discovery, the documentation link and the local stdio option shown on this page.",
     inputSchema: { type: "object", properties: {}, additionalProperties: false },
     annotations: { readOnlyHint: true },
     execute() {
