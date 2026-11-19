@@ -36759,6 +36759,34 @@ async function ensureSpaceSetup(ctx, delegation, permissions, timeoutMs) {
   if (!report) return;
   await awaitSpaceSetup(report, { probe: kvSpaceProbe(ctx, permissions), ...timeoutMs === void 0 ? {} : { timeoutMs } });
 }
+async function recheckSpaceHosting(ctx, sessionSpaceId, permissions, options) {
+  if (options.confirmed.has(sessionSpaceId)) return;
+  const probe = kvSpaceProbe(ctx, permissions, options.restore);
+  const first = await probe().catch(() => "transient");
+  if (first === "hosted") options.confirmed.add(sessionSpaceId);
+  if (first !== "unhosted") return;
+  await awaitSpaceSetup({ ready: null, pending: true }, {
+    probe,
+    ...options.timeoutMs === void 0 ? {} : { timeoutMs: options.timeoutMs },
+    ...options.sleep === void 0 ? {} : { sleep: options.sleep },
+    ...options.now === void 0 ? {} : { now: options.now },
+    ...options.write === void 0 ? {} : { write: options.write }
+  });
+  options.confirmed.add(sessionSpaceId);
+}
+function createSpaceRecheck() {
+  const confirmed = /* @__PURE__ */ new Set();
+  let settled = false;
+  return {
+    settle: () => {
+      settled = true;
+    },
+    check: async (ctx, sessionSpaceId, permissions, options = {}) => {
+      if (settled) return;
+      await recheckSpaceHosting(ctx, sessionSpaceId, permissions, { ...options, confirmed });
+    }
+  };
+}
 
 // src/commands/auth.ts
 init_scoped_login();
@@ -43275,6 +43303,7 @@ ${deadlineMs === void 0 ? "\nWaiting for approval. Re-run this command after an 
           }
         });
       };
+      const spaceRecheck = createSpaceRecheck();
       for (const [index, step] of ONBOARD_STEPS.entries()) {
         currentStep = index + 1;
         const session2 = await ProfileManager.getSession(ctx.profile);
@@ -43292,9 +43321,16 @@ ${deadlineMs === void 0 ? "\nWaiting for approval. Re-run this command after an 
             delegationData.permissions,
             deadlineMs === void 0 ? void 0 : spaceSetupTimeoutMs({ deadlineMs, step: currentStep, of: ONBOARD_STEPS.length })
           );
+          spaceRecheck.settle();
           profile = await ProfileManager.getProfile(ctx.profile);
           continue;
         }
+        await spaceRecheck.check(
+          { profile: ctx.profile, host: ctx.host },
+          String(session2?.spaceId),
+          step.permissions,
+          deadlineMs === void 0 ? {} : { timeoutMs: spaceSetupTimeoutMs({ deadlineMs, step: currentStep, of: ONBOARD_STEPS.length }) }
+        );
         await ensureDelegationAuthority({
           ctx,
           profile,

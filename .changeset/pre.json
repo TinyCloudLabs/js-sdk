@@ -38,6 +38,7 @@
     "native-share-recording-links",
     "node-sdk-delegate-not-before",
     "node-sdk-registry-sync-busy",
+    "onboard-rerun-space-recheck",
     "revoke-issued-space-not-found",
     "share-links-no-delegation-actions",
     "tc-2652-profile-show-output",
