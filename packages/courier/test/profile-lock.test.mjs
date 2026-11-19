@@ -8,7 +8,7 @@ import path from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { acquireLock } from '../dist/file-lock.js';
-import { LOCAL, removalCommand } from './support/lock-identity.mjs';
+import { LOCAL } from './support/lock-identity.mjs';
 import { loadProfile, saveProfile, writeSecure } from '../dist/profile.js';
 
 const HOME = process.env.COURIER_HOME;
@@ -146,13 +146,13 @@ test('a guard left by a breaker that died does not block the next breaker', asyn
 });
 
 // test-ruling: TC-2384: a pid that exists is never judged dead (start time, zombie state and EPERM tests that said otherwise were removed).
-test('test-ruling: a pid that now belongs to another process (reuse after a crash) is kept: the manual recovery line applies', (t) => {
+test('test-ruling: a pid that now belongs to another process is kept without removal advice', (t) => {
   const file = lockFile('reuse');
   fs.rmSync(file, { force: true });
   const bystander = sleeper(t);
   const content = JSON.stringify({ ...LOCAL, pid: bystander.pid, nonce: 'reused' });
   fs.writeFileSync(file, content, { mode: 0o600 });
-  assert.throws(() => acquireLock(file), (e) => e.code === 'locked' && /only after confirming no Courier command is running/.test(e.message));
+  assert.throws(() => acquireLock(file), (e) => e.code === 'locked' && e.message.includes(`running Courier command (pid ${bystander.pid}`) && !/rm -f|Remove-Item/.test(e.message));
   assert.equal(fs.readFileSync(file, 'utf8'), content);
   fs.rmSync(file);
 });
@@ -192,8 +192,8 @@ test('a profile save refused by a lock it cannot judge prints one recovery line 
   assert.throws(() => saveProfile(profile), (e) => {
     assert.equal(e.code, 'profile-locked');
     assert.equal(e.message.split('\n').length, 1, 'one line');
-    assert.ok(e.message.endsWith(removalCommand(LOCK)), e.message);
-    assert.match(e.message, /only after confirming no Courier command is running[^:]*: (rm -f -- |Remove-Item )/, 'the removal command is conditioned on confirming no Courier process runs');
+    assert.match(e.message, /cannot tell/);
+    assert.doesNotMatch(e.message, /rm -f|Remove-Item/);
     assert.ok(e.message.includes(LOCK) && e.message.includes('2147483000') && e.message.includes('other-host.example'), e.message);
     return true;
   });
@@ -308,7 +308,7 @@ test('a profile save that meets an old pid-only lock refuses with the one-line r
   fs.writeFileSync(LOCK, content, { mode: 0o600 });
   const profile = loadProfile();
   profile.label = 'refused';
-  assert.throws(() => saveProfile(profile), (e) => e.code === 'profile-locked' && !e.message.includes('\n') && e.message.endsWith(removalCommand(LOCK)) && /only after confirming no Courier command is running/.test(e.message));
+  assert.throws(() => saveProfile(profile), (e) => e.code === 'profile-locked' && !e.message.includes('\n') && /cannot tell/.test(e.message) && !/rm -f|Remove-Item/.test(e.message));
   assert.equal(fs.readFileSync(LOCK, 'utf8'), content);
 });
 
@@ -342,9 +342,12 @@ test('a refusal because another command is clearing the lock does not claim the 
     assert.equal(e.message.includes('\n'), false);
     assert.doesNotMatch(e.message, /\bdead\b/);
     assert.ok(e.message.includes('stale-nonce-1'), e.message);
-    assert.ok(e.message.endsWith(removalCommand(file)) && /only after confirming/.test(e.message));
+    assert.doesNotMatch(e.message, /rm -f|Remove-Item/);
+    assert.match(e.message, /Try again/);
     return true;
   });
+  assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).nonce, 'stale-nonce-1');
+  assert.equal(JSON.parse(fs.readFileSync(`${file}.break.stale-nonce-1.1`, 'utf8')).pid, breaker.pid);
   fs.rmSync(file); fs.rmSync(`${file}.break.stale-nonce-1.1`);
 });
 

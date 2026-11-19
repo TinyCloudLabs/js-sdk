@@ -196,7 +196,7 @@ code within 5 minutes. The second call (`status: "acquired"`) returns `issuedAt`
 | Setting | Flag | Env | Stored | Default |
 |---|---|---|---|---|
 | Profile dir | — | `COURIER_HOME` | — | `~/.courier` |
-| Node host | `init --host` | `COURIER_HOST` (first init only) | `profile.host` | `https://tee.node.tinycloud.xyz` |
+| Node host | `init --host` | `COURIER_HOST` (first init only) | `profile.host` | `https://node.tinycloud.xyz` |
 | OpenKey | `init --openkey-host` | `COURIER_OPENKEY_HOST` | `profile.openkeyHost` | `https://openkey.so` |
 | OpenKey API (short codes) | `init --openkey-api-host` | `COURIER_OPENKEY_API_HOST` | not stored | `https://api.openkey.so` for `https://openkey.so`, otherwise the OpenKey host |
 
@@ -263,6 +263,12 @@ Every step logs one JSON object per line on stdout (`start`, `hook-event`,
 adapter start), `woke` with `runMs`, errors). `--once` does a single catch-up pass,
 wakes immediately and exits. Run one watcher per Courier agent.
 
+Other Courier commands may share `COURIER_HOME` with that watcher. The profile
+lock covers only local reads and merged writes, not network requests. A live
+holder is reported with its pid; leave its lock in place and retry. A service
+watcher logs `profile-locked` and retries at the polling cadence (at most five
+minutes); `--once` reports the timeout and exits.
+
 Each Courier agent keeps its watcher state under its own key,
 `me/state/agents/<its did:key id>/` (`watch.json`, `paused/`, `wake-claims/`),
 so two agents of one owner can share the space and run their watchers at the
@@ -302,6 +308,12 @@ share an id), a run id and its pid.
   in which the other watcher wrote nothing. Meanwhile the other watcher, which
   belongs to the same agent, keeps that agent's messages watched. `--once`
   still exits with `state-conflict` (exit 1).
+- A state write that fails without a 412 (lost reply, timeout,
+  `outcome_unknown`) may still have been applied, so the watcher reads the
+  state back before its next write: its own body or no change carries on;
+  anything else is a `state-conflict` as above. The conflict shows at the
+  watcher's next own write (a message, a notice retry, the hourly or daily
+  prune), which can be long after the other process wrote.
 
 Wakes are at-least-once: a crash between a wake and the state write wakes that
 thread again on restart (the new watcher takes the dead one's claim).

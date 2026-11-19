@@ -152,7 +152,7 @@ var init_constants = __esm({
     CONFIG_DIR = tinycloudHomePath();
     PROFILES_DIR = profilesPath();
     CONFIG_FILE = tinycloudConfigPath();
-    DEFAULT_HOST = "https://tee.node.tinycloud.xyz";
+    DEFAULT_HOST = "https://node.tinycloud.xyz";
     DEFAULT_OPENKEY_HOST = "https://openkey.so";
     DEFAULT_OPENKEY_DEVICE_API_HOST = "https://api.openkey.so";
     DEFAULT_PROFILE = "default";
@@ -942,6 +942,23 @@ async function writeJsonDurable(filePath, data) {
   } catch (error) {
     await rm2(tempPath, { force: true }).catch(() => void 0);
     throw error;
+  }
+}
+async function syncAuthCredentialFiles(directory) {
+  for (const name of ["key.json", "session.json"]) {
+    const handle = await open2(join3(directory, name), fsConstants2.O_RDONLY | fsConstants2.O_NOFOLLOW);
+    try {
+      if (!(await handle.stat()).isFile()) throw new Error(`${name} is not a regular credential file.`);
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
+  }
+  const parent = await open2(directory, "r");
+  try {
+    await parent.sync();
+  } finally {
+    await parent.close();
   }
 }
 async function fileExists(filePath) {
@@ -7473,19 +7490,26 @@ async function assertPendingRemoteLogoutSession(name, expected) {
     }
   }, { requireProfile: true });
 }
-async function clearProfileCredentials(name, syncDirectory = false, legacyCleanup = false) {
+async function clearProfileCredentials(name, syncDirectory = false, legacyCleanup = false, keepKey = false) {
   await ProfileManager.withLock(name, async () => {
     const profile = await ProfileManager.getProfile(name);
-    const { namedKeys: _namedKeys, ...signedOutProfile } = profile;
+    const { namedKeys: _namedKeys, authKeyRetained: _authKeyRetained, ...signedOutProfile } = profile;
     await rm5(join10(profilePath4(name), "approval-pending.json"), { force: true });
-    await ProfileManager.setProfileDurable(name, { ...signedOutProfile, authSignedOut: true, ...legacyCleanup ? { legacyReplicaCleanup: true } : {} });
+    await ProfileManager.setProfileDurable(name, {
+      ...signedOutProfile,
+      authSignedOut: true,
+      ...keepKey ? { authKeyRetained: true } : {},
+      ...legacyCleanup ? { legacyReplicaCleanup: true } : {}
+    });
     let failed = false;
     let error;
-    try {
-      await ProfileManager.removeKey(name);
-    } catch (cause) {
-      failed = true;
-      error = cause;
+    if (!keepKey) {
+      try {
+        await ProfileManager.removeKey(name);
+      } catch (cause) {
+        failed = true;
+        error = cause;
+      }
     }
     try {
       await ProfileManager.clearSession(name);
@@ -7510,7 +7534,7 @@ async function finishSignedOutCredentialRemoval(name) {
     throw error;
   });
   if (profile?.authSignedOut !== true) return;
-  for (const file of ["session.json", "key.json"]) {
+  for (const file of profile.authKeyRetained === true ? ["session.json"] : ["session.json", "key.json"]) {
     try {
       await lstat5(join10(profilePath4(name), file));
     } catch (error) {
@@ -7518,8 +7542,9 @@ async function finishSignedOutCredentialRemoval(name) {
       throw error;
     }
     await ProfileManager.withLock(name, async () => {
-      if ((await ProfileManager.getProfile(name)).authSignedOut === true) {
-        await clearProfileCredentials(name, true);
+      const current = await ProfileManager.getProfile(name);
+      if (current.authSignedOut === true) {
+        await clearProfileCredentials(name, true, false, current.authKeyRetained === true);
       }
     }, { requireProfile: true });
     return;
@@ -7644,6 +7669,7 @@ var init_logout_pending = __esm({
     init_profile_gate();
     init_profiles();
     init_constants();
+    init_types();
     init_errors();
     init_profile_replicas();
     init_replication_log();
@@ -7665,7 +7691,7 @@ __export(sdk_exports, {
   selectSignerJwk: () => selectSignerJwk,
   storedSessionVerifiesLocally: () => storedSessionVerifiesLocally
 });
-import { createProfileRegistryCacheStore, createProfileRegistrySequenceStore } from "@tinycloud/operations/state";
+import { createProfileRegistryCacheStore, createProfileRegistrySequenceStore, profilePath as profilePath5 } from "@tinycloud/operations/state";
 import { TinyCloudNode, signedCompactUcanExpiry } from "@tinycloud/node-sdk";
 import { CLI_NAME as CLI_NAME9 } from "@tinycloud/operations/cli-name";
 import { liveStoredLease, ownerSessionLacksProof, restoreStoredSession } from "@tinycloud/operations/profile";
@@ -7904,7 +7930,7 @@ async function createSDKInstance(ctx, options) {
   }
   return node;
 }
-async function bootstrapDelegatedSession(ctx, delegation) {
+async function bootstrapDelegatedSession(ctx, delegation, options = {}) {
   const written = await ProfileManager.withLock(ctx.profile, async () => {
     const previousProfile = await ProfileManager.getProfile(ctx.profile);
     if (resolveProfilePosture(previousProfile) !== "delegate-session") {
@@ -7922,7 +7948,8 @@ async function bootstrapDelegatedSession(ctx, delegation) {
         ExitCode.PERMISSION_DENIED
       );
     }
-    if (await ProfileManager.getSession(ctx.profile) !== null) {
+    const previousSession = await ProfileManager.getSession(ctx.profile);
+    if (previousSession !== null && options.replaceSession !== true) {
       throw new CLIError(
         "PROFILE_CHANGED_DURING_IMPORT",
         `Profile "${ctx.profile}" gained a session (another login or import) after this import checked it. Nothing was saved; run the import again.`,
@@ -7930,7 +7957,11 @@ async function bootstrapDelegatedSession(ctx, delegation) {
       );
     }
     if (signedLifetimePassed(delegation)) throw delegationExpiredError();
-    const jwk = signerJwkForProfile(ctx.profile, void 0, await ProfileManager.getKey(ctx.profile));
+    const jwk = signerJwkForProfile(
+      ctx.profile,
+      previousSession && "jwk" in previousSession ? previousSession.jwk : void 0,
+      await ProfileManager.getStoredKey(ctx.profile)
+    );
     const session = {
       delegationHeader: delegation.delegationHeader,
       delegationCid: delegation.cid,
@@ -7938,15 +7969,25 @@ async function bootstrapDelegatedSession(ctx, delegation) {
       jwk,
       verificationMethod: sessionDid
     };
-    const { namedKeys: _namedKeys, ...previousFields } = previousProfile;
+    const {
+      namedKeys: _namedKeys,
+      authSignedOut: _authSignedOut,
+      authKeyRetained: _authKeyRetained,
+      ...previousFields
+    } = previousProfile;
     const profile = { ...previousFields, sessionDid, spaceId: delegation.spaceId };
     try {
       await ProfileManager.setSession(ctx.profile, session);
-      await ProfileManager.setProfile(ctx.profile, profile);
+      if (previousProfile.authSignedOut === true) {
+        await syncAuthCredentialFiles(profilePath5(ctx.profile));
+        await ProfileManager.setProfileDurable(ctx.profile, profile);
+      } else {
+        await ProfileManager.setProfile(ctx.profile, profile);
+      }
     } catch (error) {
-      throw annotate(error, await restoreBeforeBootstrap(ctx.profile, previousProfile));
+      throw annotate(error, await restoreBeforeBootstrap(ctx.profile, previousProfile, previousSession));
     }
-    return { previousProfile, profile, session };
+    return { previousProfile, previousSession, profile, session };
   });
   const abandon = async (cause) => {
     const reported = cause instanceof CLIError && cause.code === "AUTH_REQUIRED" && signedLifetimePassed(delegation) ? delegationExpiredError() : cause;
@@ -7959,7 +8000,7 @@ async function bootstrapDelegatedSession(ctx, delegation) {
       if (profile === null || BOOTSTRAP_PROFILE_FIELDS.some((field) => profile[field] !== written.profile[field]) || JSON.stringify(session) !== JSON.stringify(written.session)) {
         return `Profile "${ctx.profile}" changed while the import was pending (another login, logout or profile update), so its newer state was kept and the provisional session was not rolled back.`;
       }
-      return restoreBeforeBootstrap(ctx.profile, written.previousProfile);
+      return restoreBeforeBootstrap(ctx.profile, written.previousProfile, written.previousSession);
     }, { timeoutMs: PROFILE_COMMIT_LOCK_TIMEOUT_MS }).catch((error) => (
       // The lock or a read failed: the import's error stays the one reported.
       `Rolling back the provisional session of profile "${ctx.profile}" could not run (${failureName(error)}); check \`${CLI_NAME9} --profile ${ctx.profile} context\`.`
@@ -7974,15 +8015,15 @@ async function bootstrapDelegatedSession(ctx, delegation) {
   }
   return { node, abandon };
 }
-async function restoreBeforeBootstrap(profileName, previousProfile) {
+async function restoreBeforeBootstrap(profileName, previousProfile, previousSession) {
   const failures = [];
   for (const write of [
-    () => ProfileManager.clearSession(profileName),
+    () => previousSession === null ? ProfileManager.clearSession(profileName) : ProfileManager.setSession(profileName, previousSession),
     () => ProfileManager.updateProfile(profileName, (current) => {
       const restored = { ...current };
       for (const field of BOOTSTRAP_PROFILE_FIELDS) {
         if (previousProfile[field] === void 0) delete restored[field];
-        else restored[field] = previousProfile[field];
+        else Object.assign(restored, { [field]: previousProfile[field] });
       }
       return restored;
     })
@@ -8034,6 +8075,7 @@ var init_sdk = __esm({
   "src/lib/sdk.ts"() {
     "use strict";
     init_profiles();
+    init_storage2();
     init_types();
     init_errors();
     init_constants();
@@ -8046,7 +8088,7 @@ var init_sdk = __esm({
     init_replication_registry();
     init_logout_pending();
     init_replication_registry();
-    BOOTSTRAP_PROFILE_FIELDS = ["sessionDid", "spaceId"];
+    BOOTSTRAP_PROFILE_FIELDS = ["sessionDid", "spaceId", "authSignedOut", "authKeyRetained"];
   }
 });
 
@@ -8194,14 +8236,15 @@ var init_host = __esm({
 });
 
 // src/config/profiles.ts
-import { chmod as chmod3, lstat as lstat6, readdir as readdir5, rm as rm6 } from "fs/promises";
+import { constants as fsConstants5 } from "fs";
+import { chmod as chmod3, lstat as lstat6, open as open7, readdir as readdir5, rm as rm6 } from "fs/promises";
 import { CLI_NAME as CLI_NAME11 } from "@tinycloud/operations/cli-name";
 import { join as join11 } from "path";
 import {
   assertRealProfileDirectory,
   ProfileSymlinkError as ProfileSymlinkError2,
   namedProfilePath as namedProfilePath2,
-  profilePath as profilePath5,
+  profilePath as profilePath6,
   readSession,
   recordProfileDeletion,
   refuseWriteToDeletedProfile as refuseWriteToDeletedProfile2,
@@ -8210,6 +8253,60 @@ import {
   writeSession,
   withPinnedProfileDirectory as withPinnedProfileDirectory2
 } from "@tinycloud/operations/state";
+function isTransientProfileEntryError(error) {
+  const code5 = error.code;
+  return code5 === "ENOENT" || code5 === "ENOTDIR" || code5 === "ELOOP" || code5 === "EISDIR";
+}
+async function secureProfileDirectory(directory) {
+  const rootFlags = fsConstants5.O_RDONLY | fsConstants5.O_DIRECTORY | (process.platform === "linux" ? 0 : fsConstants5.O_NOFOLLOW);
+  let root;
+  try {
+    root = await open7(directory, rootFlags);
+  } catch (error) {
+    if (error.code === "ENOENT") return;
+    throw error;
+  }
+  try {
+    const info = await root.stat();
+    if (!info.isDirectory()) {
+      throw new CLIError("PROFILE_INVALID", "Profile directory is not a real directory.");
+    }
+    if ((info.mode & 511) !== PRIVATE_DIR_MODE) {
+      await root.chmod(PRIVATE_DIR_MODE);
+    }
+    const pinnedDirectory2 = process.platform === "linux" ? `/proc/self/fd/${root.fd}` : directory;
+    let entries;
+    try {
+      entries = await readdir5(pinnedDirectory2, { withFileTypes: true });
+    } catch (error) {
+      if (isTransientProfileEntryError(error)) return;
+      throw error;
+    }
+    for (const entry of entries) {
+      if (!entry.isFile()) continue;
+      let file;
+      try {
+        file = await open7(
+          join11(pinnedDirectory2, entry.name),
+          fsConstants5.O_RDONLY | fsConstants5.O_NOFOLLOW | fsConstants5.O_NONBLOCK
+        );
+      } catch (error) {
+        if (isTransientProfileEntryError(error)) continue;
+        throw error;
+      }
+      try {
+        const fileInfo = await file.stat();
+        if (fileInfo.isFile() && (fileInfo.mode & 511) !== 384) {
+          await file.chmod(384);
+        }
+      } finally {
+        await file.close();
+      }
+    }
+  } finally {
+    await root.close();
+  }
+}
 var ProfileManager;
 var init_profiles = __esm({
   "src/config/profiles.ts"() {
@@ -8251,7 +8348,7 @@ var init_profiles = __esm({
       }
       /** Owner-only profile directory (0700), created or tightened before any write into it. */
       static async ensureProfileDir(name) {
-        const profileDir = profilePath5(name);
+        const profileDir = profilePath6(name);
         if (profileDir !== join11(PROFILES_DIR, name)) {
           await chmod3(profileDir, PRIVATE_DIR_MODE);
           return profileDir;
@@ -8286,7 +8383,11 @@ var init_profiles = __esm({
        * Throws CLIError if the profile doesn't exist.
        */
       static async getProfile(name) {
-        const profile = await withPinnedProfileDirectory2(name, (directory) => directory ? readJson(join11(directory, "profile.json")) : Promise.resolve(null));
+        const profile = await withPinnedProfileDirectory2(name, async (directory) => {
+          if (!directory) return null;
+          await secureProfileDirectory(directory);
+          return readJson(join11(directory, "profile.json"));
+        });
         if (!profile) {
           throw new CLIError(
             "PROFILE_NOT_FOUND",
@@ -8313,7 +8414,7 @@ var init_profiles = __esm({
       }
       /** Removes profile.json under the profile lock (rollback of a profile a failed login created). */
       static async removeProfileConfig(name) {
-        await _ProfileManager.withLock(name, () => rm6(join11(profilePath5(name), "profile.json"), { force: true }));
+        await _ProfileManager.withLock(name, () => rm6(join11(profilePath6(name), "profile.json"), { force: true }));
       }
       /**
        * Returns true if a profile directory exists.
@@ -8368,7 +8469,7 @@ var init_profiles = __esm({
           return;
         }
         await _ProfileManager.withLock(name, async () => {
-          const directory = profilePath5(name);
+          const directory = profilePath6(name);
           for (const file of ["session.json", "key.json"]) await rm6(join11(directory, file), { force: true });
           for (const entry of await readdir5(directory)) {
             if (entry !== ".lock" && entry !== "profile.json") await rm6(join11(directory, entry), { recursive: true, force: true });
@@ -8379,7 +8480,8 @@ var init_profiles = __esm({
       }
       // ── Key management ──────────────────────────────────────────────────
       /**
-       * Returns the parsed JWK for a profile, or null if no key exists.
+       * Returns the parsed JWK for a profile, or null if no key exists or the
+       * profile is signed out.
        */
       static async getKey(name) {
         return withPinnedProfileDirectory2(name, async (directory) => {
@@ -8389,6 +8491,14 @@ var init_profiles = __esm({
           const key = await readJson(join11(directory, "key.json"));
           return (await readJson(profileFile))?.authSignedOut === true ? null : key;
         });
+      }
+      /**
+       * Returns the parsed JWK for a profile even while it is signed out, or null
+       * if no key exists. Logout keeps the key; only sign-in reads it this way, so
+       * the next sign-in keeps the key that the profile's grants are bound to.
+       */
+      static async getStoredKey(name) {
+        return withPinnedProfileDirectory2(name, async (directory) => directory ? readJson(join11(directory, "key.json")) : null);
       }
       /**
        * Saves a JWK key under the profile lock (0600, in an owner-only profile
@@ -8403,7 +8513,7 @@ var init_profiles = __esm({
       }
       /** Removes key.json under the profile lock (rollback of a key a failed login created). */
       static async removeKey(name) {
-        await _ProfileManager.withLock(name, () => rm6(join11(profilePath5(name), "key.json"), { force: true }));
+        await _ProfileManager.withLock(name, () => rm6(join11(profilePath6(name), "key.json"), { force: true }));
       }
       // ── Session management ──────────────────────────────────────────────
       /**
@@ -8436,7 +8546,7 @@ var init_profiles = __esm({
        * created or tightened to 0700.
        */
       static async getCacheDir(name) {
-        const alreadyPinned = profilePath5(name) !== namedProfilePath2(name);
+        const alreadyPinned = profilePath6(name) !== namedProfilePath2(name);
         return _ProfileManager.withLock(name, async () => {
           const cacheDir = join11(await _ProfileManager.ensureProfileDir(name), "cache");
           await ensureDir(cacheDir);
@@ -14844,7 +14954,7 @@ async function seal(plaintextBytes, key32) {
   blob.set(ciphertext, HEADER_LENGTH + nonce.length);
   return { blob, cid: await computeCid(blob) };
 }
-async function open7(blob, key32) {
+async function open8(blob, key32) {
   if (blob.length < HEADER_LENGTH + NONCE_LENGTH + TAG_LENGTH) {
     throw new TypeError(`sealed blob too short: ${blob.length} bytes`);
   }
@@ -15261,7 +15371,7 @@ async function openRecordChecked(record2, key, nowMs) {
   if (key.length !== 32) throw new LinkError("invalid_argument", "a link key is 32 bytes");
   let plaintext;
   try {
-    plaintext = await open7(body, key);
+    plaintext = await open8(body, key);
   } catch {
     throw new LinkError("body_open_failed");
   }
@@ -16066,11 +16176,11 @@ var init_duration = __esm({
 });
 
 // src/lib/browser.ts
-import open12 from "open";
+import open13 from "open";
 async function tryOpenBrowser(url) {
   let launcher;
   try {
-    launcher = await open12(url);
+    launcher = await open13(url);
   } catch {
     return false;
   }
@@ -16433,7 +16543,7 @@ function verifyScopedLogin(data, key, sessionDid, requested, expected = {}) {
       throw new CLIError("OPENKEY_SCOPE_MISMATCH", `OpenKey signed decrypt for a network not owned by the approving identity. ${notStored}`, ExitCode.PERMISSION_DENIED);
     }
   }
-  if (!scopeCovers(requested, approved, signed.ownerDid)) {
+  if (!expected.exactApproval && !scopeCovers(requested, approved, signed.ownerDid)) {
     throw new CLIError("OPENKEY_GRANT_BROADENED", `The signed grant contains authority beyond the requested ${expected.purpose === "grant" ? "grant" : "manifest"}. ${notStored}`, ExitCode.PERMISSION_DENIED);
   }
   if (expected.exactApproval && !scopeCovers(approved, requested, signed.ownerDid)) {
@@ -16466,10 +16576,10 @@ var init_scoped_login = __esm({
 
 // src/auth/pending-code.ts
 import { createHash as createHash2 } from "crypto";
-import { constants as fsConstants5 } from "fs";
-import { open as open13, rm as rm8 } from "fs/promises";
+import { constants as fsConstants6 } from "fs";
+import { open as open14, rm as rm8 } from "fs/promises";
 import { join as join15 } from "path";
-import { profilePath as profilePath6 } from "@tinycloud/operations/state";
+import { profilePath as profilePath7 } from "@tinycloud/operations/state";
 var init_pending_code = __esm({
   "src/auth/pending-code.ts"() {
     "use strict";
@@ -16513,7 +16623,7 @@ import { join as join16 } from "path";
 import { REPLICA_LOGOUT_PENDING_FILE as REPLICA_LOGOUT_PENDING_FILE3 } from "@tinycloud/node-sdk";
 import { CLI_NAME as CLI_NAME15 } from "@tinycloud/operations/cli-name";
 import { isLocalOwnerProfile as isLocalOwnerProfile3, ownerSessionLacksProof as ownerSessionLacksProof3 } from "@tinycloud/operations/profile";
-import { ProfileLockTimeoutError as ProfileLockTimeoutError3, profilePath as profilePath7 } from "@tinycloud/operations/state";
+import { ProfileLockTimeoutError as ProfileLockTimeoutError3, profilePath as profilePath8 } from "@tinycloud/operations/state";
 var init_login_commit = __esm({
   "src/auth/login-commit.ts"() {
     "use strict";
@@ -16540,7 +16650,7 @@ var init_owner_key = __esm({
 
 // src/auth/refused-approval.ts
 import { rmdir as rmdir4 } from "fs/promises";
-import { profilePath as profilePath8 } from "@tinycloud/operations/state";
+import { profilePath as profilePath9 } from "@tinycloud/operations/state";
 var init_refused_approval = __esm({
   "src/auth/refused-approval.ts"() {
     "use strict";
@@ -16851,10 +16961,10 @@ var init_invitation_key_grant = __esm({
 
 // src/auth/approval-request.ts
 import { createECDH as createECDH2, createHash as createHash4, createPrivateKey, randomBytes as randomBytes6, randomUUID as randomUUID2, sign } from "crypto";
-import { open as open14 } from "fs/promises";
+import { open as open15 } from "fs/promises";
 import { join as join17 } from "path";
 import { setTimeout as wait } from "timers/promises";
-import { additionalDelegationsPath, profilePath as profilePath9 } from "@tinycloud/operations/state";
+import { additionalDelegationsPath, profilePath as profilePath10 } from "@tinycloud/operations/state";
 import { principalDidEquals } from "@tinycloud/node-sdk";
 import { canonicalizeRecapCaveats, parseSignedCompactUcanAttenuation as parseSignedCompactUcanAttenuation2 } from "@tinycloud/sdk-core";
 import { admitOwnerRenewalLease, RENEWAL_LEASE_ORIGINAL_EXPIRED } from "@tinycloud/sdk-core/delegations/renewal";
@@ -16889,7 +16999,7 @@ async function updatePending(profile, update) {
   }, { requireProfile: true });
 }
 async function activePending(profile) {
-  const path = join17(profilePath9(profile), STATE_FILE);
+  const path = join17(profilePath10(profile), STATE_FILE);
   if (!(await readJson(path))?.length) return [];
   return ProfileManager.withLock(profile, async () => {
     const entries = await readJson(path) ?? [];
@@ -28567,7 +28677,7 @@ async function seal2(plaintextBytes, key32) {
   blob.set(ciphertext, HEADER_LENGTH2 + nonce.length);
   return { blob, cid: await computeCid2(blob) };
 }
-async function open8(blob, key32) {
+async function open9(blob, key32) {
   if (blob.length < HEADER_LENGTH2 + NONCE_LENGTH2 + TAG_LENGTH2) {
     throw new TypeError(`sealed blob too short: ${blob.length} bytes`);
   }
@@ -29143,7 +29253,7 @@ async function resolveLegacyV2(link4, options) {
     if (await computeCid2(sealed) !== parsed.ciphertextCid) throw new ShareReceiveError("cid-mismatch", "legacy envelope CID does not match");
     let plaintext;
     try {
-      plaintext = await open8(sealed, parsed.key32);
+      plaintext = await open9(sealed, parsed.key32);
     } catch {
       throw new ShareReceiveError("decrypt-failed", "legacy envelope could not be opened");
     }
@@ -29248,7 +29358,7 @@ async function receiveLegacyV2(link4, options) {
   }
   return { metadata: metadataFor(envelope, resolved.origin), link: { origin: resolved.origin, cid: resolved.cid, kind: "compact" }, bytes: bytes3, ...text === void 0 ? {} : { text } };
 }
-var SHARE_CONTENT_LIMIT = 100 * 1024 * 1024;
+var SHARE_CONTENT_LIMIT = 95 * 1024 * 1024;
 var SHARE_PUBLISH_RESULT_VERSION = 1;
 var DEFAULT_SHARE_LIFETIME_MS = 7 * 24 * 60 * 60 * 1e3;
 function redactPublishedShare(result) {
@@ -32692,11 +32802,12 @@ function receiveJson(result, path) {
 
 // src/share/io.ts
 import { constants } from "fs";
-import { lstat as lstat7, mkdir as mkdir5, mkdtemp, open as open9, readFile as readFile7, realpath as realpath2, stat as stat4, link as link2, rename as rename3, rm as rm7, unlink as unlink4 } from "fs/promises";
+import { lstat as lstat7, mkdir as mkdir5, mkdtemp, open as open10, readFile as readFile7, realpath as realpath2, stat as stat4, link as link2, rename as rename3, rm as rm7, unlink as unlink4 } from "fs/promises";
 import { randomBytes as randomBytes3 } from "crypto";
 import { basename as basename2, join as join12, resolve as resolve4, sep as sep3 } from "path";
 init_errors();
-var MAX_SHARE_STDIN_BYTES = 100 * 1024 * 1024;
+var MAX_SHARE_STDIN_BYTES = 95 * 1024 * 1024;
+var MAX_ADDRESSED_SHARE_BYTES = 71 * 1024 * 1024;
 var MAX_SHARE_URL_BYTES = 64 * 1024;
 async function readBoundedStdin(limit = MAX_SHARE_STDIN_BYTES) {
   if (!Number.isSafeInteger(limit) || limit <= 0) throw new Error("MAX_BYTES_EXCEEDED");
@@ -32768,7 +32879,7 @@ async function writeShareOutput(directory, filename, bytes, force) {
   const outputDirectory = resolve4(directory);
   await assertDirectory(outputDirectory);
   const safeName = safeFilename(filename);
-  const directoryHandle = await open9(outputDirectory, constants.O_RDONLY | (constants.O_DIRECTORY ?? 0) | (constants.O_NOFOLLOW ?? 0));
+  const directoryHandle = await open10(outputDirectory, constants.O_RDONLY | (constants.O_DIRECTORY ?? 0) | (constants.O_NOFOLLOW ?? 0));
   const stableDirectory = await realpath2(outputDirectory);
   const outputPath = join12(stableDirectory, safeName);
   const directoryIdentity = await directoryHandle.stat();
@@ -32792,7 +32903,7 @@ async function writeShareOutput(directory, filename, bytes, force) {
       if (error.code !== "ENOENT") throw error;
     }
     temporaryPath = stagingPath;
-    handle = await open9(temporaryPath, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | (constants.O_NOFOLLOW ?? 0), 384);
+    handle = await open10(temporaryPath, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | (constants.O_NOFOLLOW ?? 0), 384);
     await handle.writeFile(bytes);
     await handle.close();
     handle = void 0;
@@ -33007,7 +33118,7 @@ init_constants();
 init_errors();
 init_session_expired();
 init_warnings();
-import { chmod as chmod4, link as link3, open as open10, readFile as readFile8, stat as stat5, unlink as unlink5 } from "fs/promises";
+import { chmod as chmod4, link as link3, open as open11, readFile as readFile8, stat as stat5, unlink as unlink5 } from "fs/promises";
 import { dirname as dirname5, join as join13 } from "path";
 import { createHash } from "crypto";
 import { createProfileRegistryCacheStore as createProfileRegistryCacheStore2, createProfileRegistrySequenceStore as createProfileRegistrySequenceStore2, writeJsonAtomic as writeJsonAtomic2 } from "@tinycloud/operations/state";
@@ -33372,7 +33483,7 @@ function createEncryptedProfileHistory(profileName, sessionSigner) {
       await link3(found.file, target);
       await chmod4(target, PRIVATE_HISTORY_MODE);
       await unlink5(found.file);
-      const directory = await open10(dirname5(found.file), "r");
+      const directory = await open11(dirname5(found.file), "r");
       try {
         await directory.sync();
       } finally {
@@ -34057,7 +34168,7 @@ init_profiles();
 
 // src/share/html-folder.ts
 import { constants as constants2, existsSync } from "fs";
-import { lstat as lstat8, open as open11, readdir as readdir6, realpath as realpath3, stat as stat6 } from "fs/promises";
+import { lstat as lstat8, open as open12, readdir as readdir6, realpath as realpath3, stat as stat6 } from "fs/promises";
 import { basename as basename3, dirname as dirname6, isAbsolute, join as join14, relative as relativePath, resolve as resolve5, sep as sep4 } from "path";
 
 // ../share-sdk/dist/html-bundle.js
@@ -34412,9 +34523,9 @@ function scanMarkup(html, options) {
     if (comments > MAX_ARTIFACT_COMMENTS) fail("limit", "artifact page has too many comments");
   };
   while (index < length5) {
-    const open15 = html.indexOf("<", index);
-    if (open15 === -1) return;
-    index = open15 + 1;
+    const open16 = html.indexOf("<", index);
+    if (open16 === -1) return;
+    index = open16 + 1;
     const next = html[index] ?? "";
     if (html.startsWith("!--", index)) {
       countComment();
@@ -35015,7 +35126,7 @@ async function readRegularFile(root, path, relative, remaining, limit, hooks = {
     await hooks.beforeOpen?.();
     before = await lstat8(path);
     await hooks.afterLstat?.();
-    handle = await open11(path, constants2.O_RDONLY | (constants2.O_NOFOLLOW ?? 0) | (constants2.O_NONBLOCK ?? 0));
+    handle = await open12(path, constants2.O_RDONLY | (constants2.O_NOFOLLOW ?? 0) | (constants2.O_NONBLOCK ?? 0));
   } catch (error) {
     if (error.code === "ELOOP") return problem("symbolic link");
     if (isRaceError(error)) return problem(CHANGED);
@@ -35074,7 +35185,7 @@ async function listFolderDirectory(root, absolute, relative, hooks = {}) {
     if (before.isSymbolicLink()) return problem("symbolic link");
     if (!before.isDirectory()) return problem(CHANGED);
     await hooks.afterLstat?.();
-    const handle = await open11(absolute, constants2.O_RDONLY | (constants2.O_DIRECTORY ?? 0) | (constants2.O_NOFOLLOW ?? 0));
+    const handle = await open12(absolute, constants2.O_RDONLY | (constants2.O_DIRECTORY ?? 0) | (constants2.O_NOFOLLOW ?? 0));
     try {
       await hooks.afterOpen?.();
       const info = await handle.stat();
@@ -35227,6 +35338,8 @@ var SHARE_ORIGIN = "https://share.tinycloud.xyz";
 var NOTIFY_WINDOW_MESSAGE = "Share notification authorization expired (at share expiry or 5 minutes after publication); publish a new share and invite the recipient then.\n";
 var INVITATIONS_UNAVAILABLE_MESSAGE = "Invitation emails are not available yet.";
 var NOTIFY_NEEDS_SHORT_LINK_MESSAGE = "This share has no short link, and an invitation email carries only a short link, so no invitation was sent. Publish it again to get one.";
+var SHARE_TOO_LARGE_MESSAGE = "Shared files can be up to 95 MiB. Use a smaller file or split it.";
+var ADDRESSED_SHARE_TOO_LARGE_FILE_MESSAGE = "Files shared with specific people can be up to 71 MiB. Use a smaller file or split it.";
 var ONGOING_UNAVAILABLE = "Ongoing shares are not available yet; v1 shares pin a version";
 function artifactRequest(options, actions, inputCount) {
   if (options.artifact === void 0) {
@@ -35493,8 +35606,17 @@ async function notifyRecordedShare(record2, recipient, adapter, storage, publish
 function byteLimit(value) {
   if (value === void 0) return void 0;
   const parsed = Number(value);
-  if (!Number.isSafeInteger(parsed) || parsed <= 0 || parsed > MAX_SHARE_STDIN_BYTES) throw new CLIError("MAX_BYTES_EXCEEDED", "max-bytes must be between 1 and 100 MiB", 7);
+  if (!Number.isSafeInteger(parsed) || parsed <= 0 || parsed > MAX_SHARE_STDIN_BYTES) throw new CLIError("MAX_BYTES_EXCEEDED", "--max-bytes must be between 1 byte and 95 MiB.", 7);
   return parsed;
+}
+function shareCeiling(target) {
+  return target.kind === "bearer" ? MAX_SHARE_STDIN_BYTES : MAX_ADDRESSED_SHARE_BYTES;
+}
+function shareTooLarge(maxBytes, ceiling, together = false) {
+  const defaultLimit = maxBytes === void 0 || maxBytes >= ceiling;
+  const largest = ceiling === MAX_SHARE_STDIN_BYTES ? "95" : "71";
+  const message = together ? defaultLimit ? `These files add up to more than ${largest} MiB. Share fewer at once or use smaller files.` : `These files add up to more than the --max-bytes limit you set (${maxBytes} bytes). Share fewer at once or raise --max-bytes, up to ${largest} MiB.` : defaultLimit ? ceiling === MAX_SHARE_STDIN_BYTES ? SHARE_TOO_LARGE_MESSAGE : ADDRESSED_SHARE_TOO_LARGE_FILE_MESSAGE : `This file is over the --max-bytes limit you set (${maxBytes} bytes). Use a smaller file or raise --max-bytes, up to ${largest} MiB.`;
+  return new CLIError("MAX_BYTES_EXCEEDED", message, 7);
 }
 function mediaTypeFor(filename) {
   const extension = filename.toLowerCase().split(".").at(-1);
@@ -35505,12 +35627,12 @@ function requestedActions(values) {
   if (actions.some((value) => value !== "read" && value !== "list" && value !== "edit")) throw new CLIError("INVALID_ARGUMENT", "--action must be read, list, or edit", 2);
   return [...new Set(actions)];
 }
-function assertAggregateInputLimit(inputs, maxBytes) {
-  const limit = maxBytes ?? MAX_SHARE_STDIN_BYTES;
+function assertAggregateInputLimit(inputs, maxBytes, ceiling) {
+  const limit = Math.min(maxBytes ?? ceiling, ceiling);
   let total = 0;
   for (const input of inputs) {
     total += input.bytes.byteLength;
-    if (!Number.isSafeInteger(total) || total > limit) throw new CLIError("MAX_BYTES_EXCEEDED", "combined share input exceeds the configured byte limit", 7);
+    if (!Number.isSafeInteger(total) || total > limit) throw shareTooLarge(maxBytes, ceiling, inputs.length > 1);
   }
 }
 function registerShareCommand(program2) {
@@ -35522,6 +35644,7 @@ function registerShareCommand(program2) {
       const target = parseShareTarget(options.to);
       if (target.kind === "email") throw new CLIError("UNAVAILABLE", "email-addressed shares are not available in this release; nothing was shared", 4);
       const maxBytes = byteLimit(options.maxBytes);
+      const ceiling = shareCeiling(target);
       if (files.length === 0 || files.includes("-") && files.length > 1) throw new CLIError("INVALID_ARGUMENT", "stdin must be the only publish input", 2);
       const name = files.length === 1 ? options.name : void 0;
       const actions = requestedActions(options.action);
@@ -35542,9 +35665,11 @@ function registerShareCommand(program2) {
       } else {
         for (const file of files) if (await isDirectoryInput(file)) throw new CLIError("MAX_BYTES_EXCEEDED", FOLDER_NOT_AVAILABLE, 7);
         for (const file of files) shareInputFilename(file, name);
-        inputs = await Promise.all(files.map((file) => readShareInput(file, name, maxBytes)));
+        inputs = await Promise.all(files.map((file) => readShareInput(file, name, Math.min(maxBytes ?? ceiling, ceiling)).catch((error) => {
+          throw error instanceof Error && error.message === "MAX_BYTES_EXCEEDED" ? shareTooLarge(maxBytes, ceiling) : error;
+        })));
       }
-      assertAggregateInputLimit(inputs, maxBytes);
+      assertAggregateInputLimit(inputs, maxBytes, ceiling);
       if (options.prefix && target.kind === "bearer") throw new CLIError("INVALID_ARGUMENT", "--prefix requires an addressed target", 2);
       if (target.kind === "bearer" && actions.includes("edit")) throw new CLIError("INVALID_ARGUMENT", `--action edit is not available with --to ${options.to}: a link can only be read; address a recipient to allow edits`, 2);
       if (inputs.length > 1 && target.kind === "bearer") throw new CLIError("UNSUPPORTED_LINK", "multiple files require an addressed target", 2);

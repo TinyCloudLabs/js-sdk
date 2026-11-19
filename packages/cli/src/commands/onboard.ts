@@ -6,7 +6,7 @@ import { sessionStateIsUsable, storedSessionState } from "../auth/scoped-login.j
 import { completeApprovalResult } from "../auth/approval-request.js";
 import { APPROVAL_TIMEOUT_OPTION_DESCRIPTION, parseApprovalTimeout, spaceSetupTimeoutMs } from "../auth/approval-wait.js";
 import { onboardingPlan } from "../auth/onboarding-scope.js";
-import { ensureSpaceSetup } from "../auth/space-setup.js";
+import { createSpaceRecheck, ensureSpaceSetup } from "../auth/space-setup.js";
 import { ExitCode } from "../config/constants.js";
 import { ProfileManager } from "../config/profiles.js";
 import { resolveProfilePosture } from "../config/types.js";
@@ -100,6 +100,8 @@ export function registerOnboardCommand(program: Command): void {
           });
         };
 
+        // A re-run after SPACE_SETUP_PENDING has a usable session on a space the node does not host yet; the session's space is asked once per run.
+        const spaceRecheck = createSpaceRecheck();
         for (const [index, step] of steps.entries()) {
           const reason = step.asks;
           currentStep = index + 1;
@@ -116,9 +118,13 @@ export function registerOnboardCommand(program: Command): void {
             // A new account's space can take OpenKey a minute or two to host; under --timeout the wait ends with the call's bound.
             await ensureSpaceSetup({ profile: ctx.profile, host: ctx.host }, delegationData, delegationData.permissions as PermissionEntry[] | undefined,
               deadlineMs === undefined ? undefined : spaceSetupTimeoutMs({ deadlineMs, step: currentStep, of: steps.length }));
+            // OpenKey's report has decided about the space for this run; no later step asks the node again.
+            spaceRecheck.settle();
             profile = await ProfileManager.getProfile(ctx.profile);
             continue;
           }
+          await spaceRecheck.check({ profile: ctx.profile, host: ctx.host }, String(session?.spaceId), step.permissions,
+            deadlineMs === undefined ? {} : { timeoutMs: spaceSetupTimeoutMs({ deadlineMs, step: currentStep, of: steps.length }) });
           const node = await ensureAuthenticated(ctx);
           const requested = await resolvePermissionSpaces(step.permissions, ctx.profile);
           await ensureDelegationAuthority({

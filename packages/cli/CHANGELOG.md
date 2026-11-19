@@ -1,5 +1,123 @@
 # @tinycloud/cli
 
+## 1.8.0-beta.17
+
+### Patch Changes
+
+- 01b7932: `auth import` of a delegation addressed to an agent (delegate-session) profile's own key now makes it the profile's session, replacing a live, expired or signed-out one, so `auth status` reports the new expiry and commands work until it passes. `auth logout` on such a profile with no local replica state clears the session but keeps the key, so a new grant can be imported for it; other logouts still delete the key. Logout output says which: `keyKept` and a `message` ("Signed out. The key is kept, so a new grant can be imported for it. Grants already made for this key stay valid until they expire unless the owner revokes them." or "Signed out. The key was deleted; the next sign-in creates a new one.").
+
+  Details: TC-3434
+
+- 57e16d4: Accept a verified owner-signed whole-request grant when it covers every requested permission, including when the signed grant contains additional owner-approved permissions. Legacy scoped manifest logins retain their narrowed-approval behavior.
+
+  Details: TC-599
+
+- d94bfbf: The `tinycloud-cli` skill now says that `--to did:` and `--to domain:` create addressed shares. It no longer says that sharing to a domain or DID is unavailable. `--to email:` is still refused with `UNAVAILABLE`, and the skill now points the owner to share.tinycloud.xyz for one email address. The publish examples that used `--to email:` now use `--to domain:`.
+
+  Details: TC-2929
+
+- c58e7e7: CLI bug-report uploads now use `feedback.tinycloud.xyz`.
+
+  Details: TC-2515
+
+- Updated dependencies [df0de7e]
+  - @tinycloud/operations@0.9.1-beta.11
+
+## 1.8.0-beta.16
+
+### Patch Changes
+
+- 313b056: Shares can be up to 95 MiB, the most the TinyCloud node accepts in one upload (99,614,720 bytes). A larger file stops before uploading with "Shared files can be up to 95 MiB. Use a smaller file or split it." When several files together pass the limit, the message reads "These files add up to more than 95 MiB. Share fewer at once or use smaller files." `--max-bytes` accepts 1 byte to 95 MiB, and a file over a smaller `--max-bytes` gets its own message naming that limit.
+
+  Details: TC-3252
+
+- Updated dependencies [313b056]
+  - @tinycloud/share-sdk@1.6.0-beta.1
+  - @tinycloud/node-sdk@3.13.0-beta.9
+  - @tinycloud/sdk-core@3.13.0-beta.9
+  - @tinycloud/operations@0.9.1-beta.10
+
+## 1.8.0-beta.15
+
+### Minor Changes
+
+- 0576031: The CLI, the hosted MCP server and Courier now use `https://node.tinycloud.xyz` as the default TinyCloud node, in place of `https://tee.node.tinycloud.xyz`. Profiles that already store a host keep it. To keep using `https://tee.node.tinycloud.xyz`, set `--host` or `TC_HOST` for the CLI and the MCP server, or `COURIER_HOST` for Courier.
+
+  Details: TC-2923
+
+### Patch Changes
+
+- Updated dependencies [0576031]
+- Updated dependencies [7399b14]
+  - @tinycloud/operations@0.9.1-beta.9
+  - @tinycloud/sdk-services@3.13.0-beta.8
+  - @tinycloud/sdk-core@3.13.0-beta.8
+  - @tinycloud/node-sdk@3.13.0-beta.8
+
+## 1.8.0-beta.14
+
+### Patch Changes
+
+- Updated dependencies [9f3ca26]
+- Updated dependencies [9f3ca26]
+  - @tinycloud/node-sdk@3.13.0-beta.7
+  - @tinycloud/operations@0.9.1-beta.8
+
+## 1.8.0-beta.13
+
+### Minor Changes
+
+- 0490f71: `feed card-md` prints the owner's card.md (`{text, version, updatedAt}`). When the owner hasn't set one, it prints the default (`{text, version, default: true}`). `feed publish` adds `cardMd: {version}` to its JSON, with `default: true` while it is the default, and `feed publish` and `feed watch` print the text once on stderr when its version differs from the last one this profile saw for that agent. `feed connect` copies the owner's card.md into the new agent's response database, or the default when the owner hasn't set one. An agent connected before card.md existed reads it with the same grant, without reconnecting. `@tinycloud/sdk-services` adds `readFeedCardMd` and an optional `onWake` callback on `listenFeedResponses`, run at the start of every drain.
+
+  Details: TC-3345
+
+### Patch Changes
+
+- Updated dependencies [0490f71]
+  - @tinycloud/sdk-services@3.13.0-beta.6
+  - @tinycloud/node-sdk@3.13.0-beta.6
+  - @tinycloud/operations@0.9.1-beta.7
+  - @tinycloud/sdk-core@3.13.0-beta.6
+
+## 1.8.0-beta.12
+
+### Patch Changes
+
+- b096c5a: `tinycloud delegation revoke <cid>` from an owner profile can now revoke a grant that profile's own key issued, such as one made with `feed connect`. When the node lists the CID as issued by this profile's key, the CLI revokes it with that key, with no owner approval. A CID the node doesn't list as issued by this key is still refused, and a network or node failure is reported as an error.
+
+  Details: TC-3150
+
+## 1.8.0-beta.11
+
+### Patch Changes
+
+- a3562f4: `tinycloud onboard`, run again with a session that still works, now checks that the node hosts the session's space before it goes on. If the space isn't hosted, it waits as it does after an approval (up to 150 seconds or the `--timeout` share), then ends with exit 1 `SPACE_SETUP_PENDING` instead of failing later with "Space not found". A hosted space costs one read and no wait.
+
+  Details: TC-2380
+
+## 1.8.0-beta.10
+
+### Minor Changes
+
+- c7741ab: New `tinycloud feed disconnect --agent <token>`: an owner removes a connected agent in one step. It reads the grant ID from the owner's feed registry, revokes the grant with the profile's own key (no OpenKey approval), then removes the registry row; a failed revoke leaves the row so it can be retried. Before, `delegation revoke <cid>` from the owner profile failed with TARGET_NOT_FOUND because the owner session cannot list the grants it issued and the CLI kept no record of a `feed connect` grant.
+
+  Details: TC-3150
+
+### Patch Changes
+
+- 92f9309: `tinycloud profile show` prints only its documented fields.
+
+  Details: TC-2652
+
+- 91f4a95: Internal changes for profiles; nothing in the CLI's commands changes.
+
+  Details: TC-2653
+
+- Updated dependencies [c7741ab]
+  - @tinycloud/sdk-core@3.13.0-beta.5
+  - @tinycloud/node-sdk@3.13.0-beta.5
+  - @tinycloud/operations@0.9.1-beta.6
+
 ## 1.8.0-beta.9
 
 ### Patch Changes

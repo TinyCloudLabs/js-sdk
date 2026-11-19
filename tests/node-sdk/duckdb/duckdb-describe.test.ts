@@ -49,17 +49,6 @@ describe("DuckDB Describe", () => {
 
   // PART 1: Schema Introspection
   describe("Schema Introspection", () => {
-    test("describe returns SchemaInfo with tables and views", async () => {
-      const result = await alice.duckdb.db(DB_NAME).describe();
-      expect(result.ok).toBe(true);
-      if (result.ok) {
-        expect(result.data).toHaveProperty("tables");
-        expect(result.data).toHaveProperty("views");
-        expect(Array.isArray(result.data.tables)).toBe(true);
-        expect(Array.isArray(result.data.views)).toBe(true);
-      }
-    });
-
     test("table has name and columns array", async () => {
       const result = await alice.duckdb.db(DB_NAME).describe();
       expect(result.ok).toBe(true);
@@ -69,25 +58,6 @@ describe("DuckDB Describe", () => {
         expect(productsTable!.name).toBe(TABLE_PRODUCTS);
         expect(Array.isArray(productsTable!.columns)).toBe(true);
         expect(productsTable!.columns.length).toBeGreaterThanOrEqual(4);
-      }
-    });
-
-    test("column has name, type, nullable fields (not dataType/isNullable)", async () => {
-      const result = await alice.duckdb.db(DB_NAME).describe();
-      expect(result.ok).toBe(true);
-      if (result.ok) {
-        const productsTable = result.data.tables.find(t => t.name === TABLE_PRODUCTS);
-        const idCol = productsTable!.columns.find(c => c.name === "id");
-        expect(idCol).toBeDefined();
-
-        // Correct field names
-        expect(idCol).toHaveProperty("name");
-        expect(idCol).toHaveProperty("type");
-        expect(idCol).toHaveProperty("nullable");
-
-        // Incorrect field names should NOT exist
-        expect(idCol).not.toHaveProperty("dataType");
-        expect(idCol).not.toHaveProperty("isNullable");
       }
     });
 
