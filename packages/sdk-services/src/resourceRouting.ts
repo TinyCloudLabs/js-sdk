@@ -4,7 +4,8 @@ export type ResourceAccess = "read" | "write" | "host" | "encryption";
 export interface ResourceDestination { readonly url: string; readonly nodeDid?: string }
 export interface ResourceNodeInfo { readonly nodeId: string; readonly features?: unknown }
 export interface ResourceRoutingConfig {
-  resolveResource(resource: string, access: ResourceAccess, dataRead?: boolean): Promise<readonly ResourceDestination[]>;
+  /** `endToEnd`: the request carries vault data or names and may only use an end-to-end origin. */
+  resolveResource(resource: string, access: ResourceAccess, dataRead?: boolean, endToEnd?: boolean): Promise<readonly ResourceDestination[]>;
   bindAudience(authorization: string, nodeDid: string): Promise<string>;
   /** Defaults to the raw transport's public node identity checks. */
   verifyDestination?(target: ResourceDestination): Promise<void | ResourceNodeInfo>;
@@ -29,6 +30,8 @@ export interface ResourceTransportOptions {
   readonly invocationSession?: ServiceSession;
   /** Signed data invocations only: a read may reuse a cached registry absence. */
   readonly dataRead?: boolean;
+  /** The invocation touches vault data or names; destinations must be end-to-end origins. */
+  readonly endToEnd?: boolean;
 }
 export type ResourceTransport = (
   resources: readonly { resource: string; access: ResourceAccess }[],
@@ -152,7 +155,20 @@ export function routingResourceOf(uri: string): string {
   throw new ResourceNotRoutedError(uri);
 }
 
-function invocationResources(authorization: string): Array<{ resource: string; access: ResourceAccess }> {
+/**
+ * Vault values and their names: the vault namespaces in any space, and the
+ * whole `secrets` space (its root listing names every secret). Their traffic
+ * may only use origins whose TLS terminates inside the node (TC-2944).
+ */
+const VAULT_KV_PATH = /^kv\/(?:vault|keys|grants)(?:\/|$)/;
+
+function isVaultResourceUri(uri: string, resource: string): boolean {
+  if (!resource.startsWith("tinycloud:")) return false;
+  if (resource.endsWith(":secrets")) return true;
+  return VAULT_KV_PATH.test(uri.slice(uri.indexOf(resource) + resource.length + 1));
+}
+
+function invocationResources(authorization: string): { resources: Array<{ resource: string; access: ResourceAccess }>; endToEnd: boolean } {
   const encoded = authorization.split(".")[1];
   if (!encoded) throw new ResourceNotRoutedError("invalid invocation");
   const payload: unknown = JSON.parse(atob(encoded.replace(/-/g, "+").replace(/_/g, "/")));
@@ -160,10 +176,12 @@ function invocationResources(authorization: string): Array<{ resource: string; a
     throw new ResourceNotRoutedError("invalid invocation attenuation");
   }
   const resources: Array<{ resource: string; access: ResourceAccess }> = [];
+  let endToEnd = false;
   for (const [uri, abilities] of Object.entries(payload.att)) {
     if (typeof abilities !== "object" || abilities === null || Array.isArray(abilities)) throw new ResourceNotRoutedError(uri);
     for (const action of Object.keys(abilities)) {
       const resource = routingResourceOf(uri);
+      endToEnd ||= isVaultResourceUri(uri, resource);
       // Only named, known read abilities are reads. Unknown abilities must not broaden a read-only membership.
       const read = /^(tinycloud\.(kv\/(get|list|metadata|head|sync)|sql\/(read|export)|duckdb\/(read|describe|export)|capabilities\/read|space\/(list|info)|hooks\/list))$/.test(action);
       const access: ResourceAccess = resource.startsWith("urn:tinycloud:encryption:") ? "encryption" : action === "tinycloud.space/host" ? "host" : read ? "read" : "write";
@@ -171,7 +189,7 @@ function invocationResources(authorization: string): Array<{ resource: string; a
     }
   }
   if (resources.length === 0) throw new ResourceNotRoutedError("empty invocation");
-  return resources;
+  return { resources, endToEnd };
 }
 
 /** Share target selection and read/write outcomes with resource-specific adapters. */
@@ -182,7 +200,7 @@ export async function routeResourceRequest(
   options?: ResourceTransportOptions,
 ): Promise<FetchResponse> {
   if (resources.length === 0) throw new ResourceNotRoutedError("empty request");
-  const routes = await Promise.all(resources.map(({ resource, access }) => routing.resolveResource(resource, access, options?.dataRead)));
+  const routes = await Promise.all(resources.map(({ resource, access }) => routing.resolveResource(resource, access, options?.dataRead, options?.endToEnd)));
   if (routes.some((route) => route.length === 0)) throw new ResourceNotRoutedError(resources[routes.findIndex((route) => route.length === 0)].resource);
   const write = options?.independentResources === true || resources.some(({ access }) => access === "write" || access === "host");
   let targets: readonly ResourceDestination[];
@@ -247,13 +265,14 @@ export function createResourceTransportInvocationFetch(transport: ResourceTransp
     if (parsed.pathname !== "/invoke") throw new ResourceNotRoutedError(parsed.pathname);
     const authorization = authorizationOf(init?.headers);
     if (!authorization) throw new ResourceNotRoutedError("unsigned invocation");
-    return transport(invocationResources(authorization), async (target) => {
+    const { resources, endToEnd } = invocationResources(authorization);
+    return transport(resources, async (target) => {
       const signed = await target.bindAudience(authorization);
       const headers = (Array.isArray(init?.headers) ? init.headers : Object.entries(init?.headers ?? {}))
         .filter(([name]) => name.toLowerCase() !== "authorization");
       headers.push(["Authorization", signed]);
       return target.fetch(`${target.url}${parsed.pathname}${parsed.search}`, { ...init, headers });
-    }, { invocationSession: session, dataRead: true });
+    }, { invocationSession: session, dataRead: true, endToEnd });
   };
 }
 
@@ -264,7 +283,7 @@ export function createResourceRoutingFetch(fetchFn: FetchFunction, routing: Reso
     if (parsed.pathname !== "/invoke") return fetchFn(url, init);
     const authorization = authorizationOf(init?.headers);
     if (!authorization) throw new ResourceNotRoutedError("unsigned invocation");
-    const resources = invocationResources(authorization);
+    const { resources, endToEnd } = invocationResources(authorization);
     const send = async (target: ResourceDestination): Promise<FetchResponse> => {
       init?.signal?.throwIfAborted();
       if (routing.verifyDestination) await routing.verifyDestination(target);
@@ -282,6 +301,6 @@ export function createResourceRoutingFetch(fetchFn: FetchFunction, routing: Reso
         throw new NodeNotRespondingError([target.url], error);
       }
     };
-    return routeResourceRequest(resources, routing, send, { dataRead: true });
+    return routeResourceRequest(resources, routing, send, { dataRead: true, endToEnd });
   };
 }

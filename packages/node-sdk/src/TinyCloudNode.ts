@@ -2327,7 +2327,7 @@ export class TinyCloudNode {
         }
       },
       {
-        resolveResource: (resource, access, dataRead) => this.routingDestinations(resource, access, undefined, dataRead),
+        resolveResource: (resource, access, dataRead, endToEnd) => this.routingDestinations(resource, access, undefined, dataRead, endToEnd),
         bindAudience: (authorization, nodeDid) => this.bindRoutedAudience(authorization, nodeDid, session),
         verifyDestination: (target) => verifyResourceDestination(target, globalThis.fetch.bind(globalThis)),
       },
@@ -2344,13 +2344,14 @@ export class TinyCloudNode {
     );
   }
 
-  private async routingDestinations(resource: string, access: ResourceAccess, noEntryHosts?: readonly string[], dataRead?: boolean): Promise<ResourceDestination[]> {
+  private async routingDestinations(resource: string, access: ResourceAccess, noEntryHosts?: readonly string[], dataRead?: boolean, endToEnd?: boolean): Promise<ResourceDestination[]> {
     const destinations = await this.registryDestinations(resource, access, noEntryHosts, dataRead);
-    // Encryption-network traffic carries key material and public keys, so it
-    // only uses the origin whose TLS terminates inside the node (TC-2923). The
+    // Encryption-network traffic carries key material and public keys, and
+    // vault traffic carries secret values and names, so both only use the
+    // origin whose TLS terminates inside the node (TC-2923, TC-2944). The
     // identity check that follows runs against that origin; nothing retries on
     // the other production name.
-    return access === "encryption"
+    return access === "encryption" || endToEnd
       ? destinations.map((destination) => ({ ...destination, url: endToEndNodeHost(destination.url) }))
       : destinations;
   }
@@ -2453,15 +2454,15 @@ export class TinyCloudNode {
     return async (resources, send, options) => {
       graph.assertActive();
       return routeResourceRequest(resources, {
-        resolveResource: async (requestedResource, requestedAccess, dataRead) => {
+        resolveResource: async (requestedResource, requestedAccess, dataRead, endToEnd) => {
           graph.assertActive();
           const targets = placement && requestedResource === placement.parent.spaceId && requestedAccess !== "encryption"
             ? await (await import("@tinycloud/sdk-core/share-placement")).sharePlacementDestinations(placement.record, placement.parent, {
               registryUrl: this.config.tinycloudRegistryUrl ?? undefined, sequenceStore: this.config.registrySequenceStore,
               cacheStore: this.config.registryCacheStore, registryChainId: this.config.registryChainId,
               fetch: rawFetch as typeof fetch,
-            })
-            : await this.routingDestinations(requestedResource, requestedAccess, undefined, dataRead);
+            }).then((destinations) => endToEnd ? destinations.map((destination) => ({ ...destination, url: endToEndNodeHost(destination.url) })) : destinations)
+            : await this.routingDestinations(requestedResource, requestedAccess, undefined, dataRead, endToEnd);
           graph.assertActive();
           return targets;
         },
