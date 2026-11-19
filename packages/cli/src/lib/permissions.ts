@@ -491,10 +491,7 @@ export async function loadManifestPermissions(
   // Checked on the manifest as written, before resolution rewrites its entries.
   if (Array.isArray(manifest.permissions)) assertNoCaveatLimits(manifest.permissions);
   if (options.device && typeof manifest.app_id === "string") {
-    const refused = manifest.secrets !== undefined || manifest.space === "secrets" ||
-        (typeof manifest.space === "string" && manifest.space.endsWith(":secrets"))
-      ? "secrets"
-      : deviceRefusal(appManifestEntries(manifest));
+    const refused = deviceRefusal([...appManifestEntries(manifest), ...appManifestSecretEntries(manifest)]);
     if (refused !== undefined) {
       throw new CLIError("DEVICE_AUTH_UNSUPPORTED_SCOPE", deviceRefusalMessage(refused, "this manifest", DEVICE_MANIFEST_NEXT), ExitCode.USAGE_ERROR);
     }
@@ -511,7 +508,7 @@ export async function loadManifestPermissions(
 
   if (typeof manifest.app_id === "string") {
     const permissions = appManifestEntries(manifest);
-    permissions.push(...await secretPermissionsFromAppManifest(manifest, profile, options.ownerDid));
+    permissions.push(...await secretPermissionsFromAppManifest(manifest, profile, options.ownerDid, options.device === true));
     return resolvePermissionSpaces(permissions, profile, options);
   }
 
@@ -556,11 +553,8 @@ function appManifestEntry(entry: Record<string, unknown>, manifest: Record<strin
   };
 }
 
-async function secretPermissionsFromAppManifest(
-  manifest: Record<string, unknown>,
-  profile: string,
-  requestedOwner: string | undefined,
-): Promise<PermissionEntry[]> {
+/** The named-secret KV entries an app manifest's `secrets` field asks for, each as it will be requested. */
+function appManifestSecretEntries(manifest: Record<string, unknown>): PermissionEntry[] {
   if (manifest.secrets === undefined) {
     return [];
   }
@@ -572,22 +566,34 @@ async function secretPermissionsFromAppManifest(
     prefix: "",
     secrets: manifest.secrets as Parameters<typeof resolveManifest>[0]["secrets"],
   });
-  const permissions = resolved.resources.filter((resource) =>
+  return resolved.resources.filter((resource) =>
     resource.service === "tinycloud.kv" &&
     resource.space === "secrets" &&
     resource.path.startsWith("vault/secrets/")
   );
+}
+
+async function secretPermissionsFromAppManifest(
+  manifest: Record<string, unknown>,
+  profile: string,
+  requestedOwner: string | undefined,
+  device: boolean,
+): Promise<PermissionEntry[]> {
+  const permissions = appManifestSecretEntries(manifest);
 
   const needsDecrypt = permissions.some((permission) =>
     permission.actions.includes("tinycloud.kv/get")
   );
   if (needsDecrypt) {
-    permissions.push({
-      service: ENCRYPTION_PERMISSION_SERVICE,
-      space: ENCRYPTION_MANIFEST_SPACE,
-      path: await defaultSecretsNetworkId(profile, requestedOwner),
-      actions: ["tinycloud.encryption/decrypt"],
-    });
+    // OpenKey's device flow takes the default-network decrypt entry as written and signs the approving owner's own network.
+    permissions.push(device
+      ? { service: ENCRYPTION_PERMISSION_SERVICE, space: "default", path: "", actions: ["tinycloud.encryption/decrypt"] }
+      : {
+        service: ENCRYPTION_PERMISSION_SERVICE,
+        space: ENCRYPTION_MANIFEST_SPACE,
+        path: await defaultSecretsNetworkId(profile, requestedOwner),
+        actions: ["tinycloud.encryption/decrypt"],
+      });
   }
 
   return permissions;

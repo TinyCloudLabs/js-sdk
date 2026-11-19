@@ -490,14 +490,41 @@ describe("loadManifestPermissions", () => {
       .toBe(`urn:tinycloud:encryption:${OWNER_DID}:default`);
   });
 
-  test("device manifest with secrets is rejected before resolving an unknown owner", async () => {
+  test("device manifest asking for the whole secrets space is rejected before resolving an unknown owner", async () => {
     activeProfile = {
       name: "agent", host: "https://node.tinycloud.test", chainId: 1,
       spaceName: "default", did: "did:key:z6MkSession", createdAt: "2026-06-01T00:00:00.000Z",
     };
-    const source = manifestSource({ app_id: "xyz.tinycloud.agent", space: "secrets", secrets: { OPENAI_API_KEY: true } });
+    const source = manifestSource({
+      app_id: "xyz.tinycloud.agent", space: "secrets",
+      permissions: [{ service: "kv", path: "vault/secrets/", skipPrefix: true, actions: ["get", "list"] }],
+    });
     await expect(loadManifestPermissions(source, "agent", { allowLogicalSpaces: true, device: true }))
       .rejects.toMatchObject({ code: "DEVICE_AUTH_UNSUPPORTED_SCOPE" });
+  });
+
+  test("device manifest naming secrets asks for those paths and the default decrypt, without resolving an unknown owner", async () => {
+    activeProfile = {
+      name: "agent", host: "https://node.tinycloud.test", chainId: 1,
+      spaceName: "default", did: "did:key:z6MkSession", createdAt: "2026-06-01T00:00:00.000Z",
+    };
+    const source = manifestSource({ app_id: "xyz.tinycloud.agent", secrets: { OPENAI_API_KEY: ["read", "write"] } });
+    const permissions = await loadManifestPermissions(source, "agent", { allowLogicalSpaces: true, device: true });
+    expect(permissions).toEqual([
+      { service: "tinycloud.kv", space: "secrets", path: "vault/secrets/OPENAI_API_KEY", actions: ["tinycloud.kv/get", "tinycloud.kv/put"] },
+      { service: "tinycloud.encryption", space: "default", path: "", actions: ["tinycloud.encryption/decrypt"] },
+    ]);
+  });
+
+  test("device manifest naming a secret it may delete, or a scoped one, is refused", async () => {
+    activeProfile = {
+      name: "agent", host: "https://node.tinycloud.test", chainId: 1,
+      spaceName: "default", did: "did:key:z6MkSession", createdAt: "2026-06-01T00:00:00.000Z",
+    };
+    for (const secrets of [{ OPENAI_API_KEY: ["delete"] }, { OPENAI_API_KEY: { actions: ["read"], scope: "team" } }]) {
+      await expect(loadManifestPermissions(manifestSource({ app_id: "xyz.tinycloud.agent", secrets }), "agent", { allowLogicalSpaces: true, device: true }))
+        .rejects.toMatchObject({ code: "DEVICE_AUTH_UNSUPPORTED_SCOPE" });
+    }
   });
 
   test("a device manifest keeps decrypt on the owner's default network as OpenKey's device flow takes it", async () => {

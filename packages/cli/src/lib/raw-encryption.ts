@@ -1,5 +1,6 @@
 import type { PermissionEntry } from "@tinycloud/node-sdk";
 import { ENCRYPTION_PERMISSION_SERVICE } from "../../../sdk-core/src/manifest.js";
+import { SECRET_NAME_RE } from "@tinycloud/sdk-services";
 import { safeClipped } from "../output/safe-text.js";
 
 /**
@@ -35,14 +36,34 @@ export function isDeviceDefaultDecrypt(permission: Pick<PermissionEntry, "servic
     !permission.caveats?.length;
 }
 
+const DEVICE_SECRET_ACTIONS: ReadonlySet<string> = new Set(["tinycloud.kv/get", "tinycloud.kv/put", "tinycloud.kv/list"]);
+
 /**
- * The first entry OpenKey's device flow refuses: any entry in a secrets space ("secrets"), or any encryption entry
- * other than decrypt on the owner's default network. OpenKey admits exactly that one encryption entry
+ * One named secret OpenKey's device flow admits in a secrets space: KV get/put/list on exactly
+ * `vault/secrets/<NAME>` (one secret name, no prefix, no scope, no limits). A whole-space request is not one.
+ */
+export function isDeviceNamedSecret(entry: Pick<PermissionEntry, "service" | "space" | "path" | "actions" | "caveats">): boolean {
+  const name = entry.path.startsWith("vault/secrets/") ? entry.path.slice("vault/secrets/".length) : undefined;
+  return entry.service === "tinycloud.kv" && name !== undefined && SECRET_NAME_RE.test(name) &&
+    entry.actions.length > 0 && entry.actions.every((action) => DEVICE_SECRET_ACTIONS.has(action)) &&
+    !entry.caveats?.length;
+}
+
+/** The capability read on a space root that every OpenKey login carries (it signs no delegation without it). */
+function isCapabilitiesRead(entry: Pick<PermissionEntry, "service" | "path" | "actions" | "caveats">): boolean {
+  return entry.service === "tinycloud.capabilities" && entry.path === "" &&
+    entry.actions.length === 1 && entry.actions[0] === "tinycloud.capabilities/read" && !entry.caveats?.length;
+}
+
+/**
+ * The first entry OpenKey's device flow refuses: any entry in a secrets space ("secrets") other than one named
+ * secret (`isDeviceNamedSecret`) or the space's capability read, or any encryption entry other than decrypt on the
+ * owner's default network. OpenKey admits exactly that one encryption entry
  * (openkey apps/api/src/services/device-authorization.ts, deviceRequestPermissions).
  */
 export function deviceRefusal(entries: readonly PermissionEntry[]): PermissionEntry | "secrets" | undefined {
   for (const entry of entries) {
-    if (entry.space === "secrets" || entry.space?.endsWith(":secrets") === true) return "secrets";
+    if ((entry.space === "secrets" || entry.space?.endsWith(":secrets") === true) && !isDeviceNamedSecret(entry) && !isCapabilitiesRead(entry)) return "secrets";
     if (entry.service === ENCRYPTION_PERMISSION_SERVICE && !isDeviceDefaultDecrypt(entry)) return entry;
   }
   return undefined;

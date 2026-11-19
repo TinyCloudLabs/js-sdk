@@ -382,11 +382,21 @@ export function declinedPermissions(requested: readonly PermissionEntry[], signe
 }
 
 /**
+ * The entries that name a login's one space. OpenKey's device flow takes the default-network decrypt entry as
+ * written, so it names a space only when it is the whole request.
+ */
+function spaceNamingEntries(permissions: readonly PermissionEntry[]): PermissionEntry[] {
+  const spaced = permissions.filter((p) => !isRawEncryptionPermission(p));
+  const others = spaced.filter((p) => !isDeviceDefaultDecrypt(p));
+  return others.length > 0 ? others : spaced;
+}
+
+/**
  * A first-login scope: one TinyCloud space, plus optional raw encryption
- * network entries (`space: "encryption"`), which are not a second space.
+ * network entries (`space: "encryption"`) and OpenKey's default-network decrypt entry, which are not a second space.
  */
 export function validateLoginPermissions(permissions: PermissionEntry[]): void {
-  const spaced = permissions.filter((p) => !isRawEncryptionPermission(p));
+  const spaced = spaceNamingEntries(permissions);
   if (!spaced.length || permissions.some((p) =>
     !p.service?.startsWith("tinycloud.") || !p.space ||
     (isRawEncryptionPermission(p)
@@ -406,8 +416,8 @@ export function validateLoginPermissions(permissions: PermissionEntry[]): void {
  */
 export function scopedLoginPermissions(permissions: PermissionEntry[]): PermissionEntry[] {
   assertNoCaveatLimits(permissions);
-  // Validation guarantees one non-raw entry with a non-empty space.
-  return withCapabilitiesRead(permissions, permissions.find((p) => !isRawEncryptionPermission(p))!.space ?? "");
+  // Validation guarantees one space-naming entry with a non-empty space.
+  return withCapabilitiesRead(permissions, spaceNamingEntries(permissions)[0]!.space ?? "");
 }
 
 /**
@@ -613,7 +623,8 @@ export function verifyScopedLogin(
   }
   const spaceId = data.spaceId as string;
   for (const permission of requested) {
-    if (isRawEncryptionPermission(permission) || isRawCidRevocationPermission(permission)) continue;
+    // The default-network decrypt entry is the approving owner's own network, not a path in the session's space.
+    if (isRawEncryptionPermission(permission) || isRawCidRevocationPermission(permission) || isDeviceDefaultDecrypt(permission)) continue;
     if (normalizePkhIdentifier(ownerSpaceId(permission.space ?? "", signed.ownerDid)) !== normalizePkhIdentifier(spaceId)) {
       throw new CLIError("OPENKEY_SCOPE_MISMATCH", `The approved space differs from the requested space. ${notStored}`, ExitCode.PERMISSION_DENIED);
     }
