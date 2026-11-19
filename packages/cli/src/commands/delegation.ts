@@ -58,7 +58,7 @@ function listedDelegation(d: AccountDelegationRecord) {
 const ISSUED_ORDER_NOTE = "Sorted by delegation ID, not by date.";
 
 /** Maps the SDK's issued-delegation errors to CLI errors; everything else takes the common mapping. */
-function issuedFailure(
+export function issuedFailure(
   error: { code: string; message: string; meta?: Record<string, unknown> },
   host: string,
 ): CLIError {
@@ -92,7 +92,7 @@ function issuedFailure(
  * Revokes a delegation this profile's own key issued, with a revocation signed by that key and no
  * proof. Revoking a delegation that is already revoked succeeds like a first revocation (the node answers 200).
  */
-async function revokeIssuedDelegation(node: TinyCloudNode, ctx: { profile: string; host: string }, cid: string) {
+export async function revokeIssuedDelegation(node: TinyCloudNode, ctx: { profile: string; host: string }, cid: string) {
   const result = await node.delegationManager.revokeIssued(cid);
   if (result.ok) return { cid: result.data.cid, revoked: true as const };
   if (result.error.code === "PERMISSION_DENIED") {
