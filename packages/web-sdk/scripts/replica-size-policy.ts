@@ -486,6 +486,7 @@ export type Ledger = {
   tc3243SdkOwnsBusyRetryRoot?: LogoutRatchet;
   tc3285SecretTypesRoot?: LogoutRatchet;
   tc3284PerSecretRoot?: LogoutRatchet;
+  tc3284SecretIncarnationsRoot?: LogoutRatchet;
   tc2773LazyRestoreReplicaWorker?: Omit<WorkerRatchet, "worker"> & { replicaWorker: { delta: number; ceiling: number } };
 };
 
@@ -1126,6 +1127,7 @@ export function ancestryPins(root: Ledger, hasGatedOnly: boolean): Array<{ row: 
   if (root.tc3243SdkOwnsBusyRetryRoot !== undefined) pins.push({ row: "tc3243SdkOwnsBusyRetryRoot", pin: root.tc3243SdkOwnsBusyRetryRoot.sourceCommits.at(-1)! });
   if (root.tc3285SecretTypesRoot !== undefined) pins.push({ row: "tc3285SecretTypesRoot", pin: root.tc3285SecretTypesRoot.sourceCommits.at(-1)! });
   if (root.tc3284PerSecretRoot !== undefined) pins.push({ row: "tc3284PerSecretRoot", pin: root.tc3284PerSecretRoot.sourceCommits.at(-1)! });
+  if (root.tc3284SecretIncarnationsRoot !== undefined) pins.push({ row: "tc3284SecretIncarnationsRoot", pin: root.tc3284SecretIncarnationsRoot.sourceCommits.at(-1)! });
   if (hasGatedOnly) pins.push({ row: "gatedOnlyRatchet", pin: approvedGatedOnlyRatchet.sourceCommit });
   return pins;
 }
@@ -1236,6 +1238,7 @@ export function rootCeilings(root: Ledger): Array<{ row: string; ceiling: GzipSi
     ["tc3243SdkOwnsBusyRetryRoot", root.tc3243SdkOwnsBusyRetryRoot?.root.ceiling],
     ["tc3285SecretTypesRoot", root.tc3285SecretTypesRoot?.root.ceiling],
     ["tc3284PerSecretRoot", root.tc3284PerSecretRoot?.root.ceiling],
+    ["tc3284SecretIncarnationsRoot", root.tc3284SecretIncarnationsRoot?.root.ceiling],
   ];
   return rows.flatMap(([row, ceiling]) => ceiling === undefined ? [] : [{ row, ceiling }]);
 }
@@ -3650,6 +3653,26 @@ const approvedTc3284PerSecretRoot: LogoutRatchet = {
   "reason": "The named-key Secrets APIs and exact read delegation ship in the web-sdk root. SQLite and PostgreSQL canonical CI agree on the aggregate gzip -9 bytes. No non-root ceiling moves."
 };
 
+/** The exact TC-3284 secret-incarnation root allowance from canonical CI. */
+const approvedTc3284SecretIncarnationsRoot: LogoutRatchet = {
+  "label": "fresh named key per isolated secret creation (TC-3284)",
+  "ruling": "test-ruling: TC-858 ratchet row tc3284SecretIncarnationsRoot. Naomi approved the exact #1052 canonical CI root gzip bytes with no margin.",
+  "base": "991ddb560d494e0b61424bff2b2c7e28541e522b",
+  "sourceCommits": ["8bb1620601cdca888ca117fbe861740cd46f5bc7"],
+  "canonicalCI": {
+    "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44422221853",
+    "jobs": [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44422221853/job/135217824970",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44422221853/job/135217824870"
+    ]
+  },
+  "root": {
+    "delta": { "index.mjs": 966, "index.cjs": 1007 },
+    "ceiling": { "index.mjs": 1531767, "index.cjs": 1464852 }
+  },
+  "reason": "Per-creation named-key selection and guarded value updates ship in the web-sdk root. SQLite and PostgreSQL canonical CI agree on the aggregate gzip -9 bytes. No non-root ceiling moves."
+};
+
 export const approvedLedgerRows: Record<string, unknown> = {
   phase2Ratchet: approvedPhase2,
   fixRequiredRatchet: approvedFixRequiredRatchet,
@@ -3757,6 +3780,7 @@ export const approvedLedgerRows: Record<string, unknown> = {
   tc3243SdkOwnsBusyRetryRoot: approvedTc3243SdkOwnsBusyRetryRoot,
   tc3285SecretTypesRoot: approvedTc3285SecretTypesRoot,
   tc3284PerSecretRoot: approvedTc3284PerSecretRoot,
+  tc3284SecretIncarnationsRoot: approvedTc3284SecretIncarnationsRoot,
 };
 
 /** Only a git merge-base ledger may retain the pre-correction toolchain. */
@@ -4250,6 +4274,11 @@ export function validateLedger(value: Ledger, historicalBase = false): void {
       (!value.tc3285SecretTypesRoot ||
         JSON.stringify(value.tc3284PerSecretRoot) !== JSON.stringify(approvedTc3284PerSecretRoot))) {
     throw new Error("Only the exact TC-3284 per-secret root admission is approved.");
+  }
+  if (value.tc3284SecretIncarnationsRoot !== undefined &&
+      (!value.tc3284PerSecretRoot ||
+        JSON.stringify(value.tc3284SecretIncarnationsRoot) !== JSON.stringify(approvedTc3284SecretIncarnationsRoot))) {
+    throw new Error("Only the exact TC-3284 secret-incarnation root admission is approved.");
   }
 }
 

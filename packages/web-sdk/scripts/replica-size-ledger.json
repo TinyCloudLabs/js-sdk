@@ -3381,5 +3381,23 @@
       "ceiling": { "index.mjs": 1530801, "index.cjs": 1463845 }
     },
     "reason": "The named-key Secrets APIs and exact read delegation ship in the web-sdk root. SQLite and PostgreSQL canonical CI agree on the aggregate gzip -9 bytes. No non-root ceiling moves."
+  },
+  "tc3284SecretIncarnationsRoot": {
+    "label": "fresh named key per isolated secret creation (TC-3284)",
+    "ruling": "test-ruling: TC-858 ratchet row tc3284SecretIncarnationsRoot. Naomi approved the exact #1052 canonical CI root gzip bytes with no margin.",
+    "base": "991ddb560d494e0b61424bff2b2c7e28541e522b",
+    "sourceCommits": ["8bb1620601cdca888ca117fbe861740cd46f5bc7"],
+    "canonicalCI": {
+      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44422221853",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44422221853/job/135217824970",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44422221853/job/135217824870"
+      ]
+    },
+    "root": {
+      "delta": { "index.mjs": 966, "index.cjs": 1007 },
+      "ceiling": { "index.mjs": 1531767, "index.cjs": 1464852 }
+    },
+    "reason": "Per-creation named-key selection and guarded value updates ship in the web-sdk root. SQLite and PostgreSQL canonical CI agree on the aggregate gzip -9 bytes. No non-root ceiling moves."
   }
 }
