@@ -11,7 +11,7 @@ const { version } = JSON.parse(
   readFileSync(new URL("../package.json", import.meta.url), "utf-8")
 );
 import { theme } from "./output/theme.js";
-import { setJsonOutputRequested, shouldOutputJson, outputWarnings } from "./output/formatter.js";
+import { setJsonOutputRequested, outputWarnings } from "./output/formatter.js";
 import { ProfileManager } from "./config/profiles.js";
 import { configureShareCommandServices, registerShareCommand } from "./commands/share.js";
 import { createShareAuthorityAdapters } from "./share/adapters.js";
@@ -98,10 +98,6 @@ program.hook("preAction", async (hookedCommand, actionCommand) => {
     aboutPending = { signedIn };
   }
 
-  // Config guard — warn if not configured for auth-required commands
-  const commandName = hookedCommand.name();
-  const isRootCommand = hookedCommand === program;
-  const fullCommand = fullCommandName(hookedCommand);
   setDiagnosticCommandContext({
     command: fullCommandName(actionCommand),
     args: process.argv.slice(2),
@@ -109,25 +105,6 @@ program.hook("preAction", async (hookedCommand, actionCommand) => {
     cliVersion: version,
   });
   commandStartedAt = Date.now();
-  const skipGuard = isRootCommand || ["init", "doctor", "completion", "help", "upgrade", "status"].includes(commandName) ||
-                    fullCommand === "profile create" || fullCommand === "registry show";
-  if (!skipGuard && !opts.quiet && !shouldOutputJson()) {
-    try {
-      const config = await ProfileManager.getConfig();
-      const profileName = opts.profile || config.defaultProfile;
-      const hasProfile = await ProfileManager.profileExists(profileName);
-      if (!hasProfile) {
-        process.stderr.write(theme.warn("⚠ No profile configured.") + " " + theme.muted(`Run: ${CLI_NAME} init`) + "\n\n");
-      } else {
-        const key = await ProfileManager.getKey(profileName);
-        if (!key) {
-          process.stderr.write(theme.warn("⚠ No key found.") + " " + theme.muted(`Run: ${CLI_NAME} init`) + "\n\n");
-        }
-      }
-    } catch {
-      // Config dir doesn't exist yet — that's fine, commands will handle it
-    }
-  }
 });
 
 program.hook("postAction", async (_hookedCommand, actionCommand) => {
