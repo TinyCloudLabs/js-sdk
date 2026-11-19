@@ -197,6 +197,8 @@ export function kvSpaceProbe(
   permissions: readonly PermissionEntry[] | undefined,
   restore: (ctx: ProfileSessionContext) => Promise<ProfileSessionRestore> = restoreProfileSessionNode,
   spaceId?: string,
+  /** Read `spaceId` through the node's own space when it is the node's primary (or the primary is unknown), and through `space(spaceId)` otherwise. */
+  ownSpaceThroughNode = false,
 ): () => Promise<SpaceProbeResult> {
   const target = readTarget(permissions);
   const sql = permissions?.find(p => (p.service === "tinycloud.sql" || p.service === "sql") && p.actions.some(a => a === "read" || a === "tinycloud.sql/read") && p.path !== "" && !p.path.endsWith("/"));
@@ -205,7 +207,9 @@ export function kvSpaceProbe(
     if (!target && !sql) return "unreadable";
     restored ??= await restore(ctx);
     if ("unavailable" in restored) return "unreadable";
-    const kv = spaceId ? restored.node.space(spaceId).kv : restored.node.kv;
+    const primary = restored.node.spaceId;
+    const scoped = Boolean(spaceId) && (!ownSpaceThroughNode || (primary !== undefined && normalizePkhIdentifier(spaceId!) !== normalizePkhIdentifier(primary)));
+    const kv = scoped ? restored.node.space(spaceId!).kv : restored.node.kv;
     const result = target
       ? target.op === "list" ? await kv.list({ prefix: target.prefix, limit: 1 }) : await kv.get(target.key)
       : await restored.node.sqlForSpace(spaceId ?? restored.node.spaceId!).db(sql!.path).query("SELECT 1");
@@ -247,7 +251,7 @@ export async function ensureSpaceSetup(
   }
   const report = spaceSetupReport(delegation);
   if (!report) return;
-  // Probe the space this delegation was signed for, not the profile's primary.
+  // Probe the space this delegation was signed for, not the profile's primary; a node's own space is read through the node itself.
   const spaceId = typeof delegation.spaceId === "string" ? delegation.spaceId : undefined;
-  await awaitSpaceSetup(report, { probe: kvSpaceProbe(ctx, permissions, restore, spaceId), ...(timeoutMs === undefined ? {} : { timeoutMs }) });
+  await awaitSpaceSetup(report, { probe: kvSpaceProbe(ctx, permissions, restore, spaceId, true), ...(timeoutMs === undefined ? {} : { timeoutMs }) });
 }
