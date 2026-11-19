@@ -1,20 +1,26 @@
+import { constants as fsConstants } from "node:fs";
 import { createReadStream } from "node:fs";
+import { chmod, lstat, mkdir, open, rm } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { join } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { stderr, stdin } from "node:process";
 import { Command } from "commander";
 import { CONFIG_DIR } from "../config/constants.js";
 import { CLIError, handleError } from "../output/errors.js";
-import { clearDiagnosticLogs, readDiagnosticLogs, redactDiagnosticLog } from "../lib/diagnostic-logs.js";
+import { BUG_REPORT_REVIEW_DIR_NAME, clearDiagnosticLogs, readDiagnosticLogs, redactDiagnosticLog } from "../lib/diagnostic-logs.js";
 
 const MAX_BODY_BYTES = 256 * 1024;
 const MAX_CONTENT_BYTES = 128 * 1024;
 const ATTACHMENT_URL = "https://feedback.tinycloud.xyz/reports";
+const REVIEW_HASH_PATTERN = /^[0-9a-f]{32}$/;
 
 type BugReportDependencies = {
   root?: string;
   attachmentUrl?: string;
   fetchImpl?: typeof fetch;
-  confirm?: (summary: string, content: string) => Promise<boolean>;
+  confirm?: (summary: string, content: string, reportId: string) => Promise<boolean>;
+  interactive?: boolean;
   write?: (text: string) => void;
   sleep?: (milliseconds: number) => Promise<void>;
   handleError?: (error: unknown) => Promise<never>;
@@ -55,15 +61,10 @@ export async function confirmUpload(summary: string, content: string, reportId: 
   const write = io?.write ?? ((text: string) => { stderr.write(text); });
   const question = io?.question ?? (() => prompt!.question(""));
   try {
-    while (true) {
-      write(`${summary}\nSend this CLI log to report ${reportId}? Type v to view it first. [y/N/v] `);
-      const answer = (await question()).trim().toLowerCase();
-      if (answer === "v") {
-        write(`\n--- CLI log ---\n${content}\n--- end CLI log ---\n`);
-        continue;
-      }
-      return /^y(?:es)?$/i.test(answer);
-    }
+    write(`\n--- CLI log ---\n${content}\n--- end CLI log ---\n`);
+    write(`${summary}\nSend this CLI log to report ${reportId}? [y/N] `);
+    const answer = (await question()).trim().toLowerCase();
+    return /^y(?:es)?$/i.test(answer);
   } finally {
     prompt?.close();
     if (input && input !== stdin) input.destroy();
@@ -91,33 +92,86 @@ function attachmentError(status: number, code: string): CLIError {
   return new CLIError(`BUG_REPORT_${code.toUpperCase()}`, messages[code] ?? `The CLI log upload was rejected (${code}).`, undefined, { status });
 }
 
-async function attachLogs(reportId: string, tokenStdin: boolean, dependencies: BugReportDependencies): Promise<void> {
-  const output = dependencies.write ?? ((text: string) => { stderr.write(text); });
-  if (!/^[0-9A-HJKMNP-TV-Z]{26}$/.test(reportId)) throw new CLIError("BUG_REPORT_ID_INVALID", "That isn't a report ID. Use the 26-character ID the bug report returned.");
-  const token = await readToken(tokenStdin);
-  const raw = await readDiagnosticLogs(dependencies.root ?? CONFIG_DIR);
-  if (!raw.trim()) throw new CLIError("BUG_REPORT_LOGS_MISSING", "There's no recent CLI log to attach.");
-  let source = tailBytes(raw, MAX_CONTENT_BYTES);
-  let redacted = redactDiagnosticLog(source);
-  const payload = { type: "cli-log", content: redacted.text, name: "tc-debug.log" };
-  if (!payload.content.trim()) throw new CLIError("BUG_REPORT_LOGS_EMPTY", "Nothing is left to attach after sensitive values were removed.");
-  let body = JSON.stringify(payload);
-  while (Buffer.byteLength(body) > MAX_BODY_BYTES) {
-    const smaller = tailBytes(source, Math.floor(Buffer.byteLength(source) * 0.8));
-    if (!smaller || smaller === source) throw new CLIError("BUG_REPORT_LOGS_TOO_LARGE", "The CLI log is too big to attach, even after trimming.");
-    source = smaller;
-    redacted = redactDiagnosticLog(source);
-    payload.content = redacted.text;
-    body = JSON.stringify(payload);
-  }
-  const bytes = Buffer.byteLength(body);
-  const lines = payload.content.split(/\r?\n/).filter(Boolean).length;
-  const lineLabel = lines === 1 ? "line" : "lines";
-  const valueLabel = redacted.count === 1 ? "value" : "values";
-  const summary = `Report ${reportId}: CLI log, ${bytes} bytes, ${lines} ${lineLabel}, ${redacted.count} ${valueLabel} hidden.`;
-  const confirmed = await (dependencies.confirm ?? confirmUpload)(summary, payload.content, reportId);
-  if (!confirmed) { output("Nothing was sent.\n"); return; }
+function reviewHash(reportId: string, body: Buffer): string {
+  return createHash("sha256").update("bug-report-attach\0").update(reportId).update("\0").update(body).digest("hex").slice(0, 32);
+}
 
+function reviewedLogPath(root: string, reportId: string, hash: string): string {
+  return join(root, BUG_REPORT_REVIEW_DIR_NAME, `${reportId}-${hash}.json`);
+}
+
+// Writes the exact request bytes so the owner can read them and `--confirm` can
+// upload those same bytes later; owner-only, like the diagnostic log itself.
+async function saveReviewedLog(root: string, reportId: string, body: Buffer): Promise<{ path: string; hash: string }> {
+  const hash = reviewHash(reportId, body);
+  const directory = join(root, BUG_REPORT_REVIEW_DIR_NAME);
+  await mkdir(directory, { recursive: true, mode: 0o700 });
+  const directoryInfo = await lstat(directory);
+  if (directoryInfo.isSymbolicLink() || !directoryInfo.isDirectory()) throw new Error("Couldn't save the CLI log on this computer, so nothing was sent. Try again.");
+  await chmod(directory, 0o700);
+  const path = reviewedLogPath(root, reportId, hash);
+  const file = await open(path, fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_TRUNC | fsConstants.O_NOFOLLOW, 0o600);
+  try {
+    await file.chmod(0o600);
+    await file.writeFile(body);
+  } finally {
+    await file.close();
+  }
+  return { path, hash };
+}
+
+function missingReviewError(): CLIError {
+  return new CLIError("BUG_REPORT_REVIEW_MISSING", "There's no reviewed CLI log with that hash, so nothing was sent.");
+}
+
+function reviewReadError(): CLIError {
+  return new CLIError("BUG_REPORT_REVIEW_READ_FAILED", "Couldn't read the saved CLI log, so nothing was sent.");
+}
+
+// Returns the saved request bytes only when they still hash to the reviewed identity.
+async function readReviewedLog(root: string, reportId: string, hash: string): Promise<Buffer> {
+  if (!REVIEW_HASH_PATTERN.test(hash)) throw missingReviewError();
+  const directory = join(root, BUG_REPORT_REVIEW_DIR_NAME);
+  try {
+    const directoryInfo = await lstat(directory);
+    if (directoryInfo.isSymbolicLink() || !directoryInfo.isDirectory()) throw missingReviewError();
+  } catch (error) {
+    if (error instanceof CLIError) throw error;
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ENOENT" || code === "ENOTDIR") throw missingReviewError();
+    throw reviewReadError();
+  }
+  const path = reviewedLogPath(root, reportId, hash);
+  let file;
+  try {
+    file = await open(path, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW | fsConstants.O_NONBLOCK);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ENOENT" || code === "ELOOP" || code === "ENOTDIR") throw missingReviewError();
+    throw reviewReadError();
+  }
+  let body: Buffer;
+  try {
+    const details = await file.stat();
+    if (!details.isFile()) throw missingReviewError();
+    // Windows reports 0o666/0o444 for files, so only POSIX can check owner-only mode; the report-bound hash still detects edits there.
+    if (process.platform !== "win32" && (details.mode & 0o777) !== 0o600) {
+      throw new CLIError("BUG_REPORT_REVIEW_READ_FAILED", "The saved CLI log's permissions changed, so nothing was sent.");
+    }
+    body = await file.readFile();
+  } catch (error) {
+    if (error instanceof CLIError) throw error;
+    throw reviewReadError();
+  } finally {
+    await file.close();
+  }
+  if (reviewHash(reportId, body) !== hash) {
+    throw new CLIError("BUG_REPORT_REVIEW_CHANGED", "The CLI log changed since it was saved for review, so nothing was sent.");
+  }
+  return body;
+}
+
+async function sendAttachment(reportId: string, token: string, body: string | Buffer, output: (text: string) => void, dependencies: BugReportDependencies): Promise<void> {
   const fetchImpl = dependencies.fetchImpl ?? fetch;
   const endpoint = dependencies.attachmentUrl ?? ATTACHMENT_URL;
   const sleep = dependencies.sleep ?? ((milliseconds: number) => new Promise<void>((resolve) => {
@@ -159,27 +213,78 @@ async function attachLogs(reportId: string, tokenStdin: boolean, dependencies: B
   }
 }
 
+async function attachLogs(reportId: string, tokenStdin: boolean, confirmHash: string | undefined, dependencies: BugReportDependencies): Promise<void> {
+  const output = dependencies.write ?? ((text: string) => { stderr.write(text); });
+  const root = dependencies.root ?? CONFIG_DIR;
+  if (!/^[0-9A-HJKMNP-TV-Z]{26}$/.test(reportId)) throw new CLIError("BUG_REPORT_ID_INVALID", "That isn't a report ID. Use the 26-character ID the bug report returned.");
+  if (confirmHash !== undefined) {
+    const reviewed = await readReviewedLog(root, reportId, confirmHash);
+    const token = await readToken(tokenStdin);
+    await sendAttachment(reportId, token, reviewed, output, dependencies);
+    // Uploaded: drop the staged copy so it can't linger or be sent twice.
+    await rm(reviewedLogPath(root, reportId, confirmHash), { force: true }).catch(() => undefined);
+    return;
+  }
+  const raw = await readDiagnosticLogs(root);
+  if (!raw.trim()) throw new CLIError("BUG_REPORT_LOGS_MISSING", "There's no recent CLI log to attach.");
+  let source = tailBytes(raw, MAX_CONTENT_BYTES);
+  let redacted = redactDiagnosticLog(source);
+  const payload = { type: "cli-log", content: redacted.text, name: "tc-debug.log" };
+  if (!payload.content.trim()) throw new CLIError("BUG_REPORT_LOGS_EMPTY", "Nothing is left to attach after sensitive values were removed.");
+  let body = JSON.stringify(payload);
+  while (Buffer.byteLength(body) > MAX_BODY_BYTES) {
+    const smaller = tailBytes(source, Math.floor(Buffer.byteLength(source) * 0.8));
+    if (!smaller || smaller === source) throw new CLIError("BUG_REPORT_LOGS_TOO_LARGE", "The CLI log is too big to attach, even after trimming.");
+    source = smaller;
+    redacted = redactDiagnosticLog(source);
+    payload.content = redacted.text;
+    body = JSON.stringify(payload);
+  }
+  const bytes = Buffer.byteLength(body);
+  const lines = payload.content.split(/\r?\n/).filter(Boolean).length;
+  const lineLabel = lines === 1 ? "line" : "lines";
+  const valueLabel = redacted.count === 1 ? "value" : "values";
+  const summary = `Report ${reportId}: CLI log, ${bytes} bytes, ${lines} ${lineLabel}, ${redacted.count} ${valueLabel} hidden.`;
+  const review = dependencies.confirm ?? ((dependencies.interactive ?? stderr.isTTY) ? confirmUpload : undefined);
+  if (review) {
+    const confirmed = await review(summary, payload.content, reportId);
+    if (!confirmed) { output("Nothing was sent.\n"); return; }
+    const token = await readToken(tokenStdin);
+    await sendAttachment(reportId, token, body, output, dependencies);
+    return;
+  }
+  // Non-interactive: stage the exact request bytes for the owner to read, send nothing.
+  let saved: { path: string; hash: string };
+  try {
+    saved = await saveReviewedLog(root, reportId, Buffer.from(body, "utf8"));
+  } catch {
+    throw new CLIError("BUG_REPORT_REVIEW_SAVE_FAILED", "Couldn't save the CLI log on this computer, so nothing was sent.");
+  }
+  output(`Nothing was sent. Saved the CLI log for report ${reportId} to ${saved.path} (${bytes} bytes, ${redacted.count} ${valueLabel} hidden). Review hash: ${saved.hash}\n`);
+}
+
 export function registerBugReportCommand(program: Command, dependencies: BugReportDependencies = {}): void {
   const output = dependencies.write ?? ((text: string) => { stderr.write(text); });
   const root = dependencies.root ?? CONFIG_DIR;
   const command = program.command("bug-report")
-    .description("Attach your recent CLI log to a bug report, with sensitive values removed where found")
+    .description("Attach your recent CLI log to a bug report after you've reviewed it, with sensitive values removed where found")
     .option("--attach <report-id>", "Attach your recent CLI log to this report")
+    .option("--confirm <hash>", "Send the CLI log you reviewed, identified by the hash shown when it was saved")
     .option("--token-stdin", "Read the attachment token from standard input")
-    .option("--clear-logs", "Delete the CLI log saved on this computer");
-  command.addHelpText("after", "\nThe CLI keeps a log of recent commands on this computer (up to 1 MB, readable only by your user account), with sensitive values removed where found. To stop recording, set TINYCLOUD_CLI_LOGS=0 or pass --no-diagnostic-logs. To delete it, run tinycloud bug-report --clear-logs.\n");
+    .option("--clear-logs", "Delete the CLI log and any saved review copies on this computer");
+  command.addHelpText("after", "\nThe CLI keeps a log of recent commands on this computer (up to 1 MB, readable only by your user account), with sensitive values removed where found. In a terminal, the redacted log is shown before the send prompt. Without a terminal, the exact upload is saved with owner-only access and a review hash; nothing is sent until you pass that hash to --confirm, and the saved copy is deleted once it is sent. To stop recording, set TINYCLOUD_CLI_LOGS=0 or pass --no-diagnostic-logs. To delete the log and any saved review copies, run tinycloud bug-report --clear-logs.\n");
   command.action(async (options) => {
     try {
-      if (options.clearLogs && options.attach) {
+      if (options.clearLogs && (options.attach || options.confirm)) {
         throw new CLIError("BUG_REPORT_OPTIONS_CONFLICT", "Choose either --attach or --clear-logs; the CLI log was not changed.");
       }
       if (options.clearLogs) {
         await clearDiagnosticLogs(root);
-        output("Deleted the CLI log on this computer.\n");
+        output("Deleted the CLI log and any saved review copies on this computer.\n");
         return;
       }
       if (!options.attach) throw new CLIError("BUG_REPORT_USAGE", "Use `tinycloud bug-report --attach <report-id>` or `tinycloud bug-report --clear-logs`.");
-      await attachLogs(options.attach, options.tokenStdin === true, dependencies);
+      await attachLogs(options.attach, options.tokenStdin === true, options.confirm, dependencies);
     } catch (error) { return (dependencies.handleError ?? handleError)(error); }
   });
 }
