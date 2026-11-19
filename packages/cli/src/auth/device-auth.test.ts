@@ -258,6 +258,7 @@ describe("OpenKey device authorization", () => {
       [{ service: "tinycloud.kv", space: "secrets", path: "vault/secrets/scoped/team/KEY", actions: ["tinycloud.kv/get"] }],
       [{ service: "tinycloud.kv", space: "secrets", path: "vault/secrets/key", actions: ["tinycloud.kv/get"] }],
       [{ service: "tinycloud.kv", space: "secrets", path: `vault/secrets/K${"A".repeat(64)}`, actions: ["tinycloud.kv/get"] }],
+      [{ service: "tinycloud.kv", space: "secrets", path: "vault/secrets/", actions: ["tinycloud.kv/list", "tinycloud.kv/get"] }],
     ];
     for (const permissions of forbidden) {
       const openkey = openKeyRelayStub(() => response({}), { start: response({ error: "invalid_scope" }, 400) });
@@ -304,6 +305,22 @@ describe("OpenKey device authorization", () => {
     expect(openkey.startBodies[0]?.permissions).toEqual(named);
     expect(result.declined).toEqual([]);
     expect(result.spaceId).toBe(secretsSpace);
+  });
+
+  test("starts device authorization for a named secret with the list-only grant on the secrets prefix", async () => {
+    const secretsSpace = wasm.makeSpaceId(address, 1, "secrets");
+    const network = `urn:tinycloud:encryption:${ownerDid}:default`;
+    const signedEntries: PermissionEntry[] = [
+      { service: "tinycloud.capabilities", space: "secrets", path: "", actions: ["tinycloud.capabilities/read"] },
+      { service: "tinycloud.kv", space: "secrets", path: "vault/secrets/API_KEY", actions: ["tinycloud.kv/get"] },
+      { service: "tinycloud.kv", space: "secrets", path: "vault/secrets/", actions: ["tinycloud.kv/list"] },
+    ];
+    const named: PermissionEntry[] = [...signedEntries, defaultDecrypt];
+    const signedDecrypt: PermissionEntry = { service: "encryption", space: "encryption", path: network, actions: ["tinycloud.encryption/decrypt"] };
+    const openkey = openKeyRelayStub((start, id) => approved(start, id, { signed: [...signedEntries, signedDecrypt], binding: named, sessionSpaceId: secretsSpace }));
+    const result = await acquire(openkey, { permissions: named });
+    expect(openkey.startBodies[0]?.permissions).toEqual(named);
+    expect(result.declined).toEqual([]);
   });
 
   test("reports capabilities the owner unchecked and keeps only the signed subset, including the required capability read", async () => {
@@ -550,6 +567,23 @@ describe("device login persistence", () => {
     const stored = await ProfileManager.getSession("agent") as { permissions?: PermissionEntry[] } | null;
     expect(stored?.permissions?.filter((permission) => permission.path.toLowerCase() === network.toLowerCase()))
       .toEqual([expect.objectContaining({ actions: ["tinycloud.encryption/decrypt"] })]);
+  });
+
+  test("sends one default-network decrypt when a hand-written manifest repeats it", async () => {
+    await ProfileManager.setKey("agent", key);
+    await ProfileManager.setProfile("agent", { name: "agent", host: NODE, chainId: 1, spaceName: "default", did: sessionDid, createdAt: "2026-10-01T00:00:00.000Z" });
+    const network = `urn:tinycloud:encryption:${ownerDid}:default`;
+    const defaultDecrypt: PermissionEntry = { service: "tinycloud.encryption", space: "default", path: "", actions: ["tinycloud.encryption/decrypt"] };
+    const once = [...requested, defaultDecrypt];
+    const openkey = openKeyRelayStub((start, id) => approved(start, id, {
+      signed: [...requested, { service: "encryption", space: "encryption", path: network, actions: ["tinycloud.encryption/decrypt"] }],
+      binding: once,
+    }));
+
+    await loginWithDeviceAuthorization({ profileName: "agent", nodeOrigin: NODE, shareOrigin: SHARE, permissions: [...once, { ...defaultDecrypt }], fetchFn: openkey.fetchFn, emitInstructions: () => undefined, wait: async () => undefined });
+
+    const sent = openkey.startBodies[0]?.permissions as PermissionEntry[];
+    expect(sent.filter((entry) => entry.service === "tinycloud.encryption")).toHaveLength(1);
   });
 
   test("records whether the approving key is the account's primary key and warns on stderr when it is not (TC-705)", async () => {

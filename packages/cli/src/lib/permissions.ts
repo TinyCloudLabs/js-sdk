@@ -40,7 +40,7 @@ import { ProfileManager } from "../config/profiles.js";
 import { CLIError } from "../output/errors.js";
 import { ExitCode } from "../config/constants.js";
 import { resolveSpaceUri } from "./space.js";
-import { deviceRefusal, deviceRefusalMessage, isDeviceDefaultDecrypt, isRawEncryptionPermission, isSharePublishingPrefixDecrypt } from "./raw-encryption.js";
+import { DEVICE_SECRETS_LIST_PATH, deviceRefusal, deviceRefusalMessage, isDeviceDefaultDecrypt, isRawEncryptionPermission, isSharePublishingPrefixDecrypt } from "./raw-encryption.js";
 import { canonicalOwnerDid } from "./owner-did.js";
 import { assertNoCaveatLimits } from "./caveat-refusal.js";
 import { SHARE_PUBLISHING_MANIFEST, SHARE_PUBLISHING_MANIFEST_REF } from "../share/publishing-manifest.js";
@@ -584,6 +584,11 @@ async function secretPermissionsFromAppManifest(
   const needsDecrypt = permissions.some((permission) =>
     permission.actions.includes("tinycloud.kv/get")
   );
+  const listing = permissions.find((permission) => permission.actions.includes("tinycloud.kv/list"));
+  if (device && listing !== undefined) {
+    // A named grant that lists is OpenKey's list-only grant on the whole secrets prefix (names, no values), so `secrets list` works.
+    permissions.push({ service: "tinycloud.kv", space: listing.space, path: DEVICE_SECRETS_LIST_PATH, actions: ["tinycloud.kv/list"] });
+  }
   if (needsDecrypt) {
     // OpenKey's device flow takes the default-network decrypt entry as written and signs the approving owner's own network.
     permissions.push(device

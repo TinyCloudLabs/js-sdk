@@ -56,15 +56,40 @@ function isCapabilitiesRead(entry: Pick<PermissionEntry, "service" | "path" | "a
     entry.actions.length === 1 && entry.actions[0] === "tinycloud.capabilities/read" && !entry.caveats?.length;
 }
 
+/** The device list-only grant on the whole secrets prefix: names only, never with get or put on the prefix. */
+export const DEVICE_SECRETS_LIST_PATH = "vault/secrets/";
+
+export function isDeviceSecretsList(entry: Pick<PermissionEntry, "service" | "path" | "actions" | "caveats">): boolean {
+  return entry.service === "tinycloud.kv" && entry.path === DEVICE_SECRETS_LIST_PATH &&
+    entry.actions.length === 1 && entry.actions[0] === "tinycloud.kv/list" && !entry.caveats?.length;
+}
+
+/**
+ * `entries` without a repeated default-network decrypt: OpenKey's device flow takes exactly one, so an identical
+ * second one (a hand-written manifest) is dropped.
+ */
+export function dedupeDeviceDecrypt<T extends Pick<PermissionEntry, "service" | "space" | "path" | "actions" | "caveats">>(entries: readonly T[]): T[] {
+  let seen = false;
+  return entries.filter((entry) => {
+    if (!isDeviceDefaultDecrypt({ ...entry, space: entry.space ?? "" })) return true;
+    const repeat = seen;
+    seen = true;
+    return !repeat;
+  });
+}
+
 /**
  * The first entry OpenKey's device flow refuses: any entry in a secrets space ("secrets") other than one named
- * secret (`isDeviceNamedSecret`) or the space's capability read, or any encryption entry other than decrypt on the
- * owner's default network. OpenKey admits exactly that one encryption entry
- * (openkey apps/api/src/services/device-authorization.ts, deviceRequestPermissions).
+ * secret (`isDeviceNamedSecret`), the whole-prefix list (`isDeviceSecretsList`) or the space's capability read, or
+ * any encryption entry other than decrypt on the owner's default network. OpenKey admits exactly that one
+ * encryption entry (openkey apps/api/src/services/device-authorization.ts, deviceRequestPermissions).
  */
 export function deviceRefusal(entries: readonly PermissionEntry[]): PermissionEntry | "secrets" | undefined {
   for (const entry of entries) {
-    if ((entry.space === "secrets" || entry.space?.endsWith(":secrets") === true) && !isDeviceNamedSecret(entry) && !isCapabilitiesRead(entry)) return "secrets";
+    if (
+      (entry.space === "secrets" || entry.space?.endsWith(":secrets") === true) &&
+      !isDeviceNamedSecret(entry) && !isDeviceSecretsList(entry) && !isCapabilitiesRead(entry)
+    ) return "secrets";
     if (entry.service === ENCRYPTION_PERMISSION_SERVICE && !isDeviceDefaultDecrypt(entry)) return entry;
   }
   return undefined;

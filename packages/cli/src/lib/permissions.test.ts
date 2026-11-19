@@ -516,6 +516,21 @@ describe("loadManifestPermissions", () => {
     ]);
   });
 
+  test("device manifest naming a secret it may list also asks for the list-only grant on the secrets prefix, once", async () => {
+    activeProfile = {
+      name: "agent", host: "https://node.tinycloud.test", chainId: 1,
+      spaceName: "default", did: "did:key:z6MkSession", createdAt: "2026-06-01T00:00:00.000Z",
+    };
+    const source = manifestSource({ app_id: "xyz.tinycloud.agent", secrets: { OPENAI_API_KEY: ["read", "list"], DB_URL: ["list"] } });
+    const permissions = await loadManifestPermissions(source, "agent", { allowLogicalSpaces: true, device: true });
+    expect(permissions.filter((permission) => permission.path === "vault/secrets/")).toEqual([
+      { service: "tinycloud.kv", space: "secrets", path: "vault/secrets/", actions: ["tinycloud.kv/list"] },
+    ]);
+    expect(permissions.filter((permission) => permission.path === "vault/secrets/OPENAI_API_KEY")).toEqual([
+      { service: "tinycloud.kv", space: "secrets", path: "vault/secrets/OPENAI_API_KEY", actions: ["tinycloud.kv/get", "tinycloud.kv/list"] },
+    ]);
+  });
+
   test("device manifest naming a secret it may delete, or a scoped one, is refused", async () => {
     activeProfile = {
       name: "agent", host: "https://node.tinycloud.test", chainId: 1,
