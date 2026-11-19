@@ -39,7 +39,8 @@ describe("program name", () => {
     mkdirSync(config, { recursive: true, mode: 0o700 });
     const { version: installed } = JSON.parse(readFileSync(resolve(PACKAGE_DIR, "package.json"), "utf-8")) as { version: string };
     const newer = installed.replace(/\d+$/, (build) => String(Number(build) + 1));
-    writeFileSync(join(config, "update-check.json.beta"), JSON.stringify({
+    const channel = /^[^-+]+-([0-9A-Za-z-]+)/.exec(installed)?.[1] ?? "latest";
+    writeFileSync(join(config, `update-check.json.${channel}`), JSON.stringify({
       checkedAt: Date.now(),
       version: newer,
     }), { mode: 0o600 });

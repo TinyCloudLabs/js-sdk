@@ -26,6 +26,7 @@ const updateCheck = isAutoUpdateEnabled(process.env)
   : Promise.resolve(null);
 
 registerUpdateNoticeFinalizer(async () => {
+  if (program.opts().quiet === true) return;
   const available = await updateCheck;
   if (!available) return;
   await new Promise<void>((resolve) => process.stdout.write("", () => resolve()));

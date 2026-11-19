@@ -20,7 +20,7 @@ with `tinycloud --version`.
 
 ## Update checks
 
-The CLI checks the npm registry for a newer release at most once a day. When one is available, it prints the update command on stderr after the command finishes. Stable installs follow npm's `latest` tag; prerelease installs follow their matching channel. Set `TC_NO_AUTO_UPDATE=1` or `CI=true` to turn the check off.
+The CLI checks the npm registry for a newer release at most once a day. When one is available, it prints the update command on stderr after the command finishes. Stable installs follow npm's `latest` tag; prerelease installs follow their matching channel. The first command of each day can wait up to 3 seconds at exit for the registry check; a failed or slow check never fails the command. `--quiet` hides the notice. Set `TC_NO_AUTO_UPDATE=1` or `CI=true` to turn the check off.
 
 ## Agent skills
 
