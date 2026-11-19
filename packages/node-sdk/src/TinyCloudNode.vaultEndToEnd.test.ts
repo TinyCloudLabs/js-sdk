@@ -117,6 +117,22 @@ test("ordinary data keeps the routed production name", async () => {
   expect(origins(invocations(attempts))).toEqual(new Set([PROXIED]));
 });
 
+test("listing the whole key space, which names vault entries, goes only to the TEE origin", async () => {
+  const { node, attempts } = await fixture();
+  await node.kv.list();
+  await node.kv.list({ prefix: "" });
+  expect(invocations(attempts).length).toBeGreaterThanOrEqual(2);
+  expect(origins(attempts)).toEqual(new Set([TEE]));
+  expect(attempts.every((attempt) => attempt.redirect === "error")).toBe(true);
+});
+
+test("listing an ordinary prefix keeps the routed production name", async () => {
+  const { node, attempts } = await fixture();
+  await node.kv.list({ prefix: "notes/" });
+  expect(invocations(attempts).length).toBeGreaterThanOrEqual(1);
+  expect(origins(invocations(attempts))).toEqual(new Set([PROXIED]));
+});
+
 test("a TEE failure fails the vault call and never reaches the proxied name", async () => {
   const { node, attempts } = await fixture({ teeDown: true });
   const result = await node.vault.get("api-key", { source: "network" });
@@ -130,7 +146,7 @@ test("a TEE failure fails the vault call and never reaches the proxied name", as
   expect(origins(attempts)).toEqual(new Set([TEE]));
 });
 
-test("grants are posted to the TEE origin when they name vault data or cannot be read, and keep their route otherwise", async () => {
+test("grants are posted to the TEE origin when they name or cover vault data or cannot be read, and keep their route otherwise", async () => {
   const posted: string[] = [];
   const redirects: Array<RequestRedirect | undefined> = [];
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -138,7 +154,8 @@ test("grants are posted to the TEE origin when they name vault data or cannot be
     redirects.push(init?.redirect);
     return Response.json({ activated: [], skipped: [] });
   }) as typeof fetch;
-  const ordinary = await signedRestorableSession({ abilities: KV_ABILITIES });
+  const ordinary = await signedRestorableSession({ abilities: { kv: { "notes/": ["tinycloud.kv/get"] } } });
+  const wholeKeySpace = await signedRestorableSession({ abilities: KV_ABILITIES });
   const secrets = await signedRestorableSession({ abilities: KV_ABILITIES, ownedSpaceAbilities: { secrets: KV_ABILITIES } });
   const vaultPath = await signedRestorableSession({ abilities: { kv: { "vault/api-key": ["tinycloud.kv/get"] } } });
   const unreadable = { Authorization: "not-a-signed-grant" };
@@ -148,11 +165,31 @@ test("grants are posted to the TEE origin when they name vault data or cannot be
     delegateDID: NODE_DID,
   });
 
-  for (const header of [ordinary.delegationHeader, secrets.delegationHeader, vaultPath.delegationHeader, unreadable]) {
+  for (const header of [ordinary.delegationHeader, wholeKeySpace.delegationHeader, secrets.delegationHeader, vaultPath.delegationHeader, unreadable]) {
     await importOn(header);
   }
-  expect(posted).toEqual([PROXIED, TEE, TEE, TEE]);
-  expect(redirects).toEqual(["error", "error", "error", "error"]);
+  expect(posted).toEqual([PROXIED, TEE, TEE, TEE, TEE]);
+  expect(redirects).toEqual(["error", "error", "error", "error", "error"]);
+});
+
+test("under a session that grants the whole key space, every vault invocation and every grant touching vault goes only to the TEE origin", async () => {
+  const { node, attempts } = await fixture();
+  await node.vault.get("api-key", { source: "network" });
+  await node.vault.list();
+  await node.kv.get("vault/api-key");
+  await node.kv.list();
+  const wholeKeySpace = await signedRestorableSession({ abilities: KV_ABILITIES });
+  const vaultPath = await signedRestorableSession({ abilities: { kv: { "vault/api-key": ["tinycloud.kv/get"] } } });
+  for (const grant of [wholeKeySpace, vaultPath]) {
+    await importPortableDelegation(globalThis.fetch, PROXIED, {
+      cid: "bafy-grant", delegationHeader: grant.delegationHeader, ownerAddress: grant.address, chainId: 1,
+      spaceId: grant.spaceId, path: "", actions: ["tinycloud.kv/get"], expiry: new Date(Date.now() + 60_000),
+      delegateDID: NODE_DID,
+    });
+  }
+  expect(invocations(attempts).length).toBeGreaterThanOrEqual(4);
+  expect(attempts.filter((attempt) => new URL(attempt.url).pathname === "/delegate").length).toBe(2);
+  expect(origins(attempts)).toEqual(new Set([TEE]));
 });
 
 test("a self-hosted node keeps its own origin for vault traffic", async () => {

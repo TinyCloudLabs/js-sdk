@@ -146,6 +146,7 @@ export {
   routeResourceRequest,
   routingResourceOf,
   isVaultResourceUri,
+  namesVaultResourceUri,
   verifyResourceDestination,
   NodeNotRespondingError,
   NodeIdentityMismatchError,

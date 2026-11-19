@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { ResourceNotRoutedError, isVaultResourceUri, routingResourceOf, type FetchFunction, type FetchResponse, type ResourceAccess, type ResourceTransport } from "@tinycloud/sdk-services";
+import { ResourceNotRoutedError, isVaultResourceUri, namesVaultResourceUri, routingResourceOf, type FetchFunction, type FetchResponse, type ResourceAccess, type ResourceTransport } from "@tinycloud/sdk-services";
 import type { DelegatedResource } from "./types";
 import { createCompactPolicyDescendant, parseSignedCompactUcanAttenuation } from "../policy/unified";
 import { httpResponseError } from "../http-error";
@@ -50,8 +50,9 @@ export async function verifiedDelegationRouting(authorization: string, cid: stri
 }
 
 /**
- * Whether a signed grant names vault data, so its activation or import may only
- * use the node's end-to-end origin. Unreadable grants count as vault grants.
+ * Whether a signed grant names or reaches vault data (a vault name, the `kv`
+ * root, a space root), so its activation or import may only use the node's
+ * end-to-end origin. Unreadable grants count as vault grants.
  * Routing only: this checks neither signature validity nor authority.
  */
 export async function delegationTouchesVault(authorization: string): Promise<boolean> {
@@ -59,8 +60,8 @@ export async function delegationTouchesVault(authorization: string): Promise<boo
     const attenuation = authorization.includes(".")
       ? parseSignedCompactUcanAttenuation(authorization).payload.att
       : (await parseSignedSiweCacao(authorization)).attenuation;
-    const uris = Object.keys(attenuation);
-    return uris.length === 0 || uris.some(isVaultResourceUri);
+    const entries = Object.entries(attenuation);
+    return entries.length === 0 || entries.some(([uri, abilities]) => isVaultResourceUri(uri, abilities));
   } catch {
     return true;
   }
@@ -68,8 +69,11 @@ export async function delegationTouchesVault(authorization: string): Promise<boo
 
 /**
  * Session form of {@link delegationTouchesVault}: a SIWE session's recap is
- * the attenuation its delegation carries (a SIWE without one names nothing);
- * without a SIWE, read the delegation. An unreadable recap counts as vault.
+ * the attenuation its delegation carries (a SIWE without one names nothing).
+ * A session's own grant is audienced to its session key, so the node cannot
+ * use it; it is classified by the vault names it carries, not by a broad `kv`
+ * root. Without a SIWE, read the delegation as a grant. An unreadable recap
+ * counts as vault.
  */
 export async function sessionTouchesVault(session: {
   readonly siwe?: string;
@@ -77,7 +81,7 @@ export async function sessionTouchesVault(session: {
 }): Promise<boolean> {
   if (!session.siwe) return delegationTouchesVault(session.delegationHeader.Authorization);
   try {
-    return Object.keys(extractRecapAttenuations(session.siwe)).some(isVaultResourceUri);
+    return Object.keys(extractRecapAttenuations(session.siwe)).some(namesVaultResourceUri);
   } catch {
     return true;
   }

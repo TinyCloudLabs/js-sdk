@@ -156,24 +156,68 @@ export function routingResourceOf(uri: string): string {
 }
 
 /**
- * Vault values and their names: the vault namespaces in any space, and the
- * whole `secrets` space (its root listing names every secret). Their traffic,
- * including grants that name them, may only use origins whose TLS terminates
- * inside the node (TC-2944). Accepts a signed resource URI or a bare space id.
+ * Vault values and their names: the vault namespaces in any space and the whole
+ * `secrets` space (its root listing names every secret). A path whose reach
+ * cannot be decided (`.`/`..` or empty segments, percent escapes) counts as
+ * naming vault data. A bare space id names vault data only for `secrets`.
+ *
+ * Reaching vault data from above is a second kind: the `kv` root of any space,
+ * and a space root carrying any ability other than the known space and
+ * capability ones. Listing or reading through such a resource returns vault
+ * entries, but a grant of it names none.
+ *
+ * Not vault: node requests (node-local names and the encryption network) and
+ * every other service of a space.
  */
-const VAULT_KV_PATH = /^kv\/(?:vault|keys|grants)(?:\/|$)/;
+const VAULT_KV_NAMESPACES: ReadonlySet<string> = new Set(["vault", "keys", "grants"]);
+const NON_KV_ABILITY = /^tinycloud\.(?:space|capabilities)\//;
 
-export function isVaultResourceUri(uri: string): boolean {
-  if (uri.startsWith("urn:tinycloud:encryption:")) return false;
+function abilityNamesOf(abilities: unknown): readonly string[] {
+  if (Array.isArray(abilities)) return abilities.map((ability) => typeof ability === "string" ? ability : "");
+  if (typeof abilities === "object" && abilities !== null) return Object.keys(abilities);
+  return [""];
+}
+
+function vaultReach(uri: string, abilities: unknown): "names" | "reaches" | undefined {
+  if (uri.startsWith("urn:tinycloud:encryption:")) return undefined;
   let resource: string;
   try {
     resource = routingResourceOf(uri);
   } catch {
-    return false;
+    return undefined;
   }
-  if (!resource.startsWith("tinycloud:")) return false;
-  if (resource.endsWith(":secrets")) return true;
-  return VAULT_KV_PATH.test(uri.slice(uri.indexOf(resource) + resource.length + 1));
+  if (!resource.startsWith("tinycloud:")) return undefined;
+  if (resource.endsWith(":secrets")) return "names";
+  // What follows the space id, without query or fragment: "/kv/vault/x", "/kv", "".
+  const rest = uri.slice(uri.indexOf(resource) + resource.length).split(/[?#]/, 1)[0]!;
+  if (rest === "" || rest === "/") {
+    return abilities !== undefined && abilityNamesOf(abilities).some((ability) => !NON_KV_ABILITY.test(ability)) ? "reaches" : undefined;
+  }
+  const segments = rest.replace(/^\//, "").split("/");
+  // `a//b`, `.`, `..` and escapes may be read differently by the node: assume the worst.
+  if (rest.startsWith("//") || rest.includes("%") || segments.some((segment, index) => segment === "." || segment === ".." || (segment === "" && index < segments.length - 1))) return "names";
+  if (segments[0] !== "kv") return undefined;
+  if (segments.length === 1 || (segments.length === 2 && segments[1] === "")) return "reaches";
+  return VAULT_KV_NAMESPACES.has(segments[1]!) ? "names" : undefined;
+}
+
+/**
+ * Whether a resource names or reaches vault data. Requests and grants that do
+ * either may only use origins whose TLS terminates inside the node (TC-2944).
+ * `abilities` (the names or the ability map attached to the URI) is read only
+ * for a space root, where the ability decides whether the grant reaches `kv`.
+ */
+export function isVaultResourceUri(uri: string, abilities?: unknown): boolean {
+  return vaultReach(uri, abilities) !== undefined;
+}
+
+/**
+ * Whether a resource names vault data. A session's own grant is classified by
+ * this: it is audienced to the session key, carries no vault data, and a broad
+ * `kv` root grant names no entry.
+ */
+export function namesVaultResourceUri(uri: string): boolean {
+  return vaultReach(uri, undefined) === "names";
 }
 
 function invocationResources(authorization: string): { resources: Array<{ resource: string; access: ResourceAccess }>; endToEnd: boolean } {
@@ -189,7 +233,7 @@ function invocationResources(authorization: string): { resources: Array<{ resour
     if (typeof abilities !== "object" || abilities === null || Array.isArray(abilities)) throw new ResourceNotRoutedError(uri);
     for (const action of Object.keys(abilities)) {
       const resource = routingResourceOf(uri);
-      endToEnd ||= isVaultResourceUri(uri);
+      endToEnd ||= isVaultResourceUri(uri, abilities);
       // Only named, known read abilities are reads. Unknown abilities must not broaden a read-only membership.
       const read = /^(tinycloud\.(kv\/(get|list|metadata|head|sync)|sql\/(read|export)|duckdb\/(read|describe|export)|capabilities\/read|space\/(list|info)|hooks\/list))$/.test(action);
       const access: ResourceAccess = resource.startsWith("urn:tinycloud:encryption:") ? "encryption" : action === "tinycloud.space/host" ? "host" : read ? "read" : "write";
