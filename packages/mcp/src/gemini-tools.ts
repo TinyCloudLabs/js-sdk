@@ -98,7 +98,7 @@ export const GEMINI_TOOLS = [
   {
     name: "tinycloud_list_records",
     title: "List records",
-    description: "Lists records of one kind, newest first. Returns each record's key, etag, time (at) and data fields, the number of records in each folder (counts), and truncated true when more records exist than were returned. Records of an item kind are filed by state, for example open or done; records of a log kind are filed by month.",
+    description: "Lists records of one kind, newest first. Returns each record's key, etag, time (at) and data fields, the number of records in each folder (counts), and, when more records exist than were returned, truncated true with next_cursor for the following page. Records of an item kind are filed by state, for example open or done; records of a log kind are filed by month.",
     inputSchema: {
       type: "object",
       properties: {
@@ -111,6 +111,7 @@ export const GEMINI_TOOLS = [
           description: "Return only this folder: a state of an item kind, such as open, or a month of a log kind as YYYY-MM. Omit for all folders.",
         },
         limit: { type: "integer", minimum: 1, maximum: 100, default: 50, description: "Most records to return, 1 to 100." },
+        cursor: { type: "string", maxLength: 512, description: "The next_cursor of the previous result for the same app, kind and folder, to get the records that follow it. Omit for the first page." },
       },
       required: ["app", "kind"],
       additionalProperties: false,
@@ -318,15 +319,25 @@ function notOk(result: Record<string, unknown>): Reply {
         next_step: APPROVAL_NEXT_STEP,
       };
     }
+    // The operations' own messages are written for the five-tool addresses and change with their releases, so
+    // nothing of them is passed on: this address answers in its own fixed words, by code.
+    const code = typeof result.error.code === "string" ? result.error.code : "INTERNAL_ERROR";
     return {
       status: "error",
-      code: typeof result.error.code === "string" ? result.error.code : "INTERNAL_ERROR",
-      message: typeof result.error.message === "string" ? result.error.message : "TinyCloud could not complete this request.",
+      code,
+      message: details.reason === "space_not_hosted"
+        ? "The user's TinyCloud storage space is not set up yet. It is created shortly after the first approval."
+        : ERROR_MESSAGES[code] ?? "TinyCloud could not complete this request.",
       ...(result.error.retryable === true ? { retryable: true } : {}),
     };
   }
   return { status: "error", code: "SETUP_REQUIRED", message: "TinyCloud is not set up for this account yet." };
 }
+
+const ERROR_MESSAGES: Readonly<Record<string, string>> = {
+  INPUT_INVALID: "TinyCloud did not accept these arguments.",
+  STORAGE_QUOTA_EXCEEDED: "The user's TinyCloud storage is full, so nothing was saved.",
+};
 
 async function output(call: Call, operationId: Operation, input: unknown): Promise<Record<string, unknown>> {
   const result = await call(operationId, input);
@@ -398,8 +409,17 @@ function shown(entry: { key: string; etag?: string; value?: Record<string, unkno
   };
 }
 
-/** A write outcome that is not `ok`, in words the model can act on. */
-function refuseOutcome(outcome: Outcome, what: string): never {
+/** Field names in `data` that the kind does not list, reported as data in place of the operations' warning text. */
+function fieldsNotInKind(data: Record<string, unknown>, kind: Record<string, unknown> | undefined): { fields_not_in_kind?: string[] } {
+  const listed = kind?.fields;
+  if (!isRecord(listed)) return {};
+  // `due` and `done` mean the same in every kind and need no entry.
+  const unlisted = Object.keys(data).filter((field) => field !== "due" && field !== "done" && !Object.hasOwn(listed, field));
+  return unlisted.length === 0 ? {} : { fields_not_in_kind: unlisted };
+}
+
+/** A write outcome that is not `ok`, in this address's own words; the operations' warning texts are not passed on. */
+function refuseOutcome(outcome: Outcome, what: string, invalid = `TinyCloud did not accept this ${what}.`): never {
   const current = outcome.value === undefined ? {} : { current: shown(outcome) };
   switch (outcome.outcome) {
     case "CHANGED":
@@ -412,7 +432,7 @@ function refuseOutcome(outcome: Outcome, what: string): never {
       return refuse("TIMEZONE_REQUIRED", "No timezone is saved for this user. Ask the user for their timezone and save it with tinycloud_set_timezone, then repeat this call.");
     case "INVALID":
     case "CATALOG_CHANGE":
-      return refuse("INVALID", outcome.warnings?.join(" ") || `TinyCloud refused this ${what}.`);
+      return refuse("INVALID", invalid);
     default:
       return refuse(outcome.outcome, `TinyCloud could not save this ${what}. Try again shortly.`);
   }
@@ -491,9 +511,13 @@ const handlers: { readonly [Name in Exclude<GeminiToolName, "tinycloud_connect">
     };
   },
 
-  async tinycloud_list_records(call, input: { app: string; kind: string; folder?: string; limit?: number }) {
+  async tinycloud_list_records(call, input: { app: string; kind: string; folder?: string; limit?: number; cursor?: string }) {
     const { app, folder } = input;
     const kind = kindId(input.kind);
+    const after = input.cursor === undefined ? undefined : parseKey(input.cursor);
+    if (input.cursor !== undefined && (after?.area !== "record" || after.app !== app || after.kind !== kind)) {
+      refuse("INVALID", "cursor is not the next_cursor of a listing of this app and kind.");
+    }
     const { layout } = await listedApp(call, app, "read");
     const prefix = recordPrefix(app, kind, layout);
     const listed = await read(call, {
@@ -501,24 +525,38 @@ const handlers: { readonly [Name in Exclude<GeminiToolName, "tinycloud_connect">
       keys: [catalogKey(app, kind, layout)],
     });
     if (listed.records[0] === undefined) refuse("NOT_FOUND", `The app ${app} has no kind ${kind}. Its kinds are listed by tinycloud_get_app.`);
+    // Newest first: ids begin with a date. The same order places a cursor, so a page follows it even if its record is gone.
+    const order = (a: RecordParts, b: RecordParts) => b.id.localeCompare(a.id) || a.folder.localeCompare(b.folder);
     const found = listed.keys.flatMap((key) => {
       const parts = parseKey(key);
       return parts?.area === "record" && parts.app === app && parts.kind === kind ? [{ key, parts }] : [];
-    }).sort((a, b) => b.parts.id.localeCompare(a.parts.id) || a.parts.folder.localeCompare(b.parts.folder));
+    }).sort((a, b) => order(a.parts, b.parts));
     const counts: Record<string, number> = {};
     for (const { parts } of found) counts[parts.folder] = (counts[parts.folder] ?? 0) + 1;
-    const wanted = found.slice(0, input.limit ?? 50).map(({ key }) => key);
-    const records = wanted.length === 0 ? [] : (await read(call, { keys: wanted })).records
-      .flatMap((entry) => entry === undefined ? [] : [shown(entry)]);
-    const reply = (returned: Record<string, unknown>[]): Reply => ({
-      status: "ok", app, kind, total: found.length, counts, returned: returned.length, truncated: returned.length < found.length, records: returned,
-    });
+    const remaining = after?.area === "record" ? found.filter(({ parts }) => order(after, parts) < 0) : found;
+    const wanted = remaining.slice(0, input.limit ?? 50).map(({ key }) => key);
+    const stored = wanted.length === 0 ? [] : (await read(call, { keys: wanted })).records;
+    const page = wanted.map((key, index) => ({ key, record: stored[index] }));
+    const reply = (): Reply => {
+      const records = page.flatMap(({ record }) => record === undefined ? [] : [shown(record)]);
+      const truncated = page.length < remaining.length;
+      return {
+        status: "ok", app, kind, total: found.length, counts, returned: records.length, truncated,
+        ...(truncated ? { next_cursor: page[page.length - 1]!.key } : {}),
+        records,
+      };
+    };
     // Hosted results stop at 100,000 characters; a page of very large records is cut to what fits.
-    while (records.length > 1 && JSON.stringify(reply(records)).length > 90_000) records.pop();
-    return reply(records);
+    while (page.length > 1 && JSON.stringify(reply()).length > 90_000) page.pop();
+    return reply();
   },
 
   async tinycloud_set_timezone(call, { timezone }: { timezone: string }) {
+    try {
+      new Intl.DateTimeFormat("en", { timeZone: timezone });
+    } catch {
+      refuse("INVALID", "timezone is not an IANA timezone name such as Europe/Berlin.");
+    }
     const context = await output(call, "tinycloud.apps.context", { timezone, access: "read" });
     return { status: "ok", timezone: context.timezone, now: context.now };
   },
@@ -531,8 +569,10 @@ const handlers: { readonly [Name in Exclude<GeminiToolName, "tinycloud_connect">
     if (outcome?.outcome === "EXISTS") {
       refuse("EXISTS", `An app with the id ${app} was already created and has no kind yet. Add one with tinycloud_create_kind.`);
     }
-    if (outcome?.outcome !== "ok") refuseOutcome(outcome ?? { key: app, outcome: "INTERNAL_ERROR" }, "app");
-    return { status: "ok", app, title, about, next_step: "Add the app's first kind of record with tinycloud_create_kind." };
+    if (outcome?.outcome !== "ok") {
+      refuseOutcome(outcome ?? { key: app, outcome: "INTERNAL_ERROR" }, "app", `The app id ${app} cannot be used. Choose another app id.`);
+    }
+    return { status: "ok", app, title, about };
   },
 
   async tinycloud_create_kind(call, input: {
@@ -600,7 +640,16 @@ const handlers: { readonly [Name in Exclude<GeminiToolName, "tinycloud_connect">
       if (type === "item") {
         const [first] = states(definition);
         if (first === undefined) return refuse("INVALID", `The kind ${kind} has no states, so no item can be created in it.`);
-        key = `${prefix}${first}/${today}-${slug(input.name)}`;
+        // An item keeps its id when it moves to another state, so a new id must be free in every state:
+        // a second item of the same name on the same day gets -2, then -3.
+        const taken = new Set((await read(call, { prefixes: [prefix] })).keys.flatMap((existing) => {
+          const parts = parseKey(existing);
+          return parts?.area === "record" ? [parts.id] : [];
+        }));
+        const base = `${today}-${slug(input.name)}`;
+        let id = base;
+        for (let suffix = 2; taken.has(id); suffix++) id = `${base}-${suffix}`;
+        key = `${prefix}${first}/${id}`;
       } else {
         const date = input.date ?? today;
         const time = input.time ?? (date === today ? context.now.slice(11, 16) : "12:00");
@@ -614,17 +663,17 @@ const handlers: { readonly [Name in Exclude<GeminiToolName, "tinycloud_connect">
       refuse("EXISTS", "A record for that date already exists. Change it with tinycloud_update_record, using this key and etag.", { current: shown(outcome) });
     }
     if (outcome?.outcome !== "ok") refuseOutcome(outcome ?? { key, outcome: "INTERNAL_ERROR" }, "record");
-    return { status: "ok", ...shown(outcome), ...(outcome.warnings?.length ? { warnings: outcome.warnings } : {}) };
+    return { status: "ok", ...shown(outcome), ...fieldsNotInKind(data, definition) };
   },
 
   async tinycloud_update_record(call, { key, etag, data }: { key: string; etag: string; data: Record<string, unknown> }) {
-    recordKey(key);
-    const current = (await read(call, { keys: [key] })).records[0];
+    const parts = recordKey(key);
+    const [current, definition] = (await read(call, { keys: [key, catalogKey(parts.app, parts.kind, parts.layout)] })).records;
     if (current === undefined) return refuseOutcome({ key, outcome: "NOT_FOUND" }, "record");
     if (current.etag !== etag) refuseOutcome({ ...current, outcome: "CHANGED" }, "record");
     const [outcome] = await write(call, [{ op: "put", key, etag, value: kept(current, { ...(isRecord(current.value.data) ? current.value.data : {}), ...data }) }]);
     if (outcome?.outcome !== "ok") refuseOutcome(outcome ?? { key, outcome: "INTERNAL_ERROR" }, "record");
-    return { status: "ok", ...shown(outcome), ...(outcome.warnings?.length ? { warnings: outcome.warnings } : {}) };
+    return { status: "ok", ...shown(outcome), ...fieldsNotInKind(data, definition?.value) };
   },
 
   async tinycloud_move_record(call, { key, etag, state }: { key: string; etag: string; state: string }) {
@@ -653,6 +702,10 @@ const handlers: { readonly [Name in Exclude<GeminiToolName, "tinycloud_connect">
 
   async tinycloud_delete_record(call, { key, etag }: { key: string; etag: string }) {
     recordKey(key);
+    // Compared here first, as for an update or a move: an etag that is stale or mistyped gets the current record back.
+    const current = (await read(call, { keys: [key] })).records[0];
+    if (current === undefined) return refuseOutcome({ key, outcome: "NOT_FOUND" }, "record");
+    if (current.etag !== etag) refuseOutcome({ ...current, outcome: "CHANGED" }, "record");
     const [outcome] = await write(call, [{ op: "delete", key, etag }]);
     if (outcome?.outcome !== "ok") refuseOutcome(outcome ?? { key, outcome: "INTERNAL_ERROR" }, "record");
     return { status: "ok", deleted: key };

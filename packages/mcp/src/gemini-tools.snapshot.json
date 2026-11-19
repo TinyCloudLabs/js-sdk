@@ -62,7 +62,7 @@
     {
       "name": "tinycloud_list_records",
       "title": "List records",
-      "description": "Lists records of one kind, newest first. Returns each record's key, etag, time (at) and data fields, the number of records in each folder (counts), and truncated true when more records exist than were returned. Records of an item kind are filed by state, for example open or done; records of a log kind are filed by month.",
+      "description": "Lists records of one kind, newest first. Returns each record's key, etag, time (at) and data fields, the number of records in each folder (counts), and, when more records exist than were returned, truncated true with next_cursor for the following page. Records of an item kind are filed by state, for example open or done; records of a log kind are filed by month.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -90,6 +90,11 @@
             "maximum": 100,
             "default": 50,
             "description": "Most records to return, 1 to 100."
+          },
+          "cursor": {
+            "type": "string",
+            "maxLength": 512,
+            "description": "The next_cursor of the previous result for the same app, kind and folder, to get the records that follow it. Omit for the first page."
           }
         },
         "required": [
