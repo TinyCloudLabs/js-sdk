@@ -25,7 +25,7 @@ export function onboardingPlan(selector = "apps"): { permissions: PermissionEntr
   }
   const asks = tasks.includes("feed")
     ? tasks.includes("apps")
-      ? "Set up TinyCloud on this computer: use your apps and your Feed, and see your spaces and apps, for 30 days."
+      ? "Set up TinyCloud on this computer: use your apps and your Feed, and see your spaces, for 30 days."
       : "Set up TinyCloud on this computer: use your Feed and see your spaces and apps, for 30 days."
     : "Set up TinyCloud on this computer: use your apps and see your spaces, for 30 days.";
   return {
