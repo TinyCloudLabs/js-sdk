@@ -232,6 +232,11 @@ tinycloud --profile feed-agent feed handling --agent writer --file handling.json
 tinycloud --profile owner feed show card-draft-01 --agent writer
 ```
 
+`feed show` follows Home's rule for reply-only revisions: when the agent publishes a new revision that only appends
+`payload.replies` (and, for a post's first reply, turns `render` into `thread`), it is the same request, so the card is
+reported at its newest revision with the owner's earlier answer, acknowledgement and outcome, and `answeredAtRevision`
+names the revision that was actually answered. Any other change to the card is a new request and starts unanswered.
+
 For an explicit outbound note to that agent, save a separate `message.json`:
 
 ```json
