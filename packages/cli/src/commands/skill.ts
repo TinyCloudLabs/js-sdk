@@ -2,6 +2,7 @@ import { Command } from "commander";
 import { homedir } from "node:os";
 import { handleError } from "../output/errors.js";
 import { outputJson } from "../output/formatter.js";
+import { CONTINUE_NEXT_LINE } from "../output/next.js";
 import { checkSkill, saveBundledSkill } from "../skill/run.js";
 import { shownPath } from "../skill/bundle.js";
 
@@ -25,7 +26,7 @@ export function registerSkillCommand(program: Command): void {
         outputJson({ saved: saved.saved, version: saved.version, folder: saved.folder, folders: saved.folders });
         if (command.optsWithGlobals().quiet) return;
         for (const folder of saved.unchanged) process.stderr.write(`TinyCloud's guide is already saved in ${shownPath(folder)}.\n`);
-        process.stderr.write("Next: carry on with the owner's request.\n");
+        process.stderr.write(`${CONTINUE_NEXT_LINE}\n`);
       } catch (error) {
         await handleError(error);
       }

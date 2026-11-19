@@ -12,6 +12,9 @@ export function saveGuideNextLine(cli: string = CLI_NAME): string {
   return `Next: \`${cli} skill save\` saves a short guide to TinyCloud in your skills folder, so you have it next time.`;
 }
 
+/** After `skill save` succeeds: back to what the owner asked for. */
+export const CONTINUE_NEXT_LINE = "Next: carry on with the owner's request.";
+
 /**
  * The offer after `onboard`, or `undefined` when `skill save` would not be the next step: the guide is already saved
  * and current, a skills folder holds files TinyCloud did not write (`skill save` refuses it), or no agent's skills
