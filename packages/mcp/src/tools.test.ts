@@ -24,15 +24,15 @@ test("registers exact SQL read and mutation annotations", () => {
     });
 });
 
-test("the personal-apps tools are annotated by their write and destructive effects", () => {
+test("only record writes are annotated destructive: context saves a timezone and a query refreshes a rebuildable derived copy, and neither deletes a record", () => {
   const annotations = Object.fromEntries(toolBindingsForTest()
     .filter((candidate) => candidate.name.startsWith("tinycloud_apps_"))
     .map((candidate) => [candidate.name, [candidate.readOnlyHint, candidate.destructiveHint]]));
   expect(annotations).toMatchObject({
-    tinycloud_apps_context: [false, true],
+    tinycloud_apps_context: [false, false],
     tinycloud_apps_read: [true, false],
     tinycloud_apps_write: [false, true],
-    tinycloud_apps_query: [false, true],
+    tinycloud_apps_query: [false, false],
   });
 });
 

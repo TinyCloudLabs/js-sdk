@@ -1,15 +1,34 @@
+import "../../../operations/test-support/test-bootstrap.mjs";
 import { afterAll, beforeEach, describe, expect, mock, setSystemTime, test } from "bun:test";
 import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { CLIError as CLIErrorInstance } from "../output/errors.js";
 
-// The profile store and its lock are real; TC_HOME is read when the store
-// loads, so set it before importing. The store signals lock contention only
-// under NODE_ENV=test.
+// The profile store and its lock are real; establish both private home paths
+// before importing it. The store signals contention only under NODE_ENV=test.
+const originalEnvironment = {
+  HOME: process.env.HOME,
+  TC_HOME: process.env.TC_HOME,
+  NODE_ENV: process.env.NODE_ENV,
+  TC_TEST_PROFILE_LOCK_CONTENTION_SIGNAL_PATH: process.env.TC_TEST_PROFILE_LOCK_CONTENTION_SIGNAL_PATH,
+};
 const home = await mkdtemp(join(tmpdir(), "tc-sdk-bootstrap-"));
+process.env.HOME = home;
 process.env.TC_HOME = home;
 process.env.NODE_ENV = "test";
+
+// Register cleanup before loading the profile store or SDK-facing modules.
+afterAll(async () => {
+  try {
+    await rm(home, { recursive: true, force: true });
+  } finally {
+    for (const [name, value] of Object.entries(originalEnvironment)) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+  }
+});
 
 // Restoring the session into a node is not under test.
 let restoreFailure: Error | null = null;
@@ -111,11 +130,6 @@ beforeEach(async () => {
   await rm(join(home, ".tinycloud"), { recursive: true, force: true });
   await ProfileManager.setProfile(PROFILE, fresh);
   await ProfileManager.setKey(PROFILE, KEY);
-});
-
-afterAll(async () => {
-  delete process.env.TC_TEST_PROFILE_LOCK_CONTENTION_SIGNAL_PATH;
-  await rm(home, { recursive: true, force: true });
 });
 
 describe("bootstrapDelegatedSession under the profile lock", () => {

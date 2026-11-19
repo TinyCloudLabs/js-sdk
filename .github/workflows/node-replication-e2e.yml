@@ -65,7 +65,7 @@ jobs:
             cargo-${{ runner.os }}-stable-${{ github.workflow }}-${{ github.job }}-
 
       - name: Install wasm-pack
-        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+        uses: ./.github/actions/install-wasm-pack
 
       - name: Install locked dependencies
         run: bun install --frozen-lockfile

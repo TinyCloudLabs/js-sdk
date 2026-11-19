@@ -69,7 +69,7 @@ beforeAll(async () => {
   const signature = await owner.signMessage(prepared.siwe);
   await writeJsonAtomic(tinycloudConfigPath(), { defaultProfile: "owner", version: 1 });
   await writeJsonAtomic(profileConfigPath("owner"), {
-    name: "owner", host: hermetic.host, chainId: 1, spaceName: "secrets", spaceId,
+    name: "owner", host: hermetic.host, tinycloudRegistryUrl: hermetic.host, chainId: 1, spaceName: "secrets", spaceId,
     did: hermetic.ownerDid, sessionDid, ownerDid: hermetic.ownerDid,
     authMethod: "openkey", posture: "owner-openkey", operatorType: "human",
     createdAt: "2026-10-04T00:00:00.000Z",

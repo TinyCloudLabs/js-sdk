@@ -8,9 +8,9 @@ import {
   type PortableDelegation,
   type TinyCloudNode,
 } from "@tinycloud/node-sdk";
-import { appSecretScope } from "@tinycloud/sdk-core";
+import { appSecretScope, SECRET_TYPES } from "@tinycloud/sdk-core";
 import { invokeOperation } from "@tinycloud/operations";
-import { isLocalOwnerProfile, ownerSessionLacksProof } from "@tinycloud/operations/profile";
+import { isLocalOwnerProfile, liveStoredLease, ownerSessionLacksProof } from "@tinycloud/operations/profile";
 import {
   buildSecretManagerUrl,
   buildSecretRequestUrl,
@@ -48,6 +48,7 @@ import { closeReplication } from "../lib/replication-registry.js";
 import { sessionExpiredError, withSignInHint } from "../auth/session-expired.js";
 import { sessionExpiresAt } from "../auth/scoped-login.js";
 import { resolveSpaceUri } from "../lib/space.js";
+import { assertSecretValueMatchesType, parseSecretTypeOption } from "../lib/secret-type.js";
 import { tryOpenBrowser, warnBrowserNotOpened } from "../lib/browser.js";
 import { runProbeChild, type ProbeRequest } from "../lib/probe-child.js";
 import { runCommand, type CommandOutcome } from "../lib/run-command.js";
@@ -361,7 +362,6 @@ async function runSecretOperation<T>(params: {
       requested,
       expiryOption: undefined,
       reason: secretCommandReason(params.action, params.name),
-      yes: true,
       force: true,
       anchorSpace: params.space ?? SECRETS_SPACE,
       openKeyAcquisition: params.openKeyAcquisition,
@@ -535,7 +535,6 @@ async function canonicalSecretGet(
       requested: first.missing as PermissionEntry[],
       expiryOption: undefined,
       reason: secretCommandReason("get", params.name),
-      yes: true,
       force: true,
       anchorSpace: params.space ?? SECRETS_SPACE,
       openKeyAcquisition: params.openKeyAcquisition,
@@ -603,6 +602,9 @@ function throwCanonicalSecretGetError(
           ExitCode.AUTH_REQUIRED,
           { hint: `Sign in with: ${CLI_NAME} --profile ${result.context.profile} auth login` },
         );
+      }
+      if (result.error.code === "NODE_NOT_RESPONDING" || result.error.code === "DECRYPTION_DEPENDENCY_UNAVAILABLE") {
+        throw new CLIError(result.error.code, result.error.message, ExitCode.NETWORK_ERROR);
       }
       if (result.error.code === "NODE_UNREACHABLE") {
         throw new CLIError("NETWORK_ERROR", result.error.message, ExitCode.NETWORK_ERROR);
@@ -1080,12 +1082,13 @@ async function readDelegatedSecretValue(params: {
   return parseDecryptedSecretPayload(decrypted.data, params.secretPath);
 }
 
+/** Past its original grant; a session saved with an owner renewal lease counts as live until the lease's signed end. */
 function isStoredSessionExpired(session: object): boolean {
   const record = session as Record<string, unknown>;
   const direct = parseDate(record.expiresAt ?? record.expiry ?? record.expirationTime);
-  if (direct) return direct.getTime() <= Date.now();
-  const signedOrSiweExpiry = sessionExpiresAt(record);
-  return signedOrSiweExpiry !== null && Date.parse(signedOrSiweExpiry) <= Date.now();
+  const signedOrSiweExpiry = direct ? direct.toISOString() : sessionExpiresAt(record);
+  if (signedOrSiweExpiry === null || Date.parse(signedOrSiweExpiry) > Date.now()) return false;
+  return liveStoredLease(record) === undefined;
 }
 
 function parseDate(value: unknown): Date | null {
@@ -1726,9 +1729,11 @@ export function registerSecretsCommand(
     .option("--space <name|uri>", "Target a non-default secrets space (short name or full URI)")
     .option("--file <path>", "Read value from file")
     .option("--stdin", "Read value from stdin")
+    .option("--type <type>", `What the secret is: ${SECRET_TYPES.join(", ")} (default: secret). A totp secret must be a base32 seed or an otpauth:// link.`)
     .option("--private-key <hex>", "Ethereum private key (or set TC_PRIVATE_KEY)")
     .action(async (name: string, value: string | undefined, options, cmd) => {
       try {
+        const secretType = parseSecretTypeOption(options.type);
         const globalOpts = cmd.optsWithGlobals();
         const ctx = await ProfileManager.resolveContext(globalOpts);
         const node = await ensureSecretsNode(ctx, options);
@@ -1755,6 +1760,10 @@ export function registerSecretsCommand(
         }
 
         const scopeOptions = resolveSecretScope(options);
+        assertSecretValueMatchesType(secretType, secretValue);
+        const putOptions = secretType === undefined
+          ? scopeOptions
+          : { ...scopeOptions, type: secretType };
         const result = await runSecretOperation({
           ctx,
           node,
@@ -1763,14 +1772,14 @@ export function registerSecretsCommand(
           scopeOptions,
           space: spaceUri,
           label: `Storing secret ${name}...`,
-          operation: () => secrets.put(name, secretValue, scopeOptions),
+          operation: () => secrets.put(name, secretValue, putOptions),
         });
 
         if (!result.ok) {
           throw cliErrorFromService(result.error);
         }
 
-        outputJson({ name, written: true });
+        outputJson({ name, written: true, ...(secretType === undefined ? {} : { type: secretType }) });
       } catch (error) {
         return handleError(error);
       }

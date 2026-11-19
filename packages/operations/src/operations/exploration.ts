@@ -407,7 +407,7 @@ export const explorationOperationDefinitions: readonly ExplorationDefinition[] =
   },
   {
     id: "tinycloud.kv.put", version: 1, title: "Write a TinyCloud KV value",
-    description: "Create, conditionally replace, or explicitly upsert one exact KV key. For personal records under xyz.tinycloud.tinyapps.<app>/ or xyz.tinycloud.agent-data/, use tinycloud_apps_write.",
+    description: "Create, conditionally replace, or explicitly upsert one exact KV key. For personal records under xyz.tinycloud.tinyapps.<app>/, use tinycloud_apps_write.",
     input: KvPutInputSchema, output: KvPutOutputSchema, effects: ["write"], runtime: "authenticated",
     postures: AUTHENTICATED_POSTURES, exposure: EXPLORATION_EXPOSURE, sensitivity: KV_PUT_SENSITIVITY,
     authority: (context: RuntimeOperationContext, input: KvPutInput) =>
@@ -416,7 +416,7 @@ export const explorationOperationDefinitions: readonly ExplorationDefinition[] =
   },
   {
     id: "tinycloud.kv.delete", version: 1, title: "Delete a TinyCloud KV value",
-    description: "Delete one exact KV key, optionally only when its ETag still matches. For personal records under xyz.tinycloud.tinyapps.<app>/ or xyz.tinycloud.agent-data/, use tinycloud_apps_write.",
+    description: "Delete one exact KV key, optionally only when its ETag still matches. For personal records under xyz.tinycloud.tinyapps.<app>/, use tinycloud_apps_write.",
     input: KvDeleteInputSchema, output: KvDeleteOutputSchema, effects: ["destructive"], runtime: "authenticated",
     postures: AUTHENTICATED_POSTURES, exposure: EXPLORATION_EXPOSURE, sensitivity: KV_KEY_SENSITIVITY,
     authority: (context: RuntimeOperationContext, input: KvDeleteInput) =>

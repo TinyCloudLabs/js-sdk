@@ -1,8 +1,9 @@
-import { afterEach, expect, test } from "bun:test";
+import { HOST_SIWE } from "../test-support/host-siwe";
+import { afterEach, beforeEach, expect, test } from "bun:test";
 import {
   DEFAULT_TINYCLOUD_FALLBACK_HOST,
   authorizationVerdictOf,
-  DEFAULT_TINYCLOUD_LOCATION_REGISTRY_URL,
+  makePkhSpaceId,
   type IWasmBindings,
   type ISessionManager,
   type ISigner,
@@ -19,6 +20,17 @@ import {
 } from "./NodeUserAuthorization";
 import { MemorySessionStorage } from "../storage/MemorySessionStorage";
 import { isAppKeyHostBound } from "./appKeyHostBinding";
+import {
+  startUnregisteredLocationRegistry,
+  unregisteredLocationRegistryResponse,
+  type UnregisteredLocationRegistry,
+} from "../test-support/unregistered-location-registry";
+
+let locationRegistry: UnregisteredLocationRegistry;
+
+beforeEach(() => {
+  locationRegistry = startUnregisteredLocationRegistry();
+});
 
 test("OpenKey manifest digest is stable across JSON formatting and key order", () => {
   const inMemory = {
@@ -119,11 +131,11 @@ function createWasmBindings(captured: Array<Record<string, unknown>>): IWasmBind
     }),
     ensureEip55: (address: string) => address,
     makeSpaceId: (address: string, chainId: number, prefix: string) =>
-      `${prefix}:${chainId}:${address}`,
+      makePkhSpaceId(address, chainId, prefix),
     createDelegation: async () => {
       throw new Error("not used");
     },
-    generateHostSIWEMessage: () => "",
+    generateHostSIWEMessage: () => HOST_SIWE,
     siweToDelegationHeaders: () => ({ Authorization: "Bearer host" }),
     protocolVersion: () => 1,
     vault_encrypt: () => new Uint8Array(),
@@ -154,12 +166,15 @@ afterEach(() => {
     globalThis.fetch = (globalThis as any).__originalFetch;
     delete (globalThis as any).__originalFetch;
   }
+  locationRegistry.stop(true);
 });
 
 async function withSignInHost<T>(run: () => Promise<T>, features: string[] = []): Promise<T> {
   const previousFetch = globalThis.fetch;
   globalThis.fetch = async (input, init) => {
-    const url = String(input);
+    const url = input instanceof Request ? input.url : String(input);
+    const registryResponse = unregisteredLocationRegistryResponse(input, locationRegistry.url.origin, init);
+    if (registryResponse) return registryResponse;
     if (url.endsWith("/info")) {
       return new Response(JSON.stringify({ protocol: 1, version: "1.0.0", features }), {
         status: 200, headers: { "content-type": "application/json" },
@@ -202,6 +217,7 @@ test("manifest keys expand to top-level ReCap resources only when the node lists
   ] as const) {
     const captured: Array<Record<string, unknown>> = [];
     const auth = new NodeUserAuthorization({
+      tinycloudRegistryUrl: locationRegistry.url.origin,
       signer: createSigner([]), wasmBindings: createWasmBindings(captured),
       signStrategy: { type: "auto-sign" }, domain: "healthlog.tinycloud.xyz",
       tinycloudHosts: ["https://tinycloud.test"], sessionStorage: new MemorySessionStorage(),
@@ -216,6 +232,7 @@ test("manifest keys expand to top-level ReCap resources only when the node lists
 test("a non-binding SIWE host omits manifest key grants and reports their paths", async () => {
   const captured: Array<Record<string, unknown>> = [];
   const auth = new NodeUserAuthorization({
+    tinycloudRegistryUrl: locationRegistry.url.origin,
     signer: createSigner([]), wasmBindings: createWasmBindings(captured),
     signStrategy: { type: "auto-sign" }, domain: "billing.example.com",
     siweConfig: { domain: "other.example.com" },
@@ -231,6 +248,7 @@ test("a non-binding SIWE host omits manifest key grants and reports their paths"
 
 test("a non-binding host does not fetch the named-key feature before preparing", async () => {
   const auth = new NodeUserAuthorization({
+    tinycloudRegistryUrl: locationRegistry.url.origin,
     signer: createSigner([]), wasmBindings: createWasmBindings([]),
     signStrategy: { type: "auto-sign" }, domain: "localhost",
     tinycloudHosts: ["https://tinycloud.test"], sessionStorage: new MemorySessionStorage(),
@@ -246,6 +264,7 @@ test("a non-binding host does not fetch the named-key feature before preparing",
 test("prepared sign-in with manifest keys resolves hosts from its signer parameters", async () => {
   const captured: Array<Record<string, unknown>> = [];
   const auth = new NodeUserAuthorization({
+    tinycloudRegistryUrl: locationRegistry.url.origin,
     signer: createSigner([]), wasmBindings: createWasmBindings(captured),
     signStrategy: { type: "auto-sign" }, domain: "billing.example.com",
     sessionStorage: new MemorySessionStorage(),
@@ -272,6 +291,7 @@ test("manifest sign-in without keys keeps full capabilities identical across fea
   for (const features of [[], ["encryption-named-keys-v1"]]) {
     const prepared: Array<Record<string, unknown>> = [];
     const auth = new NodeUserAuthorization({
+      tinycloudRegistryUrl: locationRegistry.url.origin,
       signer: createSigner([]), wasmBindings: createWasmBindings(prepared),
       signStrategy: { type: "auto-sign" }, domain: "billing.example.com",
       tinycloudHosts: ["https://tinycloud.test"], sessionStorage: new MemorySessionStorage(),
@@ -306,6 +326,7 @@ test("regular network sign-in does not invent replica issuance when signed SIWE 
   let observed: TinyCloudSession | undefined;
   const sessionStorage = new MemorySessionStorage();
   const auth = new NodeUserAuthorization({
+    tinycloudRegistryUrl: locationRegistry.url.origin,
     signer: createSigner([]),
     wasmBindings: wasm,
     signStrategy: { type: "auto-sign" },
@@ -325,6 +346,7 @@ test("prepared network sign-in does not invent replica issuance when SIWE is abs
   let observed: TinyCloudSession | undefined;
   const sessionStorage = new MemorySessionStorage();
   const auth = new NodeUserAuthorization({
+    tinycloudRegistryUrl: locationRegistry.url.origin,
     signer: createSigner([]),
     wasmBindings: createWasmBindings([]),
     signStrategy: { type: "auto-sign" },
@@ -337,7 +359,7 @@ test("prepared network sign-in does not invent replica issuance when SIWE is abs
   const session = await withSignInHost(() => auth.signInWithPreparedSession({
     siwe: undefined as never,
     jwk: { kty: "OKP" },
-    spaceId: "space://test",
+    spaceId: restoredTinyCloudSession().spaceId,
     verificationMethod: "did:key:verification",
   }, "0xsigned", "default", { kty: "OKP" }));
   expect(session.address.toLowerCase()).toBe("0x1234567890abcdef1234567890abcdef12345678");
@@ -351,7 +373,9 @@ test("NodeUserAuthorization.signIn keeps constructor siweConfig.nonce when no pe
   const originalFetch = globalThis.fetch;
   (globalThis as any).__originalFetch = originalFetch;
   globalThis.fetch = async (input: any, init?: any) => {
-    const url = String(input);
+    const url = input instanceof Request ? input.url : String(input);
+    const registryResponse = unregisteredLocationRegistryResponse(input, locationRegistry.url.origin, init);
+    if (registryResponse) return registryResponse;
     if (url.endsWith("/info")) {
       return new Response(
         JSON.stringify({ protocol: 1, version: "1.0.0", features: [] }),
@@ -368,6 +392,7 @@ test("NodeUserAuthorization.signIn keeps constructor siweConfig.nonce when no pe
   };
 
   const auth = new NodeUserAuthorization({
+    tinycloudRegistryUrl: locationRegistry.url.origin,
     signer: createSigner(signedMessages),
     wasmBindings: createWasmBindings(captured),
     signStrategy: { type: "auto-sign" },
@@ -387,7 +412,9 @@ test("account-only manifest signs into the account space it authorizes", async (
   const captured: Array<Record<string, unknown>> = [];
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async (input, init) => {
-    const url = String(input);
+    const url = input instanceof Request ? input.url : String(input);
+    const registryResponse = unregisteredLocationRegistryResponse(input, locationRegistry.url.origin, init);
+    if (registryResponse) return registryResponse;
     if (url.endsWith("/info")) {
       return new Response(JSON.stringify({ protocol: 1, version: "1.0.0", features: [] }), {
         status: 200,
@@ -403,6 +430,7 @@ test("account-only manifest signs into the account space it authorizes", async (
     throw new Error(`Unexpected fetch: ${url}`);
   };
   const auth = new NodeUserAuthorization({
+    tinycloudRegistryUrl: locationRegistry.url.origin,
     signer: createSigner([]),
     wasmBindings: createWasmBindings(captured),
     signStrategy: { type: "auto-sign" },
@@ -440,7 +468,9 @@ test("NodeUserAuthorization.signIn preserves caller defaultActions when merging 
   const originalDefaultActions = structuredClone(defaultActions);
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async (input, init) => {
-    const url = String(input);
+    const url = input instanceof Request ? input.url : String(input);
+    const registryResponse = unregisteredLocationRegistryResponse(input, locationRegistry.url.origin, init);
+    if (registryResponse) return registryResponse;
     if (url.endsWith("/info")) {
       return new Response(
         JSON.stringify({ protocol: 1, version: "1.0.0", features: [] }),
@@ -457,6 +487,7 @@ test("NodeUserAuthorization.signIn preserves caller defaultActions when merging 
   };
 
   const auth = new NodeUserAuthorization({
+    tinycloudRegistryUrl: locationRegistry.url.origin,
     signer: createSigner(signedMessages),
     wasmBindings: createWasmBindings(captured),
     signStrategy: { type: "auto-sign" },
@@ -493,7 +524,9 @@ test("NodeUserAuthorization.signIn lets a per-call nonce override siweConfig.non
   const originalFetch = globalThis.fetch;
   (globalThis as any).__originalFetch = originalFetch;
   globalThis.fetch = async (input: any, init?: any) => {
-    const url = String(input);
+    const url = input instanceof Request ? input.url : String(input);
+    const registryResponse = unregisteredLocationRegistryResponse(input, locationRegistry.url.origin, init);
+    if (registryResponse) return registryResponse;
     if (url.endsWith("/info")) {
       return new Response(
         JSON.stringify({ protocol: 1, version: "1.0.0", features: [] }),
@@ -510,6 +543,7 @@ test("NodeUserAuthorization.signIn lets a per-call nonce override siweConfig.non
   };
 
   const auth = new NodeUserAuthorization({
+    tinycloudRegistryUrl: locationRegistry.url.origin,
     signer: createSigner(signedMessages),
     wasmBindings: createWasmBindings(captured),
     signStrategy: { type: "auto-sign" },
@@ -533,11 +567,10 @@ test("NodeUserAuthorization.signIn resolves TinyCloud hosts when none are explic
   const originalFetch = globalThis.fetch;
   (globalThis as any).__originalFetch = originalFetch;
   globalThis.fetch = async (input: any, init?: any) => {
-    const url = String(input);
+    const url = input instanceof Request ? input.url : String(input);
     requests.push(url);
-    if (url.startsWith(`${DEFAULT_TINYCLOUD_LOCATION_REGISTRY_URL}/v1/locations/`)) {
-      return new Response("{}", { status: 404 });
-    }
+    const registryResponse = unregisteredLocationRegistryResponse(input, locationRegistry.url.origin, init);
+    if (registryResponse) return registryResponse;
     if (url.endsWith("/info")) {
       return new Response(
         JSON.stringify({ protocol: 1, version: "1.0.0", features: [] }),
@@ -554,6 +587,7 @@ test("NodeUserAuthorization.signIn resolves TinyCloud hosts when none are explic
   };
 
   const auth = new NodeUserAuthorization({
+    tinycloudRegistryUrl: locationRegistry.url.origin,
     signer: createSigner(signedMessages),
     wasmBindings: createWasmBindings(captured),
     signStrategy: { type: "auto-sign" },
@@ -566,7 +600,7 @@ test("NodeUserAuthorization.signIn resolves TinyCloud hosts when none are explic
 
   expect(auth.hosts).toEqual([DEFAULT_TINYCLOUD_FALLBACK_HOST]);
   expect(requests).toContain(
-    `${DEFAULT_TINYCLOUD_LOCATION_REGISTRY_URL}/v1/locations/${encodeURIComponent(
+    `${locationRegistry.url.origin}/v1/locations/${encodeURIComponent(
       "did:pkh:eip155:1:0x1234567890AbcdEF1234567890aBcdef12345678",
     )}`,
   );
@@ -592,11 +626,14 @@ test("restored session adopts persisted hosts WITHOUT the wallet flow and a host
   const captured: Array<Record<string, unknown>> = [];
   const signedMessages: string[] = [];
   const requests: string[] = [];
+  const configuredHost = "https://configured.node.test";
   const originalFetch = globalThis.fetch;
   (globalThis as any).__originalFetch = originalFetch;
   globalThis.fetch = async (input: any, init?: any) => {
-    const url = String(input);
+    const url = input instanceof Request ? input.url : String(input);
     requests.push(url);
+    const registryResponse = unregisteredLocationRegistryResponse(input, locationRegistry.url.origin, init);
+    if (registryResponse) return registryResponse;
     if (url.endsWith("/delegate") && init?.method === "POST") {
       // Primary space already activated — no creation needed.
       return new Response(
@@ -608,6 +645,8 @@ test("restored session adopts persisted hosts WITHOUT the wallet flow and a host
   };
 
   const auth = new NodeUserAuthorization({
+    tinycloudRegistryUrl: locationRegistry.url.origin,
+    registryNoEntryHosts: [configuredHost],
     signer: createSigner(signedMessages),
     wasmBindings: createWasmBindings(captured),
     signStrategy: { type: "auto-sign" },
@@ -621,17 +660,18 @@ test("restored session adopts persisted hosts WITHOUT the wallet flow and a host
 
   // Hosts are adopted immediately, with NO wallet signing and NO registry hit.
   expect(auth.hosts).toEqual(persistedHosts);
+  expect(requests).toEqual([]);
 
   // A host-needing call must NOT throw "hosts have not been resolved".
   await auth.ensureSpaceExists();
 
   expect(signedMessages.length).toBe(0); // no wallet flow
-  // No registry lookup — persisted hosts were used directly.
-  expect(
-    requests.some((u) => u.startsWith(DEFAULT_TINYCLOUD_LOCATION_REGISTRY_URL)),
-  ).toBe(false);
-  // The host-needing call targeted the persisted host.
-  expect(requests).toContain(`${persistedHosts[0]}/delegate`);
+  expect(requests).toContain(
+    `${locationRegistry.url.origin}/v2/locations/0x1234567890AbcdEF1234567890aBcdef12345678`,
+  );
+  // Live transport uses explicit code configuration, never restored host data.
+  expect(requests).toContain(`${configuredHost}/delegate`);
+  expect(requests.some((url) => url.startsWith(persistedHosts[0]!))).toBe(false);
 });
 
 test("restored session with NO persisted hosts lazily resolves via registry/fallback", async () => {
@@ -641,11 +681,10 @@ test("restored session with NO persisted hosts lazily resolves via registry/fall
   const originalFetch = globalThis.fetch;
   (globalThis as any).__originalFetch = originalFetch;
   globalThis.fetch = async (input: any, init?: any) => {
-    const url = String(input);
+    const url = input instanceof Request ? input.url : String(input);
     requests.push(url);
-    if (url.startsWith(`${DEFAULT_TINYCLOUD_LOCATION_REGISTRY_URL}/v1/locations/`)) {
-      return new Response("{}", { status: 404 });
-    }
+    const registryResponse = unregisteredLocationRegistryResponse(input, locationRegistry.url.origin, init);
+    if (registryResponse) return registryResponse;
     if (url.endsWith("/delegate") && init?.method === "POST") {
       return new Response(
         JSON.stringify({ activated: ["space"], skipped: [] }),
@@ -656,6 +695,7 @@ test("restored session with NO persisted hosts lazily resolves via registry/fall
   };
 
   const auth = new NodeUserAuthorization({
+    tinycloudRegistryUrl: locationRegistry.url.origin,
     signer: createSigner(signedMessages),
     wasmBindings: createWasmBindings(captured),
     signStrategy: { type: "auto-sign" },
@@ -666,13 +706,14 @@ test("restored session with NO persisted hosts lazily resolves via registry/fall
   // Old persisted session: no hosts supplied on restore.
   auth.setRestoredTinyCloudSession(restoredTinyCloudSession());
   expect(auth.hosts).toEqual([]); // not yet resolved
+  expect(requests).toEqual([]);
 
   // First host-needing call resolves lazily via registry -> fallback.
   await auth.ensureSpaceExists();
 
   expect(auth.hosts).toEqual([DEFAULT_TINYCLOUD_FALLBACK_HOST]);
   expect(requests).toContain(
-    `${DEFAULT_TINYCLOUD_LOCATION_REGISTRY_URL}/v1/locations/${encodeURIComponent(
+    `${locationRegistry.url.origin}/v1/locations/${encodeURIComponent(
       "did:pkh:eip155:1:0x1234567890AbcdEF1234567890aBcdef12345678",
     )}`,
   );
@@ -686,7 +727,9 @@ test("ensureSpaceExists records skipped spaces for fresh-account bootstrap detec
   const originalFetch = globalThis.fetch;
   (globalThis as any).__originalFetch = originalFetch;
   globalThis.fetch = async (input: any, init?: any) => {
-    const url = String(input);
+    const url = input instanceof Request ? input.url : String(input);
+    const registryResponse = unregisteredLocationRegistryResponse(input, locationRegistry.url.origin, init);
+    if (registryResponse) return registryResponse;
     if (url.endsWith("/info")) {
       return new Response(
         JSON.stringify({ protocol: 1, version: "1.0.0", features: [] }),
@@ -703,6 +746,7 @@ test("ensureSpaceExists records skipped spaces for fresh-account bootstrap detec
   };
 
   const auth = new NodeUserAuthorization({
+    tinycloudRegistryUrl: locationRegistry.url.origin,
     signer: createSigner(signedMessages),
     wasmBindings: createWasmBindings(captured),
     signStrategy: { type: "auto-sign" },
@@ -722,7 +766,9 @@ test("createBootstrapSession mints a signed single-space bootstrap session", asy
   const originalFetch = globalThis.fetch;
   (globalThis as any).__originalFetch = originalFetch;
   globalThis.fetch = async (input: any, init?: any) => {
-    const url = String(input);
+    const url = input instanceof Request ? input.url : String(input);
+    const registryResponse = unregisteredLocationRegistryResponse(input, locationRegistry.url.origin, init);
+    if (registryResponse) return registryResponse;
     if (url.endsWith("/info")) {
       return new Response(
         JSON.stringify({ protocol: 1, version: "1.0.0", features: [] }),
@@ -739,6 +785,7 @@ test("createBootstrapSession mints a signed single-space bootstrap session", asy
   };
 
   const auth = new NodeUserAuthorization({
+    tinycloudRegistryUrl: locationRegistry.url.origin,
     signer: createSigner(signedMessages),
     wasmBindings: createWasmBindings(captured),
     signStrategy: { type: "auto-sign" },
@@ -801,7 +848,9 @@ test("ensureSpaceExists surfaces a space-creation handler rejection", async () =
   const originalFetch = globalThis.fetch;
   (globalThis as any).__originalFetch = originalFetch;
   globalThis.fetch = async (input: any, init?: any) => {
-    const url = String(input);
+    const url = input instanceof Request ? input.url : String(input);
+    const registryResponse = unregisteredLocationRegistryResponse(input, locationRegistry.url.origin, init);
+    if (registryResponse) return registryResponse;
     if (url.endsWith("/delegate") && init?.method === "POST") {
       // The primary space does not exist yet, so the handler is consulted.
       return new Response(
@@ -813,6 +862,7 @@ test("ensureSpaceExists surfaces a space-creation handler rejection", async () =
   };
 
   const auth = new NodeUserAuthorization({
+    tinycloudRegistryUrl: locationRegistry.url.origin,
     signer: createSigner(signedMessages),
     wasmBindings: createWasmBindings(captured),
     signStrategy: { type: "auto-sign" },
@@ -836,8 +886,11 @@ test("ensureSpaceExists surfaces a space-creation handler rejection", async () =
 
 test("ensureSpaceExists preserves the failed activation status and body", async () => {
   const originalFetch = globalThis.fetch;
-  globalThis.fetch = async () => new Response("Unauthorized Action: denied", { status: 403 });
+  globalThis.fetch = async (input, init) => unregisteredLocationRegistryResponse(
+    input, locationRegistry.url.origin, init,
+  ) ?? new Response("Unauthorized Action: denied", { status: 403 });
   const auth = new NodeUserAuthorization({
+    tinycloudRegistryUrl: locationRegistry.url.origin,
     signer: createSigner([]),
     wasmBindings: createWasmBindings([]),
     domain: "example.com",
@@ -869,7 +922,9 @@ test("ensureSpaceExists retains the failed retry verdict after creating a skippe
   const originalFetch = globalThis.fetch;
   let activations = 0;
   globalThis.fetch = async (input, init) => {
-    const url = String(input);
+    const url = input instanceof Request ? input.url : String(input);
+    const registryResponse = unregisteredLocationRegistryResponse(input, locationRegistry.url.origin, init);
+    if (registryResponse) return registryResponse;
     if (url.includes("/peer/generate/")) {
       return new Response("peer-id");
     }
@@ -886,6 +941,7 @@ test("ensureSpaceExists retains the failed retry verdict after creating a skippe
     throw new Error(`Unexpected fetch: ${url}`);
   };
   const auth = new NodeUserAuthorization({
+    tinycloudRegistryUrl: locationRegistry.url.origin,
     signer: createSigner([]),
     wasmBindings: createWasmBindings([]),
     domain: "example.com",
@@ -921,7 +977,9 @@ test("ensureSpaceExists preserves a failed host result instead of collapsing it 
   let activations = 0;
   let notified = 0;
   globalThis.fetch = async (input, init) => {
-    const url = String(input);
+    const url = input instanceof Request ? input.url : String(input);
+    const registryResponse = unregisteredLocationRegistryResponse(input, locationRegistry.url.origin, init);
+    if (registryResponse) return registryResponse;
     if (url.includes("/peer/generate/")) return new Response("peer-id");
     if (url.endsWith("/delegate") && init?.method === "POST") {
       activations++;
@@ -933,6 +991,7 @@ test("ensureSpaceExists preserves a failed host result instead of collapsing it 
     throw new Error(`Unexpected fetch: ${url}`);
   };
   const auth = new NodeUserAuthorization({
+    tinycloudRegistryUrl: locationRegistry.url.origin,
     signer: createSigner([]),
     wasmBindings: createWasmBindings([]),
     domain: "example.com",
@@ -964,7 +1023,9 @@ test("NodeUserAuthorization default session abilities never include kv/sync or k
   const captured: Array<Record<string, unknown>> = [];
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async (input, init) => {
-    const url = String(input);
+    const url = input instanceof Request ? input.url : String(input);
+    const registryResponse = unregisteredLocationRegistryResponse(input, locationRegistry.url.origin, init);
+    if (registryResponse) return registryResponse;
     if (url.endsWith("/info")) {
       return new Response(
         JSON.stringify({ protocol: 1, version: "1.0.0", features: [] }),
@@ -981,6 +1042,7 @@ test("NodeUserAuthorization default session abilities never include kv/sync or k
   };
 
   const auth = new NodeUserAuthorization({
+    tinycloudRegistryUrl: locationRegistry.url.origin,
     signer: createSigner([]),
     wasmBindings: createWasmBindings(captured),
     signStrategy: { type: "auto-sign" },
@@ -1018,6 +1080,7 @@ test("isAppKeyHostBound agrees with the sign-in key grant for every SIWE domain"
   for (const [domain, bound] of table) {
     const captured: Array<Record<string, unknown>> = [];
     const auth = new NodeUserAuthorization({
+      tinycloudRegistryUrl: locationRegistry.url.origin,
       signer: createSigner([]), wasmBindings: createWasmBindings(captured),
       signStrategy: { type: "auto-sign" }, domain,
       tinycloudHosts: ["https://tinycloud.test"], sessionStorage: new MemorySessionStorage(),
@@ -1046,7 +1109,9 @@ async function signInRecordingHosting(
   const originalFetch = globalThis.fetch;
   let activations = 0;
   globalThis.fetch = async (input: string | URL | Request, init?: RequestInit) => {
-    const url = String(input);
+    const url = input instanceof Request ? input.url : String(input);
+    const registryResponse = unregisteredLocationRegistryResponse(input, locationRegistry.url.origin, init);
+    if (registryResponse) return registryResponse;
     if (url.endsWith("/info")) {
       return new Response(JSON.stringify({ protocol: 1, version: "1.0.0", features: [] }), { status: 200 });
     }
@@ -1058,6 +1123,7 @@ async function signInRecordingHosting(
     throw new Error(`Unexpected fetch: ${url}`);
   };
   const auth = new NodeUserAuthorization({
+    tinycloudRegistryUrl: locationRegistry.url.origin,
     signer: createSigner([]),
     wasmBindings: createWasmBindings(captured),
     signStrategy: { type: "auto-sign" },
@@ -1145,6 +1211,8 @@ test("a restored session whose empty-list re-post says nothing is never reported
   const session = restoredTinyCloudSession();
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async (input, init) => {
+    const registryResponse = unregisteredLocationRegistryResponse(input, locationRegistry.url.origin, init);
+    if (registryResponse) return registryResponse;
     if (String(input).endsWith("/delegate") && init?.method === "POST") {
       // The node answers a delegation it already holds with empty lists, hosted or not.
       return new Response(JSON.stringify({ activated: [], skipped: [] }), { status: 200 });
@@ -1153,6 +1221,7 @@ test("a restored session whose empty-list re-post says nothing is never reported
   };
   try {
     const auth = new NodeUserAuthorization({
+      tinycloudRegistryUrl: locationRegistry.url.origin,
       signer: createSigner([]),
       wasmBindings: createWasmBindings([]),
       domain: "example.com",
@@ -1174,7 +1243,9 @@ test("ensurePrimarySpaceHosted creates only a not-hosted space and re-activates 
   const originalFetch = globalThis.fetch;
   const delegates: Array<Record<string, string>> = [];
   globalThis.fetch = async (input, init) => {
-    const url = String(input);
+    const url = input instanceof Request ? input.url : String(input);
+    const registryResponse = unregisteredLocationRegistryResponse(input, locationRegistry.url.origin, init);
+    if (registryResponse) return registryResponse;
     if (url.includes("/peer/generate/")) return new Response("peer-id");
     if (url.endsWith("/delegate") && init?.method === "POST") {
       delegates.push(Object.fromEntries(new Headers(init?.headers)));
@@ -1185,6 +1256,7 @@ test("ensurePrimarySpaceHosted creates only a not-hosted space and re-activates 
   try {
     let confirmations = 0;
     const auth = new NodeUserAuthorization({
+      tinycloudRegistryUrl: locationRegistry.url.origin,
       signer: createSigner([]),
       wasmBindings: createWasmBindings([]),
       domain: "example.com",
@@ -1246,7 +1318,9 @@ async function verifyCreationContextPrivacy(
   };
   const primarySpace = () => path === "fresh" ? String(captured[0]?.spaceId) : session.spaceId;
   globalThis.fetch = async (input, init) => {
-    const url = String(input);
+    const url = input instanceof Request ? input.url : String(input);
+    const registryResponse = unregisteredLocationRegistryResponse(input, locationRegistry.url.origin, init);
+    if (registryResponse) return registryResponse;
     if (url.endsWith("/info")) return new Response(JSON.stringify({ protocol: 1, version: "1.0.0", features: [] }));
     if (url.includes("/peer/generate/")) return new Response("peer-id");
     if (url.endsWith("/delegate") && init?.method === "POST") {
@@ -1271,6 +1345,7 @@ async function verifyCreationContextPrivacy(
     onSpaceCreationFailed: (context: SpaceCreationContext) => contexts.failed.push(context),
   };
   const auth = new NodeUserAuthorization({
+    tinycloudRegistryUrl: locationRegistry.url.origin,
     signer: createSigner([]),
     wasmBindings: wasm,
     signStrategy: { type: "auto-sign" },

@@ -44,6 +44,7 @@ interface HermeticEncryptedNode {
   readonly unrelatedAudience: string;
   /** Every HTTP request the loopback node received, in order. */
   requests(): readonly HermeticRequest[];
+  failDelegate(status: number | null): void;
   /** Every capability of every verified `/invoke` invocation, in order. */
   invocations(): readonly { readonly service: string; readonly action: string; readonly space: string; readonly path: string }[];
   createRotatedRestorableSession(): Promise<HermeticEncryptedNode["restorableSession"]>;
@@ -97,6 +98,7 @@ export async function createAuthRuntimeFixture(
     await writeJsonAtomic(profileConfigPath(profile), {
       name: profile,
       host: hermetic.host,
+      tinycloudRegistryUrl: hermetic.host,
       chainId: hermetic.restorableSession.chainId,
       spaceName: "secrets",
       spaceId: hermetic.restorableSession.spaceId,
@@ -111,6 +113,7 @@ export async function createAuthRuntimeFixture(
     await writeJsonAtomic(profileConfigPath(ownerProfile), {
       name: ownerProfile,
       host: hermetic.host,
+      tinycloudRegistryUrl: hermetic.host,
       chainId: hermetic.ownerRestorableSession.chainId,
       spaceName: "secrets",
       spaceId: hermetic.ownerRestorableSession.spaceId,

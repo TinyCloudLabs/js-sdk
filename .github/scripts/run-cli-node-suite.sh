@@ -28,6 +28,7 @@ secret="$(head -c 48 /dev/urandom | base64 -w0 | tr '+/' '-_' | tr -d '=')"
 (
   cd "$run"
   exec env \
+    HOME="$run/home" TC_HOME="$run/home" \
     TMPDIR="$run/tmp" \
     TINYCLOUD_STORAGE__DATADIR="$run/data" \
     TINYCLOUD_ADDRESS=127.0.0.1 TINYCLOUD_PORT="$port" \
@@ -67,7 +68,7 @@ echo "node ready at $server (pid $node_pid)"
 log="$run/suite.log"
 set +e
 HOME="$run/home" TMPDIR="$run/tmp" TC_HOME="$run/home" TC_TEST_SERVER="$server" \
-  bun test "$test_file" --timeout 60000 2>&1 | tee "$log"
+  bun test --preload ./packages/operations/test-support/test-bootstrap.mjs "$test_file" --timeout 60000 2>&1 | tee "$log"
 status=${PIPESTATUS[0]}
 set -e
 if [ "$status" != 0 ]; then

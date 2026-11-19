@@ -243,16 +243,14 @@ test("delegate-session revoke gate precedes consent and every node/OpenKey reque
   } finally { await writeFile(configPath, original); }
 });
 
-test("owner revoke requires consent before mutation, and OpenKey without verified fallback fails immediately", async () => {
+test("a local-key owner revokes without --yes and without a terminal: no question, revoked on the node, then removed", async () => {
   const target = await fixture.hermetic.mintDelegation();
-  const proofless = { ...target, delegationHeader: { Authorization: "old proofless grant" } };
   const path = additionalDelegationsPath(fixture.ownerProfile);
-  await writeJsonAtomic(path, [{ delegation: proofless, permissions: [] }]);
-  const old = await readFile(path, "utf8");
-  const noConsent = await command(fixture.ownerProfile, ["remove", target.cid, "--revoke"]);
-  expect(noConsent).toMatchObject({ code: 2, error: { error: { code: "CONFIRMATION_REQUIRED" } } });
-  expect(await readFile(path, "utf8")).toBe(old);
-  expect(fixture.hermetic.nativeBearerStats().revocations).toBe(0);
+  await writeJsonAtomic(path, [{ delegation: { ...target, delegationHeader: { Authorization: "old proofless grant" } }, permissions: [] }]);
+  const revocationsBefore = fixture.hermetic.nativeBearerStats().revocations;
+  const revoked = await command(fixture.ownerProfile, ["remove", target.cid, "--revoke"]);
+  expect(revoked).toMatchObject({ code: 0, error: null, output: { revoked: true, removed: 1 } });
+  expect(fixture.hermetic.nativeBearerStats().revocations).toBe(revocationsBefore + 1);
 });
 
 test("owner-openkey with no verified CID-bound space refuses raw-CID revoke without opening OpenKey", async () => {
@@ -265,6 +263,7 @@ test("owner-openkey with no verified CID-bound space refuses raw-CID revoke with
   await writeJsonAtomic(path, [{ delegation: { ...target, delegationHeader: { Authorization: "proof absent" } }, permissions: [] }]);
   const before = await readFile(path, "utf8");
   let acquisitions = 0;
+  const revocationsBefore = fixture.hermetic.nativeBearerStats().revocations;
   try {
     const denied = await command(fixture.ownerProfile, ["remove", target.cid, "--revoke", "--yes"], async () => {
       acquisitions++;
@@ -272,7 +271,7 @@ test("owner-openkey with no verified CID-bound space refuses raw-CID revoke with
     });
     expect(denied).toMatchObject({ code: 5, error: { error: { code: "RAW_RECAP_RESOURCE_UNSUPPORTED" } } });
     expect(acquisitions).toBe(0);
-    expect(fixture.hermetic.nativeBearerStats().revocations).toBe(0);
+    expect(fixture.hermetic.nativeBearerStats().revocations).toBe(revocationsBefore);
     expect(await readFile(path, "utf8")).toBe(before);
   } finally {
     await writeFile(configPath, originalProfile);

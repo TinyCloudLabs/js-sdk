@@ -29,6 +29,7 @@ beforeAll(async () => {
     fetch(request) {
       const pathname = new URL(request.url).pathname;
       requests.push(`${request.method} ${pathname}`);
+      if (/^\/v[12]\/locations\//.test(pathname)) return Response.json({ error: "location record not found" }, { status: 404 });
       return new Response(pathname === "/delegate" ? `refused: ${RESPONSE_CANARY}` : "read denied", { status: 403 });
     },
   });
@@ -79,7 +80,7 @@ beforeAll(async () => {
   };
 
   await writeJsonAtomic(profileConfigPath("owner"), {
-    name: "owner", host: node.url.origin, chainId: 1, spaceName: "secrets", spaceId,
+    name: "owner", host: node.url.origin, tinycloudRegistryUrl: node.url.origin, chainId: 1, spaceName: "secrets", spaceId,
     did: ownerDid, sessionDid, ownerDid, authMethod: "openkey", posture: "owner-openkey",
     operatorType: "human", createdAt: "2026-10-04T00:00:00.000Z",
   });

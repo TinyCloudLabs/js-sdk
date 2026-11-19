@@ -13,9 +13,9 @@ export function isObject(value: unknown): value is JsonObject {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
-export const KeySchema = z.string().refine((key) => parseKey(key) !== undefined, "Invalid personal-record key.");
+export const KeySchema = z.string().refine((key) => parseKey(key) !== undefined, "A personal-record key is xyz.tinycloud.tinyapps.<app>/<kind>/<folder>/<id>, one of that app's catalog keys, or an existing xyz.tinycloud.agent-data/ key.");
 export const RecordKeySchema = KeySchema.refine((key) => parseKey(key)?.area === "record", "A record key is required.");
-export const PrefixSchema = z.string().refine((prefix) => parsePrefix(prefix) !== undefined, "Invalid personal-record prefix.");
+export const PrefixSchema = z.string().refine((prefix) => parsePrefix(prefix) !== undefined, "A personal-record prefix starts with xyz.tinycloud.tinyapps.<app>/ or xyz.tinycloud.agent-data/ and follows the key layout.");
 export const EtagSchema = z.string().regex(/^"blake3-[0-9a-f]{64}"$/, "A strong TinyCloud BLAKE3 ETag is required.");
 
 export type RecordParts = Extract<KeyParts, { area: "record" }>;
@@ -70,7 +70,7 @@ export const WriteInputSchema = z.object({ ops: z.array(z.discriminatedUnion("op
     const target = parseKey(op.op === "move" ? op.to : op.key);
     const from = op.op === "move" ? parseKey(op.from) : undefined;
     if (!target || (op.op === "move" && !from)) return;
-    if (from && (from.layout !== target.layout || from.app !== target.app)) context.addIssue({ code: "custom", path: ["ops", index, "to"], message: "a move stays inside one layout and app" });
+    if (from && (from.app !== target.app || from.layout !== target.layout)) context.addIssue({ code: "custom", path: ["ops", index, "to"], message: "a move stays inside one app and layout" });
     const reason = valueSyntax(op.op === "move" ? op.to : op.key, op.value);
     if (reason) context.addIssue({ code: "custom", path: ["ops", index, "value"], message: reason });
   });

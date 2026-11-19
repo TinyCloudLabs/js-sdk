@@ -18,7 +18,7 @@ import { cmd } from './program.js';
 import { loadKey, profileDir, type AgentKey } from './profile.js';
 import { StoredCredentialSource, type StoredVerifier } from './credential-source.js';
 
-type Step = 'request' | 'code' | 'credential' | 'session';
+export type Step = 'request' | 'code' | 'credential' | 'session';
 
 /** Code window: 5 minutes (lifecycle ruling). The witness returns no code expiry, so it is computed from the pending record's creation time. */
 const CODE_WINDOW_MS = 5 * 60_000;
@@ -59,7 +59,7 @@ const credentialUsage = () => `${acquireUsage()}\n${showUsage()}`;
  * Holder over Courier's did:key Ed25519 agent key. The private key stays inside
  * Node's KeyObject; only signature bytes leave this function.
  */
-function holderFor(key: AgentKey): HolderSigner {
+export function holderFor(key: AgentKey): HolderSigner {
   let privateKey: KeyObject;
   try {
     privateKey = createPrivateKey({ key: key.jwk as JsonWebKey, format: 'jwk' });
@@ -73,26 +73,34 @@ function holderFor(key: AgentKey): HolderSigner {
   }
 }
 
+/**
+ * node-sdk bundles `EmailProofError` once per entrypoint (`credentials`, `share-receive`), so an error thrown through
+ * one entrypoint is not `instanceof` the class another one exports. Accept the class, or an error with its exact shape.
+ */
 function isEmailProofError(error: unknown): error is EmailProofError {
-  return error instanceof EmailProofError;
+  if (error instanceof EmailProofError) return true;
+  return error instanceof Error && error.name === 'EmailProofError'
+    && 'step' in error && typeof error.step === 'string'
+    && 'code' in error && typeof error.code === 'string'
+    && 'recoverable' in error && typeof error.recoverable === 'boolean';
 }
 
 /**
  * Maps a witness-flow failure to a stable `credential.<step>.<CODE>` code. The
  * message never contains the verification code, the pending verifier, or key material.
  */
-function mapEmailProofError(error: unknown, fallbackStep: Step): CourierError {
+export function mapEmailProofError(error: unknown, fallbackStep: Step): CourierError {
   if (isEmailProofError(error)) return new CourierError(`credential.${error.step}.${error.code}`, error.message);
   return new CourierError(`credential.${fallbackStep}.FAILED`, 'Email verification failed.');
 }
 
 /** The witness marks which failures leave the pending request usable for another code. */
-function keepsPendingAfterFailure(error: unknown): boolean {
+export function keepsPendingAfterFailure(error: unknown): boolean {
   return isEmailProofError(error) && error.recoverable;
 }
 
 /** Pending-store failures keep their store codes (`credential-permissions`, `credential-store-invalid`). */
-async function withStoreErrors<T>(run: () => Promise<T>): Promise<T> {
+export async function withStoreErrors<T>(run: () => Promise<T>): Promise<T> {
   try {
     return await run();
   } catch (error) {

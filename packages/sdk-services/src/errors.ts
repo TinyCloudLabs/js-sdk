@@ -7,6 +7,7 @@
 import { responseErrorMeta } from "./responseErrors";
 import { CAPABILITY_REGISTRY } from "@tinycloud/bootstrap";
 import { parseNetworkId } from "./encryption/networkId";
+import { routingFailure } from "./resourceRouting";
 
 import {
   type ServiceError,
@@ -611,6 +612,8 @@ export function wrapError(
   error: unknown,
   defaultCode: string = ErrorCodes.NETWORK_ERROR
 ): ServiceError {
+  const routing = routingFailure(error);
+  if (routing) return { ...routing, service };
   if (error instanceof Error) {
     // A configured request timeout elapsed (see BaseService.createRequestSignal)
     if (isRequestTimeoutError(error)) {

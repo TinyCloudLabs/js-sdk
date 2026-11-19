@@ -1,4 +1,6 @@
 import type { PermissionEntry } from "@tinycloud/node-sdk";
+import { publicJwk } from "@tinycloud/sdk-core";
+import type { ShareInvitationApprovalContext } from "@tinycloud/share-envelope/links";
 import { createInterface } from "node:readline";
 import { DEFAULT_OPENKEY_HOST, DEFAULT_OPENKEY_DEVICE_API_HOST, ExitCode } from "../config/constants.js";
 import { CLIError } from "../output/errors.js";
@@ -44,6 +46,10 @@ export interface AuthFlowOptions {
   jwk?: object;
   host?: string;
   permissions?: PermissionEntry[];
+  /** A share-invitation approval: no permissions and no key id; the approver chooses the key. */
+  invitationContext?: ShareInvitationApprovalContext;
+  /** An invitation's file identity, stored with its pending request so a rerun of the same file resumes it. */
+  invitationMeta?: { contentSha256: string; requestedDurationMs?: number };
   /**
    * User-facing context shown on the OpenKey approval page. Optional at the
    * OpenKey protocol boundary, but TinyCloud CLI permission-grant call sites
@@ -70,30 +76,11 @@ export interface AuthFlowOptions {
    * it must verify the signed result with the matching `expiryChangeable` expectation.
    */
   expiryChangeable?: boolean;
-}
-
-const PRIVATE_JWK_FIELDS = new Set([
-  "d",
-  "p",
-  "q",
-  "dp",
-  "dq",
-  "qi",
-  "oth",
-  "k",
-]);
-
-
-export function publicJwkForDelegation(jwk: object): object {
-  const publicJwk: Record<string, unknown> = {};
-
-  for (const [key, value] of Object.entries(jwk)) {
-    if (!PRIVATE_JWK_FIELDS.has(key)) {
-      publicJwk[key] = value;
-    }
-  }
-
-  return publicJwk;
+  /**
+   * Ask the owner for a renewal lease of at most this many seconds with the signed approval request. The result's
+   * lease is verified and admitted at the node before the login saves it. No command sets this yet.
+   */
+  renewalLeaseSeconds?: number;
 }
 
 /** Default: durable remote approval and automatic result discovery. `--paste` remains explicit. */
@@ -119,7 +106,7 @@ export function buildAuthUrl(did: string, options: AuthFlowOptions & { callback?
   if (options.jwk) {
     // base64url-encode the JWK
     const jwkB64 = Buffer.from(
-      JSON.stringify(publicJwkForDelegation(options.jwk)),
+      JSON.stringify(publicJwk(options.jwk)),
     ).toString("base64url");
     params.set("jwk", jwkB64);
   }
@@ -221,7 +208,7 @@ function assertBoundToKey(parsed: unknown, did: string, localJwk: Record<string,
     !jwk || typeof jwk !== "object" || Array.isArray(jwk) ||
     jwk.kty !== "OKP" || jwk.crv !== "Ed25519" ||
     typeof jwk.x !== "string" || jwk.x !== localJwk.x ||
-    [...PRIVATE_JWK_FIELDS].some((field) => field in jwk)
+    "d" in jwk
   ) {
     throw new Error("Delegation is bound to a different CLI key.");
   }
@@ -233,7 +220,7 @@ export async function delegationFromInput(input: string, did: string, options: A
   let parsed: unknown;
   if (/^[a-z2-7]{4}-[a-z2-7]{4}$/i.test(trimmed)) {
     if (!options.jwk) throw new Error("A CLI session key is required to retrieve a delegation.");
-    const localJwk = publicJwkForDelegation(options.jwk) as Record<string, unknown>;
+    const localJwk = publicJwk(options.jwk);
     // OpenKey consumes the code on redeem: a code an interrupted run already redeemed is finished from its local copy.
     const saved = options.profileName === undefined ? undefined : await pendingDelegationFor(options.profileName, trimmed);
     if (saved !== undefined) {

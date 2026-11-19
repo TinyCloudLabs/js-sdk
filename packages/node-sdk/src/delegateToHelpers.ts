@@ -119,3 +119,14 @@ export function extractSiweExpiration(siwe: string): Date | undefined {
   }
   return d;
 }
+
+/**
+ * The latest expiry a child session or delegation may carry under a parent that expires at `parentExpiry`,
+ * held to whole seconds. A parent's expiry is read as seconds by the node (a compact UCAN `exp` is whole
+ * seconds; a SIWE session grant may carry milliseconds), so a child that keeps the parent's milliseconds
+ * can sit after the parent's whole second and be refused as outliving it. Rounding down never extends the
+ * child past the parent under either reading and costs less than one second.
+ */
+export function wholeSecondExpiry(parentExpiry: Date): Date {
+  return new Date(Math.floor(parentExpiry.getTime() / 1000) * 1000);
+}

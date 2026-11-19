@@ -28,7 +28,16 @@ import { join, resolve } from "node:path";
 // tc2096LazyContentRatchet row records it; approved by Naomi (replica first import +104/+111, activation +26/+22 at run 40370497109). Zero additional headroom.
 // TC-2418 (#844: request signals combined with AbortSignal.any) measured 776,561 (+22) in GitHub run 41589803513 (source
 // b817f0d5); the ledger's tc2418AbortListenerCleanup row records it; approved by Naomi, 2026-11-03. Zero additional headroom.
-export const MAX_WORKER_GZIP_BYTES = 776_561;
+// TC-2481 (#872), after the metadata-preserving error-normalization trim: both pinned SQLite/PostgreSQL jobs in
+// run 42410717276 measured 777125 at 8bfeb9ab9. Naomi's conditional exact-byte approval, confirmed by Holden,
+// admits only these final worker bytes; tc2481RegistryFreshness records the provenance. Zero additional headroom.
+// #873's narrow cold-refusal/offline mapping reaches both workers through
+// kvSyncTransport. Run42498701097 at11f3b8a7 measured777149 (+24) in both lanes;
+// Naomi8e3df7f3 admits only that exact worker size; tc2481OfflineReplicaTransport records it.
+// host SIWE expiry (TC-2691): final pinned source-WASM bytes; Naomi approved zero headroom.
+// TC-2872: canonical Replica e2e run 43392230112 measured 780,742 B on SQLite and Postgres, +3,518 B over the prior ceiling; Naomi approved the exact ticket-scoped size.
+// TC-2931: canonical run 43430771640 measures 780,903 B (+161); exact named admission, no headroom. Details: TC-2931
+export const MAX_WORKER_GZIP_BYTES = 780_903;
 // TC-1827 follow-up: `replica.worker.js` (the @tinycloud/replica/browser worker) is unhashed and had no ceiling. It
 // measured 770,093 in GitHub run 39949887460 (head f2e2f9fc, merge base dc615834); requested by Naomi, 2026-10-23; the
 // ledger's tc1827ReplicaWorkerRatchet row records it. Zero additional headroom.
@@ -38,7 +47,15 @@ export const MAX_WORKER_GZIP_BYTES = 776_561;
 // replicaWorker; approved by Naomi. Zero additional headroom.
 // TC-2418 (#844) measured 770,494 (+27) in the same run 41589803513; the ledger's tc2418AbortListenerCleanup row records
 // it as replicaWorker; approved by Naomi, 2026-11-03. Zero additional headroom.
-export const MAX_REPLICA_WORKER_GZIP_BYTES = 770_494;
+// TC-2481 measured 771018 in the same pinned jobs; tc2481RegistryFreshness records the +524-byte admission.
+// Zero additional headroom; no root, first-import, activation or optional bucket is raised.
+// The same pinned #873 lanes measured771051 (+33); the new worker-only row
+// preserves every root, initial, activation and gated ceiling.
+// host SIWE expiry (TC-2691): final pinned source-WASM bytes; Naomi approved zero headroom.
+// TC-2773: canonical run 42939305043 measures 771106 (+34), approved by Naomi with zero headroom.
+// TC-2872: canonical Replica e2e run 43392230112 measured 774,411 B, +3,305 B over the prior ceiling; Naomi approved the exact ticket-scoped size.
+// TC-2931: the same canonical run measures 774,561 B (+150); exact named admission, no headroom. Details: TC-2931
+export const MAX_REPLICA_WORKER_GZIP_BYTES = 774_561;
 const canonicalName = /^kv-storage\.worker\.([0-9a-f]{64})\.js$/;
 const replicaWorkerName = "replica.worker.js";
 

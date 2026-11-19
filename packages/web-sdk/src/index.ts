@@ -1,3 +1,5 @@
+export { SessionAccountMismatchError } from "./modules/restoreAccount";
+export { sharePlacementCore as __sharePlacementCore } from "./share-placement-core";
 // Main class and config
 export {
   TinyCloudWeb,
@@ -14,6 +16,10 @@ export {
   type EstablishOpenKeySessionResult,
   type EstablishOpenKeySessionStatus,
 } from "./openkey-session";
+export {
+  OpenKeySigningKeyError,
+  type OpenKeySigningKeyErrorCode,
+} from "./openkey-signing-key";
 export {
   establishManageKeySession,
   type EstablishManageKeySessionOptions,
@@ -248,6 +254,8 @@ export {
   // SharingService
   SharingService,
   createSharingService,
+  inspectShareToken,
+  type InspectedShareToken,
   type ISharingService,
   type SharingServiceConfig,
   type EncodedShareData,
@@ -345,7 +353,9 @@ export {
   type VaultError,
   type ISecretsService,
   type SecretCatalogEntry,
+  type SecretEntry,
   type SecretPayload,
+  type SecretType,
   type SecretsError,
   type ResolvedSecretPath,
   type ParsedSecretCatalogKey,

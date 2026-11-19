@@ -1,7 +1,9 @@
+import { assertRequestedRestoreAccount, SessionAccountMismatchError } from "../modules/restoreAccount";
 import {
   ISessionStorage,
   PersistedSessionData,
   validatePersistedSessionData,
+  registerOwnedSessionStorage,
 } from "@tinycloud/sdk-core";
 import type { PortableDelegation } from "@tinycloud/node-sdk/core";
 
@@ -30,14 +32,15 @@ function toRuntimeGrant(entry: unknown): PortableDelegation | undefined {
 
 export type BrowserSessionLoadStatus =
   | "loaded"
+  | "renewal-candidate"
   | "missing"
   | "expired"
   | "corrupt"
   | "storage-unavailable";
 
 export type BrowserSessionLoadResult =
-  | { status: "loaded"; data: PersistedSessionData }
-  | { status: Exclude<BrowserSessionLoadStatus, "loaded">; data: null };
+  | { status: "loaded" | "renewal-candidate"; data: PersistedSessionData }
+  | { status: Exclude<BrowserSessionLoadStatus, "loaded" | "renewal-candidate">; data: null };
 
 export interface BrowserSessionStorageOptions {
   /** Storage backend. Defaults to globalThis.localStorage when available. */
@@ -53,6 +56,9 @@ export class BrowserSessionStorage implements ISessionStorage {
   constructor(options: BrowserSessionStorageOptions = {}) {
     this.storage = options.storage ?? this.defaultStorage();
     this.keyPrefix = options.keyPrefix ?? STORAGE_PREFIX;
+    if (new.target === BrowserSessionStorage) {
+      registerOwnedSessionStorage(this, (address, signature) => this.invalidateSession(address, signature));
+    }
   }
 
   private defaultStorage(): Storage | undefined {
@@ -73,6 +79,49 @@ export class BrowserSessionStorage implements ISessionStorage {
     return `${this.keyPrefix}${FENCE_SEGMENT}${address.toLowerCase()}`;
   }
 
+  private retirementKey(address: string, signature: string): string {
+    return `${this.keyPrefix}retired:${address.toLowerCase()}:${encodeURIComponent(signature)}`;
+  }
+
+  private isRetired(address: string, signature: string): boolean {
+    return this.storage !== undefined &&
+      this.storage.getItem(this.retirementKey(address, signature)) !== null;
+  }
+
+  private invalidateSession(address: string, signature: string): void {
+    if (!this.storage) throw new Error("Session storage is unavailable.");
+    let failure: unknown;
+    try {
+      this.storage.setItem(this.retirementKey(address, signature), "1");
+      if (this.storage.getItem(this.retirementKey(address, signature)) !== "1") {
+        throw new Error("Session storage did not confirm sign-out.");
+      }
+    } catch (error) {
+      failure = error;
+    }
+    try {
+      const raw = this.storage.getItem(this.key(address));
+      if (raw !== null && (JSON.parse(raw) as PersistedSessionData).signature === signature) {
+        this.storage.removeItem(this.key(address));
+        const remaining = this.storage.getItem(this.key(address));
+        if (remaining !== null && (JSON.parse(remaining) as PersistedSessionData).signature === signature) {
+          throw new Error("Session storage did not confirm removal.");
+        }
+        if (remaining === null) {
+          this.storage.removeItem(this.grantsKey(address));
+          this.clearActiveAddress(address);
+          if (this.storage.getItem(this.grantsKey(address)) !== null ||
+              this.storage.getItem(this.activeAddressKey()) === address.toLowerCase()) {
+            throw new Error("Session storage did not confirm removal.");
+          }
+        }
+      }
+    } catch (error) {
+      failure ??= error;
+    }
+    if (failure !== undefined) throw failure;
+  }
+
   /**
    * Fences the session with `signature` stored for `address`, for when removing its record fails: a restore
    * checks {@link isSignedOut} and refuses it. A successful `clear` lifts the fence, and so does saving a
@@ -83,7 +132,8 @@ export class BrowserSessionStorage implements ISessionStorage {
   }
 
   isSignedOut(address: string, signature: string): boolean {
-    return this.storage?.getItem(this.fenceKey(address)) === signature;
+    return this.isRetired(address, signature) ||
+      this.storage?.getItem(this.fenceKey(address)) === signature;
   }
 
   private clearActiveAddress(address: string): void {
@@ -116,6 +166,7 @@ export class BrowserSessionStorage implements ISessionStorage {
   save(address: string, data: PersistedSessionData): Promise<void> {
     if (!this.storage) return Promise.resolve();
     this.assertPersistable(data);
+    if (this.isRetired(address, data.signature)) throw new Error("Session was cancelled by sign-out.");
     const normalizedAddress = address.toLowerCase();
     this.storage.setItem(this.key(normalizedAddress), JSON.stringify(data));
     // A new session record has a new key; grants made to the previous key do not carry over.
@@ -136,6 +187,15 @@ export class BrowserSessionStorage implements ISessionStorage {
     return address;
   }
 
+  /**
+   * Returns the saved address for a renewal restore without discarding an expired candidate.
+   * The session and renewal authority still require full verification before restore.
+   */
+  activeAddressForRenewal(): string | undefined {
+    const address = this.storage?.getItem(this.activeAddressKey());
+    return address || undefined;
+  }
+
   load(address: string): Promise<PersistedSessionData | null> {
     return this.loadWithStatus(address).then((result) =>
       result.status === "loaded" ? result.data : null,
@@ -154,7 +214,18 @@ export class BrowserSessionStorage implements ISessionStorage {
     return validatePersistedSessionData(networkData);
   }
 
-  async loadWithStatus(address: string): Promise<BrowserSessionLoadResult> {
+  loadWithStatus(address: string): Promise<BrowserSessionLoadResult> {
+    return this.loadForRestore(address, false);
+  }
+
+  loadRenewalCandidate(address: string): Promise<BrowserSessionLoadResult> {
+    return this.loadForRestore(address, true);
+  }
+
+  private async loadForRestore(
+    address: string,
+    preserveExpiredCandidate: boolean,
+  ): Promise<BrowserSessionLoadResult> {
     if (!this.storage) return { status: "storage-unavailable", data: null };
 
     const key = this.key(address);
@@ -169,6 +240,8 @@ export class BrowserSessionStorage implements ISessionStorage {
         this.clearActiveAddress(address);
         return { status: "corrupt", data: null };
       }
+      await assertRequestedRestoreAccount(address, result.data);
+      if (this.isRetired(address, result.data.signature)) return { status: "missing", data: null };
 
       if (!result.data.tinycloudSession?.spaceId) {
         this.storage.removeItem(key);
@@ -188,6 +261,9 @@ export class BrowserSessionStorage implements ISessionStorage {
       }
 
       const expiresAt = new Date(result.data.expiresAt);
+      if (preserveExpiredCandidate && Number.isFinite(expiresAt.getTime()) && expiresAt.getTime() <= Date.now()) {
+        return { status: "renewal-candidate", data: result.data };
+      }
       if (!Number.isFinite(expiresAt.getTime()) || expiresAt.getTime() <= Date.now()) {
         this.storage.removeItem(key);
         this.clearActiveAddress(address);
@@ -195,9 +271,10 @@ export class BrowserSessionStorage implements ISessionStorage {
       }
 
       return { status: "loaded", data: result.data };
-    } catch {
+    } catch (error) {
       this.storage.removeItem(key);
       this.clearActiveAddress(address);
+      if (error instanceof SessionAccountMismatchError) throw error;
       return { status: "corrupt", data: null };
     }
   }
@@ -288,6 +365,7 @@ export class BrowserSessionStorage implements ISessionStorage {
       const parsed = JSON.parse(raw);
       const result = this.validateForNetworkRestore(parsed);
       if (!result.ok) return false;
+      if (this.isRetired(address, result.data.signature)) return false;
       return new Date(result.data.expiresAt).getTime() > Date.now();
     } catch {
       return false;

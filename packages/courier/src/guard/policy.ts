@@ -49,12 +49,21 @@ export interface PolicyEnv {
   courierEntries?: string[];
 }
 
-/** The exec opt-out never starts a second agent CLI. */
-export function startsAgentCli(command: string): boolean {
+/** The agent CLI a command starts as its first word (`codex`, `omp`, …), if any. */
+export function agentCliStarted(command: string): string | undefined {
   const head = parseShell(command).cmds[0]?.words[0];
   const literal = head ? wordLiteral(head) : undefined;
-  return literal !== undefined && AGENT_CLIS.has(progName(literal));
+  const name = literal === undefined ? undefined : progName(literal);
+  return name !== undefined && AGENT_CLIS.has(name) ? name : undefined;
 }
+
+/** The exec opt-out never starts a second agent CLI. */
+export function startsAgentCli(command: string): boolean {
+  return agentCliStarted(command) !== undefined;
+}
+
+/** Agent CLIs a guarded wake adapter exists for (`--wake claude`, `--wake paseo`): never started through `exec`. */
+export const GUARDED_ADAPTER_CLIS: ReadonlySet<string> = new Set(['claude', 'paseo']);
 
 const MAX_DEPTH = 6;
 const PLACEHOLDER = '\u0001';

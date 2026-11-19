@@ -9,6 +9,7 @@ import { secretsGetOperationDefinitions } from "./operations/secrets-get.js";
 import { secretsStatusOperationDefinitions } from "./operations/secrets-status.js";
 import { sqlOperationDefinitions } from "./operations/sql.js";
 import { statusOperationDefinitions } from "./operations/status.js";
+import { registryShowOperationDefinitions } from "./operations/registry-show.js";
 
 export type OperationLookup =
   | Readonly<{ status: "found"; definition: OperationDefinition<any, any> }>
@@ -38,6 +39,7 @@ function registeredOperationDefinitions(): readonly OperationDefinition<any, any
     ...secretsGetOperationDefinitions,
     ...secretsStatusOperationDefinitions,
     ...knowledgeOperationDefinitions,
+    ...registryShowOperationDefinitions,
   ];
   return operationDefinitions;
 }
