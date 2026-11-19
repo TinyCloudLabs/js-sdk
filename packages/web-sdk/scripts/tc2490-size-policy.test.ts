@@ -8,12 +8,12 @@ import {
   validateTc2490OneApprovalRootTransition,
 } from "./replica-size-policy";
 
-test("TC-2490 records the exact canonical CI root bytes of #1060 within the 800-byte cap", () => {
+test("TC-2490 records #1060's canonical CI root delta over TC-3286 within the 800-byte cap", () => {
   validateLedger(ledger);
   const row = ledger.tc2490OneApprovalRoot;
-  const predecessor = ledger.tc3285SecretTypesRoot;
+  const predecessor = ledger.tc3286ShareNoDelegationActionsRoot;
   expect(row).toEqual(approvedTc2490OneApprovalRoot);
-  expect(row.base).toBe("991ddb560d494e0b61424bff2b2c7e28541e522b");
+  expect(row.base).toBe("1f961e4a56d65fb122493b263a40a23c9e68a142");
   expect(row.canonicalCI).toEqual({
     run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44427965751",
     jobs: [
@@ -22,7 +22,7 @@ test("TC-2490 records the exact canonical CI root bytes of #1060 within the 800-
     ],
   });
   expect(row.sourceCommits).toEqual(["e1c984268ec5c9082ac6ab0d5830dc6a483cd712"]);
-  expect(row.root.ceiling).toEqual({ "index.mjs": 1529015, "index.cjs": 1462451 });
+  expect(row.root.ceiling).toEqual({ "index.mjs": 1529118, "index.cjs": 1462499 });
   expect(row.root.delta).toEqual({ "index.mjs": 179, "index.cjs": 159 });
 
   for (const format of ["index.mjs", "index.cjs"] as const) {
@@ -41,7 +41,7 @@ test("TC-2490 records the exact canonical CI root bytes of #1060 within the 800-
   ]);
 });
 
-test("TC-2490 refuses mutation, removal, or a missing TC-3285 predecessor", () => {
+test("TC-2490 refuses mutation, removal, or a missing TC-3286 predecessor", () => {
   const row = ledger.tc2490OneApprovalRoot;
   validateTc2490OneApprovalRootTransition(undefined, row);
   validateTc2490OneApprovalRootTransition(row, structuredClone(row));
@@ -59,5 +59,5 @@ test("TC-2490 refuses mutation, removal, or a missing TC-3285 predecessor", () =
   }
 
   expect(() => validateTc2490OneApprovalRootTransition(row, undefined)).toThrow("TC-2490");
-  expect(() => validateLedger({ ...ledger, tc3285SecretTypesRoot: undefined })).toThrow("TC-2490");
+  expect(() => validateLedger({ ...ledger, tc3286ShareNoDelegationActionsRoot: undefined })).toThrow("TC-2490");
 });
