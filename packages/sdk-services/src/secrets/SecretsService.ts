@@ -4,9 +4,16 @@ import type { VaultError } from "../vault/types";
 import type {
   ISecretsService,
   SecretCatalogEntry,
+  SecretEntry,
   SecretPayload,
   SecretsError,
 } from "./ISecretsService";
+import {
+  DEFAULT_SECRET_TYPE,
+  isSecretType,
+  SECRET_TYPES,
+  secretTypeOf,
+} from "./secretTypes";
 import {
   canonicalizeSecretScope,
   parseSecretCatalogKey,
@@ -61,10 +68,10 @@ export class SecretsService implements ISecretsService {
     this.vault.lock();
   }
 
-  async get(
+  private async readPayload(
     name: string,
     options?: SecretScopeOptions,
-  ): Promise<Result<string, SecretsError>> {
+  ): Promise<Result<SecretPayload, SecretsError>> {
     const secretPath = resolveSecretPathResult(name, options);
     if ("ok" in secretPath) return secretPath;
 
@@ -77,7 +84,29 @@ export class SecretsService implements ISecretsService {
     if (!result.ok) {
       return result;
     }
-    return { ok: true, data: result.data.value.value };
+    return { ok: true, data: result.data.value };
+  }
+
+  async get(
+    name: string,
+    options?: SecretScopeOptions,
+  ): Promise<Result<string, SecretsError>> {
+    const payload = await this.readPayload(name, options);
+    if (!payload.ok) return payload;
+    return { ok: true, data: payload.data.value };
+  }
+
+  async getEntry(
+    name: string,
+    options?: SecretScopeOptions,
+  ): Promise<Result<SecretEntry, SecretsError>> {
+    const payload = await this.readPayload(name, options);
+    if (!payload.ok) return payload;
+    const { value, createdAt, updatedAt } = payload.data;
+    return {
+      ok: true,
+      data: { value, type: secretTypeOf(payload.data), createdAt, updatedAt },
+    };
   }
 
   async put(
@@ -87,12 +116,20 @@ export class SecretsService implements ISecretsService {
   ): Promise<Result<void, SecretsError>> {
     const secretPath = resolveSecretPathResult(name, options);
     if ("ok" in secretPath) return secretPath;
+    if (options?.type !== undefined && !isSecretType(options.type)) {
+      return invalidSecretInput(
+        `Invalid secret type ${JSON.stringify(options.type)}. Use one of: ${SECRET_TYPES.join(", ")}.`,
+      );
+    }
 
     const now = new Date().toISOString();
     const payload = {
       value,
       createdAt: now,
       updatedAt: now,
+      ...(options?.type === undefined || options.type === DEFAULT_SECRET_TYPE
+        ? {}
+        : { type: options.type }),
     } satisfies SecretPayload;
     return options?.ifAbsent === true
       ? this.vault.put(secretPath.vaultKey, payload, { ifNoneMatch: "*" })

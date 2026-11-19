@@ -44,7 +44,7 @@ var init_constants = __esm({
     CONFIG_DIR = tinycloudHomePath();
     PROFILES_DIR = profilesPath();
     CONFIG_FILE = tinycloudConfigPath();
-    DEFAULT_HOST = "https://tee.node.tinycloud.xyz";
+    DEFAULT_HOST = "https://node.tinycloud.xyz";
     DEFAULT_OPENKEY_HOST = "https://openkey.so";
     DEFAULT_OPENKEY_DEVICE_API_HOST = "https://api.openkey.so";
     DEFAULT_SHARE_ORIGIN = "https://share.tinycloud.xyz";
@@ -8267,8 +8267,8 @@ CREATE TABLE IF NOT EXISTS grant_install (
         if (this.#readonlySnapshot) {
           throw new ReplicaError3(ReplicaErrorCode3.STORAGE_ERROR, "A read-only replica snapshot cannot mutate the shared database.");
         }
-        const read5 = activeReadSection.getStore();
-        if (read5?.active && read5.controller === this) {
+        const read6 = activeReadSection.getStore();
+        if (read6?.active && read6.controller === this) {
           throw new ReplicaError3(
             ReplicaErrorCode3.STORAGE_ERROR,
             "mutation attempted on the same controller while its readTransaction section is active; this would deadlock"
@@ -9579,9 +9579,9 @@ async function finishLegacyReplicaCleanup(name, approval, discardLocalChanges = 
   return removed;
 }
 async function gateHeldByAnotherAccount(name, principal) {
-  const read5 = await readLogoutGate(profilePath4(name));
-  if (read5 === void 0) return false;
-  const { state: state2 } = read5;
+  const read6 = await readLogoutGate(profilePath4(name));
+  if (read6 === void 0) return false;
+  const { state: state2 } = read6;
   const hash = await principalHashOf(state2.salt, principal);
   return state2.principalHash !== null ? state2.principalHash !== hash : state2.eraseDeferred && state2.deferredPrincipalHash !== hash;
 }
@@ -10352,7 +10352,8 @@ var init_host = __esm({
 });
 
 // src/config/profiles.ts
-import { chmod as chmod3, lstat as lstat6, readdir as readdir5, rm as rm6 } from "fs/promises";
+import { constants as fsConstants5 } from "fs";
+import { chmod as chmod3, lstat as lstat6, open as open7, readdir as readdir5, rm as rm6 } from "fs/promises";
 import { CLI_NAME as CLI_NAME9 } from "@tinycloud/operations/cli-name";
 import { join as join11 } from "path";
 import {
@@ -10368,6 +10369,60 @@ import {
   writeSession,
   withPinnedProfileDirectory as withPinnedProfileDirectory2
 } from "@tinycloud/operations/state";
+function isTransientProfileEntryError(error) {
+  const code5 = error.code;
+  return code5 === "ENOENT" || code5 === "ENOTDIR" || code5 === "ELOOP" || code5 === "EISDIR";
+}
+async function secureProfileDirectory(directory) {
+  const rootFlags = fsConstants5.O_RDONLY | fsConstants5.O_DIRECTORY | (process.platform === "linux" ? 0 : fsConstants5.O_NOFOLLOW);
+  let root;
+  try {
+    root = await open7(directory, rootFlags);
+  } catch (error) {
+    if (error.code === "ENOENT") return;
+    throw error;
+  }
+  try {
+    const info = await root.stat();
+    if (!info.isDirectory()) {
+      throw new CLIError("PROFILE_INVALID", "Profile directory is not a real directory.");
+    }
+    if ((info.mode & 511) !== PRIVATE_DIR_MODE) {
+      await root.chmod(PRIVATE_DIR_MODE);
+    }
+    const pinnedDirectory2 = process.platform === "linux" ? `/proc/self/fd/${root.fd}` : directory;
+    let entries;
+    try {
+      entries = await readdir5(pinnedDirectory2, { withFileTypes: true });
+    } catch (error) {
+      if (isTransientProfileEntryError(error)) return;
+      throw error;
+    }
+    for (const entry of entries) {
+      if (!entry.isFile()) continue;
+      let file;
+      try {
+        file = await open7(
+          join11(pinnedDirectory2, entry.name),
+          fsConstants5.O_RDONLY | fsConstants5.O_NOFOLLOW | fsConstants5.O_NONBLOCK
+        );
+      } catch (error) {
+        if (isTransientProfileEntryError(error)) continue;
+        throw error;
+      }
+      try {
+        const fileInfo = await file.stat();
+        if (fileInfo.isFile() && (fileInfo.mode & 511) !== 384) {
+          await file.chmod(384);
+        }
+      } finally {
+        await file.close();
+      }
+    }
+  } finally {
+    await root.close();
+  }
+}
 var ProfileManager;
 var init_profiles = __esm({
   "src/config/profiles.ts"() {
@@ -10444,7 +10499,11 @@ var init_profiles = __esm({
        * Throws CLIError if the profile doesn't exist.
        */
       static async getProfile(name) {
-        const profile = await withPinnedProfileDirectory2(name, (directory) => directory ? readJson(join11(directory, "profile.json")) : Promise.resolve(null));
+        const profile = await withPinnedProfileDirectory2(name, async (directory) => {
+          if (!directory) return null;
+          await secureProfileDirectory(directory);
+          return readJson(join11(directory, "profile.json"));
+        });
         if (!profile) {
           throw new CLIError(
             "PROFILE_NOT_FOUND",
@@ -17002,7 +17061,7 @@ async function seal(plaintextBytes, key32) {
   blob.set(ciphertext, HEADER_LENGTH + nonce.length);
   return { blob, cid: await computeCid(blob) };
 }
-async function open8(blob, key32) {
+async function open9(blob, key32) {
   if (blob.length < HEADER_LENGTH + NONCE_LENGTH + TAG_LENGTH) {
     throw new TypeError(`sealed blob too short: ${blob.length} bytes`);
   }
@@ -17419,7 +17478,7 @@ async function openRecordChecked(record3, key, nowMs) {
   if (key.length !== 32) throw new LinkError("invalid_argument", "a link key is 32 bytes");
   let plaintext;
   try {
-    plaintext = await open8(body, key);
+    plaintext = await open9(body, key);
   } catch {
     throw new LinkError("body_open_failed");
   }
@@ -18194,11 +18253,11 @@ var init_links = __esm({
 });
 
 // src/lib/browser.ts
-import open11 from "open";
+import open12 from "open";
 async function tryOpenBrowser(url) {
   let launcher;
   try {
-    launcher = await open11(url);
+    launcher = await open12(url);
   } catch {
     return false;
   }
@@ -19097,8 +19156,8 @@ var init_scoped_login = __esm({
 
 // src/auth/pending-code.ts
 import { createHash as createHash2 } from "crypto";
-import { constants as fsConstants5 } from "fs";
-import { open as open12, rm as rm7 } from "fs/promises";
+import { constants as fsConstants6 } from "fs";
+import { open as open13, rm as rm7 } from "fs/promises";
 import { join as join14 } from "path";
 import { profilePath as profilePath7 } from "@tinycloud/operations/state";
 function hashOf(code5) {
@@ -19116,7 +19175,7 @@ async function live(profile) {
   let records;
   let handle;
   try {
-    handle = await open12(file, fsConstants5.O_RDONLY | fsConstants5.O_NOFOLLOW | fsConstants5.O_NONBLOCK);
+    handle = await open13(file, fsConstants6.O_RDONLY | fsConstants6.O_NOFOLLOW | fsConstants6.O_NONBLOCK);
     const info = await handle.stat();
     if (!info.isFile() || info.uid !== process.getuid?.()) return [];
     if ((info.mode & 63) !== 0) await handle.chmod(384).catch(() => void 0);
@@ -20238,7 +20297,7 @@ __export(approval_request_exports, {
   trackApprovalResult: () => trackApprovalResult
 });
 import { createECDH as createECDH2, createHash as createHash4, createPrivateKey, randomBytes as randomBytes5, randomUUID as randomUUID2, sign } from "crypto";
-import { open as open13 } from "fs/promises";
+import { open as open14 } from "fs/promises";
 import { join as join16 } from "path";
 import { setTimeout as wait } from "timers/promises";
 import { additionalDelegationsPath as additionalDelegationsPath3, profilePath as profilePath10 } from "@tinycloud/operations/state";
@@ -20303,7 +20362,7 @@ async function syncCommandFiles(profile, result) {
     throw invalid2("The verified command result and history have not both been saved.");
   }
   for (const path of [localGrantArtifactsPath(profile), grantHistoryPath(profile), profilePath10(profile)]) {
-    const handle = await open13(path, "r");
+    const handle = await open14(path, "r");
     try {
       await handle.sync();
     } finally {
@@ -20600,6 +20659,16 @@ function bodyCutOff(error) {
 function lapsedPastRetention(entry, now) {
   return now >= Date.parse(entry.requestExpiresAt) + RESULT_RETENTION_MS + EXPIRY_SKEW_MS;
 }
+async function showApprovalLink(options, entry) {
+  options.onApprovalRequest?.({ approvalUrl: entry.approvalUrl, requestId: entry.requestId, expiresAt: entry.requestExpiresAt });
+  if (!options.onApprovalRequest) console.error(`Approve this request in OpenKey (open the complete link):
+${entry.approvalUrl}
+The link is valid until ${entry.requestExpiresAt}.
+`);
+  if (!options.noPopup && !options.onApprovalRequest && process.env.TC_AUTH_NO_POPUP !== "1" && process.env.TC_NO_POPUP !== "1") {
+    await tryOpenBrowser(entry.approvalUrl);
+  }
+}
 async function expiredRequest(profile, entry, drop) {
   if (drop) await updatePending(profile, (items) => items.filter((item) => item.requestId !== entry.requestId));
   return new CLIError(
@@ -20612,6 +20681,18 @@ async function discoverRefusedAsExpired(entry, response, now) {
   if (response.status !== 400 || entry.resultRef !== void 0 || now < Date.parse(entry.requestExpiresAt)) return false;
   const body = await response.clone().json().catch(() => null);
   return body?.code === "invalid_request" || typeof body?.error === "string" && /expired/i.test(body.error);
+}
+async function openKeySaysExpired(entry, signingKey) {
+  let response;
+  try {
+    response = await post2(entry, "discover", signingKey);
+  } catch {
+    return false;
+  }
+  if (response.ok) return false;
+  if (await discoverRefusedAsExpired(entry, response, Date.now())) return true;
+  const body = await response.clone().json().catch(() => null);
+  return typeof body === "object" && body !== null && "code" in body && body.code === "expired_request";
 }
 async function pauseBetweenAttempts(profile, entry, approvalWait, reached = false) {
   if (!approvalWait) {
@@ -20686,9 +20767,21 @@ async function acquireApprovalRequest(_did, options) {
   });
   if (matching.length > 1) throw invalid2("Multiple approvals match this command; no result was selected.");
   let entry = matching[0];
-  const isNewRequest = entry === void 0;
-  if (entry && approvalWait && !entry.resultRef && !entry.resultEnvelope && lapsedPastRetention(entry, (approvalWait.now ?? Date.now)())) {
-    throw await expiredRequest(profile, entry, true);
+  let isNewRequest = entry === void 0;
+  const clock = approvalWait?.now ?? Date.now;
+  let linkWithheld = false;
+  if (entry && !entry.resultRef && !entry.resultEnvelope && clock() >= Date.parse(entry.requestExpiresAt)) {
+    linkWithheld = true;
+    if (lapsedPastRetention(entry, clock())) {
+      if (approvalWait) throw await expiredRequest(profile, entry, true);
+      if (await openKeySaysExpired(entry, signingKey)) {
+        const staleRequestId = entry.requestId;
+        await updatePending(profile, (items) => items.filter((item) => item.requestId !== staleRequestId));
+        entry = void 0;
+        isNewRequest = true;
+        linkWithheld = false;
+      }
+    }
   }
   if (!entry) {
     const relay = createECDH2("prime256v1");
@@ -20723,13 +20816,8 @@ async function acquireApprovalRequest(_did, options) {
     await updatePending(profile, (items) => [...items, entry]);
   }
   if (!entry.resultRef && !entry.resultEnvelope) {
-    options.onApprovalRequest?.({ approvalUrl: entry.approvalUrl, requestId: entry.requestId, expiresAt: entry.requestExpiresAt });
-    if (!options.onApprovalRequest) console.error(`Approve this request in OpenKey (open the complete link):
-${entry.approvalUrl}
-`);
-    if (!options.noPopup && !options.onApprovalRequest && process.env.TC_AUTH_NO_POPUP !== "1" && process.env.TC_NO_POPUP !== "1") {
-      await tryOpenBrowser(entry.approvalUrl);
-    }
+    if (!linkWithheld) await showApprovalLink(options, entry);
+    else if (!options.onApprovalRequest) console.error("Checking the saved request with OpenKey...");
     if (isNewRequest && approvalWait) throw pendingApproval(entry, approvalWait, true);
   }
   if (!entry.resultEnvelope) {
@@ -20753,6 +20841,10 @@ ${entry.approvalUrl}
       }
       answered = true;
       if (response.status === 202) {
+        if (linkWithheld) {
+          linkWithheld = false;
+          await showApprovalLink(options, entry);
+        }
         await pauseBetweenAttempts(profile, entry, approvalWait, true);
         continue;
       }
@@ -20843,13 +20935,13 @@ async function completeApprovalResult(profile, delegation) {
         const grants = await loadAdditionalDelegations(profile);
         const stored = grants.find((item) => item.delegation.cid === verifiedDelegation.delegationCid && item.delegation.siweProof?.siwe === verifiedDelegation.siwe && item.delegation.siweProof?.signature === verifiedDelegation.signature);
         if (stored) {
-          const file = await open13(additionalDelegationsPath3(profile), "r");
+          const file = await open14(additionalDelegationsPath3(profile), "r");
           try {
             await file.sync();
           } finally {
             await file.close();
           }
-          const directory = await open13(profilePath10(profile), "r");
+          const directory = await open14(profilePath10(profile), "r");
           try {
             await directory.sync();
           } finally {
@@ -21161,7 +21253,7 @@ var init_browser_auth = __esm({
 // src/commands/account.ts
 init_profiles();
 init_constants();
-import open7 from "open";
+import open8 from "open";
 import { readFile as readFile7 } from "fs/promises";
 
 // src/lib/account-access.ts
@@ -21484,7 +21576,7 @@ function registerAccountCommand(program) {
     billing.command(name).description(`${name === "status" ? "Show" : "Open"} account billing page`).option("--open", "Open account.tinycloud.xyz in your browser").action(async (options) => {
       try {
         if (options.open) {
-          await open7(ACCOUNT_BILLING_URL);
+          await open8(ACCOUNT_BILLING_URL);
         }
         outputJson({ url: ACCOUNT_BILLING_URL, opened: Boolean(options.open) });
       } catch (error) {
@@ -21727,13 +21819,13 @@ function registerBugReportCommand(program, dependencies = {}) {
 init_profile_gate();
 init_dist();
 init_profiles();
-import { CLI_NAME as CLI_NAME20 } from "@tinycloud/operations/cli-name";
+import { CLI_NAME as CLI_NAME21 } from "@tinycloud/operations/cli-name";
 import { get as httpGet } from "http";
 import { get as httpsGet } from "https";
 import { spawn } from "child_process";
 import { lstat as lstat8, mkdir as mkdir5, readFile as readFile10, writeFile as writeFile3 } from "fs/promises";
 import { dirname as dirname6, join as join17 } from "path";
-import { createInterface as createInterface4 } from "readline";
+import { createInterface as createInterface5 } from "readline";
 import { TinyCloudNode as TinyCloudNode3, grantAuthRequest, principalDidEquals as principalDidEquals3, REPLICA_LOGOUT_PENDING_FILE as REPLICA_LOGOUT_PENDING_FILE4, signedCompactUcanExpiry as signedCompactUcanExpiry3 } from "@tinycloud/node-sdk";
 import { composeManifestRequest } from "@tinycloud/sdk-core";
 import { invokeOperation } from "@tinycloud/operations";
@@ -28839,7 +28931,7 @@ init_constants();
 init_errors();
 init_session_expired();
 init_warnings();
-import { chmod as chmod4, link as link2, open as open10, readFile as readFile9, stat as stat4, unlink as unlink4 } from "fs/promises";
+import { chmod as chmod4, link as link2, open as open11, readFile as readFile9, stat as stat4, unlink as unlink4 } from "fs/promises";
 import { dirname as dirname5, join as join13 } from "path";
 import { createHash } from "crypto";
 import { createProfileRegistryCacheStore as createProfileRegistryCacheStore2, createProfileRegistrySequenceStore as createProfileRegistrySequenceStore2, writeJsonAtomic as writeJsonAtomic2 } from "@tinycloud/operations/state";
@@ -34261,7 +34353,7 @@ async function importAesKey2(key32, usage3) {
     [usage3]
   );
 }
-async function open9(blob, key32) {
+async function open10(blob, key32) {
   if (blob.length < HEADER_LENGTH2 + NONCE_LENGTH2 + TAG_LENGTH2) {
     throw new TypeError(`sealed blob too short: ${blob.length} bytes`);
   }
@@ -34825,7 +34917,7 @@ async function resolveLegacyV2(link5, options) {
     if (await computeCid2(sealed) !== parsed.ciphertextCid) throw new ShareReceiveError("cid-mismatch", "legacy envelope CID does not match");
     let plaintext;
     try {
-      plaintext = await open9(sealed, parsed.key32);
+      plaintext = await open10(sealed, parsed.key32);
     } catch {
       throw new ShareReceiveError("decrypt-failed", "legacy envelope could not be opened");
     }
@@ -34930,7 +35022,7 @@ async function receiveLegacyV2(link5, options) {
   }
   return { metadata: metadataFor(envelope, resolved.origin), link: { origin: resolved.origin, cid: resolved.cid, kind: "compact" }, bytes: bytes3, ...text2 === void 0 ? {} : { text: text2 } };
 }
-var SHARE_CONTENT_LIMIT = 100 * 1024 * 1024;
+var SHARE_CONTENT_LIMIT = 95 * 1024 * 1024;
 var SHARE_PUBLISH_RESULT_VERSION = 1;
 var DEFAULT_SHARE_LIFETIME_MS = 7 * 24 * 60 * 60 * 1e3;
 function redactPublishedShare(result) {
@@ -36289,7 +36381,7 @@ function createEncryptedProfileHistory(profileName2, sessionSigner) {
     if (salt.length < 16) throw new ShareHistoryUnreadableError();
     return salt;
   };
-  const read5 = async (profile, ready) => {
+  const read6 = async (profile, ready) => {
     const file = await readIfPresent(await path(profile));
     if (file === void 0) {
       const legacy = await readIfPresent(await legacyPath(profile));
@@ -36378,7 +36470,7 @@ function createEncryptedProfileHistory(profileName2, sessionSigner) {
         false,
         ["encrypt", "decrypt"]
       );
-      await read5(profile, { salt, key, legacyKey: keys.legacyKey });
+      await read6(profile, { salt, key, legacyKey: keys.legacyKey });
       return true;
     } catch (error) {
       if (error instanceof ShareHistoryUnreadableError) return false;
@@ -36405,7 +36497,7 @@ function createEncryptedProfileHistory(profileName2, sessionSigner) {
       await link2(found.file, target);
       await chmod4(target, PRIVATE_HISTORY_MODE);
       await unlink4(found.file);
-      const directory = await open10(dirname5(found.file), "r");
+      const directory = await open11(dirname5(found.file), "r");
       try {
         await directory.sync();
       } finally {
@@ -36417,7 +36509,7 @@ function createEncryptedProfileHistory(profileName2, sessionSigner) {
   return {
     async put(record3) {
       return locked(async (profile, ready) => {
-        const values = await read5(profile, ready);
+        const values = await read6(profile, ready);
         const index = values.findIndex((value4) => value4.shareId === record3.shareId);
         if (index >= 0) values[index] = record3;
         else values.push(record3);
@@ -36426,7 +36518,7 @@ function createEncryptedProfileHistory(profileName2, sessionSigner) {
     },
     async update(shareId, change) {
       return locked(async (profile, ready) => {
-        const values = await read5(profile, ready);
+        const values = await read6(profile, ready);
         const index = values.findIndex((record3) => record3.shareId === shareId);
         if (index < 0) return void 0;
         const updated = await change(values[index]);
@@ -36436,14 +36528,14 @@ function createEncryptedProfileHistory(profileName2, sessionSigner) {
       }, true);
     },
     async list() {
-      return locked((profile, ready) => read5(profile, ready));
+      return locked((profile, ready) => read6(profile, ready));
     },
     async get(shareId) {
-      return locked(async (profile, ready) => (await read5(profile, ready)).find((record3) => record3.shareId === shareId));
+      return locked(async (profile, ready) => (await read6(profile, ready)).find((record3) => record3.shareId === shareId));
     },
     async delete(shareId) {
       return locked(async (profile, ready) => {
-        await write2(profile, (await read5(profile, ready)).filter((record3) => record3.shareId !== shareId), ready);
+        await write2(profile, (await read6(profile, ready)).filter((record3) => record3.shareId !== shareId), ready);
       }, true);
     },
     quarantineUnreadable
@@ -36513,6 +36605,32 @@ init_constants();
 init_types();
 init_browser_auth();
 init_approval_wait();
+
+// src/auth/covering-grants.ts
+init_scoped_login();
+import { PermissionEntrySchema } from "@tinycloud/operations/artifacts";
+var CID5 = /^bafkr4i[a-z2-7]{52}$/;
+function read5(value4, key) {
+  return typeof value4 === "object" && value4 !== null ? Reflect.get(value4, key) : void 0;
+}
+function storedGrantsCovering(stored, requested, ownerDid, now = Date.now()) {
+  if (ownerDid === void 0) return [];
+  const found = [];
+  for (const entry of stored) {
+    const delegation = read5(entry, "delegation");
+    const cid = read5(delegation, "cid");
+    const expiry = read5(delegation, "expiry");
+    if (typeof cid !== "string" || !CID5.test(cid) || typeof expiry !== "string" && !(expiry instanceof Date)) continue;
+    const expiresAt = new Date(expiry);
+    if (!Number.isFinite(expiresAt.getTime()) || expiresAt.getTime() <= now) continue;
+    const scope = PermissionEntrySchema.array().safeParse(read5(entry, "permissions"));
+    if (!scope.success || !scopeCovers(scope.data, requested, ownerDid)) continue;
+    if (!found.some((item) => item.cid === cid)) found.push({ cid, expiry: expiresAt.toISOString() });
+  }
+  return found;
+}
+
+// src/commands/auth.ts
 init_approval_request();
 init_device_auth();
 
@@ -36641,6 +36759,34 @@ async function ensureSpaceSetup(ctx, delegation, permissions, timeoutMs) {
   if (!report) return;
   await awaitSpaceSetup(report, { probe: kvSpaceProbe(ctx, permissions), ...timeoutMs === void 0 ? {} : { timeoutMs } });
 }
+async function recheckSpaceHosting(ctx, sessionSpaceId, permissions, options) {
+  if (options.confirmed.has(sessionSpaceId)) return;
+  const probe = kvSpaceProbe(ctx, permissions, options.restore);
+  const first = await probe().catch(() => "transient");
+  if (first === "hosted") options.confirmed.add(sessionSpaceId);
+  if (first !== "unhosted") return;
+  await awaitSpaceSetup({ ready: null, pending: true }, {
+    probe,
+    ...options.timeoutMs === void 0 ? {} : { timeoutMs: options.timeoutMs },
+    ...options.sleep === void 0 ? {} : { sleep: options.sleep },
+    ...options.now === void 0 ? {} : { now: options.now },
+    ...options.write === void 0 ? {} : { write: options.write }
+  });
+  options.confirmed.add(sessionSpaceId);
+}
+function createSpaceRecheck() {
+  const confirmed = /* @__PURE__ */ new Set();
+  let settled = false;
+  return {
+    settle: () => {
+      settled = true;
+    },
+    check: async (ctx, sessionSpaceId, permissions, options = {}) => {
+      if (settled) return;
+      await recheckSpaceHosting(ctx, sessionSpaceId, permissions, { ...options, confirmed });
+    }
+  };
+}
 
 // src/commands/auth.ts
 init_scoped_login();
@@ -36669,7 +36815,7 @@ init_owner_did();
 import { randomBytes as randomBytes6, timingSafeEqual } from "crypto";
 import { createServer } from "http";
 import { createInterface as createInterface3 } from "readline";
-import open14 from "open";
+import open15 from "open";
 import { publicJwk as publicJwk3 } from "@tinycloud/sdk-core";
 var MAX_BODY_BYTES2 = 1024 * 1024;
 var RESULT_FIELDS = ["address", "permissions", "protocolVersion", "selectedActionKeys", "signature", "signedMessage"];
@@ -36874,7 +37020,7 @@ async function startPreparedOpenKeyHandoff(options) {
     console.error(`Open this URL in a browser to authenticate: ${url}`);
     if (!options.noPopup && !options.paste) {
       try {
-        await open14(url);
+        await open15(url);
       } catch {
         console.error("Could not open browser. Use the printed URL or paste the signed code.");
       }
@@ -36950,9 +37096,9 @@ init_types();
 init_constants();
 init_permissions();
 init_sdk();
-import { CLI_NAME as CLI_NAME18 } from "@tinycloud/operations/cli-name";
+import { CLI_NAME as CLI_NAME19 } from "@tinycloud/operations/cli-name";
 import { TinyCloudNode as TinyCloudNode2 } from "@tinycloud/node-sdk";
-import { DelegationRequestBindingSchema, PermissionEntrySchema } from "@tinycloud/operations/artifacts";
+import { DelegationRequestBindingSchema, PermissionEntrySchema as PermissionEntrySchema2 } from "@tinycloud/operations/artifacts";
 import {
   inspectStoredDelegation as inspectStoredDelegation2,
   operationSpaceResolver,
@@ -36965,7 +37111,7 @@ import {
 // src/lib/revoke-delegation.ts
 init_constants();
 init_errors();
-import { CLI_NAME as CLI_NAME17 } from "@tinycloud/operations/cli-name";
+import { CLI_NAME as CLI_NAME18 } from "@tinycloud/operations/cli-name";
 import { parseSignedCompactUcanAttenuation as parseSignedCompactUcanAttenuation4 } from "@tinycloud/sdk-core";
 import { inspectStoredDelegation, withoutBearer as withoutBearer3 } from "@tinycloud/operations/delegation-binding";
 init_permissions();
@@ -37034,6 +37180,254 @@ async function lookupOwnerSpaceOnNode(node, cid, ownerDid) {
     if (cursor === void 0) return ownerSpaceFromNodeRecords(records, cid, ownerDid, node.sessionDid);
   }
   return void 0;
+}
+
+// src/commands/delegation.ts
+import { createInterface as createInterface4 } from "readline";
+init_profiles();
+init_formatter();
+init_errors();
+init_constants();
+init_sdk();
+init_duration();
+import { CLI_NAME as CLI_NAME17 } from "@tinycloud/operations/cli-name";
+import { PermissionNotInManifestError } from "@tinycloud/node-sdk";
+async function queryDelegations(node, options, until) {
+  const found = [];
+  let cursor;
+  do {
+    const page = await node.account.delegations.query({ ...options, limit: 100, cursor });
+    if (!page.ok) {
+      if (page.error.code === "PERMISSION_DENIED") {
+        throw new CLIError(
+          "PERMISSION_DENIED",
+          `This session cannot read delegations: it lacks tinycloud.delegation/list. Run \`${CLI_NAME17} auth login\` again to grant it.`,
+          ExitCode.PERMISSION_DENIED
+        );
+      }
+      throw cliErrorFromService(page.error);
+    }
+    found.push(...page.data.items);
+    cursor = page.data.nextCursor;
+  } while (cursor && !(until && found.some((d) => d.cid === until)));
+  return found;
+}
+function listedDelegation(d) {
+  const resources = d.resources.map((r) => {
+    const [space, service, ...path] = r.resource.split("/");
+    return { space, service, path: path.join("/"), actions: r.actions };
+  });
+  return {
+    cid: d.cid,
+    delegatee: d.delegateDid,
+    delegator: d.delegatorDid,
+    direction: d.direction,
+    status: d.status,
+    expiry: d.expiresAt?.toISOString() ?? null,
+    resources
+  };
+}
+var ISSUED_ORDER_NOTE = "Sorted by delegation ID, not by date.";
+function issuedFailure(error, host) {
+  if (error.code === "UNSUPPORTED_OPERATION") {
+    return new CLIError(
+      "ISSUED_DELEGATIONS_UNAVAILABLE",
+      `${host} can't list the delegations you issued yet.`,
+      ExitCode.NODE_ERROR
+    );
+  }
+  if (error.code === "CHAIN_TOO_DEEP") {
+    return new CLIError(
+      "CHAIN_TOO_DEEP",
+      "The node can't check this delegation chain right now because it's too long. Try again later.",
+      ExitCode.NODE_ERROR,
+      { status: 503 }
+    );
+  }
+  if (error.code === "INVALID_CURSOR") {
+    return new CLIError(
+      "INVALID_CURSOR",
+      "The node couldn't continue the list. Run the command again.",
+      ExitCode.NODE_ERROR,
+      { status: 400 }
+    );
+  }
+  return cliErrorFromService(error);
+}
+async function revokeIssuedDelegation(node, ctx, cid) {
+  const result = await node.delegationManager.revokeIssued(cid);
+  if (result.ok) return { cid: result.data.cid, revoked: true };
+  if (result.error.code === "PERMISSION_DENIED") {
+    throw new CLIError(
+      "REVOKE_UNAUTHORIZED",
+      `The node refused this revocation: ${result.error.message}.`,
+      ExitCode.PERMISSION_DENIED,
+      {
+        status: result.error.meta?.status,
+        hint: `A profile can revoke only the delegations its own key issued. See them with \`${CLI_NAME17} --profile ${ctx.profile} delegation list --granted\`.`
+      }
+    );
+  }
+  if (result.error.code === "NOT_FOUND") {
+    throw new CLIError("TARGET_NOT_FOUND", `The node has no delegation "${cid}".`, ExitCode.NOT_FOUND);
+  }
+  throw issuedFailure(result.error, ctx.host);
+}
+async function confirmCurrentSessionRevoke(yes) {
+  if (yes) return;
+  const warning = "This is your current sign-in session; revoking it signs you out";
+  if (!isInteractive() || !process.stdin.isTTY) {
+    throw new CLIError("CONFIRMATION_REQUIRED", `${warning}. Re-run with --yes to confirm.`, ExitCode.USAGE_ERROR);
+  }
+  process.stderr.write(`${warning}.
+`);
+  const prompt = createInterface4({ input: process.stdin, output: process.stderr });
+  try {
+    const answer = await new Promise((resolve10) => prompt.question("Revoke this session? [y/N] ", resolve10));
+    if (!/^y(es)?$/i.test(answer.trim())) {
+      throw new CLIError("REQUEST_CANCELLED", "Current session revocation cancelled.", ExitCode.ERROR);
+    }
+  } finally {
+    prompt.close();
+  }
+}
+function registerDelegationCommand(program, configuration = {}) {
+  const delegation = program.command("delegation").description("Manage delegations");
+  delegation.command("create").description("Create a delegation").requiredOption("--to <did>", "Recipient DID").requiredOption("--path <path>", "KV path scope").requiredOption("--actions <actions>", "Comma-separated actions (e.g., kv/get,kv/list)").option("--expiry <duration>", "Expiry duration (e.g., 1h, 7d, ISO date)", "1h").action(async (options, cmd) => {
+    try {
+      const globalOpts = cmd.optsWithGlobals();
+      const ctx = await ProfileManager.resolveContext(globalOpts);
+      const node = await ensureAuthenticated(ctx);
+      const actions = options.actions.split(",").map((a) => {
+        const trimmed = a.trim();
+        return trimmed.startsWith("tinycloud.") ? trimmed : `tinycloud.${trimmed}`;
+      });
+      const byService = {};
+      for (const action of actions) {
+        const slash = action.indexOf("/");
+        if (slash <= "tinycloud.".length || slash === action.length - 1) {
+          throw new CLIError("USAGE_ERROR", `Invalid action "${action}"; use service/action, e.g. kv/get`, ExitCode.USAGE_ERROR);
+        }
+        (byService[action.slice(0, slash)] ??= []).push(action);
+      }
+      const expiry = parseExpiry3(options.expiry);
+      const recipient = options.to.split("#")[0];
+      const { delegation: created } = await node.delegateTo(
+        recipient,
+        Object.entries(byService).map(([service, serviceActions]) => ({
+          service,
+          space: "default",
+          path: options.path,
+          actions: serviceActions
+        })),
+        { expiry: expiry.getTime() - Date.now(), requireActivation: true }
+      ).catch((error) => {
+        if (error instanceof PermissionNotInManifestError) {
+          const needed = error.missing.map((m) => `${m.actions.join(", ")} on space "${m.space ?? "default"}" path "${m.path}"`).join("; ");
+          throw new CLIError(
+            "PERMISSION_DENIED",
+            `This session cannot delegate what was requested. Missing: ${needed}. Sign in again with these permissions.`,
+            ExitCode.PERMISSION_DENIED
+          );
+        }
+        throw error;
+      });
+      const confirmed = (await queryDelegations(node, { direction: "granted" }, created.cid)).find((d) => d.cid === created.cid);
+      if (confirmed?.status !== "active") {
+        throw new CLIError(
+          "DELEGATION_NOT_CONFIRMED",
+          confirmed ? `The node lists delegation ${created.cid} as ${confirmed.status}, not active; treat it as not created.` : `The node accepted delegation ${created.cid} but does not list it; treat it as not created.`,
+          ExitCode.ERROR
+        );
+      }
+      outputJson({
+        cid: created.cid,
+        delegateDid: recipient,
+        delegatorDid: confirmed.delegatorDid,
+        path: options.path,
+        actions,
+        expiry: created.expiry.toISOString(),
+        status: confirmed.status
+      });
+    } catch (error) {
+      return handleError(error);
+    }
+  });
+  delegation.command("list").description("List delegations").option("--granted", "Show only delegations I've granted").option("--received", "Show only delegations I've received").option("--space <space>", "Filter by space name or ID").action(async (options, cmd) => {
+    try {
+      const globalOpts = cmd.optsWithGlobals();
+      const ctx = await ProfileManager.resolveContext(globalOpts);
+      const node = await ensureAuthenticated(ctx);
+      if (options.granted && options.received) {
+        throw new CLIError("USAGE_ERROR", "Use only one of --granted or --received.", ExitCode.USAGE_ERROR);
+      }
+      if (options.granted && ctx.posture === "delegate-session" && node.address === void 0) {
+        const issued = await node.delegationManager.queryAllIssued({ space: options.space });
+        if (!issued.ok) throw issuedFailure(issued.error, ctx.host);
+        outputJson({
+          delegations: issued.data.map(listedDelegation),
+          count: issued.data.length,
+          note: ISSUED_ORDER_NOTE
+        });
+        return;
+      }
+      const delegations = await queryDelegations(node, {
+        direction: options.granted ? "granted" : options.received ? "received" : "all",
+        space: options.space
+      });
+      outputJson({
+        delegations: delegations.map(listedDelegation),
+        count: delegations.length
+      });
+    } catch (error) {
+      return handleError(error);
+    }
+  });
+  delegation.command("info <cid>").description("Get delegation details").option("--space <space>", "Filter by space name or ID").action(async (cid, options, cmd) => {
+    try {
+      const globalOpts = cmd.optsWithGlobals();
+      const ctx = await ProfileManager.resolveContext(globalOpts);
+      const node = await ensureAuthenticated(ctx);
+      const found = (await queryDelegations(node, { direction: "all", space: options.space })).find((d) => d.cid === cid);
+      if (!found) {
+        throw new CLIError("NOT_FOUND", `Delegation "${cid}" not found in this account's delegations`, ExitCode.NOT_FOUND);
+      }
+      outputJson(listedDelegation(found));
+    } catch (error) {
+      return handleError(error);
+    }
+  });
+  delegation.command("revoke <cid>").description("Revoke a delegation").option("--yes", "Confirm revoking the current sign-in session", false).action(async (cid, options, cmd) => {
+    try {
+      const globalOpts = cmd.optsWithGlobals();
+      const ctx = await ProfileManager.resolveContext(globalOpts);
+      const delegateCandidate = ctx.posture === "delegate-session" ? await ensureAuthenticated(ctx) : void 0;
+      if (delegateCandidate !== void 0 && delegateCandidate.address === void 0) {
+        outputJson(await revokeIssuedDelegation(delegateCandidate, ctx, cid));
+        return;
+      }
+      const session = await ProfileManager.getSession(ctx.profile);
+      const currentSession = session && "delegationCid" in session && session.delegationCid === cid;
+      if (currentSession) await confirmCurrentSessionRevoke(options.yes === true);
+      const prepared = currentSession ? await prepareProfileRemoteLogout(ctx, cid) : void 0;
+      const node = prepared?.node ?? delegateCandidate ?? await ensureAuthenticated(ctx);
+      const profile = prepared?.profile ?? await ProfileManager.getProfile(ctx.profile);
+      const revoked = await revokeDelegationOnNode({
+        ctx,
+        node,
+        profile,
+        cid,
+        openKeyAcquisition: configuration.openKeyAcquisition
+      });
+      const replicasRemoved = prepared ? await finishProfileLogout(ctx, { online: prepared, expectedSessionCid: cid }) : void 0;
+      outputJson({
+        ...revoked,
+        ...replicasRemoved === void 0 ? {} : { signedOut: true, replicasRemoved }
+      });
+    } catch (error) {
+      return handleError(error);
+    }
+  });
 }
 
 // src/lib/revoke-delegation.ts
@@ -37138,9 +37532,21 @@ async function revokeDelegationOnNode(params) {
           host: ctx.host
         });
         if (!boundSpace) {
+          const issued = await node.delegationManager.queryAllIssued({ untilCid: cid });
+          if (issued.ok && issued.data.some((delegation) => delegation.cid === cid)) {
+            await revokeIssuedDelegation(node, ctx, cid);
+            return {
+              cid,
+              revoked: true,
+              targetSpaceSource: "node-issued-list",
+              authorityScopeSource: "own-session-key",
+              authorityScopeReason: "The node lists this delegation as issued by this profile's own key, so that key revoked it."
+            };
+          }
+          if (!issued.ok && issued.error.code !== "UNSUPPORTED_OPERATION") throw issuedFailure(issued.error, ctx.host);
           throw new CLIError(
             "TARGET_NOT_FOUND",
-            `This profile cannot list the owner's delegations on the node, so it cannot look up "${cid}", and it has no local record of that grant. Use the profile that created the grant, or revoke it from the Delegations screen of the account site (https://account.tinycloud.xyz).`,
+            `This profile can't look up "${cid}": it has no local record of that grant, and the node doesn't list it among the delegations this profile's key issued.`,
             ExitCode.NOT_FOUND
           );
         }
@@ -37223,7 +37629,7 @@ async function revokeDelegationOnNode(params) {
         "REVOKE_UNAUTHORIZED",
         "The node rejected this revocation: Unauthorized Revoker.",
         ExitCode.PERMISSION_DENIED,
-        { status: 403, hint: `Use a different profile belonging to the delegation's grantor, its recipient, or the owner of a space it covers; the rejected profile was "${ctx.profile}" (DID ${profileDid}). Retry with \`${CLI_NAME17} --profile <profile-name> delegation revoke ${cid}\`.` }
+        { status: 403, hint: `Use a different profile belonging to the delegation's grantor, its recipient, or the owner of a space it covers; the rejected profile was "${ctx.profile}" (DID ${profileDid}). Retry with \`${CLI_NAME18} --profile <profile-name> delegation revoke ${cid}\`.` }
       );
     }
     throw cliErrorFromService(result.error);
@@ -37242,7 +37648,7 @@ function noteUnneededYes(yes) {
 init_warnings();
 init_errors();
 init_formatter();
-var CID5 = /^bafkr4i[a-z2-7]{52}$/;
+var CID6 = /^bafkr4i[a-z2-7]{52}$/;
 function record(value4) {
   return value4 !== null && typeof value4 === "object" && !Array.isArray(value4) ? value4 : void 0;
 }
@@ -37262,7 +37668,7 @@ async function localContext(options) {
   return { ctx, profile };
 }
 function storedScope(value4) {
-  const parsed = PermissionEntrySchema.array().safeParse(record(value4)?.permissions);
+  const parsed = PermissionEntrySchema2.array().safeParse(record(value4)?.permissions);
   return parsed.success ? parsed.data : [];
 }
 function storedProof(value4) {
@@ -37283,7 +37689,7 @@ async function listedGrant(value4, index, options) {
   const source = storedDelegationSource(value4);
   return {
     index,
-    cid: typeof rawCid === "string" && CID5.test(rawCid) ? rawCid : null,
+    cid: typeof rawCid === "string" && CID6.test(rawCid) ? rawCid : null,
     expiry,
     expired: expiry !== null && Date.parse(expiry) <= Date.now(),
     local: inspection?.local ?? "for_another_key",
@@ -37299,7 +37705,7 @@ async function listedGrant(value4, index, options) {
 function localSessionCid(session, host) {
   const header = record(session.delegationHeader)?.Authorization;
   const cid = session.delegationCid;
-  if (typeof header !== "string" || typeof cid !== "string" || !CID5.test(cid)) return null;
+  if (typeof header !== "string" || typeof cid !== "string" || !CID6.test(cid)) return null;
   try {
     return new TinyCloudNode2({ host }).computeDelegationCid(header) === cid ? cid : null;
   } catch {
@@ -37313,7 +37719,7 @@ function renderList(result) {
   }
   process.stdout.write(`Profile: ${result.profile}
 `);
-  process.stdout.write(`Session CID: ${result.session?.cid ?? "unavailable"}` + (result.session?.cid ? ` (current session; revoke with ${CLI_NAME18} delegation revoke ${result.session.cid})
+  process.stdout.write(`Session CID: ${result.session?.cid ?? "unavailable"}` + (result.session?.cid ? ` (current session; revoke with ${CLI_NAME19} delegation revoke ${result.session.cid})
 ` : "\n"));
   process.stdout.write(`Local verification: ${result.localVerification}; node validation and revocation are not checked.
 `);
@@ -37369,7 +37775,7 @@ function registerAuthGrantsCommand(auth, options = {}) {
           ExitCode.PERMISSION_DENIED
         );
       }
-      if (!CID5.test(cid)) {
+      if (!CID6.test(cid)) {
         throw new CLIError("INVALID_ARGUMENT", "Expected a delegation CID.", ExitCode.USAGE_ERROR);
       }
       const entries = await loadAdditionalDelegations(ctx.profile);
@@ -37411,7 +37817,7 @@ function registerAuthGrantsCommand(auth, options = {}) {
               ExitCode.ERROR,
               {
                 causeCode: cause.code,
-                hint: `Do not use --revoke again. After fixing local profile storage, run: ${CLI_NAME18} --profile ${ctx.profile} auth grants remove ${cid}`
+                hint: `Do not use --revoke again. After fixing local profile storage, run: ${CLI_NAME19} --profile ${ctx.profile} auth grants remove ${cid}`
               }
             );
           }
@@ -37458,7 +37864,7 @@ init_formatter();
 init_errors();
 init_constants();
 init_local_key();
-import { CLI_NAME as CLI_NAME19 } from "@tinycloud/operations/cli-name";
+import { CLI_NAME as CLI_NAME20 } from "@tinycloud/operations/cli-name";
 async function createKeyOnlyProfile(profileName2, host, defaultSpace) {
   await ProfileManager.ensureConfigDir();
   const { jwk, did: did2 } = await generateKey2();
@@ -37495,7 +37901,7 @@ function registerInitCommand(program) {
       if (await ProfileManager.profileExists(profileName2)) {
         throw new CLIError(
           "PROFILE_EXISTS",
-          `Profile "${profileName2}" already exists. Use \`${CLI_NAME19} profile delete ${profileName2}\` first or choose a different name.`,
+          `Profile "${profileName2}" already exists. Use \`${CLI_NAME20} profile delete ${profileName2}\` first or choose a different name.`,
           ExitCode.ERROR
         );
       }
@@ -37646,7 +38052,7 @@ async function promptAuthMethod() {
   if (!isInteractive()) {
     return "openkey";
   }
-  const rl = createInterface4({
+  const rl = createInterface5({
     input: process.stdin,
     output: process.stderr
   });
@@ -37804,7 +38210,7 @@ async function prepareProfileRemoteLogout(ctx, expectedSessionCid, discardLocalC
       "REVOCATION_AUTHORITY_UNAVAILABLE",
       "OpenKey owner CID revocation requires a verified signed revoke-control grant or wallet proof. No CID was revoked; session, key and replica files remain for retry, while local replica reads stay denied.",
       ExitCode.AUTH_REQUIRED,
-      { hint: `This sign-in can't be revoked from the CLI yet. Revoke it at https://account.tinycloud.xyz/delegations. To sign out on this computer only, run \`${CLI_NAME20} auth logout\`.` }
+      { hint: `This sign-in can't be revoked from the CLI yet. Revoke it at https://account.tinycloud.xyz/delegations. To sign out on this computer only, run \`${CLI_NAME21} auth logout\`.` }
     );
   }
   const signerDid = addressToDID(
@@ -37848,7 +38254,7 @@ async function revokeForLogout(ctx, discardLocalChanges) {
           "REVOCATION_FAILED",
           `Revocation failed for ${cid}: ${result.error.message}. Session, key, and replica files are retained for retry; local reads stay denied.`,
           ExitCode.ERROR,
-          { cid, hint: `Retry \`${CLI_NAME20} auth logout --revoke\` when the node is available.` }
+          { cid, hint: `Retry \`${CLI_NAME21} auth logout --revoke\` when the node is available.` }
         );
       }
       if (result.data.cid !== cid || result.data.revoked !== true) {
@@ -37867,7 +38273,7 @@ async function revokeForLogout(ctx, discardLocalChanges) {
       "REVOCATION_FAILED",
       `Revocation failed before local logout: ${error instanceof Error ? error.message : String(error)}. Session, key, and replica files are retained for retry; local reads stay denied.`,
       ExitCode.ERROR,
-      { hint: `Retry \`${CLI_NAME20} auth logout --revoke\` when online authority is available.` }
+      { hint: `Retry \`${CLI_NAME21} auth logout --revoke\` when online authority is available.` }
     );
   }
 }
@@ -38066,7 +38472,7 @@ async function finishProfileLogout(ctx, options = {}) {
 function registerAuthCommand(program, options) {
   const auth = program.command("auth").description("Authentication management");
   registerAuthGrantsCommand(auth, { openKeyAcquisition: options?.openKeyAcquisition });
-  auth.command("login").description("Authenticate with TinyCloud").option("--device", "Approve on another device (e.g. a phone) through OpenKey device authorization; requires a KV-scoped --manifest (SQL and secret decrypt need browser or --paste login)").option("--paste", "Use manual paste mode; OpenKey return codes expire after 5 minutes").option("--no-popup", "Print the OpenKey URL without opening a browser").option("--method <method>", "Authentication method: local or openkey").option("--manifest <fileOrBase64>", `Request only this manifest's permissions (one space, plus raw encryption network entries such as a secrets decrypt grant); ${SHARE_PUBLISHING_MANIFEST_REF} covers \`${CLI_NAME20} share publish\``).option("--expiry <duration>", `OpenKey session lifetime, e.g. 1h or 7d (with --manifest: default 1h, or 7d for ${SHARE_PUBLISHING_MANIFEST_REF} so Share links keep their 7-day life; device login: at most 30d, default 30d)`).option("--owner <did>", "Sign in as this owner (did:pkh:eip155:CHAIN:ADDRESS): OpenKey preselects that key, e.g. one that is not the account's primary key, and an approval by any other identity is refused. With --manifest, also names the secrets owner for a manifest's `secrets` on a profile with no recorded owner").option("--replace-session", "Scoped or device login: replace this profile's live session even though the new scope would narrow, change or shorten it (prefer a new profile)").option("--force", "Replica-enabled OpenKey login: replace the stored session key even when recorded shares could not be checked or hold unexpired shares that need the current key").option("--keys <folder>", "Also let this sign-in create and use encryption keys in this folder (for example `qa`). The node must support named keys. With OpenKey, the first time on a profile also needs `--owner`.").option("--replication-prefix <prefix>", "Add replication get+sync authority for a folder prefix ending in /, or root (repeatable)", (prefix, values = []) => [...values, prefix]).option("--replication-allow-secrets", "Allow replication of secret material (network-wide decrypt warning)").action(async (options2, cmd) => {
+  auth.command("login").description("Authenticate with TinyCloud").option("--device", "Approve on another device (e.g. a phone) through OpenKey device authorization; requires a KV-scoped --manifest (SQL and secret decrypt need browser or --paste login)").option("--paste", "Use manual paste mode; OpenKey return codes expire after 5 minutes").option("--no-popup", "Print the OpenKey URL without opening a browser").option("--method <method>", "Authentication method: local or openkey").option("--manifest <fileOrBase64>", `Request only this manifest's permissions (one space, plus raw encryption network entries such as a secrets decrypt grant); ${SHARE_PUBLISHING_MANIFEST_REF} covers \`${CLI_NAME21} share publish\``).option("--expiry <duration>", `OpenKey session lifetime, e.g. 1h or 7d (with --manifest: default 1h, or 7d for ${SHARE_PUBLISHING_MANIFEST_REF} so Share links keep their 7-day life; device login: at most 30d, default 30d)`).option("--owner <did>", "Sign in as this owner (did:pkh:eip155:CHAIN:ADDRESS): OpenKey preselects that key, e.g. one that is not the account's primary key, and an approval by any other identity is refused. With --manifest, also names the secrets owner for a manifest's `secrets` on a profile with no recorded owner").option("--replace-session", "Scoped or device login: replace this profile's live session even though the new scope would narrow, change or shorten it (prefer a new profile)").option("--force", "Replica-enabled OpenKey login: replace the stored session key even when recorded shares could not be checked or hold unexpired shares that need the current key").option("--keys <folder>", "Also let this sign-in create and use encryption keys in this folder (for example `qa`). The node must support named keys. With OpenKey, the first time on a profile also needs `--owner`.").option("--replication-prefix <prefix>", "Add replication get+sync authority for a folder prefix ending in /, or root (repeatable)", (prefix, values = []) => [...values, prefix]).option("--replication-allow-secrets", "Allow replication of secret material (network-wide decrypt warning)").action(async (options2, cmd) => {
     try {
       if (options2.device && options2.paste) {
         throw new CLIError("INVALID_ARGUMENT", "--device and --paste are mutually exclusive.", ExitCode.USAGE_ERROR);
@@ -38230,7 +38636,7 @@ function registerAuthCommand(program, options) {
         authenticated: false,
         replicasRemoved,
         replicasKept: options2.keepReplicas === true,
-        warning: online ? `The node confirmed revocation of the listed CIDs before local logout. Files you already shared stay available until each share expires or you revoke it (\`${CLI_NAME20} share revoke <id>\`).` : options2.keepReplicas ? "Legacy replica files remain on disk; this local logout clears the session but does not revoke node grants. Purge the files before a future sign-in if they must not be reused." : `Logout is local; delegations and grants on the node stay valid until they expire. Use \`${CLI_NAME20} delegation revoke <cid>\` to end access now.`,
+        warning: online ? `The node confirmed revocation of the listed CIDs before local logout. Files you already shared stay available until each share expires or you revoke it (\`${CLI_NAME21} share revoke <id>\`).` : options2.keepReplicas ? "Legacy replica files remain on disk; this local logout clears the session but does not revoke node grants. Purge the files before a future sign-in if they must not be reused." : `Logout is local; delegations and grants on the node stay valid until they expire. Use \`${CLI_NAME21} delegation revoke <cid>\` to end access now.`,
         ...online === void 0 ? {} : {
           revokedCids: online.plan.cids,
           revocationExcluded: online.plan.excluded
@@ -38329,9 +38735,13 @@ ${signInAgainHint(ctx.profile, posture ?? void 0)}
     `With --preset ${APPS_AGENT_PRESET}: limit the grant to this app's <app_id>/ prefix (recommended); repeatable`,
     (value4, previous) => [...previous, value4],
     []
-  ).option("--write", `With --preset ${APPS_AGENT_PRESET}: also let the agent add and change the named --app apps' data: write their knowledge/ and prefs/ files (kv put) and add, change or delete their table rows (sql write). Their code, manifest and install record stay read-only. Creating, changing or dropping tables is granted only for an app's catalog database (today Health Log's healthlog)`).option("--paste", "With --grant on an OpenKey profile: use manual paste mode (return codes expire after 5 minutes)").action(async (options2, cmd) => {
+  ).option("--write", `With --preset ${APPS_AGENT_PRESET}: also let the agent add and change the named --app apps' data: write their knowledge/ and prefs/ files (kv put) and add, change or delete their table rows (sql write). Their code, manifest and install record stay read-only. Creating, changing or dropping tables is granted only for an app's catalog database (today Health Log's healthlog)`).option("--paste", "With --grant on an OpenKey profile: use manual paste mode (return codes expire after 5 minutes)").option("--timeout <duration>", APPROVAL_TIMEOUT_OPTION_DESCRIPTION).option("--fresh", "With --grant on an OpenKey owner profile: ask the owner for a new approval even if the current grants already cover the request. The old grant is kept (not removed, not revoked); the output lists the new CIDs and, from local storage, the stored grants that already covered the request. Revoke is by CID: revoke each to end access").action(async (options2, cmd) => {
     try {
       noteUnneededYes(options2.yes);
+      if (options2.timeout !== void 0 && (!options2.grant || options2.paste === true || options2.device === true)) {
+        throw new CLIError("INVALID_ARGUMENT", "--timeout requires --grant and cannot be combined with --paste or --device: only the approval request link can be left and resumed.", ExitCode.USAGE_ERROR);
+      }
+      const deadlineMs = options2.timeout === void 0 ? void 0 : Date.now() + parseApprovalTimeout(options2.timeout);
       const globalOpts = cmd.optsWithGlobals();
       const ctx = await ProfileManager.resolveContext(globalOpts, options2.grant ? {} : { storedSession: "unused" });
       const initialSnapshot = options2.grant ? await readProfileSnapshot(ctx.profile) : void 0;
@@ -38341,6 +38751,9 @@ ${signInAgainHint(ctx.profile, posture ?? void 0)}
       }
       if (options2.device && (!options2.grant || resolveProfilePosture(profile) !== "owner-openkey")) {
         throw new CLIError("INVALID_ARGUMENT", "--device requires --grant on an OpenKey owner profile.", ExitCode.USAGE_ERROR);
+      }
+      if (options2.fresh && (!options2.grant || resolveProfilePosture(profile) !== "owner-openkey")) {
+        throw new CLIError("INVALID_ARGUMENT", "--fresh requires --grant on an OpenKey owner profile: it asks the owner for a new approval although the current grants already cover the request.", ExitCode.USAGE_ERROR);
       }
       const preset = resolveAppsAgentRequest(options2);
       const resolutionOptions = { allowLogicalSpaces: true };
@@ -38376,13 +38789,14 @@ ${appsAgentScopeNotice(preset.mode, preset.appIds)}
       await completeApprovalResult(ctx.profile);
       let node;
       if (!keyOnlyOpenKey) node = await ensureAuthenticated(ctx);
-      if (node?.hasRuntimePermissions(requested)) {
+      const existing = options2.fresh ? storedGrantsCovering(await loadAdditionalDelegations(ctx.profile), requested, profile.ownerDid) : [];
+      if (!options2.fresh && node?.hasRuntimePermissions(requested)) {
         outputJson({ changed: false, missing: [], added: [] });
         return;
       }
       if (profile.authMethod === "openkey" || options2.device || keyOnlyOpenKey) {
         if (!key) {
-          throw new CLIError("NO_KEY", `No key found for profile "${ctx.profile}". Run \`${CLI_NAME20} --profile ${ctx.profile} auth rotate\` to create a new key and sign in.`, ExitCode.AUTH_REQUIRED);
+          throw new CLIError("NO_KEY", `No key found for profile "${ctx.profile}". Run \`${CLI_NAME21} --profile ${ctx.profile} auth rotate\` to create a new key and sign in.`, ExitCode.AUTH_REQUIRED);
         }
         const openkeyHost = resolveOpenKeyHost(profile);
         const grants = [];
@@ -38433,6 +38847,7 @@ ${appsAgentScopeNotice(preset.mode, preset.appIds)}
                 expiry: expiryCap === void 0 ? void 0 : openKeyExpiryParam(expiryCap),
                 noPopup: options2.popup === false,
                 paste: options2.paste,
+                ...deadlineMs === void 0 ? {} : { approvalWait: { deadlineMs, step: index + 1, of: groups.length } },
                 ...grantLinkOptsIn ? { expiryChangeable: true } : {}
               });
             }
@@ -38473,7 +38888,8 @@ ${appsAgentScopeNotice(preset.mode, preset.appIds)}
           delegationCid: delegationCids2[0],
           delegationCids: delegationCids2,
           expiry: expiry2,
-          ...options2.device ? { declined } : {}
+          ...options2.device ? { declined } : {},
+          ...options2.fresh ? { fresh: true, existingDelegationCids: existing.map((grant) => grant.cid) } : {}
         });
         return;
       }
@@ -38529,7 +38945,7 @@ ${appsAgentScopeNotice(preset.mode, preset.appIds)}
           kind: parsed.kind,
           requestId: parsed.requestId,
           requested: parsed.requested,
-          next: `${CLI_NAME20} auth retry ${parsed.requestId}`
+          next: `${CLI_NAME21} auth retry ${parsed.requestId}`
         });
         return;
       }
@@ -39140,7 +39556,7 @@ async function acquireOpenKeyApproval(params) {
   if (!key) {
     throw new CLIError(
       "NO_KEY",
-      `No key found for profile "${params.ctx.profile}". Run \`${CLI_NAME20} --profile ${params.ctx.profile} auth rotate\` to create a new key and sign in.`,
+      `No key found for profile "${params.ctx.profile}". Run \`${CLI_NAME21} --profile ${params.ctx.profile} auth rotate\` to create a new key and sign in.`,
       ExitCode.AUTH_REQUIRED
     );
   }
@@ -39224,7 +39640,7 @@ async function ensureDelegationAuthority(params) {
     if (!key) {
       throw new CLIError(
         "NO_KEY",
-        `No key found for profile "${params.ctx.profile}". Run \`${CLI_NAME20} --profile ${params.ctx.profile} auth rotate\` to create a new key and sign in.`,
+        `No key found for profile "${params.ctx.profile}". Run \`${CLI_NAME21} --profile ${params.ctx.profile} auth rotate\` to create a new key and sign in.`,
         ExitCode.AUTH_REQUIRED
       );
     }
@@ -39442,7 +39858,7 @@ async function rotateAuthKey(profileName2, host, options = {}) {
     if (!profile.privateKey) {
       throw new CLIError(
         "LOCAL_OWNER_KEY_REQUIRED",
-        `Profile "${profileName2}" does not have a local owner private key. Run \`${CLI_NAME20} auth login --method local\` first.`,
+        `Profile "${profileName2}" does not have a local owner private key. Run \`${CLI_NAME21} auth login --method local\` first.`,
         ExitCode.AUTH_REQUIRED
       );
     }
@@ -39802,9 +40218,9 @@ function preparedSignInOptions(expiry) {
 }
 var KEYS_APPROVAL_NOTE = (folder) => `On the OpenKey page, the row that mentions tinycloud.encryption lets this profile create and use keys in the folder "${folder}/". Keep every row ticked. To sign in without keys, untick that whole row and nothing else; any other change makes OpenKey refuse the sign-in.
 `;
-var keysNotGrantedAfterLogin = (profileName2) => `You're signed in, but without named keys: the tinycloud.encryption permission wasn't approved. To add them, sign in again with \`${CLI_NAME20} --profile ${profileName2} auth login --keys <folder>\` and leave the row that mentions tinycloud.encryption ticked.
+var keysNotGrantedAfterLogin = (profileName2) => `You're signed in, but without named keys: the tinycloud.encryption permission wasn't approved. To add them, sign in again with \`${CLI_NAME21} --profile ${profileName2} auth login --keys <folder>\` and leave the row that mentions tinycloud.encryption ticked.
 `;
-var KEYS_FOLDER_NOT_READY = `You're signed in, but your encryption keys aren't set up yet. Try \`${CLI_NAME20} keys ensure <folder>/<name>\` again in a minute.
+var KEYS_FOLDER_NOT_READY = `You're signed in, but your encryption keys aren't set up yet. Try \`${CLI_NAME21} keys ensure <folder>/<name>\` again in a minute.
 `;
 async function readyNamedKeysNetwork(node) {
   try {
@@ -40049,7 +40465,7 @@ async function refreshOpenKeySession(profileName2, host, options = {}) {
 }
 
 // src/commands/completion.ts
-import { CLI_NAME as CLI_NAME21 } from "@tinycloud/operations/cli-name";
+import { CLI_NAME as CLI_NAME22 } from "@tinycloud/operations/cli-name";
 function registerCompletionCommand(program) {
   const completion = program.command("completion").description("Generate shell completions");
   completion.command("bash").description("Output bash completions").action(() => {
@@ -40066,7 +40482,7 @@ function registerCompletionCommand(program) {
   });
 }
 function generateBashCompletion() {
-  return `# ${CLI_NAME21} bash completion
+  return `# ${CLI_NAME22} bash completion
 _tc_completions() {
   local cur prev commands subcommands
   COMPREPLY=()
@@ -40091,11 +40507,11 @@ _tc_completions() {
     COMPREPLY=( $(compgen -W "\${subcommands}" -- "\${cur}") )
   fi
 }
-complete -F _tc_completions ${CLI_NAME21}
+complete -F _tc_completions ${CLI_NAME22}
 `;
 }
 function generateZshCompletion() {
-  return `#compdef ${CLI_NAME21}
+  return `#compdef ${CLI_NAME22}
 
 _tc() {
   local -a commands
@@ -40147,51 +40563,51 @@ _tc
 `;
 }
 function generateFishCompletion() {
-  return `# ${CLI_NAME21} fish completion
+  return `# ${CLI_NAME22} fish completion
 set -l commands init auth kv space delegation share node profile completion
 
 # Disable file completion by default
-complete -c ${CLI_NAME21} -f
+complete -c ${CLI_NAME22} -f
 
 # Top-level commands
-complete -c ${CLI_NAME21} -n "not __fish_seen_subcommand_from $commands" -a init -d "Initialize a new TinyCloud profile"
-complete -c ${CLI_NAME21} -n "not __fish_seen_subcommand_from $commands" -a auth -d "Authentication management"
-complete -c ${CLI_NAME21} -n "not __fish_seen_subcommand_from $commands" -a kv -d "Key-value store operations"
-complete -c ${CLI_NAME21} -n "not __fish_seen_subcommand_from $commands" -a space -d "Space management"
-complete -c ${CLI_NAME21} -n "not __fish_seen_subcommand_from $commands" -a delegation -d "Manage delegations"
-complete -c ${CLI_NAME21} -n "not __fish_seen_subcommand_from $commands" -a share -d "Share data with others"
-complete -c ${CLI_NAME21} -n "not __fish_seen_subcommand_from $commands" -a node -d "Node health and info"
-complete -c ${CLI_NAME21} -n "not __fish_seen_subcommand_from $commands" -a profile -d "Profile management"
-complete -c ${CLI_NAME21} -n "not __fish_seen_subcommand_from $commands" -a completion -d "Generate shell completions"
+complete -c ${CLI_NAME22} -n "not __fish_seen_subcommand_from $commands" -a init -d "Initialize a new TinyCloud profile"
+complete -c ${CLI_NAME22} -n "not __fish_seen_subcommand_from $commands" -a auth -d "Authentication management"
+complete -c ${CLI_NAME22} -n "not __fish_seen_subcommand_from $commands" -a kv -d "Key-value store operations"
+complete -c ${CLI_NAME22} -n "not __fish_seen_subcommand_from $commands" -a space -d "Space management"
+complete -c ${CLI_NAME22} -n "not __fish_seen_subcommand_from $commands" -a delegation -d "Manage delegations"
+complete -c ${CLI_NAME22} -n "not __fish_seen_subcommand_from $commands" -a share -d "Share data with others"
+complete -c ${CLI_NAME22} -n "not __fish_seen_subcommand_from $commands" -a node -d "Node health and info"
+complete -c ${CLI_NAME22} -n "not __fish_seen_subcommand_from $commands" -a profile -d "Profile management"
+complete -c ${CLI_NAME22} -n "not __fish_seen_subcommand_from $commands" -a completion -d "Generate shell completions"
 
 # Subcommands
-complete -c ${CLI_NAME21} -n "__fish_seen_subcommand_from auth" -a "login logout rotate status whoami"
-complete -c ${CLI_NAME21} -n "__fish_seen_subcommand_from kv" -a "get put delete list head"
-complete -c ${CLI_NAME21} -n "__fish_seen_subcommand_from space" -a "list create info switch"
-complete -c ${CLI_NAME21} -n "__fish_seen_subcommand_from delegation" -a "create list info revoke"
-complete -c ${CLI_NAME21} -n "__fish_seen_subcommand_from share" -a "create receive list revoke"
-complete -c ${CLI_NAME21} -n "__fish_seen_subcommand_from node" -a "health version status"
-complete -c ${CLI_NAME21} -n "__fish_seen_subcommand_from profile" -a "list create show switch delete"
-complete -c ${CLI_NAME21} -n "__fish_seen_subcommand_from completion" -a "bash zsh fish"
+complete -c ${CLI_NAME22} -n "__fish_seen_subcommand_from auth" -a "login logout rotate status whoami"
+complete -c ${CLI_NAME22} -n "__fish_seen_subcommand_from kv" -a "get put delete list head"
+complete -c ${CLI_NAME22} -n "__fish_seen_subcommand_from space" -a "list create info switch"
+complete -c ${CLI_NAME22} -n "__fish_seen_subcommand_from delegation" -a "create list info revoke"
+complete -c ${CLI_NAME22} -n "__fish_seen_subcommand_from share" -a "create receive list revoke"
+complete -c ${CLI_NAME22} -n "__fish_seen_subcommand_from node" -a "health version status"
+complete -c ${CLI_NAME22} -n "__fish_seen_subcommand_from profile" -a "list create show switch delete"
+complete -c ${CLI_NAME22} -n "__fish_seen_subcommand_from completion" -a "bash zsh fish"
 
 # Global options
-complete -c ${CLI_NAME21} -l profile -s p -d "Profile to use"
-complete -c ${CLI_NAME21} -l host -s H -d "TinyCloud node URL"
-complete -c ${CLI_NAME21} -l verbose -s v -d "Enable verbose output"
-complete -c ${CLI_NAME21} -l no-cache -d "Disable caching"
-complete -c ${CLI_NAME21} -l quiet -s q -d "Suppress non-essential output"
-complete -c ${CLI_NAME21} -l replication -d "Enable read-through replication"
-complete -c ${CLI_NAME21} -l no-replication -d "Disable replication"
-complete -c ${CLI_NAME21} -l replication-debug -d "Write replication diagnostics to stderr"
-complete -c ${CLI_NAME21} -l no-diagnostic-logs -d "Don't record a CLI log for this command"
+complete -c ${CLI_NAME22} -l profile -s p -d "Profile to use"
+complete -c ${CLI_NAME22} -l host -s H -d "TinyCloud node URL"
+complete -c ${CLI_NAME22} -l verbose -s v -d "Enable verbose output"
+complete -c ${CLI_NAME22} -l no-cache -d "Disable caching"
+complete -c ${CLI_NAME22} -l quiet -s q -d "Suppress non-essential output"
+complete -c ${CLI_NAME22} -l replication -d "Enable read-through replication"
+complete -c ${CLI_NAME22} -l no-replication -d "Disable replication"
+complete -c ${CLI_NAME22} -l replication-debug -d "Write replication diagnostics to stderr"
+complete -c ${CLI_NAME22} -l no-diagnostic-logs -d "Don't record a CLI log for this command"
 `;
 }
 
 // src/commands/courier.ts
-import { CLI_NAME as CLI_NAME22 } from "@tinycloud/operations/cli-name";
-var TC_OPTIONS_BEFORE_COURIER = `${CLI_NAME22} courier takes no ${CLI_NAME22} options and does not use ${CLI_NAME22} profiles; Courier keeps its own profile in $COURIER_HOME (default ~/.courier). Put flags after "courier", e.g. ${CLI_NAME22} courier init --host <url>.`;
+import { CLI_NAME as CLI_NAME23 } from "@tinycloud/operations/cli-name";
+var TC_OPTIONS_BEFORE_COURIER = `${CLI_NAME23} courier takes no ${CLI_NAME23} options and does not use ${CLI_NAME23} profiles; Courier keeps its own profile in $COURIER_HOME (default ~/.courier). Put flags after "courier", e.g. ${CLI_NAME23} courier init --host <url>.`;
 function registerCourierCommand(program) {
-  const courier = program.command("courier").description(`Agent-to-agent threads over TinyCloud; run \`${CLI_NAME22} courier --help\` (beta)`).argument("[args...]").allowUnknownOption().helpOption(false);
+  const courier = program.command("courier").description(`Agent-to-agent threads over TinyCloud; run \`${CLI_NAME23} courier --help\` (beta)`).argument("[args...]").allowUnknownOption().helpOption(false);
   courier.action(() => courier.error(TC_OPTIONS_BEFORE_COURIER, { exitCode: 2, code: "tc.courier.options" }));
 }
 
@@ -40223,254 +40639,6 @@ function registerContextCommand(program) {
           evidence: "local-metadata"
         },
         access: "not-tested"
-      });
-    } catch (error) {
-      return handleError(error);
-    }
-  });
-}
-
-// src/commands/delegation.ts
-import { createInterface as createInterface5 } from "readline";
-init_profiles();
-init_formatter();
-init_errors();
-init_constants();
-init_sdk();
-init_duration();
-import { CLI_NAME as CLI_NAME23 } from "@tinycloud/operations/cli-name";
-import { PermissionNotInManifestError } from "@tinycloud/node-sdk";
-async function queryDelegations(node, options, until) {
-  const found = [];
-  let cursor;
-  do {
-    const page = await node.account.delegations.query({ ...options, limit: 100, cursor });
-    if (!page.ok) {
-      if (page.error.code === "PERMISSION_DENIED") {
-        throw new CLIError(
-          "PERMISSION_DENIED",
-          `This session cannot read delegations: it lacks tinycloud.delegation/list. Run \`${CLI_NAME23} auth login\` again to grant it.`,
-          ExitCode.PERMISSION_DENIED
-        );
-      }
-      throw cliErrorFromService(page.error);
-    }
-    found.push(...page.data.items);
-    cursor = page.data.nextCursor;
-  } while (cursor && !(until && found.some((d) => d.cid === until)));
-  return found;
-}
-function listedDelegation(d) {
-  const resources = d.resources.map((r) => {
-    const [space, service, ...path] = r.resource.split("/");
-    return { space, service, path: path.join("/"), actions: r.actions };
-  });
-  return {
-    cid: d.cid,
-    delegatee: d.delegateDid,
-    delegator: d.delegatorDid,
-    direction: d.direction,
-    status: d.status,
-    expiry: d.expiresAt?.toISOString() ?? null,
-    resources
-  };
-}
-var ISSUED_ORDER_NOTE = "Sorted by delegation ID, not by date.";
-function issuedFailure(error, host) {
-  if (error.code === "UNSUPPORTED_OPERATION") {
-    return new CLIError(
-      "ISSUED_DELEGATIONS_UNAVAILABLE",
-      `${host} can't list the delegations you issued yet.`,
-      ExitCode.NODE_ERROR
-    );
-  }
-  if (error.code === "CHAIN_TOO_DEEP") {
-    return new CLIError(
-      "CHAIN_TOO_DEEP",
-      "The node can't check this delegation chain right now because it's too long. Try again later.",
-      ExitCode.NODE_ERROR,
-      { status: 503 }
-    );
-  }
-  if (error.code === "INVALID_CURSOR") {
-    return new CLIError(
-      "INVALID_CURSOR",
-      "The node couldn't continue the list. Run the command again.",
-      ExitCode.NODE_ERROR,
-      { status: 400 }
-    );
-  }
-  return cliErrorFromService(error);
-}
-async function revokeIssuedDelegation(node, ctx, cid) {
-  const result = await node.delegationManager.revokeIssued(cid);
-  if (result.ok) return { cid: result.data.cid, revoked: true };
-  if (result.error.code === "PERMISSION_DENIED") {
-    throw new CLIError(
-      "REVOKE_UNAUTHORIZED",
-      `The node refused this revocation: ${result.error.message}.`,
-      ExitCode.PERMISSION_DENIED,
-      {
-        status: result.error.meta?.status,
-        hint: `A profile can revoke only the delegations its own key issued. See them with \`${CLI_NAME23} --profile ${ctx.profile} delegation list --granted\`.`
-      }
-    );
-  }
-  if (result.error.code === "NOT_FOUND") {
-    throw new CLIError("TARGET_NOT_FOUND", `The node has no delegation "${cid}".`, ExitCode.NOT_FOUND);
-  }
-  throw issuedFailure(result.error, ctx.host);
-}
-async function confirmCurrentSessionRevoke(yes) {
-  if (yes) return;
-  const warning = "This is your current sign-in session; revoking it signs you out";
-  if (!isInteractive() || !process.stdin.isTTY) {
-    throw new CLIError("CONFIRMATION_REQUIRED", `${warning}. Re-run with --yes to confirm.`, ExitCode.USAGE_ERROR);
-  }
-  process.stderr.write(`${warning}.
-`);
-  const prompt = createInterface5({ input: process.stdin, output: process.stderr });
-  try {
-    const answer = await new Promise((resolve10) => prompt.question("Revoke this session? [y/N] ", resolve10));
-    if (!/^y(es)?$/i.test(answer.trim())) {
-      throw new CLIError("REQUEST_CANCELLED", "Current session revocation cancelled.", ExitCode.ERROR);
-    }
-  } finally {
-    prompt.close();
-  }
-}
-function registerDelegationCommand(program, configuration = {}) {
-  const delegation = program.command("delegation").description("Manage delegations");
-  delegation.command("create").description("Create a delegation").requiredOption("--to <did>", "Recipient DID").requiredOption("--path <path>", "KV path scope").requiredOption("--actions <actions>", "Comma-separated actions (e.g., kv/get,kv/list)").option("--expiry <duration>", "Expiry duration (e.g., 1h, 7d, ISO date)", "1h").action(async (options, cmd) => {
-    try {
-      const globalOpts = cmd.optsWithGlobals();
-      const ctx = await ProfileManager.resolveContext(globalOpts);
-      const node = await ensureAuthenticated(ctx);
-      const actions = options.actions.split(",").map((a) => {
-        const trimmed = a.trim();
-        return trimmed.startsWith("tinycloud.") ? trimmed : `tinycloud.${trimmed}`;
-      });
-      const byService = {};
-      for (const action of actions) {
-        const slash = action.indexOf("/");
-        if (slash <= "tinycloud.".length || slash === action.length - 1) {
-          throw new CLIError("USAGE_ERROR", `Invalid action "${action}"; use service/action, e.g. kv/get`, ExitCode.USAGE_ERROR);
-        }
-        (byService[action.slice(0, slash)] ??= []).push(action);
-      }
-      const expiry = parseExpiry3(options.expiry);
-      const recipient = options.to.split("#")[0];
-      const { delegation: created } = await node.delegateTo(
-        recipient,
-        Object.entries(byService).map(([service, serviceActions]) => ({
-          service,
-          space: "default",
-          path: options.path,
-          actions: serviceActions
-        })),
-        { expiry: expiry.getTime() - Date.now(), requireActivation: true }
-      ).catch((error) => {
-        if (error instanceof PermissionNotInManifestError) {
-          const needed = error.missing.map((m) => `${m.actions.join(", ")} on space "${m.space ?? "default"}" path "${m.path}"`).join("; ");
-          throw new CLIError(
-            "PERMISSION_DENIED",
-            `This session cannot delegate what was requested. Missing: ${needed}. Sign in again with these permissions.`,
-            ExitCode.PERMISSION_DENIED
-          );
-        }
-        throw error;
-      });
-      const confirmed = (await queryDelegations(node, { direction: "granted" }, created.cid)).find((d) => d.cid === created.cid);
-      if (confirmed?.status !== "active") {
-        throw new CLIError(
-          "DELEGATION_NOT_CONFIRMED",
-          confirmed ? `The node lists delegation ${created.cid} as ${confirmed.status}, not active; treat it as not created.` : `The node accepted delegation ${created.cid} but does not list it; treat it as not created.`,
-          ExitCode.ERROR
-        );
-      }
-      outputJson({
-        cid: created.cid,
-        delegateDid: recipient,
-        delegatorDid: confirmed.delegatorDid,
-        path: options.path,
-        actions,
-        expiry: created.expiry.toISOString(),
-        status: confirmed.status
-      });
-    } catch (error) {
-      return handleError(error);
-    }
-  });
-  delegation.command("list").description("List delegations").option("--granted", "Show only delegations I've granted").option("--received", "Show only delegations I've received").option("--space <space>", "Filter by space name or ID").action(async (options, cmd) => {
-    try {
-      const globalOpts = cmd.optsWithGlobals();
-      const ctx = await ProfileManager.resolveContext(globalOpts);
-      const node = await ensureAuthenticated(ctx);
-      if (options.granted && options.received) {
-        throw new CLIError("USAGE_ERROR", "Use only one of --granted or --received.", ExitCode.USAGE_ERROR);
-      }
-      if (options.granted && ctx.posture === "delegate-session" && node.address === void 0) {
-        const issued = await node.delegationManager.queryAllIssued({ space: options.space });
-        if (!issued.ok) throw issuedFailure(issued.error, ctx.host);
-        outputJson({
-          delegations: issued.data.map(listedDelegation),
-          count: issued.data.length,
-          note: ISSUED_ORDER_NOTE
-        });
-        return;
-      }
-      const delegations = await queryDelegations(node, {
-        direction: options.granted ? "granted" : options.received ? "received" : "all",
-        space: options.space
-      });
-      outputJson({
-        delegations: delegations.map(listedDelegation),
-        count: delegations.length
-      });
-    } catch (error) {
-      return handleError(error);
-    }
-  });
-  delegation.command("info <cid>").description("Get delegation details").option("--space <space>", "Filter by space name or ID").action(async (cid, options, cmd) => {
-    try {
-      const globalOpts = cmd.optsWithGlobals();
-      const ctx = await ProfileManager.resolveContext(globalOpts);
-      const node = await ensureAuthenticated(ctx);
-      const found = (await queryDelegations(node, { direction: "all", space: options.space })).find((d) => d.cid === cid);
-      if (!found) {
-        throw new CLIError("NOT_FOUND", `Delegation "${cid}" not found in this account's delegations`, ExitCode.NOT_FOUND);
-      }
-      outputJson(listedDelegation(found));
-    } catch (error) {
-      return handleError(error);
-    }
-  });
-  delegation.command("revoke <cid>").description("Revoke a delegation").option("--yes", "Confirm revoking the current sign-in session", false).action(async (cid, options, cmd) => {
-    try {
-      const globalOpts = cmd.optsWithGlobals();
-      const ctx = await ProfileManager.resolveContext(globalOpts);
-      const delegateCandidate = ctx.posture === "delegate-session" ? await ensureAuthenticated(ctx) : void 0;
-      if (delegateCandidate !== void 0 && delegateCandidate.address === void 0) {
-        outputJson(await revokeIssuedDelegation(delegateCandidate, ctx, cid));
-        return;
-      }
-      const session = await ProfileManager.getSession(ctx.profile);
-      const currentSession = session && "delegationCid" in session && session.delegationCid === cid;
-      if (currentSession) await confirmCurrentSessionRevoke(options.yes === true);
-      const prepared = currentSession ? await prepareProfileRemoteLogout(ctx, cid) : void 0;
-      const node = prepared?.node ?? delegateCandidate ?? await ensureAuthenticated(ctx);
-      const profile = prepared?.profile ?? await ProfileManager.getProfile(ctx.profile);
-      const revoked = await revokeDelegationOnNode({
-        ctx,
-        node,
-        profile,
-        cid,
-        openKeyAcquisition: configuration.openKeyAcquisition
-      });
-      const replicasRemoved = prepared ? await finishProfileLogout(ctx, { online: prepared, expectedSessionCid: cid }) : void 0;
-      outputJson({
-        ...revoked,
-        ...replicasRemoved === void 0 ? {} : { signedOut: true, replicasRemoved }
       });
     } catch (error) {
       return handleError(error);
@@ -41159,8 +41327,8 @@ function printResult(result) {
 // src/commands/feed.ts
 init_profiles();
 init_sdk();
-import { readFile as readFile13 } from "fs/promises";
-import { join as join19 } from "path";
+import { readFile as readFile14 } from "fs/promises";
+import { join as join20 } from "path";
 import { parseSpaceUri as parseSpaceUri3 } from "@tinycloud/sdk-core";
 import {
   appendFeedMessage,
@@ -41177,6 +41345,7 @@ import {
   newFeedMessageSchema as newFeedMessageSchema2,
   newFeedResponseSchema as newFeedResponseSchema2,
   publishFeedCard,
+  readFeedCardMd as readFeedCardMd2,
   readFeedResponsePayload,
   recordFeedHandling,
   resolveFeedCard
@@ -41367,6 +41536,46 @@ async function connectFeedAgent(registry, source, activate) {
   }
   return grant;
 }
+function feedAgentPermissions(space, resources) {
+  return [
+    { service: "tinycloud.sql", space, path: resources.outputResource, actions: ["tinycloud.sql/read", "tinycloud.sql/write"] },
+    { service: "tinycloud.sql", space, path: resources.responseResource, actions: ["tinycloud.sql/read"] },
+    { service: "tinycloud.hooks", space, path: `sql/${resources.responseResource}`, actions: ["tinycloud.hooks/subscribe"] }
+  ];
+}
+
+// src/feed/disconnect.ts
+init_constants();
+init_errors();
+async function disconnectFeedAgent(registry, agentId, revoke) {
+  const found = await registry.query("SELECT authorization_json FROM feed_agents WHERE agent_id = ?", [agentId]);
+  if (!found.ok && !/no such table/i.test(found.error.message)) throw cliErrorFromService(found.error);
+  const row = found.ok ? found.data.rows[0] : void 0;
+  if (!row) {
+    throw new CLIError("FEED_AGENT_NOT_FOUND", `No agent is connected under the feed token "${agentId}". Nothing was changed.`, ExitCode.NOT_FOUND);
+  }
+  const authorization = row[0];
+  let cid;
+  try {
+    const parsed = JSON.parse(authorization);
+    if (parsed !== null && typeof parsed === "object" && "cid" in parsed) cid = parsed.cid;
+  } catch {
+    cid = void 0;
+  }
+  if (typeof cid !== "string" || cid === "") {
+    throw new CLIError("FEED_GRANT_UNREADABLE", `The registry row for "${agentId}" has no readable grant ID, so the grant can't be revoked from it. Nothing was changed.`, ExitCode.ERROR);
+  }
+  let nodeHadNoGrant = false;
+  try {
+    await revoke(cid);
+  } catch (error) {
+    if (!(error instanceof CLIError) || error.code !== "TARGET_NOT_FOUND") throw error;
+    nodeHadNoGrant = true;
+  }
+  const removed = await registry.execute("DELETE FROM feed_agents WHERE agent_id = ? AND authorization_json = ?", [agentId, authorization]);
+  if (!removed.ok) throw cliErrorFromService(removed.error);
+  return nodeHadNoGrant ? { agentId, cid, revoked: false, nodeHadNoGrant: true, removed: true } : { agentId, cid, revoked: true, removed: true };
+}
 
 // src/feed/export.ts
 init_constants();
@@ -41374,7 +41583,7 @@ init_errors();
 import { createHash as createHash6, randomUUID as randomUUID3 } from "crypto";
 import { isUtf8 } from "buffer";
 import { constants } from "fs";
-import { link as link3, lstat as lstat9, open as open15, readFile as readFile12, readlink, realpath as realpath2, rm as rm8, unlink as unlink5 } from "fs/promises";
+import { link as link3, lstat as lstat9, open as open16, readFile as readFile12, readlink, realpath as realpath2, rm as rm8, unlink as unlink5 } from "fs/promises";
 import { basename as basename2, dirname as dirname8, join as join18, resolve as resolve5 } from "path";
 var RawExportRefusal = class extends Error {
 };
@@ -41487,7 +41696,7 @@ async function sidecarRows(options, keys) {
 async function publishSnapshot(outFile, snapshot, signal) {
   const parentPath = dirname8(outFile);
   await assertTrustedOutputDirectory(parentPath);
-  const parent = await open15(parentPath, constants.O_RDONLY | (constants.O_DIRECTORY ?? 0) | (constants.O_NOFOLLOW ?? 0));
+  const parent = await open16(parentPath, constants.O_RDONLY | (constants.O_DIRECTORY ?? 0) | (constants.O_NOFOLLOW ?? 0));
   const temporary = join18(parentPath, `.${basename2(outFile)}.${randomUUID3()}.tmp`);
   let created = false;
   try {
@@ -41499,7 +41708,7 @@ async function publishSnapshot(outFile, snapshot, signal) {
       }
     };
     await assertStableParent();
-    const file = await open15(temporary, "wx", 384);
+    const file = await open16(temporary, "wx", 384);
     created = true;
     try {
       await file.chmod(384);
@@ -41929,6 +42138,281 @@ async function importFeedPreparedBundle(options) {
   }
 }
 
+// src/feed/card-md.ts
+import { chmod as chmod6, readFile as readFile13, rename as rename3, writeFile as writeFile5 } from "fs/promises";
+import { join as join19 } from "path";
+import { readFeedCardMd } from "@tinycloud/sdk-services/feed";
+
+// src/feed/card-md-default.ts
+var CARD_MD_DEFAULT_VERSION = "ce089aab8391";
+var CARD_MD_DEFAULT = `# card.md
+
+How cards are made for this Feed. Every agent that posts here reads this before its first card. The owner can change it at any time; when it changes, follow the new version.
+
+## Writing a card
+
+1. Plain words first. Write for the owner, not for another agent: no code names, file paths or ids in the text.
+2. Start with a short post: what happened, in one or two sentences. Put it in \`payload.summary\`, and don't repeat the title.
+3. When the owner has to do something, give numbered steps, one action per step.
+4. When you ask for access, name the exact thing and the limit: which data or app, what you will do with it (read, or read and change), and for how long. Never ask for more than the task needs.
+5. One card per thing. Don't edit a card to show progress: post a new update.
+6. On every card, set \`payload.priority\` (0 is the most urgent, 5 is routine news) and \`payload.agent\`. When anything has a date, set \`payload.deadline\` and \`payload.expiresAt\`.
+
+## Card kinds
+
+- **Decision**: the owner picks one of two to four. The options go in \`choices\`, as \`{"id", "label"}\` (not \`options\`). Add \`payload.brief\` with the sections Background, Why now, If you don't answer, The options and Recommendation.
+- **Update**: news that needs no answer. \`needsResponse\` is \`false\` and there are no \`choices\`. To point at a web page, set \`payload.render\` to \`link\` and add \`payload.url\`.
+- **Page**: several questions at once, with something to look at. It needs both \`payload.page.image\` (a public \`https://\` image) and \`payload.page.questions\`. Without both, the Feed shows a plain card and none of your questions.
+
+## What publishing checks
+
+\`feed publish\` checks only the outer card. It never checks \`payload\`, and it drops any other top-level field without saying so: \`priority\` belongs in \`payload.priority\`. Copy the shapes below.
+
+## Known-good cards
+
+### Decision
+
+\`\`\`json
+{
+  "cardId": "weight-goal-2026-11",
+  "revision": 1,
+  "issuanceId": "weight-goal-2026-11-r1",
+  "kind": "decision",
+  "needsResponse": true,
+  "title": "New weekly goal?",
+  "body": "You were under 82 kg all week. I suggest 81.5 kg for next week.",
+  "choices": [
+    {
+      "id": "lower",
+      "label": "81.5 kg"
+    },
+    {
+      "id": "keep",
+      "label": "Keep 82 kg"
+    }
+  ],
+  "urgency": 2,
+  "createdAt": "2026-11-03T09:00:00Z",
+  "payload": {
+    "render": "post",
+    "priority": 3,
+    "deadline": "2026-11-08T18:00:00Z",
+    "expiresAt": "2026-11-09T00:00:00Z",
+    "summary": "Lower next week's goal to 81.5 kg, or keep 82 kg?",
+    "agent": {
+      "kind": "claude",
+      "model": "Claude Sonnet 5.5",
+      "runsOn": "Home laptop",
+      "job": "Weight tracker"
+    },
+    "brief": {
+      "title": "Next week's weight goal",
+      "markdown": "## Background\\nYour weekly goal this month is 82 kg. This week's weigh-ins: 81.9, 81.7, 81.6 and 81.4 kg.\\n\\n## Why now\\nI set next week's goal on Sunday evening.\\n\\n## If you don't answer\\nThe goal stays at 82 kg.\\n\\n## The options\\n| | 81.5 kg | Keep 82 kg |\\n|---|---|---|\\n| Change | 0.5 kg lower | None |\\n| Risk | A miss if the week goes badly | You stop making progress |\\n\\n## Recommendation\\n81.5 kg: you were under it on three of four days."
+    }
+  }
+}
+\`\`\`
+
+### Update
+
+\`\`\`json
+{
+  "cardId": "weight-2026-11-03",
+  "revision": 1,
+  "issuanceId": "weight-2026-11-03-r1",
+  "kind": "update",
+  "needsResponse": false,
+  "title": "New low",
+  "body": "81.4 kg this morning, 0.6 kg under your previous best.",
+  "urgency": 0,
+  "createdAt": "2026-11-03T07:42:10Z",
+  "payload": {
+    "render": "post",
+    "priority": 5,
+    "summary": "81.4 kg, a new low.",
+    "agent": {
+      "kind": "claude",
+      "model": "Claude Sonnet 5.5",
+      "runsOn": "Home laptop",
+      "job": "Weight tracker"
+    },
+    "source": {
+      "label": "Weigh-ins"
+    }
+  }
+}
+\`\`\`
+
+### Update with a link
+
+\`\`\`json
+{
+  "cardId": "weight-report-2026-11",
+  "revision": 1,
+  "issuanceId": "weight-report-2026-11-r1",
+  "kind": "update",
+  "needsResponse": false,
+  "title": "October report",
+  "body": "Your October weigh-ins in one chart: down 1.8 kg over the month.",
+  "urgency": 1,
+  "createdAt": "2026-11-01T08:00:00Z",
+  "payload": {
+    "render": "link",
+    "url": "https://example.org/weight/october",
+    "priority": 4,
+    "summary": "October: down 1.8 kg. The chart is one tap away.",
+    "agent": {
+      "kind": "claude",
+      "model": "Claude Sonnet 5.5",
+      "runsOn": "Home laptop",
+      "job": "Weight tracker"
+    }
+  }
+}
+\`\`\`
+
+### Page
+
+\`\`\`json
+{
+  "cardId": "party-plan-2026-11",
+  "revision": 1,
+  "issuanceId": "party-plan-2026-11-r1",
+  "kind": "page",
+  "needsResponse": true,
+  "title": "Plan for Mia's party",
+  "body": "I found the hall and two cakes. Three things to settle before I book.",
+  "urgency": 3,
+  "createdAt": "2026-11-03T10:00:00Z",
+  "payload": {
+    "render": "post",
+    "priority": 2,
+    "deadline": "2026-11-05T12:00:00Z",
+    "summary": "Pick a date, cakes and anything else before I book the hall.",
+    "agent": {
+      "kind": "claude",
+      "model": "Claude Sonnet 5.5",
+      "runsOn": "Home laptop",
+      "job": "Party planner"
+    },
+    "page": {
+      "image": "https://example.org/hall.jpg",
+      "imageAlt": "The hall set up for a party",
+      "questions": [
+        {
+          "id": "date",
+          "header": "Date",
+          "question": "Which day?",
+          "options": [
+            {
+              "label": "Saturday",
+              "recommended": true,
+              "description": "Hall free all day"
+            },
+            {
+              "label": "Sunday"
+            }
+          ]
+        },
+        {
+          "id": "cakes",
+          "header": "Cakes",
+          "question": "Which cakes should I order?",
+          "multi": true,
+          "options": [
+            {
+              "label": "Chocolate",
+              "image": "https://example.org/choc.jpg"
+            },
+            {
+              "label": "Lemon"
+            }
+          ],
+          "notePrompt": "Any allergies?"
+        },
+        {
+          "id": "else",
+          "header": "Anything else",
+          "question": "Anything else I should arrange?"
+        }
+      ]
+    }
+  }
+}
+\`\`\`
+
+## The owner's preferences
+
+None. The owner can add their own rules here.
+`;
+
+// src/feed/card-md.ts
+init_safe_text();
+var CARD_MD_RESOURCE = "xyz.tinycloud.tinychat/feed/card_md";
+var DEFAULT_CARD_MD = { text: CARD_MD_DEFAULT, version: CARD_MD_DEFAULT_VERSION, default: true };
+var seenPath = (directory, agent) => join19(directory, `feed-card-md-${encodeURIComponent(agent)}.json`);
+async function seenCardMdVersion(directory, agent) {
+  try {
+    const parsed = JSON.parse(await readFile13(seenPath(directory, agent), "utf8"));
+    return typeof parsed.version === "string" ? parsed.version : void 0;
+  } catch {
+    return void 0;
+  }
+}
+async function rememberCardMdVersion(directory, agent, version) {
+  const target = seenPath(directory, agent);
+  const temporary = `${target}.${process.pid}.tmp`;
+  await writeFile5(temporary, `${JSON.stringify({ version })}
+`, { mode: 384 });
+  await chmod6(temporary, 384);
+  await rename3(temporary, target);
+}
+function markDefault(card) {
+  return card.version === CARD_MD_DEFAULT_VERSION ? { text: card.text, version: card.version, default: true } : card;
+}
+async function showOnce(card, directory, agent) {
+  const cardMd = card.default === true ? { version: card.version, default: true } : { version: card.version };
+  if (await seenCardMdVersion(directory, agent) === card.version) return { cardMd };
+  await rememberCardMdVersion(directory, agent, card.version).catch(() => void 0);
+  return { cardMd, changed: card };
+}
+async function cardMdOrDefaultForPublish(db, directory, agent) {
+  let card;
+  try {
+    const read6 = await readFeedCardMd(db);
+    if (!read6.ok) return {};
+    card = read6.data === null ? DEFAULT_CARD_MD : markDefault(read6.data);
+  } catch {
+    return {};
+  }
+  return showOnce(card, directory, agent);
+}
+function cardMdChangedText(card) {
+  const version = safeInline(card.version);
+  if (card.default === true) return `The owner hasn't set a card.md, so this is the default (${version}):
+${safeBlock(card.text)}`;
+  return card.text === "" ? `The owner's card.md changed (${version}): it's now empty.` : `The owner's card.md changed (${version}):
+${safeBlock(card.text)}`;
+}
+var CARD_MD_SCHEMA = `CREATE TABLE IF NOT EXISTS card_md (
+  id INTEGER PRIMARY KEY, text TEXT NOT NULL, version TEXT NOT NULL, updated_at TEXT NOT NULL
+)`;
+var CARD_MD_UPSERT = `INSERT INTO card_md (id, text, version, updated_at) VALUES (1, ?, ?, ?)
+  ON CONFLICT(id) DO UPDATE SET text = excluded.text, version = excluded.version, updated_at = excluded.updated_at
+  WHERE card_md.version <> excluded.version`;
+var CARD_MD_INSERT_DEFAULT = `INSERT INTO card_md (id, text, version, updated_at) VALUES (1, ?, ?, ?) ON CONFLICT(id) DO NOTHING`;
+async function copyCardMdToAgent(master, agentResponses) {
+  try {
+    const read6 = await readFeedCardMd(master);
+    if (!read6.ok) return false;
+    const statement = read6.data === null ? { sql: CARD_MD_INSERT_DEFAULT, params: [DEFAULT_CARD_MD.text, DEFAULT_CARD_MD.version, (/* @__PURE__ */ new Date()).toISOString()] } : { sql: CARD_MD_UPSERT, params: [read6.data.text, read6.data.version, read6.data.updatedAt] };
+    const written = await agentResponses.batch([{ sql: CARD_MD_SCHEMA }, statement]);
+    return written.ok;
+  } catch {
+    return false;
+  }
+}
+
 // src/commands/feed.ts
 var FEED_PREFIX2 = "xyz.tinycloud.tinychat/feed";
 var REGISTRY = "xyz.tinycloud.tinychat/home_feed";
@@ -41960,7 +42444,7 @@ function agentOptions(command) {
 async function readPrivatePayload(file) {
   if (file === void 0) return void 0;
   try {
-    const parsed = feedResponsePayloadSchema2.safeParse(JSON.parse(await readFile13(file, "utf8")));
+    const parsed = feedResponsePayloadSchema2.safeParse(JSON.parse(await readFile14(file, "utf8")));
     if (!parsed.success) throw new Error("Invalid payload envelope");
     return parsed.data;
   } catch {
@@ -41992,6 +42476,13 @@ into shared logs.
 Private typed payloads are saved atomically with respond/message --payload-file and read
 explicitly with feed payload. Default notifications include metadata, never payload data.
 
+card-md prints the owner's card.md: {text, version, updatedAt}. When the owner hasn't set one it
+prints the default instead, as {text, version, default: true}.
+publish and watch print the text once on stderr when its version differs from the last
+one this profile saw for the agent. publish also adds cardMd {version} to its JSON each time,
+with default: true while it is the default.
+An agent connected before card.md existed reads it with the same grant.
+
 export captures an owner-only raw KV snapshot to an unused private file. Source space,
 slash prefix and output are explicit; source get/sync grants are separate from feed SQL.
 `);
@@ -42018,7 +42509,7 @@ slash prefix and output are explicit; source get/sync grants are separate from f
       }
       let bundle;
       try {
-        bundle = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(await readFile13(options.file)));
+        bundle = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(await readFile14(options.file)));
       } catch {
         throw cliErrorFromService({ code: "INVALID_INPUT", message: "Could not read a valid prepared feed bundle file" });
       }
@@ -42042,12 +42533,9 @@ slash prefix and output are explicit; source get/sync grants are separate from f
       };
       const delegation = await connectFeedAgent(sql2.db(REGISTRY), source, async () => {
         value3(await initializeFeedDatabases2({ output: output2, responses }));
+        await copyCardMdToAgent(sql2.db(CARD_MD_RESOURCE), responses);
         const expiry = parseExpiry3(options.expiry).getTime() - Date.now();
-        const { delegation: delegation2 } = await node.delegateTo(did2, [
-          { service: "tinycloud.sql", space, path: resources.outputResource, actions: ["tinycloud.sql/read", "tinycloud.sql/write"] },
-          { service: "tinycloud.sql", space, path: resources.responseResource, actions: ["tinycloud.sql/read"] },
-          { service: "tinycloud.hooks", space, path: `sql/${resources.responseResource}`, actions: ["tinycloud.hooks/subscribe"] }
-        ], { expiry, requireActivation: true });
+        const { delegation: delegation2 } = await node.delegateTo(did2, feedAgentPermissions(space, resources), { expiry, requireActivation: true });
         return delegation2;
       });
       outputJson({ source, delegation });
@@ -42055,11 +42543,41 @@ slash prefix and output are explicit; source get/sync grants are separate from f
       return handleError(error);
     }
   });
+  agentOptions(feed.command("disconnect").description("Owner: revoke an agent's feed grant and remove it from the registry")).addHelpText("after", `
+Reads the grant ID from the owner registry and revokes it with this profile's own key, so no OpenKey approval is
+needed. Run it with the profile that ran feed connect: a profile can revoke only grants its own key issued. The registry
+row is removed only after the revoke succeeds; the token stays reserved for the same agent DID.
+`).action(async (options, command) => {
+    try {
+      const { node, sql: sql2, profile } = await context(command);
+      outputJson(await disconnectFeedAgent(sql2.db(REGISTRY), options.agent, async (cid) => {
+        await revokeIssuedDelegation(node, profile, cid);
+      }));
+    } catch (error) {
+      return handleError(error);
+    }
+  });
   agentOptions(feed.command("publish").description("Agent: publish an immutable card issuance")).requiredOption("--file <path>", "Card JSON file").action(async (options, command) => {
     try {
-      const { output: output2 } = await context(command);
-      const card = feedCardSchema2.parse(JSON.parse(await readFile13(options.file, "utf8")));
-      outputJson(value3(await publishFeedCard(output2, card)));
+      const { output: output2, responses, profile } = await context(command);
+      const card = feedCardSchema2.parse(JSON.parse(await readFile14(options.file, "utf8")));
+      const published = value3(await publishFeedCard(output2, card));
+      const directory = await ProfileManager.ensureProfileDir(profile.profile).catch(() => void 0);
+      const { cardMd, changed } = directory === void 0 ? {} : await cardMdOrDefaultForPublish(responses, directory, options.agent);
+      if (changed) process.stderr.write(`${cardMdChangedText(changed)}
+`);
+      outputJson(cardMd === void 0 ? published : { ...published, cardMd });
+    } catch (error) {
+      return handleError(error);
+    }
+  });
+  agentOptions(feed.command("card-md").description("Agent: read the owner's card.md, the owner's instructions for the cards you post")).action(async (options, command) => {
+    try {
+      const { responses, profile } = await context(command);
+      const stored = value3(await readFeedCardMd2(responses));
+      const cardMd = stored === null ? DEFAULT_CARD_MD : markDefault(stored);
+      await rememberCardMdVersion(await ProfileManager.ensureProfileDir(profile.profile), options.agent, cardMd.version);
+      outputJson(cardMd);
     } catch (error) {
       return handleError(error);
     }
@@ -42069,7 +42587,7 @@ slash prefix and output are explicit; source get/sync grants are separate from f
       const { output: output2, responses } = await context(command);
       let response;
       try {
-        const parsed = newFeedResponseSchema2.safeParse(JSON.parse(await readFile13(options.file, "utf8")));
+        const parsed = newFeedResponseSchema2.safeParse(JSON.parse(await readFile14(options.file, "utf8")));
         if (!parsed.success) throw new Error("Invalid response header");
         response = parsed.data;
       } catch {
@@ -42086,7 +42604,7 @@ slash prefix and output are explicit; source get/sync grants are separate from f
       const { output: output2, responses } = await context(command);
       let message;
       try {
-        const parsed = newFeedMessageSchema2.safeParse(JSON.parse(await readFile13(options.file, "utf8")));
+        const parsed = newFeedMessageSchema2.safeParse(JSON.parse(await readFile14(options.file, "utf8")));
         if (!parsed.success) throw new Error("Invalid message header");
         message = parsed.data;
       } catch {
@@ -42101,7 +42619,7 @@ slash prefix and output are explicit; source get/sync grants are separate from f
   agentOptions(feed.command("handling").description("Agent: append response acknowledgement or outcome without changing owner responses")).requiredOption("--file <path>", "Handling JSON including full response and card identities").action(async (options, command) => {
     try {
       const { output: output2 } = await context(command);
-      const handling = feedHandlingSchema.parse(JSON.parse(await readFile13(options.file, "utf8")));
+      const handling = feedHandlingSchema.parse(JSON.parse(await readFile14(options.file, "utf8")));
       outputJson(value3(await recordFeedHandling(output2, handling)));
     } catch (error) {
       return handleError(error);
@@ -42155,7 +42673,7 @@ slash prefix and output are explicit; source get/sync grants are separate from f
       const runner = options.runner === void 0 ? void 0 : parseFeedRunner(options.runner);
       const { profile, node, space, responses, resources } = await context(command);
       const directory = await ProfileManager.ensureProfileDir(profile.profile);
-      local = await openFeedHandoff(options.handoff ?? join19(directory, `feed-${options.agent}.sqlite`));
+      local = await openFeedHandoff(options.handoff ?? join20(directory, `feed-${options.agent}.sqlite`));
       process.on("SIGINT", stop);
       process.on("SIGTERM", stop);
       const deliver = runner === void 0 ? printFeedResponse : (response) => runFeedRunner(runner, response, abort.signal);
@@ -42167,7 +42685,13 @@ slash prefix and output are explicit; source get/sync grants are separate from f
         once: options.once === true,
         subscription: { space, service: "sql", pathPrefix: resources.responseResource },
         signal: abort.signal,
-        deliver
+        deliver,
+        // The owner's card.md write wakes the watch with no response; show it once per version, on stderr.
+        onWake: async () => {
+          const { changed } = await cardMdOrDefaultForPublish(responses, directory, options.agent);
+          if (changed) process.stderr.write(`${cardMdChangedText(changed)}
+`);
+        }
       });
     } catch (error) {
       return handleError(error);
@@ -42337,15 +42861,15 @@ function missingGrantHint(profile, appId) {
 }
 
 // src/commands/kv.ts
-import { readFile as readFile14 } from "fs/promises";
+import { readFile as readFile15 } from "fs/promises";
 
 // src/lib/private-output.ts
 init_storage();
 init_errors();
 init_constants();
 import { randomUUID as randomUUID4 } from "crypto";
-import { lstat as lstat10, open as open16, rename as rename3, rm as rm9 } from "fs/promises";
-import { basename as basename3, dirname as dirname9, join as join20 } from "path";
+import { lstat as lstat10, open as open17, rename as rename4, rm as rm9 } from "fs/promises";
+import { basename as basename3, dirname as dirname9, join as join21 } from "path";
 async function validatePrivateOutput(path, label = "output") {
   try {
     const destination = await lstat10(path);
@@ -42368,10 +42892,10 @@ async function validatePrivateOutput(path, label = "output") {
 async function writePrivateOutput(path, value4, label = "output") {
   await validatePrivateOutput(path, label);
   const parentPath = dirname9(path);
-  const temp = join20(parentPath, `.${basename3(path)}.${randomUUID4()}.tmp`);
+  const temp = join21(parentPath, `.${basename3(path)}.${randomUUID4()}.tmp`);
   let created = false;
   try {
-    const handle = await open16(temp, "wx", PRIVATE_FILE_MODE);
+    const handle = await open17(temp, "wx", PRIVATE_FILE_MODE);
     created = true;
     try {
       await handle.writeFile(value4);
@@ -42379,14 +42903,14 @@ async function writePrivateOutput(path, value4, label = "output") {
     } finally {
       await handle.close();
     }
-    await rename3(temp, path);
+    await rename4(temp, path);
   } catch (error) {
     if (created) await rm9(temp, { force: true }).catch(() => void 0);
     const code5 = error instanceof Error && "code" in error && typeof error.code === "string" ? ` (${error.code})` : "";
     throw new CLIError("ERROR", `Could not write ${label.toLowerCase()} "${path}"${code5}.`, ExitCode.ERROR);
   }
   try {
-    const parent = await open16(parentPath, "r");
+    const parent = await open17(parentPath, "r");
     try {
       await parent.sync();
     } finally {
@@ -42499,7 +43023,7 @@ function registerKvCommand(program) {
         throw new CLIError("USAGE_ERROR", "Provide only one of: value argument, --file, or --stdin", ExitCode.USAGE_ERROR);
       }
       if (options.file) {
-        putValue = await readFile14(options.file);
+        putValue = await readFile15(options.file);
       } else if (options.stdin) {
         putValue = await readStdin2();
       } else {
@@ -42648,7 +43172,7 @@ init_formatter();
 init_errors();
 init_sdk();
 init_named_keys();
-import { readFile as readFile15 } from "fs/promises";
+import { readFile as readFile16 } from "fs/promises";
 import { NamedKeyError, createNamedKeyClient } from "@tinycloud/node-sdk/encryption-keys";
 import { CLI_NAME as CLI_NAME28 } from "@tinycloud/operations/cli-name";
 async function readStdin3() {
@@ -42659,7 +43183,7 @@ async function readStdin3() {
   return Buffer.concat(chunks);
 }
 async function readInput(file) {
-  return file === void 0 ? readStdin3() : readFile15(file);
+  return file === void 0 ? readStdin3() : readFile16(file);
 }
 function cliErrorFromNamedKey(error, command, path) {
   if (!(error instanceof NamedKeyError)) return error;
@@ -42821,7 +43345,7 @@ init_constants();
 init_theme();
 import { resolveManifestKnowledgeRoot as resolveManifestKnowledgeRoot2 } from "@tinycloud/sdk-core";
 import { CLI_NAME as CLI_NAME29 } from "@tinycloud/operations/cli-name";
-import { readFile as readFile16 } from "fs/promises";
+import { readFile as readFile17 } from "fs/promises";
 var DEFAULT_APP_SPACE = "applications";
 function registerManifestCommand(program) {
   const manifest = program.command("manifest").description("Inspect TinyCloud app manifests");
@@ -42935,7 +43459,7 @@ async function loadManifestSource2(source) {
     }
     return response.text();
   }
-  return readFile16(source, "utf8");
+  return readFile17(source, "utf8");
 }
 function prefixWithAppId(path, appId) {
   const slash = path.indexOf("/");
@@ -43100,6 +43624,7 @@ ${deadlineMs === void 0 ? "\nWaiting for approval. Re-run this command after an 
           }
         });
       };
+      const spaceRecheck = createSpaceRecheck();
       for (const [index, step] of ONBOARD_STEPS.entries()) {
         currentStep = index + 1;
         const session2 = await ProfileManager.getSession(ctx.profile);
@@ -43117,9 +43642,16 @@ ${deadlineMs === void 0 ? "\nWaiting for approval. Re-run this command after an 
             delegationData.permissions,
             deadlineMs === void 0 ? void 0 : spaceSetupTimeoutMs({ deadlineMs, step: currentStep, of: ONBOARD_STEPS.length })
           );
+          spaceRecheck.settle();
           profile = await ProfileManager.getProfile(ctx.profile);
           continue;
         }
+        await spaceRecheck.check(
+          { profile: ctx.profile, host: ctx.host },
+          String(session2?.spaceId),
+          step.permissions,
+          deadlineMs === void 0 ? {} : { timeoutMs: spaceSetupTimeoutMs({ deadlineMs, step: currentStep, of: ONBOARD_STEPS.length }) }
+        );
         await ensureDelegationAuthority({
           ctx,
           profile,
@@ -43263,11 +43795,37 @@ function registerProfileCommand(program) {
       const isDefault = profileName2 === config.defaultProfile;
       const posture = resolveProfilePosture(p);
       const operatorType = resolveProfileOperatorType(p);
+      const profileDetails = {
+        name: p.name,
+        tinycloudRegistryUrl: p.tinycloudRegistryUrl,
+        host: p.host,
+        chainId: p.chainId,
+        spaceName: p.spaceName,
+        did: p.did,
+        sessionDid: p.sessionDid,
+        ownerDid: p.ownerDid,
+        ownerKeyPrimary: p.ownerKeyPrimary,
+        spaceId: p.spaceId,
+        defaultSpace: p.defaultSpace,
+        createdAt: p.createdAt,
+        posture,
+        operatorType,
+        authMethod: p.authMethod,
+        authSignedOut: p.authSignedOut,
+        legacyReplicaCleanup: p.legacyReplicaCleanup,
+        address: p.address,
+        openkeyHost: p.openkeyHost,
+        autoDiscoverLocalNode: p.autoDiscoverLocalNode,
+        localNodeUrl: p.localNodeUrl,
+        localLinkName: p.localLinkName,
+        expectedNodeDid: p.expectedNodeDid,
+        pinnedLocalNodeDids: p.pinnedLocalNodeDids,
+        namedKeys: p.namedKeys,
+        replication: p.replication
+      };
       if (shouldOutputJson()) {
         outputJson({
-          ...p,
-          posture,
-          operatorType,
+          ...profileDetails,
           hasKey,
           hasSession,
           isDefault
@@ -43385,9 +43943,9 @@ function parseOperatorType(raw) {
 init_profile_replicas();
 import { CLI_NAME as CLI_NAME32 } from "@tinycloud/operations/cli-name";
 import { randomBytes as randomBytes7 } from "crypto";
-import { constants as fsConstants6 } from "fs";
-import { mkdir as mkdir7, open as open17, readdir as readdir6, rename as rename4, unlink as unlink6, lstat as lstat11 } from "fs/promises";
-import { basename as basename4, dirname as dirname10, join as join21, resolve as resolve6 } from "path";
+import { constants as fsConstants7 } from "fs";
+import { mkdir as mkdir7, open as open18, readdir as readdir6, rename as rename5, unlink as unlink6, lstat as lstat11 } from "fs/promises";
+import { basename as basename4, dirname as dirname10, join as join23, resolve as resolve6 } from "path";
 
 // src/lib/replication-report.ts
 function percentile(values, fraction) {
@@ -43562,7 +44120,7 @@ async function replicaNames(profile) {
       if (entry.isSymbolicLink()) throw localPathChanged(profile);
       if (!NAME.test(entry.name) || !entry.isDirectory()) continue;
       const present = await withPinnedLocalDirectory(profile, root, entry.name, async (directory) => {
-        const database = await lstat11(join21(directory, "replica.db"), { bigint: true }).catch((error) => {
+        const database = await lstat11(join23(directory, "replica.db"), { bigint: true }).catch((error) => {
           if (error.code === "ENOENT") return null;
           throw error;
         });
@@ -43586,7 +44144,7 @@ async function withReplicaRoot(profile, action, create5 = false) {
   const readRoot = async (directory, recheckProfile) => {
     if (create5) {
       if (recheckProfile) await recheckProfile();
-      await mkdir7(join21(directory, "replicas"), { mode: 448 }).catch((error) => {
+      await mkdir7(join23(directory, "replicas"), { mode: 448 }).catch((error) => {
         if (error.code !== "EEXIST") throw error;
       });
     }
@@ -43612,7 +44170,7 @@ async function withReplicaDirectory(profile, name, action, create5 = false) {
   const result = await withReplicaRoot(profile, async (root, recheckRoot, recheckProfile) => {
     if (create5) {
       await recheckRoot();
-      await mkdir7(join21(root, name), { mode: 448 }).catch((error) => {
+      await mkdir7(join23(root, name), { mode: 448 }).catch((error) => {
         if (error.code !== "EEXIST") throw error;
       });
     }
@@ -43623,7 +44181,7 @@ async function withReplicaDirectory(profile, name, action, create5 = false) {
       async (_directory, path, expectedDirectory, recheckChild) => {
         await recheckRoot();
         await recheckChild();
-        const database = await lstat11(join21(_directory, "replica.db"), { bigint: true }).catch((error) => {
+        const database = await lstat11(join23(_directory, "replica.db"), { bigint: true }).catch((error) => {
           if (error.code === "ENOENT") return null;
           throw error;
         });
@@ -43853,8 +44411,8 @@ function describeStatus(status) {
 }
 async function writeFileAtomic(path, bytes) {
   const target = resolve6(path);
-  const temp = join21(dirname10(target), `.${basename4(target)}.${randomBytes7(6).toString("hex")}.tmp`);
-  const handle = await open17(temp, fsConstants6.O_CREAT | fsConstants6.O_EXCL | fsConstants6.O_WRONLY, 384);
+  const temp = join23(dirname10(target), `.${basename4(target)}.${randomBytes7(6).toString("hex")}.tmp`);
+  const handle = await open18(temp, fsConstants7.O_CREAT | fsConstants7.O_EXCL | fsConstants7.O_WRONLY, 384);
   try {
     await handle.writeFile(bytes);
     await handle.sync();
@@ -43862,7 +44420,7 @@ async function writeFileAtomic(path, bytes) {
     await handle.close();
   }
   try {
-    await rename4(temp, target);
+    await rename5(temp, target);
   } catch (error) {
     await unlink6(temp).catch(() => void 0);
     throw error;
@@ -43896,14 +44454,14 @@ async function assertNamedLocalEntry(profile, path, expected, kind) {
   if (!current || current.isSymbolicLink() || (kind === "directory" ? !current.isDirectory() : !current.isFile()) || !sameLocalEntry(expected, current)) throw localPathChanged(profile);
 }
 async function withPinnedLocalDirectory(profile, parent, name, action) {
-  const path = join21(parent, name);
+  const path = join23(parent, name);
   const before = await lstat11(path, { bigint: true }).catch((error) => {
     if (error.code === "ENOENT") return null;
     throw error;
   });
   if (!before) return null;
   if (before.isSymbolicLink() || !before.isDirectory()) throw localPathChanged(profile);
-  const handle = await open17(path, fsConstants6.O_RDONLY | fsConstants6.O_DIRECTORY | fsConstants6.O_NOFOLLOW).catch((error) => {
+  const handle = await open18(path, fsConstants7.O_RDONLY | fsConstants7.O_DIRECTORY | fsConstants7.O_NOFOLLOW).catch((error) => {
     if (error.code === "ELOOP" || error.code === "ENOTDIR" || error.code === "ENOENT") throw localPathChanged(profile);
     throw error;
   });
@@ -43925,14 +44483,14 @@ async function withPinnedLocalDirectory(profile, parent, name, action) {
   }
 }
 async function readReportFile(profile, parent, name) {
-  const path = join21(parent, name);
+  const path = join23(parent, name);
   const before = await lstat11(path, { bigint: true }).catch((error) => {
     if (error.code === "ENOENT") return null;
     throw error;
   });
   if (!before) return null;
   if (before.isSymbolicLink() || !before.isFile()) throw localPathChanged(profile);
-  const handle = await open17(path, fsConstants6.O_RDONLY | fsConstants6.O_NOFOLLOW).catch((error) => {
+  const handle = await open18(path, fsConstants7.O_RDONLY | fsConstants7.O_NOFOLLOW).catch((error) => {
     if (error.code === "ELOOP" || error.code === "ENOTDIR" || error.code === "ENOENT") throw localPathChanged(profile);
     throw error;
   });
@@ -44470,10 +45028,10 @@ init_errors();
 init_warnings();
 init_constants();
 import { CLI_NAME as CLI_NAME34 } from "@tinycloud/operations/cli-name";
-import { readFile as readFile17 } from "fs/promises";
-import { join as join23 } from "path";
+import { readFile as readFile18 } from "fs/promises";
+import { join as join24 } from "path";
 import { constants as osConstants, homedir, hostname, userInfo } from "os";
-import { appSecretScope } from "@tinycloud/sdk-core";
+import { appSecretScope, SECRET_TYPES as SECRET_TYPES2 } from "@tinycloud/sdk-core";
 import { invokeOperation as invokeOperation4 } from "@tinycloud/operations";
 import { isLocalOwnerProfile as isLocalOwnerProfile4, liveStoredLease as liveStoredLease3, ownerSessionLacksProof as ownerSessionLacksProof5 } from "@tinycloud/operations/profile";
 import {
@@ -44497,6 +45055,37 @@ init_replication_registry();
 init_session_expired();
 init_scoped_login();
 init_space();
+
+// src/lib/secret-type.ts
+init_errors();
+init_constants();
+import { SECRET_TYPES, isSecretType } from "@tinycloud/sdk-core";
+import { parseTotpSeed } from "@tinycloud/sdk-services/secrets/totp";
+function parseSecretTypeOption(input) {
+  if (input === void 0) return void 0;
+  if (!isSecretType(input)) {
+    throw new CLIError(
+      "USAGE_ERROR",
+      `Unknown secret type ${JSON.stringify(input)}. Use one of: ${SECRET_TYPES.join(", ")}.`,
+      ExitCode.USAGE_ERROR
+    );
+  }
+  return input;
+}
+function assertSecretValueMatchesType(type, value4) {
+  if (type !== "totp") return;
+  const parsed = parseTotpSeed(value4);
+  if (!parsed.ok) {
+    throw new CLIError(
+      "USAGE_ERROR",
+      `The value is not a usable TOTP seed: ${parsed.message}`,
+      ExitCode.USAGE_ERROR,
+      { hint: "Pass a base32 seed or an otpauth://totp/... link, or store it without --type totp." }
+    );
+  }
+}
+
+// src/commands/secrets.ts
 init_browser();
 
 // src/lib/probe-child.ts
@@ -45043,7 +45632,7 @@ function resolveSecretListPrefix(options = {}) {
 }
 function resolveProfilesDir() {
   const home = process.env.TC_HOME ?? process.env.HOME ?? process.env.USERPROFILE ?? homedir();
-  return join23(home, ".tinycloud", "profiles");
+  return join24(home, ".tinycloud", "profiles");
 }
 async function ensureSecretsNode(ctx, options, openKeyAcquisition, selectedProfile) {
   const auth = authOptions(options);
@@ -45401,7 +45990,7 @@ function permissionsFromDelegation2(delegation) {
 }
 async function loadDelegationCandidates(source) {
   try {
-    const raw = JSON.parse(await readFile17(source, "utf8"));
+    const raw = JSON.parse(await readFile18(source, "utf8"));
     return normalizeDelegationCandidates(raw, source);
   } catch (error) {
     if (error?.code !== "ENOENT") {
@@ -45420,8 +46009,8 @@ async function loadDelegationCandidates(source) {
     }
   }
   try {
-    const importedPath = join23(resolveProfilesDir(), source, "additional-delegations.json");
-    const raw = JSON.parse(await readFile17(importedPath, "utf8"));
+    const importedPath = join24(resolveProfilesDir(), source, "additional-delegations.json");
+    const raw = JSON.parse(await readFile18(importedPath, "utf8"));
     return normalizeDelegationCandidates(raw, source);
   } catch (error) {
     if (error?.code === "ENOENT") {
@@ -46054,8 +46643,9 @@ function registerSecretsCommand(program, openKeyAcquisition) {
       return handleError(error);
     }
   });
-  secrets.command("put <name> [value]").description("Store a secret").option("--scope <scope>", "Logical secret scope").option("--space <name|uri>", "Target a non-default secrets space (short name or full URI)").option("--file <path>", "Read value from file").option("--stdin", "Read value from stdin").option("--private-key <hex>", "Ethereum private key (or set TC_PRIVATE_KEY)").action(async (name, value4, options, cmd) => {
+  secrets.command("put <name> [value]").description("Store a secret").option("--scope <scope>", "Logical secret scope").option("--space <name|uri>", "Target a non-default secrets space (short name or full URI)").option("--file <path>", "Read value from file").option("--stdin", "Read value from stdin").option("--type <type>", `What the secret is: ${SECRET_TYPES2.join(", ")} (default: secret). A totp secret must be a base32 seed or an otpauth:// link.`).option("--private-key <hex>", "Ethereum private key (or set TC_PRIVATE_KEY)").action(async (name, value4, options, cmd) => {
     try {
+      const secretType = parseSecretTypeOption(options.type);
       const globalOpts = cmd.optsWithGlobals();
       const ctx = await ProfileManager.resolveContext(globalOpts);
       const node = await ensureSecretsNode(ctx, options);
@@ -46070,13 +46660,15 @@ function registerSecretsCommand(program, openKeyAcquisition) {
         throw new CLIError("USAGE_ERROR", "Provide only one of: value argument, --file, or --stdin", ExitCode.USAGE_ERROR);
       }
       if (options.file) {
-        secretValue = await readFile17(options.file, "utf-8");
+        secretValue = await readFile18(options.file, "utf-8");
       } else if (options.stdin) {
         secretValue = (await readStdin4()).toString("utf-8");
       } else {
         secretValue = value4;
       }
       const scopeOptions = resolveSecretScope(options);
+      assertSecretValueMatchesType(secretType, secretValue);
+      const putOptions = secretType === void 0 ? scopeOptions : { ...scopeOptions, type: secretType };
       const result = await runSecretOperation({
         ctx,
         node,
@@ -46085,12 +46677,12 @@ function registerSecretsCommand(program, openKeyAcquisition) {
         scopeOptions,
         space: spaceUri,
         label: `Storing secret ${name}...`,
-        operation: () => secrets2.put(name, secretValue, scopeOptions)
+        operation: () => secrets2.put(name, secretValue, putOptions)
       });
       if (!result.ok) {
         throw cliErrorFromService(result.error);
       }
-      outputJson({ name, written: true });
+      outputJson({ name, written: true, ...secretType === void 0 ? {} : { type: secretType } });
     } catch (error) {
       return handleError(error);
     }
@@ -46380,11 +46972,12 @@ function receiveJson(result, path) {
 
 // src/share/io.ts
 import { constants as constants2 } from "fs";
-import { lstat as lstat12, mkdir as mkdir8, mkdtemp, open as open18, readFile as readFile18, realpath as realpath3, stat as stat6, link as link4, rename as rename5, rm as rm10, unlink as unlink7 } from "fs/promises";
+import { lstat as lstat12, mkdir as mkdir8, mkdtemp, open as open19, readFile as readFile19, realpath as realpath3, stat as stat6, link as link4, rename as rename6, rm as rm10, unlink as unlink7 } from "fs/promises";
 import { randomBytes as randomBytes8 } from "crypto";
-import { basename as basename5, join as join24, resolve as resolve7, sep as sep3 } from "path";
+import { basename as basename5, join as join25, resolve as resolve7, sep as sep3 } from "path";
 init_errors();
-var MAX_SHARE_STDIN_BYTES = 100 * 1024 * 1024;
+var MAX_SHARE_STDIN_BYTES = 95 * 1024 * 1024;
+var MAX_ADDRESSED_SHARE_BYTES = 71 * 1024 * 1024;
 var MAX_SHARE_URL_BYTES = 64 * 1024;
 async function readBoundedStdin(limit = MAX_SHARE_STDIN_BYTES) {
   if (!Number.isSafeInteger(limit) || limit <= 0) throw new Error("MAX_BYTES_EXCEEDED");
@@ -46427,7 +47020,7 @@ async function readShareInput(input, name, limit = MAX_SHARE_STDIN_BYTES) {
   const path = resolve7(input);
   const info = await stat6(path);
   if (!info.isFile() || info.size > limit) throw new Error("MAX_BYTES_EXCEEDED");
-  const bytes = new Uint8Array(await readFile18(path));
+  const bytes = new Uint8Array(await readFile19(path));
   if (bytes.byteLength > limit) throw new Error("MAX_BYTES_EXCEEDED");
   return { bytes, filename };
 }
@@ -46436,7 +47029,7 @@ async function assertDirectory(path) {
   const segments = absolute.split(sep3).filter(Boolean);
   let current = absolute.startsWith(sep3) ? sep3 : "";
   for (const segment of segments) {
-    current = current === sep3 ? join24(current, segment) : join24(current, segment);
+    current = current === sep3 ? join25(current, segment) : join25(current, segment);
     try {
       const info = await lstat12(current);
       if (info.isSymbolicLink()) {
@@ -46456,19 +47049,19 @@ async function writeShareOutput(directory, filename, bytes, force) {
   const outputDirectory = resolve7(directory);
   await assertDirectory(outputDirectory);
   const safeName = safeFilename(filename);
-  const directoryHandle = await open18(outputDirectory, constants2.O_RDONLY | (constants2.O_DIRECTORY ?? 0) | (constants2.O_NOFOLLOW ?? 0));
+  const directoryHandle = await open19(outputDirectory, constants2.O_RDONLY | (constants2.O_DIRECTORY ?? 0) | (constants2.O_NOFOLLOW ?? 0));
   const stableDirectory = await realpath3(outputDirectory);
-  const outputPath = join24(stableDirectory, safeName);
+  const outputPath = join25(stableDirectory, safeName);
   const directoryIdentity = await directoryHandle.stat();
   const assertStableDirectory = async () => {
     const current = await stat6(stableDirectory);
     if (current.dev !== directoryIdentity.dev || current.ino !== directoryIdentity.ino) throw new Error("OUTPUT_EXISTS");
   };
   await assertStableDirectory();
-  const stagingDirectory = await mkdtemp(join24(stableDirectory, ".tinycloud-share-stage-"));
+  const stagingDirectory = await mkdtemp(join25(stableDirectory, ".tinycloud-share-stage-"));
   const stagingInfo = await lstat12(stagingDirectory);
   if (!stagingInfo.isDirectory() || (stagingInfo.mode & 511) !== 448) throw new Error("OUTPUT_EXISTS");
-  const stagingPath = join24(stagingDirectory, `.tinycloud-share-${randomBytes8(16).toString("hex")}.tmp`);
+  const stagingPath = join25(stagingDirectory, `.tinycloud-share-${randomBytes8(16).toString("hex")}.tmp`);
   let temporaryPath;
   let handle;
   try {
@@ -46480,13 +47073,13 @@ async function writeShareOutput(directory, filename, bytes, force) {
       if (error.code !== "ENOENT") throw error;
     }
     temporaryPath = stagingPath;
-    handle = await open18(temporaryPath, constants2.O_WRONLY | constants2.O_CREAT | constants2.O_EXCL | (constants2.O_NOFOLLOW ?? 0), 384);
+    handle = await open19(temporaryPath, constants2.O_WRONLY | constants2.O_CREAT | constants2.O_EXCL | (constants2.O_NOFOLLOW ?? 0), 384);
     await handle.writeFile(bytes);
     await handle.close();
     handle = void 0;
     await assertStableDirectory();
     if (force) {
-      await rename5(temporaryPath, outputPath);
+      await rename6(temporaryPath, outputPath);
     } else {
       await link4(temporaryPath, outputPath);
       await unlink7(temporaryPath);
@@ -46505,7 +47098,7 @@ async function writeShareOutput(directory, filename, bytes, force) {
     await rm10(stagingDirectory, { recursive: true, force: true });
     await directoryHandle.close();
   }
-  return join24(outputDirectory, safeName);
+  return join25(outputDirectory, safeName);
 }
 
 // src/commands/share.ts
@@ -46513,8 +47106,8 @@ init_profiles();
 
 // src/share/html-folder.ts
 import { constants as constants3, existsSync as existsSync2 } from "fs";
-import { lstat as lstat13, open as open19, readdir as readdir7, realpath as realpath4, stat as stat7 } from "fs/promises";
-import { basename as basename6, dirname as dirname11, isAbsolute, join as join25, relative as relativePath, resolve as resolve8, sep as sep4 } from "path";
+import { lstat as lstat13, open as open20, readdir as readdir7, realpath as realpath4, stat as stat7 } from "fs/promises";
+import { basename as basename6, dirname as dirname11, isAbsolute, join as join26, relative as relativePath, resolve as resolve8, sep as sep4 } from "path";
 
 // ../share-sdk/dist/html-bundle.js
 var UNSAFE_FILENAME_CODE_POINT3 = /[\p{Cc}\p{Cf}\p{Cs}\u2028\u2029]/u;
@@ -46868,9 +47461,9 @@ function scanMarkup(html, options) {
     if (comments > MAX_ARTIFACT_COMMENTS) fail("limit", "artifact page has too many comments");
   };
   while (index < length5) {
-    const open20 = html.indexOf("<", index);
-    if (open20 === -1) return;
-    index = open20 + 1;
+    const open21 = html.indexOf("<", index);
+    if (open21 === -1) return;
+    index = open21 + 1;
     const next = html[index] ?? "";
     if (html.startsWith("!--", index)) {
       countComment();
@@ -47151,15 +47744,15 @@ function assertOnlyInlineCssReferences(css) {
   if (/@import/i.test(text2)) fail("unsupported", "artifact css still imports a stylesheet");
   if (/(?:^|[^\w-])(?:-webkit-)?image-set\s*\(/i.test(text2) || /(?:^|[^\w-])src\s*\(/i.test(text2)) fail("unsupported", "artifact css uses an unsupported resource function");
   const opened = text2.match(/url\(/gi)?.length ?? 0;
-  let read5 = 0;
+  let read6 = 0;
   for (const match of text2.matchAll(/url\([ \t\n\r\f]*(?:"([^"]*)"|'([^']*)'|([^)"' \t\n\r\f]*))[ \t\n\r\f]*\)/gi)) {
-    read5 += 1;
+    read6 += 1;
     const value4 = match[1] ?? match[2] ?? match[3] ?? "";
     if (!isInlineReference(value4) || value4.includes("\\")) {
       throw new ArtifactBundleError("unsupported", "artifact css references a resource", void 0, value4);
     }
   }
-  if (read5 !== opened) fail("unsupported", "artifact css has a url() that cannot be read");
+  if (read6 !== opened) fail("unsupported", "artifact css has a url() that cannot be read");
 }
 async function transformCss(sourceText, basePath, context2) {
   if (context2.cssStack.length > MAX_ARTIFACT_CSS_IMPORT_DEPTH) fail("limit", "artifact stylesheet import depth exceeded");
@@ -47471,7 +48064,7 @@ async function readRegularFile(root, path, relative, remaining, limit, hooks = {
     await hooks.beforeOpen?.();
     before = await lstat13(path);
     await hooks.afterLstat?.();
-    handle = await open19(path, constants3.O_RDONLY | (constants3.O_NOFOLLOW ?? 0) | (constants3.O_NONBLOCK ?? 0));
+    handle = await open20(path, constants3.O_RDONLY | (constants3.O_NOFOLLOW ?? 0) | (constants3.O_NONBLOCK ?? 0));
   } catch (error) {
     if (error.code === "ELOOP") return problem("symbolic link");
     if (isRaceError(error)) return problem(CHANGED);
@@ -47530,7 +48123,7 @@ async function listFolderDirectory(root, absolute, relative, hooks = {}) {
     if (before.isSymbolicLink()) return problem("symbolic link");
     if (!before.isDirectory()) return problem(CHANGED);
     await hooks.afterLstat?.();
-    const handle = await open19(absolute, constants3.O_RDONLY | (constants3.O_DIRECTORY ?? 0) | (constants3.O_NOFOLLOW ?? 0));
+    const handle = await open20(absolute, constants3.O_RDONLY | (constants3.O_DIRECTORY ?? 0) | (constants3.O_NOFOLLOW ?? 0));
     try {
       await hooks.afterOpen?.();
       const info = await handle.stat();
@@ -47587,7 +48180,7 @@ async function readHtmlFolder(directory, limit) {
         continue;
       }
       const path = relative === "" ? entry.name : `${relative}/${entry.name}`;
-      const child = join25(absolute, entry.name);
+      const child = join26(absolute, entry.name);
       if (entry.isSymbolicLink()) {
         problems.push({ code: "UNSUPPORTED_FOLDER_ENTRY", path, reason: "symbolic link" });
       } else if (entry.isDirectory()) {
@@ -47603,11 +48196,11 @@ async function readHtmlFolder(directory, limit) {
           continue;
         }
         if (files.length >= MAX_ARTIFACT_FILES) throw limitError(`folder has more than ${MAX_ARTIFACT_FILES} files`);
-        const read5 = await readRegularFile(root, child, path, limit - total, limit);
-        if (read5 instanceof Uint8Array) {
-          total += read5.byteLength;
-          files.push({ path: path.normalize("NFC"), bytes: read5 });
-        } else problems.push(read5);
+        const read6 = await readRegularFile(root, child, path, limit - total, limit);
+        if (read6 instanceof Uint8Array) {
+          total += read6.byteLength;
+          files.push({ path: path.normalize("NFC"), bytes: read6 });
+        } else problems.push(read6);
       }
     }
   };
@@ -47683,6 +48276,8 @@ var SHARE_ORIGIN2 = "https://share.tinycloud.xyz";
 var NOTIFY_WINDOW_MESSAGE = "Share notification authorization expired (at share expiry or 5 minutes after publication); publish a new share and invite the recipient then.\n";
 var INVITATIONS_UNAVAILABLE_MESSAGE = "Invitation emails are not available yet.";
 var NOTIFY_NEEDS_SHORT_LINK_MESSAGE = "This share has no short link, and an invitation email carries only a short link, so no invitation was sent. Publish it again to get one.";
+var SHARE_TOO_LARGE_MESSAGE = "Shared files can be up to 95 MiB. Use a smaller file or split it.";
+var ADDRESSED_SHARE_TOO_LARGE_FILE_MESSAGE = "Files shared with specific people can be up to 71 MiB. Use a smaller file or split it.";
 var ONGOING_UNAVAILABLE = "Ongoing shares are not available yet; v1 shares pin a version";
 function artifactRequest(options, actions, inputCount) {
   if (options.artifact === void 0) {
@@ -47946,8 +48541,17 @@ async function notifyRecordedShare(record3, recipient, adapter, storage, publish
 function byteLimit(value4) {
   if (value4 === void 0) return void 0;
   const parsed = Number(value4);
-  if (!Number.isSafeInteger(parsed) || parsed <= 0 || parsed > MAX_SHARE_STDIN_BYTES) throw new CLIError("MAX_BYTES_EXCEEDED", "max-bytes must be between 1 and 100 MiB", 7);
+  if (!Number.isSafeInteger(parsed) || parsed <= 0 || parsed > MAX_SHARE_STDIN_BYTES) throw new CLIError("MAX_BYTES_EXCEEDED", "--max-bytes must be between 1 byte and 95 MiB.", 7);
   return parsed;
+}
+function shareCeiling(target) {
+  return target.kind === "bearer" ? MAX_SHARE_STDIN_BYTES : MAX_ADDRESSED_SHARE_BYTES;
+}
+function shareTooLarge(maxBytes, ceiling, together = false) {
+  const defaultLimit = maxBytes === void 0 || maxBytes >= ceiling;
+  const largest = ceiling === MAX_SHARE_STDIN_BYTES ? "95" : "71";
+  const message = together ? defaultLimit ? `These files add up to more than ${largest} MiB. Share fewer at once or use smaller files.` : `These files add up to more than the --max-bytes limit you set (${maxBytes} bytes). Share fewer at once or raise --max-bytes, up to ${largest} MiB.` : defaultLimit ? ceiling === MAX_SHARE_STDIN_BYTES ? SHARE_TOO_LARGE_MESSAGE : ADDRESSED_SHARE_TOO_LARGE_FILE_MESSAGE : `This file is over the --max-bytes limit you set (${maxBytes} bytes). Use a smaller file or raise --max-bytes, up to ${largest} MiB.`;
+  return new CLIError("MAX_BYTES_EXCEEDED", message, 7);
 }
 function mediaTypeFor(filename) {
   const extension = filename.toLowerCase().split(".").at(-1);
@@ -47958,12 +48562,12 @@ function requestedActions(values) {
   if (actions.some((value4) => value4 !== "read" && value4 !== "list" && value4 !== "edit")) throw new CLIError("INVALID_ARGUMENT", "--action must be read, list, or edit", 2);
   return [...new Set(actions)];
 }
-function assertAggregateInputLimit(inputs, maxBytes) {
-  const limit = maxBytes ?? MAX_SHARE_STDIN_BYTES;
+function assertAggregateInputLimit(inputs, maxBytes, ceiling) {
+  const limit = Math.min(maxBytes ?? ceiling, ceiling);
   let total = 0;
   for (const input of inputs) {
     total += input.bytes.byteLength;
-    if (!Number.isSafeInteger(total) || total > limit) throw new CLIError("MAX_BYTES_EXCEEDED", "combined share input exceeds the configured byte limit", 7);
+    if (!Number.isSafeInteger(total) || total > limit) throw shareTooLarge(maxBytes, ceiling, inputs.length > 1);
   }
 }
 function registerShareCommand(program) {
@@ -47975,6 +48579,7 @@ function registerShareCommand(program) {
       const target = parseShareTarget(options.to);
       if (target.kind === "email") throw new CLIError("UNAVAILABLE", "email-addressed shares are not available in this release; nothing was shared", 4);
       const maxBytes = byteLimit(options.maxBytes);
+      const ceiling = shareCeiling(target);
       if (files.length === 0 || files.includes("-") && files.length > 1) throw new CLIError("INVALID_ARGUMENT", "stdin must be the only publish input", 2);
       const name = files.length === 1 ? options.name : void 0;
       const actions = requestedActions(options.action);
@@ -47995,9 +48600,11 @@ function registerShareCommand(program) {
       } else {
         for (const file of files) if (await isDirectoryInput(file)) throw new CLIError("MAX_BYTES_EXCEEDED", FOLDER_NOT_AVAILABLE, 7);
         for (const file of files) shareInputFilename(file, name);
-        inputs = await Promise.all(files.map((file) => readShareInput(file, name, maxBytes)));
+        inputs = await Promise.all(files.map((file) => readShareInput(file, name, Math.min(maxBytes ?? ceiling, ceiling)).catch((error) => {
+          throw error instanceof Error && error.message === "MAX_BYTES_EXCEEDED" ? shareTooLarge(maxBytes, ceiling) : error;
+        })));
       }
-      assertAggregateInputLimit(inputs, maxBytes);
+      assertAggregateInputLimit(inputs, maxBytes, ceiling);
       if (options.prefix && target.kind === "bearer") throw new CLIError("INVALID_ARGUMENT", "--prefix requires an addressed target", 2);
       if (target.kind === "bearer" && actions.includes("edit")) throw new CLIError("INVALID_ARGUMENT", `--action edit is not available with --to ${options.to}: a link can only be read; address a recipient to allow edits`, 2);
       if (inputs.length > 1 && target.kind === "bearer") throw new CLIError("UNSUPPORTED_LINK", "multiple files require an addressed target", 2);
@@ -48288,7 +48895,7 @@ init_theme();
 import { CLI_NAME as CLI_NAME36 } from "@tinycloud/operations/cli-name";
 import { ACCOUNT_REGISTRY_SPACE } from "@tinycloud/node-sdk";
 import { randomBytes as randomBytes9 } from "crypto";
-import { mkdir as mkdir9, writeFile as writeFile5 } from "fs/promises";
+import { mkdir as mkdir9, writeFile as writeFile6 } from "fs/promises";
 import { dirname as dirname12 } from "path";
 function didWithoutFragment2(did2) {
   const fragment = did2.indexOf("#");
@@ -48446,7 +49053,7 @@ it directly with \`${CLI_NAME36} space host <name>\` (no request needed).
 async function emitHostRequestArtifact(artifact, emitOption) {
   if (typeof emitOption === "string" && emitOption.length > 0) {
     await mkdir9(dirname12(emitOption), { recursive: true });
-    await writeFile5(emitOption, JSON.stringify(artifact, null, 2) + "\n", "utf8");
+    await writeFile6(emitOption, JSON.stringify(artifact, null, 2) + "\n", "utf8");
     outputJson({
       emitted: true,
       path: emitOption,
@@ -48470,7 +49077,7 @@ init_space();
 init_host();
 init_theme();
 import { CLI_NAME as CLI_NAME37 } from "@tinycloud/operations/cli-name";
-import { writeFile as writeFile6 } from "fs/promises";
+import { writeFile as writeFile7 } from "fs/promises";
 import { resolve as resolve9 } from "path";
 async function dbHandle(node, dbName, spaceInput, profileName2) {
   const spaceUri = await resolveSpaceUri(spaceInput, profileName2);
@@ -48614,7 +49221,7 @@ Output:
       const blob = result.data;
       const buffer = Buffer.from(await blob.arrayBuffer());
       const outputPath = resolve9(options.output);
-      await writeFile6(outputPath, buffer);
+      await writeFile7(outputPath, buffer);
       outputJson({
         file: outputPath,
         size: blob.size,
@@ -49171,7 +49778,7 @@ function registerUpgradeCommand(program) {
 }
 
 // src/commands/vault.ts
-import { readFile as readFile19 } from "fs/promises";
+import { readFile as readFile20 } from "fs/promises";
 init_profiles();
 init_formatter();
 init_errors();
@@ -49233,7 +49840,7 @@ function registerVaultCommand(program) {
         throw new CLIError("USAGE_ERROR", "Provide only one of: value argument, --file, or --stdin", ExitCode.USAGE_ERROR);
       }
       if (options.file) {
-        putValue = new Uint8Array(await readFile19(options.file));
+        putValue = new Uint8Array(await readFile20(options.file));
       } else if (options.stdin) {
         putValue = new Uint8Array(await readStdin5());
       } else {
@@ -49348,7 +49955,7 @@ function registerVaultCommand(program) {
 }
 
 // src/commands/vars.ts
-import { readFile as readFile20 } from "fs/promises";
+import { readFile as readFile21 } from "fs/promises";
 init_profiles();
 init_formatter();
 init_errors();
@@ -49453,7 +50060,7 @@ function registerVarsCommand(program) {
         throw new CLIError("USAGE_ERROR", "Provide only one of: value argument, --file, or --stdin", ExitCode.USAGE_ERROR);
       }
       if (options.file) {
-        varValue = await readFile20(options.file, "utf-8");
+        varValue = await readFile21(options.file, "utf-8");
       } else if (options.stdin) {
         varValue = (await readStdin6()).toString("utf-8");
       } else {

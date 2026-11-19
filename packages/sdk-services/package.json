@@ -1,6 +1,6 @@
 {
   "name": "@tinycloud/sdk-services",
-  "version": "3.12.0",
+  "version": "3.13.0-beta.8",
   "description": "TinyCloud SDK Services - Platform-agnostic service implementations",
   "author": "TinyCloud, Inc.",
   "license": "EGPL",
@@ -136,6 +136,16 @@
         "default": "./dist/encryption/named-keys.cjs"
       }
     },
+    "./secrets/totp": {
+      "import": {
+        "types": "./dist/secrets/totp.d.ts",
+        "default": "./dist/secrets/totp.js"
+      },
+      "require": {
+        "types": "./dist/secrets/totp.d.cts",
+        "default": "./dist/secrets/totp.cjs"
+      }
+    },
     "./internal/decrypt-transport-response-error": {
       "types": "./dist/internal/decrypt-transport-response-error.d.cts",
       "import": "./dist/internal/decrypt-transport-response-error.cjs",
@@ -167,6 +177,9 @@
       ],
       "encryption/named-keys": [
         "dist/encryption/named-keys.d.ts"
+      ],
+      "secrets/totp": [
+        "dist/secrets/totp.d.ts"
       ],
       "telemetry/requestLog": [
         "dist/telemetry/requestLog.d.ts"

@@ -1,5 +1,98 @@
 # @tinycloud/courier
 
+## 0.7.0-beta.10
+
+### Patch Changes
+
+- Updated dependencies [313b056]
+  - @tinycloud/share-sdk@1.6.0-beta.1
+  - @tinycloud/node-sdk@3.13.0-beta.9
+  - @tinycloud/sdk-core@3.13.0-beta.9
+
+## 0.7.0-beta.9
+
+### Minor Changes
+
+- b228ca4: Read exact messages with `read <thread> --peer <peer> --message <id>` (repeat up to 20 ids), without downloading the thread archive. Each side reports found, missing or incomplete outcomes; message reads use a 64 KiB per-value limit and a shared 10-second data-read deadline. Receipt-update warnings use fixed text.
+
+  Details: TC-2749
+
+## 0.7.0-beta.8
+
+### Minor Changes
+
+- 0576031: The CLI, the hosted MCP server and Courier now use `https://node.tinycloud.xyz` as the default TinyCloud node, in place of `https://tee.node.tinycloud.xyz`. Profiles that already store a host keep it. To keep using `https://tee.node.tinycloud.xyz`, set `--host` or `TC_HOST` for the CLI and the MCP server, or `COURIER_HOST` for Courier.
+
+  Details: TC-2923
+
+### Patch Changes
+
+- Updated dependencies [7399b14]
+  - @tinycloud/sdk-core@3.13.0-beta.8
+  - @tinycloud/node-sdk@3.13.0-beta.8
+
+## 0.6.1-beta.7
+
+### Patch Changes
+
+- Updated dependencies [9f3ca26]
+- Updated dependencies [9f3ca26]
+  - @tinycloud/node-sdk@3.13.0-beta.7
+
+## 0.6.1-beta.6
+
+### Patch Changes
+
+- @tinycloud/node-sdk@3.13.0-beta.6
+- @tinycloud/sdk-core@3.13.0-beta.6
+
+## 0.6.1-beta.5
+
+### Patch Changes
+
+- Updated dependencies [c7741ab]
+  - @tinycloud/sdk-core@3.13.0-beta.5
+  - @tinycloud/node-sdk@3.13.0-beta.5
+
+## 0.6.1-beta.4
+
+### Patch Changes
+
+- Updated dependencies [1f961e4]
+  - @tinycloud/sdk-core@3.13.0-beta.4
+  - @tinycloud/node-sdk@3.13.0-beta.4
+
+## 0.6.1-beta.3
+
+### Patch Changes
+
+- Updated dependencies [400cf7f]
+  - @tinycloud/sdk-core@3.13.0-beta.3
+  - @tinycloud/node-sdk@3.13.0-beta.3
+
+## 0.6.1-beta.2
+
+### Patch Changes
+
+- Updated dependencies [b758e71]
+  - @tinycloud/node-sdk@3.13.0-beta.2
+
+## 0.6.1-beta.1
+
+### Patch Changes
+
+- Updated dependencies [2395340]
+  - @tinycloud/sdk-core@3.13.0-beta.1
+  - @tinycloud/node-sdk@3.13.0-beta.1
+  - @tinycloud/share-sdk@1.6.0-beta.0
+
+## 0.6.1-beta.0
+
+### Patch Changes
+
+- Updated dependencies [634753d]
+  - @tinycloud/node-sdk@3.13.0-beta.0
+
 ## 0.6.0
 
 ### Minor Changes

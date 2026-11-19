@@ -1,5 +1,97 @@
 # @tinycloud/operations
 
+## 0.9.1-beta.10
+
+### Patch Changes
+
+- @tinycloud/node-sdk@3.13.0-beta.9
+- @tinycloud/sdk-core@3.13.0-beta.9
+
+## 0.9.1-beta.9
+
+### Patch Changes
+
+- 0576031: The CLI, the hosted MCP server and Courier now use `https://node.tinycloud.xyz` as the default TinyCloud node, in place of `https://tee.node.tinycloud.xyz`. Profiles that already store a host keep it. To keep using `https://tee.node.tinycloud.xyz`, set `--host` or `TC_HOST` for the CLI and the MCP server, or `COURIER_HOST` for Courier.
+
+  Details: TC-2923
+
+- Updated dependencies [7399b14]
+  - @tinycloud/sdk-services@3.13.0-beta.8
+  - @tinycloud/sdk-core@3.13.0-beta.8
+  - @tinycloud/node-sdk@3.13.0-beta.8
+
+## 0.9.1-beta.8
+
+### Patch Changes
+
+- Updated dependencies [9f3ca26]
+- Updated dependencies [9f3ca26]
+  - @tinycloud/node-sdk@3.13.0-beta.7
+
+## 0.9.1-beta.7
+
+### Patch Changes
+
+- Updated dependencies [0490f71]
+  - @tinycloud/sdk-services@3.13.0-beta.6
+  - @tinycloud/node-sdk@3.13.0-beta.6
+  - @tinycloud/sdk-core@3.13.0-beta.6
+
+## 0.9.1-beta.6
+
+### Patch Changes
+
+- Updated dependencies [c7741ab]
+  - @tinycloud/sdk-core@3.13.0-beta.5
+  - @tinycloud/node-sdk@3.13.0-beta.5
+
+## 0.9.1-beta.5
+
+### Patch Changes
+
+- Updated dependencies [1f961e4]
+  - @tinycloud/sdk-core@3.13.0-beta.4
+  - @tinycloud/node-sdk@3.13.0-beta.4
+
+## 0.9.1-beta.4
+
+### Patch Changes
+
+- Updated dependencies [400cf7f]
+  - @tinycloud/sdk-services@3.13.0-beta.3
+  - @tinycloud/sdk-core@3.13.0-beta.3
+  - @tinycloud/node-sdk@3.13.0-beta.3
+
+## 0.9.1-beta.3
+
+### Patch Changes
+
+- Updated dependencies [b758e71]
+  - @tinycloud/node-sdk@3.13.0-beta.2
+
+## 0.9.1-beta.2
+
+### Patch Changes
+
+- Updated dependencies [2395340]
+  - @tinycloud/sdk-core@3.13.0-beta.1
+  - @tinycloud/node-sdk@3.13.0-beta.1
+
+## 0.9.1-beta.1
+
+### Patch Changes
+
+- Updated dependencies [634753d]
+  - @tinycloud/node-sdk@3.13.0-beta.0
+
+## 0.9.1-beta.0
+
+### Patch Changes
+
+- ca8ae20: New hosted connections now find apps saved in the original `default/xyz.tinycloud.agent-data/` layout before making one with the same name. When `tinycloud_apps_context` names one of your own apps that isn't in the new layout, or `tinycloud_apps_write` creates an app, the connection asks the owner for a separate, read-only approval to read the original app list (OpenKey approves one space at a time). Once approved, the older app with that name is used and a duplicate is refused. Listing apps, published apps such as `healthlog`, and apps already in the new layout need no extra approval. If the owner declines, only the call that needed the list stops; retrying it shows the same request. Connections that already read the original list are unchanged.
+
+  Details: TC-3141
+
 ## 0.9.0
 
 ### Minor Changes
