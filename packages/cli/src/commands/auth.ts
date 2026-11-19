@@ -669,7 +669,7 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
         let requestExpiresMs: number | undefined;
         if (options.requestExpires !== undefined) {
           if (options.method === "local") {
-            throw new CLIError("INVALID_ARGUMENT", "--request-expires requires OpenKey login.", ExitCode.USAGE_ERROR);
+            throw new CLIError("INVALID_ARGUMENT", "--request-expires applies only to an OpenKey login.", ExitCode.USAGE_ERROR);
           }
           const unusedBy = options.paste ? "`--paste`" : options.device ? "`--device`" : options.keys !== undefined ? "`--keys`"
             : (options.replicationPrefix?.length ?? 0) > 0 ? "`--replication-prefix`" : undefined;
@@ -695,7 +695,7 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
           ...(owner === undefined ? {} : { ownerDid: owner }),
         };
         if (requestExpiresMs !== undefined && replicationOptions.prefixes.length > 0) {
-          throw new CLIError("INVALID_ARGUMENT", "--request-expires sets the window of the one-tap approval link, which a login with replication does not use.", ExitCode.USAGE_ERROR);
+          throw new CLIError("INVALID_ARGUMENT", "--request-expires sets the window of the one-tap approval link, which a login with replication doesn't use.", ExitCode.USAGE_ERROR);
         }
         const loginPermissions = permissions === undefined
           ? undefined

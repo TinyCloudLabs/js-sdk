@@ -2404,7 +2404,7 @@ describe("OpenKey primary key (TC-705)", () => {
       expect(recorded.errors).toEqual([
         expect.objectContaining({ code: "INVALID_ARGUMENT", message: expect.stringContaining("--paste") }),
         expect.objectContaining({ code: "INVALID_ARGUMENT", message: expect.stringContaining("--device") }),
-        expect.objectContaining({ code: "INVALID_ARGUMENT", message: expect.stringContaining("requires OpenKey login") }),
+        expect.objectContaining({ code: "INVALID_ARGUMENT", message: expect.stringContaining("applies only to an OpenKey login") }),
       ]);
       nothingStored();
     });

@@ -16981,14 +16981,14 @@ function assertKey(key32) {
     throw new TypeError(`key must be ${KEY_LENGTH} bytes, got ${key32.length}`);
   }
 }
-async function importAesKey(key32, usage3) {
+async function importAesKey(key32, usage4) {
   assertKey(key32);
   return globalThis.crypto.subtle.importKey(
     "raw",
     key32,
     "AES-GCM",
     false,
-    [usage3]
+    [usage4]
   );
 }
 function generateKey() {
@@ -18229,6 +18229,49 @@ var init_browser = __esm({
   }
 });
 
+// src/auth/request-expires.ts
+function parseRequestExpires(value4, context2) {
+  const form = ` Use a number and a unit, for example 30m or 4h.`;
+  if (context2.unusedBy !== void 0) {
+    throw usage("INVALID_ARGUMENT", `--request-expires sets the window of the one-tap approval link, which ${context2.unusedBy} does not use.`);
+  }
+  const match = FORM.exec(value4);
+  if (!match) throw usage("INVALID_REQUEST_EXPIRES", `Invalid --request-expires ${JSON.stringify(value4)}.${form}`);
+  const ms2 = Number(match[1]) * UNIT_MS[match[2]];
+  if (!Number.isSafeInteger(ms2) || ms2 < REQUEST_WINDOW_MIN_MS) {
+    throw usage("INVALID_REQUEST_EXPIRES", `--request-expires must be at least ${REQUEST_WINDOW_MIN_MS / 6e4} minutes.${form}`);
+  }
+  assertRequestWindow(ms2, context2.pinnedOwner);
+  return ms2;
+}
+function assertRequestWindow(windowMs, pinnedOwner2) {
+  if (windowMs > REQUEST_WINDOW_MAX_MS) {
+    throw usage("REQUEST_EXPIRES_TOO_LONG", `--request-expires may be at most ${REQUEST_WINDOW_MAX_MS / 36e5} hours. Use a shorter window.`);
+  }
+  if (windowMs > UNPINNED_REQUEST_WINDOW_MAX_MS && pinnedOwner2 === void 0) {
+    throw usage(
+      "REQUEST_EXPIRES_NEEDS_OWNER",
+      `A --request-expires window longer than ${UNPINNED_REQUEST_WINDOW_MAX_MS / 36e5} hour needs the account pinned with --owner did:pkh:eip155:CHAIN:ADDRESS, so only that account's approval is accepted. Nothing was requested.`
+    );
+  }
+}
+var DEFAULT_REQUEST_WINDOW_MS, UNPINNED_REQUEST_WINDOW_MAX_MS, REQUEST_WINDOW_MAX_MS, REQUEST_WINDOW_MIN_MS, UNIT_MS, FORM, usage;
+var init_request_expires = __esm({
+  "src/auth/request-expires.ts"() {
+    "use strict";
+    init_links();
+    init_constants();
+    init_errors();
+    DEFAULT_REQUEST_WINDOW_MS = LINK_TYPE_SPECS["openkey-approval-request"].defaultLifeSeconds * 1e3;
+    UNPINNED_REQUEST_WINDOW_MAX_MS = DEFAULT_REQUEST_WINDOW_MS;
+    REQUEST_WINDOW_MAX_MS = 12 * 60 * 60 * 1e3;
+    REQUEST_WINDOW_MIN_MS = LINK_MIN_LIFE_SECONDS * 1e3;
+    UNIT_MS = { s: 1e3, m: 6e4, h: 36e5, d: 864e5 };
+    FORM = /^(\d+)([smhd])$/;
+    usage = (code5, message) => new CLIError(code5, message, ExitCode.USAGE_ERROR);
+  }
+});
+
 // src/lib/apps-agent-preset.ts
 import { DEFAULT_EXPIRY as DEFAULT_EXPIRY2, parseExpiry as parseExpiry2, SERVICE_LONG_TO_SHORT as SERVICE_LONG_TO_SHORT3, VAULT_PERMISSION_SERVICE as VAULT_PERMISSION_SERVICE2 } from "@tinycloud/sdk-core";
 import { CLI_NAME as CLI_NAME12 } from "@tinycloud/operations/cli-name";
@@ -18284,35 +18327,35 @@ function appsAgentScopeNotice(mode, appIds = []) {
   lines.push(revokeSentence(APPS_AGENT_EXPIRY_DAYS * DAY_MS2));
   return lines.join("\n");
 }
-function usage(message) {
+function usage2(message) {
   return new CLIError("INVALID_ARGUMENT", message, ExitCode.USAGE_ERROR);
 }
 function resolveAppsAgentRequest(options) {
   const apps = options.app ?? [];
   if (options.preset === void 0) {
     if (apps.length > 0 || options.write === true) {
-      throw usage(`--app and --write require --preset ${APPS_AGENT_PRESET}.`);
+      throw usage2(`--app and --write require --preset ${APPS_AGENT_PRESET}.`);
     }
     return void 0;
   }
   if (options.preset !== APPS_AGENT_PRESET) {
-    throw usage(`Unknown --preset "${safeClipped(options.preset)}". Available: ${APPS_AGENT_PRESET}.`);
+    throw usage2(`Unknown --preset "${safeClipped(options.preset)}". Available: ${APPS_AGENT_PRESET}.`);
   }
   if ((options.cap?.length ?? 0) > 0 || options.permission !== void 0 || options.manifest !== void 0 || options.expiry !== void 0) {
-    throw usage(
+    throw usage2(
       `--preset ${APPS_AGENT_PRESET} is the whole request (${APPS_AGENT_EXPIRY}); it cannot be combined with --cap, --permission, --manifest or --expiry.`
     );
   }
   if (options.device === true) {
-    throw usage(`--preset ${APPS_AGENT_PRESET} includes SQL, which device approval cannot grant. Use browser or --paste approval.`);
+    throw usage2(`--preset ${APPS_AGENT_PRESET} includes SQL, which device approval cannot grant. Use browser or --paste approval.`);
   }
   const mode = options.write === true ? "write" : "read";
   const appIds = [...new Set(apps)];
   for (const appId of appIds) {
-    if (!isAppId(appId)) throw usage(`Invalid --app "${safeClipped(appId)}": ${APP_ID_RULE}.`);
+    if (!isAppId(appId)) throw usage2(`Invalid --app "${safeClipped(appId)}": ${APP_ID_RULE}.`);
   }
   if (APPS_AGENT_VARIANTS[mode].perAppOnly && appIds.length === 0) {
-    throw usage("--write needs --app <app_id>: write access is only given for named apps, never for the whole space.");
+    throw usage2("--write needs --app <app_id>: write access is only given for named apps, never for the whole space.");
   }
   return { mode, appIds };
 }
@@ -20728,12 +20771,13 @@ async function acquireApprovalRequest(_did, options) {
     const relay = createECDH2("prime256v1");
     relay.generateKeys();
     const request = { ...spec, resultEncryptionPublicJwk: relayPublicJwkOf(relay) };
+    if (options.requestExpiresMs !== void 0) assertRequestWindow(options.requestExpiresMs, options.expectedOwner);
     const created = await createApprovalRequest({
       request,
       issuerKey: signer,
       apiOrigin: linkApiOrigin,
       openkeyOrigin,
-      ...context2 ? { expiresAt: new Date(context2.acceptanceExpiresAt) } : {}
+      ...context2 ? { expiresAt: new Date(context2.acceptanceExpiresAt) } : options.requestExpiresMs === void 0 ? {} : { expiresAt: new Date(Date.now() + options.requestExpiresMs) }
     });
     const profileKey = await ProfileManager.getKey(profile);
     entry = {
@@ -20968,6 +21012,7 @@ var init_approval_request = __esm({
     init_browser();
     init_space();
     init_links();
+    init_request_expires();
     init_profiles();
     init_storage();
     init_constants();
@@ -34284,14 +34329,14 @@ function assertKey3(key32) {
     throw new TypeError(`key must be ${KEY_LENGTH2} bytes, got ${key32.length}`);
   }
 }
-async function importAesKey2(key32, usage3) {
+async function importAesKey2(key32, usage4) {
   assertKey3(key32);
   return globalThis.crypto.subtle.importKey(
     "raw",
     key32,
     "AES-GCM",
     false,
-    [usage3]
+    [usage4]
   );
 }
 async function open9(blob, key32) {
@@ -36706,6 +36751,7 @@ init_scoped_login();
 init_caveat_refusal();
 init_raw_encryption();
 init_owner_did();
+init_request_expires();
 init_login_commit();
 
 // src/auth/previous-sign-in.ts
@@ -38125,7 +38171,7 @@ async function finishProfileLogout(ctx, options = {}) {
 function registerAuthCommand(program, options) {
   const auth = program.command("auth").description("Authentication management");
   registerAuthGrantsCommand(auth, { openKeyAcquisition: options?.openKeyAcquisition });
-  auth.command("login").description("Authenticate with TinyCloud").option("--device", "Approve on another device (e.g. a phone) through OpenKey device authorization; requires a KV-scoped --manifest (SQL and secret decrypt need browser or --paste login)").option("--paste", "Use manual paste mode; OpenKey return codes expire after 5 minutes").option("--no-popup", "Print the OpenKey URL without opening a browser").option("--method <method>", "Authentication method: local or openkey").option("--manifest <fileOrBase64>", `Request only this manifest's permissions (one space, plus raw encryption network entries such as a secrets decrypt grant); ${SHARE_PUBLISHING_MANIFEST_REF} covers \`${CLI_NAME20} share publish\``).option("--expiry <duration>", `OpenKey session lifetime, e.g. 1h or 7d (with --manifest: default 1h, or 7d for ${SHARE_PUBLISHING_MANIFEST_REF} so Share links keep their 7-day life; device login: at most 30d, default 30d)`).option("--owner <did>", "Sign in as this owner (did:pkh:eip155:CHAIN:ADDRESS): OpenKey preselects that key, e.g. one that is not the account's primary key, and an approval by any other identity is refused. With --manifest, also names the secrets owner for a manifest's `secrets` on a profile with no recorded owner").option("--replace-session", "Scoped or device login: replace this profile's live session even though the new scope would narrow, change or shorten it (prefer a new profile)").option("--force", "Replica-enabled OpenKey login: replace the stored session key even when recorded shares could not be checked or hold unexpired shares that need the current key").option("--keys <folder>", "Also let this sign-in create and use encryption keys in this folder (for example `qa`). The node must support named keys. With OpenKey, the first time on a profile also needs `--owner`.").option("--replication-prefix <prefix>", "Add replication get+sync authority for a folder prefix ending in /, or root (repeatable)", (prefix, values = []) => [...values, prefix]).option("--replication-allow-secrets", "Allow replication of secret material (network-wide decrypt warning)").action(async (options2, cmd) => {
+  auth.command("login").description("Authenticate with TinyCloud").option("--device", "Approve on another device (e.g. a phone) through OpenKey device authorization; requires a KV-scoped --manifest (SQL and secret decrypt need browser or --paste login)").option("--paste", "Use manual paste mode; OpenKey return codes expire after 5 minutes").option("--no-popup", "Print the OpenKey URL without opening a browser").option("--method <method>", "Authentication method: local or openkey").option("--manifest <fileOrBase64>", `Request only this manifest's permissions (one space, plus raw encryption network entries such as a secrets decrypt grant); ${SHARE_PUBLISHING_MANIFEST_REF} covers \`${CLI_NAME20} share publish\``).option("--expiry <duration>", `OpenKey session lifetime, e.g. 1h or 7d (with --manifest: default 1h, or 7d for ${SHARE_PUBLISHING_MANIFEST_REF} so Share links keep their 7-day life; device login: at most 30d, default 30d)`).option("--owner <did>", "Sign in as this owner (did:pkh:eip155:CHAIN:ADDRESS): OpenKey preselects that key, e.g. one that is not the account's primary key, and an approval by any other identity is refused. With --manifest, also names the secrets owner for a manifest's `secrets` on a profile with no recorded owner").option("--request-expires <duration>", "How long the one-tap OpenKey approval link stays valid, e.g. 30m or 4h (default 1h; at least 2m, at most 12h). More than 1h needs --owner, so only that account's approval is accepted. Not used by --paste, --device, --keys or replication logins").option("--replace-session", "Scoped or device login: replace this profile's live session even though the new scope would narrow, change or shorten it (prefer a new profile)").option("--force", "Replica-enabled OpenKey login: replace the stored session key even when recorded shares could not be checked or hold unexpired shares that need the current key").option("--keys <folder>", "Also let this sign-in create and use encryption keys in this folder (for example `qa`). The node must support named keys. With OpenKey, the first time on a profile also needs `--owner`.").option("--replication-prefix <prefix>", "Add replication get+sync authority for a folder prefix ending in /, or root (repeatable)", (prefix, values = []) => [...values, prefix]).option("--replication-allow-secrets", "Allow replication of secret material (network-wide decrypt warning)").action(async (options2, cmd) => {
     try {
       if (options2.device && options2.paste) {
         throw new CLIError("INVALID_ARGUMENT", "--device and --paste are mutually exclusive.", ExitCode.USAGE_ERROR);
@@ -38144,6 +38190,17 @@ function registerAuthCommand(program, options) {
       if (options2.keys !== void 0 && (options2.device || options2.manifest)) {
         throw new CLIError("INVALID_ARGUMENT", "`--keys` can't be used with `--device` or `--manifest`.", ExitCode.USAGE_ERROR);
       }
+      let requestExpiresMs;
+      if (options2.requestExpires !== void 0) {
+        if (options2.method === "local") {
+          throw new CLIError("INVALID_ARGUMENT", "--request-expires requires OpenKey login.", ExitCode.USAGE_ERROR);
+        }
+        const unusedBy = options2.paste ? "`--paste`" : options2.device ? "`--device`" : options2.keys !== void 0 ? "`--keys`" : (options2.replicationPrefix?.length ?? 0) > 0 ? "`--replication-prefix`" : void 0;
+        requestExpiresMs = parseRequestExpires(options2.requestExpires, {
+          pinnedOwner: options2.owner === void 0 ? void 0 : canonicalOwnerDid(options2.owner),
+          ...unusedBy === void 0 ? {} : { unusedBy }
+        });
+      }
       const globalOpts = cmd.optsWithGlobals();
       const ctx = await ProfileManager.resolveContext(globalOpts, { storedSession: "unused" });
       await recoverPendingLogout(ctx.profile);
@@ -38158,6 +38215,9 @@ function registerAuthCommand(program, options) {
         ...options2.replicationAllowSecrets === true || profileConfig?.replication?.allowSecrets === true ? { allowSecrets: true } : {},
         ...owner === void 0 ? {} : { ownerDid: owner }
       };
+      if (requestExpiresMs !== void 0 && replicationOptions.prefixes.length > 0) {
+        throw new CLIError("INVALID_ARGUMENT", "--request-expires sets the window of the one-tap approval link, which a login with replication does not use.", ExitCode.USAGE_ERROR);
+      }
       const loginPermissions = permissions === void 0 ? void 0 : buildReplicationLoginRequest(permissions, {
         ...replicationOptions,
         ownerOpenKey: options2.device !== true && resolveProfilePosture(profileConfig ?? {}) === "owner-openkey"
@@ -38207,7 +38267,7 @@ function registerAuthCommand(program, options) {
       } else if (options2.keys !== void 0) {
         method = profileConfig?.authMethod === "openkey" || options2.paste || options2.owner ? "openkey" : "local";
       } else {
-        method = scoped ? "openkey" : await promptAuthMethod();
+        method = scoped || requestExpiresMs !== void 0 ? "openkey" : await promptAuthMethod();
       }
       if (method === "openkey" && (options2.keys !== void 0 || replicationOptions.prefixes.length > 0) && !options2.paste && options2.popup !== false && !process.stdin.isTTY && !process.stderr.isTTY) {
         throw new CLIError(
@@ -38235,6 +38295,7 @@ function registerAuthCommand(program, options) {
           replication: replicationOptions,
           expiry: parseExpiryOption(options2.expiry) ?? (options2.manifest === void 0 ? void 0 : defaultManifestLoginExpiry(options2.manifest)),
           expectedOwner: owner,
+          ...requestExpiresMs === void 0 ? {} : { requestExpiresMs },
           replaceSession: options2.replaceSession === true,
           persistHost,
           force: options2.force === true,
@@ -40053,6 +40114,7 @@ async function refreshOpenKeySession(profileName2, host, options = {}) {
     const delegationData = await acquireOpenKey(requestDid, {
       profileName: profileName2,
       expectedOwner,
+      ...options.requestExpiresMs === void 0 ? {} : { requestExpiresMs: options.requestExpiresMs },
       paste: options.paste,
       noPopup: options.noPopup,
       jwk: key,
@@ -40879,17 +40941,17 @@ init_constants();
 init_errors();
 init_safe_text();
 init_apps_agent_preset();
-function usage2(message) {
+function usage3(message) {
   return new CLIError("INVALID_ARGUMENT", message, ExitCode.USAGE_ERROR);
 }
 function assertKnowledgeAppId(value4) {
-  if (!isAppId(value4)) throw usage2(`Invalid app id "${safeClipped(value4)}": ${APP_ID_RULE}.`);
+  if (!isAppId(value4)) throw usage3(`Invalid app id "${safeClipped(value4)}": ${APP_ID_RULE}.`);
   return value4;
 }
 function assertKnowledgeConcept(value4) {
   const reason = value4.length > 300 ? "it is longer than 300 characters" : value4.startsWith("/") ? "it starts with a slash" : /[*\\]/.test(value4) ? "it contains a wildcard or backslash" : /%(?:2e|2f|5c)/i.test(value4) ? "it contains an encoded dot, slash or backslash" : value4.split("/").some((segment) => segment === "" || segment === "." || segment === "..") ? "it has an empty, `.` or `..` segment" : void 0;
   if (reason !== void 0) {
-    throw usage2(
+    throw usage3(
       `Invalid concept "${safeClipped(value4)}": ${reason}. Use a path inside the app's knowledge folder, such as app or tables/meal.md.`
     );
   }
@@ -45851,14 +45913,14 @@ function argvAfterSeparator(cmd) {
   return void 0;
 }
 function secretRunPlan(cmd, operands, maps) {
-  const usage3 = `${CLI_NAME34} secrets run NAME... [--map NAME=ENV_VAR] -- <command> [args...]`;
+  const usage4 = `${CLI_NAME34} secrets run NAME... [--map NAME=ENV_VAR] -- <command> [args...]`;
   const after = argvAfterSeparator(cmd);
   if (after === void 0 || after.length > operands.length) {
-    throw new CLIError("USAGE_ERROR", `Put the command after \`--\`: ${usage3}`, ExitCode.USAGE_ERROR);
+    throw new CLIError("USAGE_ERROR", `Put the command after \`--\`: ${usage4}`, ExitCode.USAGE_ERROR);
   }
   const [program, ...args] = after;
   if (program === void 0) {
-    throw new CLIError("USAGE_ERROR", `Add the command to run after \`--\`: ${usage3}`, ExitCode.USAGE_ERROR);
+    throw new CLIError("USAGE_ERROR", `Add the command to run after \`--\`: ${usage4}`, ExitCode.USAGE_ERROR);
   }
   const exports = [];
   for (const name of operands.slice(0, operands.length - after.length)) {
@@ -45884,7 +45946,7 @@ function secretRunPlan(cmd, operands, maps) {
     exports.push({ name: map.slice(0, equals7), variable });
   }
   if (exports.length === 0) {
-    throw new CLIError("USAGE_ERROR", `Name at least one secret: ${usage3}`, ExitCode.USAGE_ERROR);
+    throw new CLIError("USAGE_ERROR", `Name at least one secret: ${usage4}`, ExitCode.USAGE_ERROR);
   }
   const variables = /* @__PURE__ */ new Set();
   for (const { variable } of exports) {

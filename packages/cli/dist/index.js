@@ -14823,14 +14823,14 @@ function assertKey(key32) {
     throw new TypeError(`key must be ${KEY_LENGTH} bytes, got ${key32.length}`);
   }
 }
-async function importAesKey(key32, usage) {
+async function importAesKey(key32, usage2) {
   assertKey(key32);
   return globalThis.crypto.subtle.importKey(
     "raw",
     key32,
     "AES-GCM",
     false,
-    [usage]
+    [usage2]
   );
 }
 function generateKey() {
@@ -16096,6 +16096,33 @@ var init_browser = __esm({
   }
 });
 
+// src/auth/request-expires.ts
+function assertRequestWindow(windowMs, pinnedOwner) {
+  if (windowMs > REQUEST_WINDOW_MAX_MS) {
+    throw usage("REQUEST_EXPIRES_TOO_LONG", `--request-expires may be at most ${REQUEST_WINDOW_MAX_MS / 36e5} hours. Use a shorter window.`);
+  }
+  if (windowMs > UNPINNED_REQUEST_WINDOW_MAX_MS && pinnedOwner === void 0) {
+    throw usage(
+      "REQUEST_EXPIRES_NEEDS_OWNER",
+      `A --request-expires window longer than ${UNPINNED_REQUEST_WINDOW_MAX_MS / 36e5} hour needs the account pinned with --owner did:pkh:eip155:CHAIN:ADDRESS, so only that account's approval is accepted. Nothing was requested.`
+    );
+  }
+}
+var DEFAULT_REQUEST_WINDOW_MS, UNPINNED_REQUEST_WINDOW_MAX_MS, REQUEST_WINDOW_MAX_MS, REQUEST_WINDOW_MIN_MS, usage;
+var init_request_expires = __esm({
+  "src/auth/request-expires.ts"() {
+    "use strict";
+    init_links();
+    init_constants();
+    init_errors();
+    DEFAULT_REQUEST_WINDOW_MS = LINK_TYPE_SPECS["openkey-approval-request"].defaultLifeSeconds * 1e3;
+    UNPINNED_REQUEST_WINDOW_MAX_MS = DEFAULT_REQUEST_WINDOW_MS;
+    REQUEST_WINDOW_MAX_MS = 12 * 60 * 60 * 1e3;
+    REQUEST_WINDOW_MIN_MS = LINK_MIN_LIFE_SECONDS * 1e3;
+    usage = (code5, message) => new CLIError(code5, message, ExitCode.USAGE_ERROR);
+  }
+});
+
 // src/lib/apps-agent-preset.ts
 import { DEFAULT_EXPIRY, parseExpiry, SERVICE_LONG_TO_SHORT as SERVICE_LONG_TO_SHORT3, VAULT_PERMISSION_SERVICE } from "@tinycloud/sdk-core";
 import { CLI_NAME as CLI_NAME13 } from "@tinycloud/operations/cli-name";
@@ -17207,12 +17234,13 @@ async function acquireApprovalRequest(_did, options) {
     const relay = createECDH2("prime256v1");
     relay.generateKeys();
     const request = { ...spec, resultEncryptionPublicJwk: relayPublicJwkOf(relay) };
+    if (options.requestExpiresMs !== void 0) assertRequestWindow(options.requestExpiresMs, options.expectedOwner);
     const created = await createApprovalRequest({
       request,
       issuerKey: signer,
       apiOrigin: linkApiOrigin,
       openkeyOrigin,
-      ...context ? { expiresAt: new Date(context.acceptanceExpiresAt) } : {}
+      ...context ? { expiresAt: new Date(context.acceptanceExpiresAt) } : options.requestExpiresMs === void 0 ? {} : { expiresAt: new Date(Date.now() + options.requestExpiresMs) }
     });
     const profileKey = await ProfileManager.getKey(profile);
     entry = {
@@ -17359,6 +17387,7 @@ var init_approval_request = __esm({
     init_browser();
     init_space();
     init_links();
+    init_request_expires();
     init_profiles();
     init_storage2();
     init_constants();
@@ -28546,14 +28575,14 @@ function assertKey3(key32) {
     throw new TypeError(`key must be ${KEY_LENGTH2} bytes, got ${key32.length}`);
   }
 }
-async function importAesKey2(key32, usage) {
+async function importAesKey2(key32, usage2) {
   assertKey3(key32);
   return globalThis.crypto.subtle.importKey(
     "raw",
     key32,
     "AES-GCM",
     false,
-    [usage]
+    [usage2]
   );
 }
 function generateKey2() {

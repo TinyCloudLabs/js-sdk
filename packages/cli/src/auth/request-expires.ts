@@ -31,7 +31,7 @@ const usage = (code: string, message: string): CLIError => new CLIError(code, me
 export function parseRequestExpires(value: string, context: RequestExpiresContext): number {
   const form = ` A window is a number and a unit s, m, h or d, for example 30m or 4h.`;
   if (context.unusedBy !== undefined) {
-    throw usage("INVALID_ARGUMENT", `--request-expires sets the window of the one-tap approval link, which ${context.unusedBy} does not use.`);
+    throw usage("INVALID_ARGUMENT", `--request-expires sets the window of the one-tap approval link, which ${context.unusedBy} doesn't use.`);
   }
   const match = FORM.exec(value);
   if (!match) throw usage("INVALID_REQUEST_EXPIRES", `Invalid --request-expires ${JSON.stringify(value)}.${form}`);
@@ -53,6 +53,6 @@ export function assertRequestWindow(windowMs: number, pinnedOwner: string | unde
   }
   if (windowMs > UNPINNED_REQUEST_WINDOW_MAX_MS && pinnedOwner === undefined) {
     throw usage("REQUEST_EXPIRES_NEEDS_OWNER",
-      `A --request-expires window longer than ${UNPINNED_REQUEST_WINDOW_MAX_MS / 3_600_000} hour is allowed only with the account pinned by --owner did:pkh:eip155:CHAIN:ADDRESS, so only that account's approval is accepted. Nothing was requested.`);
+      `A --request-expires window over ${UNPINNED_REQUEST_WINDOW_MAX_MS / 3_600_000} hour is allowed only with --owner did:pkh:eip155:CHAIN:ADDRESS. Nothing was requested.`);
   }
 }
