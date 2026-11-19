@@ -6,7 +6,9 @@
  *
  * V2 owner keys are chain-independent: EOA records use the exact EIP-55
  * address and did:key records use the exact DID. V1 probes distinguish
- * legacy-only owners, never supply routing hosts.
+ * legacy-only owners and supply no routing host, with one exception (TC-3168):
+ * a verified v1-only record whose origins are exactly the default node routes
+ * there, as 3.11 did. It carries no v2 record or sequence authority.
  */
 
 import {
@@ -286,6 +288,21 @@ interface OwnerRegistryResult {
 const cacheAuthorities = new WeakMap<RegistryCacheStore, Map<string, { sequence: number; invalidated: boolean; invalidationAttempt: number }>>();
 // The accepted decision's origin generation authorizes any later route-denial drop.
 const verdictRevisions = new WeakMap<RegistryVerdict, number>();
+
+function namesOnlyDefaultNode(hosts: readonly RegistryHost[]): boolean {
+  const origins = new Set<string>();
+  for (const host of hosts) {
+    for (const url of host.urls) {
+      try {
+        origins.add(exactHttpOrigin(url, "registry host"));
+      } catch {
+        return false;
+      }
+    }
+  }
+  return origins.size === 1 && origins.has(DEFAULT_TINYCLOUD_FALLBACK_HOST);
+}
+
 function cacheAuthority(cache: RegistryCacheStore, key: string) {
   let owners = cacheAuthorities.get(cache);
   if (!owners) cacheAuthorities.set(cache, owners = new Map());
@@ -353,6 +370,16 @@ async function refreshCachedOwnerRegistry(
     return verified;
   }
   if (verdict.status === "unavailable") return verdict;
+  if (verdict.status === "registered" && verdict.legacy === "v1-default-node") {
+    // Signed-v2 evidence from another caller outranks a legacy-only answer.
+    if (highWater >= 0 || latestRegistration?.kind === "signed-v2") return {
+      status: "unavailable", subject, source: "offchain", reason: "unsupported-format",
+      message: "owner has a v1 location record but no signed-v2 routing record", hosts: [],
+    };
+    assertRegistryRevision(subject, await cache.getRevision(key), revision!);
+    assertInvalidationAttempt(subject, authority.invalidationAttempt, invalidationAttempt!);
+    return verdict;
+  }
   if (verdict.status === "registered") {
     // The cache may disappear after I/O; the verified result still needs this caller's bound.
     if (verdict.sequence < highWater) return {
@@ -480,6 +507,18 @@ async function fetchOwnerRegistry(
   if (v1.status === "registered") {
     // Known legacy registration prevents fallback, but is not a v2 sequence.
     await store?.set(ownerKey, 0, "legacy-v1");
+    // Only after the registry confirmed v2 absence: an outage could hide a newer v2 record.
+    if (v2.status === "unregistered" && cached === undefined && remembered === undefined && namesOnlyDefaultNode(v1.hosts)) {
+      const verdict: RegisteredRegistryVerdict = {
+        status: "registered",
+        subject,
+        source: "offchain",
+        sequence: v1.sequence,
+        hosts: [{ urls: [DEFAULT_TINYCLOUD_FALLBACK_HOST], source: "offchain" }],
+        legacy: "v1-default-node",
+      };
+      return { verdict, revision, invalidationAttempt };
+    }
     return { verdict: {
       status: "unavailable",
       subject,
@@ -751,10 +790,13 @@ export interface LookupOwnerRegistryVerdictOptions {
   onRegistryFallback?: (reason: string, code?: RegistryFallbackReason) => void;
   /** Opt-in reuse of fresh verdicts; without it every call asks the registry. */
   verdictCache?: RegistryVerdictCache;
+  /** A signed data read whose result answers only that read: the absent-reads cache serves nothing else. */
+  dataRead?: boolean;
 }
 
 /** The owner a cached verdict is for, and the reading client's own fail-closed stores. */
 export interface RegistryVerdictScope {
+  dataRead?: boolean;
   registryUrl: string;
   subject: string;
   sequenceStore?: RegistrySequenceStore;
@@ -829,9 +871,13 @@ export async function resolveRegistryResource(
   access: "read" | "write" | "host" | "encryption",
   options: LookupOwnerRegistryVerdictOptions,
 ): Promise<{ verdict: RegistryVerdict; hosts: RegistryHost[] }> {
-  const verdict = await lookupOwnerRegistryVerdict(subject, options);
+  const verdict = await lookupOwnerRegistryVerdict(subject, { ...options, dataRead: access === "read" && options.dataRead });
   if (verdict.status === "unregistered") return { verdict, hosts: [] };
   if (verdict.status === "unavailable") throw new RegistryUnavailableError(subject, verdict);
+  // TC-3168: every resource of a v1-only owner on the default node goes there, and nowhere else.
+  if (verdict.legacy === "v1-default-node") {
+    return { verdict, hosts: [{ urls: [DEFAULT_TINYCLOUD_FALLBACK_HOST], source: "offchain" }] };
+  }
   const record = verdict.record;
   if (record === undefined) {
     throw new RegistryUnavailableError(subject, undefined, {

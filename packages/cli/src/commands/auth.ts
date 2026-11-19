@@ -56,7 +56,8 @@ function resolveOpenKeyHost(profile: ProfileConfig): string {
 }
 import { startAuthFlow } from "../auth/browser-auth.js";
 import { APPROVAL_TIMEOUT_OPTION_DESCRIPTION, parseApprovalTimeout, type ApprovalWait } from "../auth/approval-wait.js";
-import { approvalCommandIntent, approvalResultNeedsAck, commitApprovalCommand, completeApprovalResult, pendingApprovalKey, recoverApprovalCommand, trackApprovalResult } from "../auth/approval-request.js";
+import { storedGrantsCovering } from "../auth/covering-grants.js";
+import { approvalCommandIntent, approvalRenewalOf, approvalResultNeedsAck, commitApprovalCommand, completeApprovalResult, pendingApprovalKey, recoverApprovalCommand, trackApprovalResult } from "../auth/approval-request.js";
 import {
   acquireDeviceDelegation,
   loginWithDeviceAuthorization,
@@ -85,6 +86,7 @@ import {
   sessionStateIsUsable,
   storedSessionState,
   type StoredSessionState,
+  defaultManifestLoginExpiry,
 } from "../auth/scoped-login.js";
 import { assertNoCaveatLimits } from "../lib/caveat-refusal.js";
 import { isRawEncryptionPermission, isVerifiedRawEncryptionPermission } from "../lib/raw-encryption.js";
@@ -636,7 +638,7 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
     .option("--no-popup", "Print the OpenKey URL without opening a browser")
     .option("--method <method>", "Authentication method: local or openkey")
     .option("--manifest <fileOrBase64>", `Request only this manifest's permissions (one space, plus raw encryption network entries such as a secrets decrypt grant); ${SHARE_PUBLISHING_MANIFEST_REF} covers \`${CLI_NAME} share publish\``)
-    .option("--expiry <duration>", "OpenKey session lifetime, e.g. 1h or 7d (device login: at most 30d, default 30d)")
+    .option("--expiry <duration>", `OpenKey session lifetime, e.g. 1h or 7d (with --manifest: default 1h, or 7d for ${SHARE_PUBLISHING_MANIFEST_REF} so Share links keep their 7-day life; device login: at most 30d, default 30d)`)
     .option("--owner <did>", "Sign in as this owner (did:pkh:eip155:CHAIN:ADDRESS): OpenKey preselects that key, e.g. one that is not the account's primary key, and an approval by any other identity is refused. With --manifest, also names the secrets owner for a manifest's `secrets` on a profile with no recorded owner")
     .option("--replace-session", "Scoped or device login: replace this profile's live session even though the new scope would narrow, change or shorten it (prefer a new profile)")
     .option("--force", "Replica-enabled OpenKey login: replace the stored session key even when recorded shares could not be checked or hold unexpired shares that need the current key")
@@ -767,7 +769,7 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
             noPopup: options.popup === false,
             permissions: loginPermissions,
             replication: replicationOptions,
-            expiry: parseExpiryOption(options.expiry),
+            expiry: parseExpiryOption(options.expiry) ?? (options.manifest === undefined ? undefined : defaultManifestLoginExpiry(options.manifest)),
             expectedOwner: owner,
             replaceSession: options.replaceSession === true,
             persistHost,
@@ -956,9 +958,17 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
     )
     .option("--write", `With --preset ${APPS_AGENT_PRESET}: also let the agent add and change the named --app apps' data: write their knowledge/ and prefs/ files (kv put) and add, change or delete their table rows (sql write). Their code, manifest and install record stay read-only. Creating, changing or dropping tables is granted only for an app's catalog database (today Health Log's healthlog)`)
     .option("--paste", "With --grant on an OpenKey profile: use manual paste mode (return codes expire after 5 minutes)")
+    .option("--timeout <duration>", APPROVAL_TIMEOUT_OPTION_DESCRIPTION)
+    .option("--fresh", "With --grant on an OpenKey owner profile: ask the owner for a new approval even if the current grants already cover the request. The old grant is kept (not removed, not revoked); the output lists the new CIDs and, from local storage, the stored grants that already covered the request. Revoke is by CID: revoke each to end access")
     .action(async (options, cmd) => {
       try {
         noteUnneededYes(options.yes);
+        // Refused before anything is contacted. Only an OpenKey approval request link can be left and resumed: a pasted
+        // code and a device authorization are not saved requests, and without --grant nothing is approved.
+        if (options.timeout !== undefined && (!options.grant || options.paste === true || options.device === true)) {
+          throw new CLIError("INVALID_ARGUMENT", "--timeout requires --grant and cannot be combined with --paste or --device: only the approval request link can be left and resumed.", ExitCode.USAGE_ERROR);
+        }
+        const deadlineMs = options.timeout === undefined ? undefined : Date.now() + parseApprovalTimeout(options.timeout);
         const globalOpts = cmd.optsWithGlobals();
         // Without --grant, the request records the host it is for and no session is restored.
         const ctx = await ProfileManager.resolveContext(globalOpts, options.grant ? {} : { storedSession: "unused" });
@@ -969,6 +979,9 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
         }
         if (options.device && (!options.grant || resolveProfilePosture(profile) !== "owner-openkey")) {
           throw new CLIError("INVALID_ARGUMENT", "--device requires --grant on an OpenKey owner profile.", ExitCode.USAGE_ERROR);
+        }
+        if (options.fresh && (!options.grant || resolveProfilePosture(profile) !== "owner-openkey")) {
+          throw new CLIError("INVALID_ARGUMENT", "--fresh requires --grant on an OpenKey owner profile: it asks the owner for a new approval although the current grants already cover the request.", ExitCode.USAGE_ERROR);
         }
         const preset = resolveAppsAgentRequest(options);
         const resolutionOptions = { allowLogicalSpaces: true };
@@ -1009,11 +1022,14 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
         await completeApprovalResult(ctx.profile);
         let node: TinyCloudNode | undefined;
         if (!keyOnlyOpenKey) node = await ensureAuthenticated(ctx);
+        // Listed beside the new grant at the end. Read before the approval: nothing here changes or removes an old grant.
+        const existing = options.fresh ? storedGrantsCovering(await loadAdditionalDelegations(ctx.profile), requested, profile.ownerDid) : [];
 
         // Fast path: master's grantRuntimePermissions / hasRuntimePermissions
         // already does the diff against the live session + existing runtime
         // grants; no need to compute it ourselves.
-        if (node?.hasRuntimePermissions(requested)) {
+        // --fresh skips it: the owner asked for a new approval although the current grants already cover the request.
+        if (!options.fresh && node?.hasRuntimePermissions(requested)) {
           outputJson({ changed: false, missing: [], added: [] });
           return;
         }
@@ -1072,6 +1088,7 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
                   expiry: expiryCap === undefined ? undefined : openKeyExpiryParam(expiryCap),
                   noPopup: options.popup === false,
                   paste: options.paste,
+                  ...(deadlineMs === undefined ? {} : { approvalWait: { deadlineMs, step: index + 1, of: groups.length } }),
                   ...(grantLinkOptsIn ? { expiryChangeable: true } : {}),
                 });
               }
@@ -1115,6 +1132,7 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
             delegationCids,
             expiry,
             ...(options.device ? { declined } : {}),
+            ...(options.fresh ? { fresh: true, existingDelegationCids: existing.map((grant) => grant.cid) } : {}),
           });
           return;
         }
@@ -1479,9 +1497,11 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
         if (!artifact) {
           throw new CLIError(
             "REQUEST_NOT_FOUND",
-            options.last
+            `${options.last
               ? `No stored permission requests exist for profile "${ctx.profile}".`
-              : "Provide a requestId or use --last.",
+              : "Provide a requestId or use --last."} `
+              + "A stopped `auth request ... --grant` is not stored here: run the same command again (same flags, same profile) "
+              + "and it resumes the saved approval request instead of starting over.",
             ExitCode.NOT_FOUND,
           );
         }
@@ -1647,6 +1667,7 @@ function describeSession(state: StoredSessionState, expiresAt: string | null): s
     case "missing": return "none";
     case "expired": return `expired ${expiresAt}`;
     case "present": return `active until ${expiresAt}`;
+    case "renewed": return `renews until ${expiresAt}`;
     case "unknown-expiry": return "active (no recorded expiry)";
     case "unverified": return "not usable (no signed OpenKey proof)";
   }
@@ -3131,6 +3152,9 @@ export async function refreshOpenKeySession(
     verifiedOwner = signed.ownerDid;
     sanitizedSession = withVerifiedAuthority({ ...delegationData, jwk: key }, signed);
   }
+  // The owner's renewal lease is saved with the session only when the approval result's lease verified and was admitted.
+  const renewal = approvalRenewalOf(delegationData);
+  if (renewal) sanitizedSession = { ...sanitizedSession, renewal };
 
   // OpenKey's unsigned `primary` flag describes the key that signed, so it is
   // recorded only beside a verified owner.

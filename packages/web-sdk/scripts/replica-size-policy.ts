@@ -475,6 +475,16 @@ export type Ledger = {
   tc2923EncryptionTeeOriginRoot?: LogoutRatchet;
   tc2949PanelChunkRecoveryRoot?: LogoutRatchet;
   tc2970RegistryVerdictCacheRoot?: LogoutRatchet;
+  tc2913OpenKeyContinuationRoot?: LogoutRatchet;
+  tc2987RegistryAbsentReadsRoot?: LogoutRatchet;
+  tc2937SharePlacementRoot?: LogoutRatchet;
+  tc3030FirstPartyOriginsRoot?: LogoutRatchet;
+  tc3076ChildExpiryRoot?: LogoutRatchet;
+  tc3168V1DefaultNodeRoot?: LogoutRatchet;
+  tc3172DelegateNotBeforeRoot?: LogoutRatchet;
+  tc3194NativeShareLinksRoot?: LogoutRatchet;
+  tc3243SdkOwnsBusyRetryRoot?: LogoutRatchet;
+  tc3285SecretTypesRoot?: LogoutRatchet;
   tc2773LazyRestoreReplicaWorker?: Omit<WorkerRatchet, "worker"> & { replicaWorker: { delta: number; ceiling: number } };
 };
 
@@ -1104,6 +1114,16 @@ export function ancestryPins(root: Ledger, hasGatedOnly: boolean): Array<{ row: 
   if (root.tc2923EncryptionTeeOriginRoot !== undefined) pins.push({ row: "tc2923EncryptionTeeOriginRoot", pin: root.tc2923EncryptionTeeOriginRoot.sourceCommits.at(-1)! });
   if (root.tc2949PanelChunkRecoveryRoot !== undefined) pins.push({ row: "tc2949PanelChunkRecoveryRoot", pin: root.tc2949PanelChunkRecoveryRoot.sourceCommits.at(-1)! });
   if (root.tc2970RegistryVerdictCacheRoot !== undefined) pins.push({ row: "tc2970RegistryVerdictCacheRoot", pin: root.tc2970RegistryVerdictCacheRoot.sourceCommits.at(-1)! });
+  if (root.tc2913OpenKeyContinuationRoot !== undefined) pins.push({ row: "tc2913OpenKeyContinuationRoot", pin: root.tc2913OpenKeyContinuationRoot.sourceCommits.at(-1)! });
+  if (root.tc2987RegistryAbsentReadsRoot !== undefined) pins.push({ row: "tc2987RegistryAbsentReadsRoot", pin: root.tc2987RegistryAbsentReadsRoot.sourceCommits.at(-1)! });
+  if (root.tc2937SharePlacementRoot !== undefined) pins.push({ row: "tc2937SharePlacementRoot", pin: root.tc2937SharePlacementRoot.sourceCommits.at(-1)! });
+  if (root.tc3030FirstPartyOriginsRoot !== undefined) pins.push({ row: "tc3030FirstPartyOriginsRoot", pin: root.tc3030FirstPartyOriginsRoot.sourceCommits.at(-1)! });
+  if (root.tc3076ChildExpiryRoot !== undefined) pins.push({ row: "tc3076ChildExpiryRoot", pin: root.tc3076ChildExpiryRoot.sourceCommits.at(-1)! });
+  if (root.tc3168V1DefaultNodeRoot !== undefined) pins.push({ row: "tc3168V1DefaultNodeRoot", pin: root.tc3168V1DefaultNodeRoot.sourceCommits.at(-1)! });
+  if (root.tc3172DelegateNotBeforeRoot !== undefined) pins.push({ row: "tc3172DelegateNotBeforeRoot", pin: root.tc3172DelegateNotBeforeRoot.sourceCommits.at(-1)! });
+  if (root.tc3194NativeShareLinksRoot !== undefined) pins.push({ row: "tc3194NativeShareLinksRoot", pin: root.tc3194NativeShareLinksRoot.sourceCommits.at(-1)! });
+  if (root.tc3243SdkOwnsBusyRetryRoot !== undefined) pins.push({ row: "tc3243SdkOwnsBusyRetryRoot", pin: root.tc3243SdkOwnsBusyRetryRoot.sourceCommits.at(-1)! });
+  if (root.tc3285SecretTypesRoot !== undefined) pins.push({ row: "tc3285SecretTypesRoot", pin: root.tc3285SecretTypesRoot.sourceCommits.at(-1)! });
   if (hasGatedOnly) pins.push({ row: "gatedOnlyRatchet", pin: approvedGatedOnlyRatchet.sourceCommit });
   return pins;
 }
@@ -1203,6 +1223,16 @@ export function rootCeilings(root: Ledger): Array<{ row: string; ceiling: GzipSi
     ["tc2923EncryptionTeeOriginRoot", root.tc2923EncryptionTeeOriginRoot?.root.ceiling],
     ["tc2949PanelChunkRecoveryRoot", root.tc2949PanelChunkRecoveryRoot?.root.ceiling],
     ["tc2970RegistryVerdictCacheRoot", root.tc2970RegistryVerdictCacheRoot?.root.ceiling],
+    ["tc2913OpenKeyContinuationRoot", root.tc2913OpenKeyContinuationRoot?.root.ceiling],
+    ["tc2987RegistryAbsentReadsRoot", root.tc2987RegistryAbsentReadsRoot?.root.ceiling],
+    ["tc2937SharePlacementRoot", root.tc2937SharePlacementRoot?.root.ceiling],
+    ["tc3030FirstPartyOriginsRoot", root.tc3030FirstPartyOriginsRoot?.root.ceiling],
+    ["tc3076ChildExpiryRoot", root.tc3076ChildExpiryRoot?.root.ceiling],
+    ["tc3168V1DefaultNodeRoot", root.tc3168V1DefaultNodeRoot?.root.ceiling],
+    ["tc3172DelegateNotBeforeRoot", root.tc3172DelegateNotBeforeRoot?.root.ceiling],
+    ["tc3194NativeShareLinksRoot", root.tc3194NativeShareLinksRoot?.root.ceiling],
+    ["tc3243SdkOwnsBusyRetryRoot", root.tc3243SdkOwnsBusyRetryRoot?.root.ceiling],
+    ["tc3285SecretTypesRoot", root.tc3285SecretTypesRoot?.root.ceiling],
   ];
   return rows.flatMap(([row, ceiling]) => ceiling === undefined ? [] : [{ row, ceiling }]);
 }
@@ -3397,6 +3427,206 @@ export const approvedTc2970RegistryVerdictCacheRoot: LogoutRatchet = {
   "reason": "sdk-core's registry lookups take an opt-in verdictCache (the option branch in lookupOwnerRegistryVerdict, the route-denial drops in resolveRegistryResource and resolveFailClosedTinyCloudHosts); the cache itself ships in the separate @tinycloud/sdk-core/registry-verdict-cache entry. Canonical Node 22/Bun 1.3.14 CI measured 1524295/1458732 gzip -9 bytes on e04620cb, based on efb14e60. This is +127/+86 over the TC-2949 ceilings 1524168/1458646, within Naomi's +150-byte per-format cap. Other ceilings are unchanged. Details: TC-2970"
 };
 
+/** Naomi's exact TC-2913 OpenKey continuation root allowance from canonical CI. */
+export const approvedTc2913OpenKeyContinuationRoot: LogoutRatchet = {
+  "label": "OpenKey one-window sign-in continuation root admission (TC-2913)",
+  "ruling": "Naomi's TC-2913 size ruling: exact canonical CI bytes, capped at +800 B per format over the newest root row when it merges; stacked on TC-2970 after rebasing onto c8e53a9a. Details: TC-2913",
+  "base": "c8e53a9aad80758dd3492c1714e40e6bd348c61b",
+  "sourceCommits": ["8219765ba399cbcc85630c2057cf913bb82dcb43"],
+  "canonicalCI": {
+    "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/43486822245",
+    "jobs": [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/43486822245/job/132097360178",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/43486822245/job/132097360229"
+    ]
+  },
+  "root": {
+    "delta": { "index.mjs": 765, "index.cjs": 686 },
+    "ceiling": { "index.mjs": 1525060, "index.cjs": 1459418 }
+  },
+  "reason": "TinyCloudWeb.signIn() reserves the OpenKey window in the click handler and continues the server-selected identity's sign-in and approval in that window; before activation the SDK verifies the pinned identity, the exact signed SIWE bytes, strict ReCaps, session key, origin and nonce. Canonical Node 22/Bun 1.3.14 CI measured 1525060/1459418 gzip -9 bytes on 8219765b, based on c8e53a9a. This is +765/+686 over the TC-2970 ceilings 1524295/1458732, within Naomi's +800-byte per-format cap. Other ceilings are unchanged. Details: TC-2913"
+};
+
+/** Naomi's exact TC-2987 browser registry absent-reads root allowance from canonical CI. */
+export const approvedTc2987RegistryAbsentReadsRoot: LogoutRatchet = {
+  "label": "browser registry absent-reads root admission (TC-2987)",
+  "ruling": "Naomi's TC-2987 size ruling: exact canonical CI bytes over the newest root row when it merges, capped at +250 B per format for this row (raised from +150 B for the security fix's data-read intent plumbing); stacked on TC-2913 after #950 merged. Details: TC-2987",
+  "base": "d681e85871e34840720e2474d9091544fca4618e",
+  "sourceCommits": ["f6d8a996585de94ee708e6b838b2ce8b7e74b34e"],
+  "canonicalCI": {
+    "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/43495495915",
+    "jobs": [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/43495495915/job/132127386304",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/43495495915/job/132127386521"
+    ]
+  },
+  "root": {
+    "delta": { "index.mjs": 115, "index.cjs": 211 },
+    "ceiling": { "index.mjs": 1525175, "index.cjs": 1459629 }
+  },
+  "reason": "TinyCloudWeb selects the absent-reads registry verdict cache: a confirmed absence is reused for up to 60 s only by lookups marked as signed data reads, which the routing options, node-sdk forwarding and the sign-in resolver carry to the registry lookup; every unmarked lookup asks the registry. Canonical Node 22/Bun 1.3.14 CI measured 1525175/1459629 gzip -9 bytes on f6d8a996, based on d681e858. This is +115/+211 over the TC-2913 ceilings 1525060/1459418, within Naomi's +250-byte per-format cap for this row. Other ceilings are unchanged. Details: TC-2987"
+};
+
+/** Naomi's exact TC-2937 owner-signed share placement root allowance from canonical CI. */
+export const approvedTc2937SharePlacementRoot: LogoutRatchet = {
+  "label": "owner-signed share placement root admission (TC-2937)",
+  "ruling": "Naomi's TC-2937 size ruling: exact canonical CI bytes, capped at +800 B per format over the newest root row when it merges; re-stacked on TC-2987 after #966 merged. Details: TC-2937",
+  "base": "d4949e8c02990c0f1bb67da6b8879b0fe93cdadd",
+  "sourceCommits": ["5a99f8b8437e83593ba562f330a18ae32e5fd23a"],
+  "canonicalCI": {
+    "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/43531110930",
+    "jobs": [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/43531110930/job/132248767179",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/43531110930/job/132248766860"
+    ]
+  },
+  "root": {
+    "delta": { "index.mjs": 703, "index.cjs": 690 },
+    "ceiling": { "index.mjs": 1525878, "index.cjs": 1460319 }
+  },
+  "reason": "Native sharing envelopes may carry an opt-in wallet-owner-signed placement that receivers verify before routing to its destination; the root carries the envelope fields, placement routing and the frozen bridge, while placement verification loads from the separate share-placement entry. Canonical Node 22/Bun 1.3.14 CI measured 1525878/1460319 gzip -9 bytes on 5a99f8b8, based on d4949e8c. This is +703/+690 over the TC-2987 ceilings 1525175/1459629, within Naomi's +800-byte per-format cap. Other ceilings are unchanged. Details: TC-2937"
+};
+
+/** Naomi's exact TC-3030 tinycloud.one first-party origins root allowance from canonical CI. */
+export const approvedTc3030FirstPartyOriginsRoot: LogoutRatchet = {
+  "label": "tinycloud.one first-party origins (TC-3030)",
+  "ruling": "Naomi's ruling (a), 2026-11-15: one add-only row for #987's exact canonical CI bytes; index.mjs +12 B over the TC-2937 ceiling, index.cjs measured under its ceiling and left unchanged (the 10-24 practice).",
+  "base": "37d930ec31806b28ff83f0801bd35308d73a9e6d",
+  "sourceCommits": ["a7b59fa11333d7efa65a9993f3ebb026c47baf76"],
+  "canonicalCI": {
+    "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/43575663539",
+    "jobs": [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/43575663539/job/132389214068",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/43575663539/job/132389213878"
+    ]
+  },
+  "root": {
+    "delta": { "index.mjs": 12, "index.cjs": 0 },
+    "ceiling": { "index.mjs": 1525890, "index.cjs": 1460319 }
+  },
+  "reason": "The bootstrap first-party origin list gains tinycloud.one and TinyChat's native webview origins as SDK-only entries, which the web-sdk root bundles. Canonical Node 22/Bun 1.3.14 CI on the master merge of #987 (47b18bde, first parent 37d930ec) measured index.mjs 1525890 and index.cjs 1460232 gzip -9 bytes: +12 over the TC-2937 ceiling 1525878 for index.mjs, and index.cjs is under its ceiling 1460319, which stays. No other ceiling moves. Details: TC-3030"
+};
+
+/** Naomi's exact TC-3076 child-expiry root allowance from canonical CI. */
+export const approvedTc3076ChildExpiryRoot: LogoutRatchet = {
+  "label": "child expiry held to the parent's whole second (TC-3076)",
+  "ruling": "Naomi's TC-3076 ruling: a ratchet row in the #990 pattern for #993's exact canonical CI bytes; index.mjs +76 B over the TC-3030 ceiling, index.cjs measured under its ceiling and left unchanged. Details: TC-3076",
+  "base": "ef1c9d3b4c628ad6214e3e10e3ed18d21f90bda2",
+  "sourceCommits": ["711903b39d7ac6ba79b35bb788603d51c7f1d71b"],
+  "canonicalCI": {
+    "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/43780256449",
+    "jobs": [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/43780256449/job/133015588807",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/43780256449/job/133015588980"
+    ]
+  },
+  "root": {
+    "delta": { "index.mjs": 76, "index.cjs": 0 },
+    "ceiling": { "index.mjs": 1525966, "index.cjs": 1460319 }
+  },
+  "reason": "useDelegation, createSubDelegation and grantRuntimePermissions hold a child's expiry to its parent's whole second, through one rounding helper and a refusal for a delegation with under a second left; node-sdk is bundled into the web-sdk root. Canonical Node 22/Bun 1.3.14 CI on #993 (711903b3, based on master ef1c9d3b) measured index.mjs 1525966 and index.cjs 1460286 gzip -9 bytes: +76 over the TC-3030 ceiling 1525890 for index.mjs, and index.cjs is under its ceiling 1460319, which stays. No other ceiling moves. Details: TC-3076"
+};
+
+/** The exact TC-3168 v1 default-node root allowance from canonical CI. */
+export const approvedTc3168V1DefaultNodeRoot: LogoutRatchet = {
+  "label": "v1-only owner on the default node keeps its 3.11 route (TC-3168)",
+  "ruling": "TC-3168 size ruling: a ratchet row in the TC-3076 pattern for #1024's exact canonical CI bytes; index.mjs +124 B and index.cjs +198 B over the TC-3076 ceilings, each under the 800 B per-row cap. Details: TC-3168",
+  "base": "d8f2d10a36fb4ebe201ae33d27b21ff39cbc24e5",
+  "sourceCommits": ["47ea08a52142a303152d38c290f2361f763f3e8e"],
+  "canonicalCI": {
+    "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44135735800",
+    "jobs": [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44135735800/job/134224638801",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44135735800/job/134224638829"
+    ]
+  },
+  "root": {
+    "delta": { "index.mjs": 124, "index.cjs": 198 },
+    "ceiling": { "index.mjs": 1526090, "index.cjs": 1460517 }
+  },
+  "reason": "A verified v1-only registry record that names only the default node routes there as in 3.11, through an explicit legacy marker on the registered verdict and the node-sdk automatic-setup gate; node-sdk is bundled into the web-sdk root. Canonical Node 22/Bun 1.3.14 CI on #1024 (47ea08a5, based on master d8f2d10a) measured index.mjs 1526090 and index.cjs 1460517 gzip -9 bytes: +124 and +198 over the TC-3076 ceilings 1525966 and 1460319. No other ceiling moves. Details: TC-3168"
+};
+
+/** The exact TC-3172 delegateTo notBefore root allowance from canonical CI. */
+export const approvedTc3172DelegateNotBeforeRoot: LogoutRatchet = {
+  "label": "delegateTo notBefore option on the node-sdk (TC-3172)",
+  "ruling": "TC-3172 size ruling: a ratchet row in the TC-3168 pattern for #1025's exact canonical CI bytes; index.mjs +173 B and index.cjs +160 B over the TC-3168 ceilings, each under the 800 B per-row cap. Details: TC-3172",
+  "base": "875e26acdc1444d4f1c144efbf692d68c8ba2cb8",
+  "sourceCommits": ["0fab85aac8cf09b4bace5c3460b0788c1d6de980"],
+  "canonicalCI": {
+    "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44165332811",
+    "jobs": [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44165332811/job/134329745596",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44165332811/job/134329747802"
+    ]
+  },
+  "root": {
+    "delta": { "index.mjs": 173, "index.cjs": 160 },
+    "ceiling": { "index.mjs": 1526263, "index.cjs": 1460677 }
+  },
+  "reason": "TinyCloudNode.delegateTo takes an optional notBefore that is validated and passed through to the delegation's nbf, with the refusals for an invalid date, a time at or after expiry, and a future start; node-sdk is bundled into the web-sdk root. Canonical Node 22/Bun 1.3.14 CI on #1025 (0fab85aa, based on master 875e26ac) measured index.mjs 1526263 and index.cjs 1460677 gzip -9 bytes: +173 and +160 over the TC-3168 ceilings 1526090 and 1460517. No other ceiling moves. Details: TC-3172"
+};
+
+/** The exact TC-3194 native share links root allowance from canonical CI. */
+export const approvedTc3194NativeShareLinksRoot: LogoutRatchet = {
+  "label": "native share links on the sdk-core (TC-3194)",
+  "ruling": "Naomi's TC-3194 size ruling (policy review): a ratchet row in the TC-3172 pattern for #1033's exact canonical CI bytes; index.mjs +2196 B and index.cjs +1288 B over the TC-3172 ceilings, approved above the 800 B per-row cap for native share links instead of lazy-loading them. Details: TC-3194",
+  "base": "0b5a6bc84b7c3e3fdbd9f392d009ca1e08e42d1f",
+  "sourceCommits": ["ffa4b6a082609de3b57cedf4d747fad2e2f5d253"],
+  "canonicalCI": {
+    "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44203379707",
+    "jobs": [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44203379707/job/134462959549",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44203379707/job/134462959979"
+    ]
+  },
+  "root": {
+    "delta": { "index.mjs": 2196, "index.cjs": 1288 },
+    "ceiling": { "index.mjs": 1528459, "index.cjs": 1461965 }
+  },
+  "reason": "SharingService grants several resources in one share, signs one recipient child over all of them, and adds inspectShareToken, which checks a share token offline against the owner's wallet signature and returns the owner, the resources, when access ends and the root CID; sdk-core and node-sdk are bundled into the web-sdk root. Canonical Node 22/Bun 1.3.14 CI on #1033 (ffa4b6a0, based on master 0b5a6bc8) measured index.mjs 1528459 and index.cjs 1461965 gzip -9 bytes: +2196 and +1288 over the TC-3172 ceilings 1526263 and 1460677. No other ceiling moves. Details: TC-3194"
+};
+
+/** The exact TC-3243 account registry sync busy-retry root allowance from canonical CI. */
+export const approvedTc3243SdkOwnsBusyRetryRoot: LogoutRatchet = {
+  "label": "account registry sync leaves busy retries to the SDK (TC-3243)",
+  "ruling": "TC-3243 size ruling (Naomi): a ratchet row in the TC-3194 pattern for #1038's exact canonical CI bytes over #1033's ceilings; index.mjs +150 B and index.cjs +108 B over the TC-3194 ceilings, each under the 800 B per-row cap. Details: TC-3243",
+  "base": "23953408e6724fa5f488e67e6c418c50bca83fb3",
+  "sourceCommits": ["42eeab4a2f342a2c6213cc69340eb8c87413147d"],
+  "canonicalCI": {
+    "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44226922450",
+    "jobs": [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44226922450/job/134542228469",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44226922450/job/134542228412"
+    ]
+  },
+  "root": {
+    "delta": { "index.mjs": 150, "index.cjs": 108 },
+    "ceiling": { "index.mjs": 1528609, "index.cjs": 1462073 }
+  },
+  "reason": "TinyCloudNode's account registry sync stops, with a warning, on a node busy or timeout answer that the SDK has already retried, instead of retrying it again; node-sdk is bundled into the web-sdk root. Canonical Node 22/Bun 1.3.14 CI on #1038 (42eeab4a, based on master 23953408) measured index.mjs 1528609 and index.cjs 1462073 gzip -9 bytes: +150 and +108 over the TC-3194 ceilings 1528459 and 1461965. No other ceiling moves. Details: TC-3243"
+};
+
+/** The exact TC-3285 secret type root allowance from canonical CI. */
+export const approvedTc3285SecretTypesRoot: LogoutRatchet = {
+  "label": "optional secret type and getEntry (TC-3285)",
+  "ruling": "TC-3285 size ruling (Naomi): a ratchet row in the TC-3243 pattern for #1042's exact canonical CI bytes over the TC-3243 ceilings; index.mjs +227 B and index.cjs +219 B, each under the 800 B per-row cap. Details: TC-3285",
+  "base": "b758e712acf147bc3b2f801418b78c3bea4bf917",
+  "sourceCommits": ["342ac278df3699db027e0ab54ae2340d3d05f3b5"],
+  "canonicalCI": {
+    "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44376412165",
+    "jobs": [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44376412165/job/135056649418",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44376412165/job/135056650074"
+    ]
+  },
+  "root": {
+    "delta": { "index.mjs": 227, "index.cjs": 219 },
+    "ceiling": { "index.mjs": 1528836, "index.cjs": 1462292 }
+  },
+  "reason": "SecretsService reads a secret's optional type (getEntry) and validates the type on put; sdk-services, sdk-core, node-sdk and web-sdk expose it and are bundled into the web-sdk root. The TOTP helpers are a separate subpath and are not in the root. Canonical Node 22/Bun 1.3.14 CI on #1042 (342ac278, based on master ae9a23c9) measured index.mjs 1528836 and index.cjs 1462292 gzip -9 bytes: +227 and +219 over the TC-3243 ceilings 1528609 and 1462073. No other ceiling moves. Details: TC-3285"
+};
+
 export const approvedLedgerRows: Record<string, unknown> = {
   phase2Ratchet: approvedPhase2,
   fixRequiredRatchet: approvedFixRequiredRatchet,
@@ -3493,6 +3723,16 @@ export const approvedLedgerRows: Record<string, unknown> = {
   tc2923EncryptionTeeOriginRoot: approvedTc2923EncryptionTeeOriginRoot,
   tc2949PanelChunkRecoveryRoot: approvedTc2949PanelChunkRecoveryRoot,
   tc2970RegistryVerdictCacheRoot: approvedTc2970RegistryVerdictCacheRoot,
+  tc2913OpenKeyContinuationRoot: approvedTc2913OpenKeyContinuationRoot,
+  tc2987RegistryAbsentReadsRoot: approvedTc2987RegistryAbsentReadsRoot,
+  tc2937SharePlacementRoot: approvedTc2937SharePlacementRoot,
+  tc3030FirstPartyOriginsRoot: approvedTc3030FirstPartyOriginsRoot,
+  tc3076ChildExpiryRoot: approvedTc3076ChildExpiryRoot,
+  tc3168V1DefaultNodeRoot: approvedTc3168V1DefaultNodeRoot,
+  tc3172DelegateNotBeforeRoot: approvedTc3172DelegateNotBeforeRoot,
+  tc3194NativeShareLinksRoot: approvedTc3194NativeShareLinksRoot,
+  tc3243SdkOwnsBusyRetryRoot: approvedTc3243SdkOwnsBusyRetryRoot,
+  tc3285SecretTypesRoot: approvedTc3285SecretTypesRoot,
 };
 
 /** Only a git merge-base ledger may retain the pre-correction toolchain. */
@@ -3931,6 +4171,56 @@ export function validateLedger(value: Ledger, historicalBase = false): void {
       (!value.tc2949PanelChunkRecoveryRoot ||
         JSON.stringify(value.tc2970RegistryVerdictCacheRoot) !== JSON.stringify(approvedTc2970RegistryVerdictCacheRoot))) {
     throw new Error("Only Naomi's exact TC-2970 root admission is approved.");
+  }
+  if (value.tc2913OpenKeyContinuationRoot !== undefined &&
+      (!value.tc2970RegistryVerdictCacheRoot ||
+        JSON.stringify(value.tc2913OpenKeyContinuationRoot) !== JSON.stringify(approvedTc2913OpenKeyContinuationRoot))) {
+    throw new Error("Only Naomi's exact TC-2913 root admission is approved.");
+  }
+  if (value.tc2987RegistryAbsentReadsRoot !== undefined &&
+      (!value.tc2913OpenKeyContinuationRoot ||
+        JSON.stringify(value.tc2987RegistryAbsentReadsRoot) !== JSON.stringify(approvedTc2987RegistryAbsentReadsRoot))) {
+    throw new Error("Only Naomi's exact TC-2987 root admission is approved.");
+  }
+  if (value.tc2937SharePlacementRoot !== undefined &&
+      (!value.tc2987RegistryAbsentReadsRoot ||
+        JSON.stringify(value.tc2937SharePlacementRoot) !== JSON.stringify(approvedTc2937SharePlacementRoot))) {
+    throw new Error("Only Naomi's exact TC-2937 root admission is approved.");
+  }
+  if (value.tc3030FirstPartyOriginsRoot !== undefined &&
+      (!value.tc2937SharePlacementRoot ||
+        JSON.stringify(value.tc3030FirstPartyOriginsRoot) !== JSON.stringify(approvedTc3030FirstPartyOriginsRoot))) {
+    throw new Error("Only Naomi's exact TC-3030 root admission is approved.");
+  }
+  if (value.tc3076ChildExpiryRoot !== undefined &&
+      (!value.tc3030FirstPartyOriginsRoot ||
+        JSON.stringify(value.tc3076ChildExpiryRoot) !== JSON.stringify(approvedTc3076ChildExpiryRoot))) {
+    throw new Error("Only Naomi's exact TC-3076 root admission is approved.");
+  }
+  if (value.tc3168V1DefaultNodeRoot !== undefined &&
+      (!value.tc3076ChildExpiryRoot ||
+        JSON.stringify(value.tc3168V1DefaultNodeRoot) !== JSON.stringify(approvedTc3168V1DefaultNodeRoot))) {
+    throw new Error("Only the exact TC-3168 root admission is approved.");
+  }
+  if (value.tc3172DelegateNotBeforeRoot !== undefined &&
+      (!value.tc3168V1DefaultNodeRoot ||
+        JSON.stringify(value.tc3172DelegateNotBeforeRoot) !== JSON.stringify(approvedTc3172DelegateNotBeforeRoot))) {
+    throw new Error("Only the exact TC-3172 root admission is approved.");
+  }
+  if (value.tc3194NativeShareLinksRoot !== undefined &&
+      (!value.tc3172DelegateNotBeforeRoot ||
+        JSON.stringify(value.tc3194NativeShareLinksRoot) !== JSON.stringify(approvedTc3194NativeShareLinksRoot))) {
+    throw new Error("Only the exact TC-3194 root admission is approved.");
+  }
+  if (value.tc3243SdkOwnsBusyRetryRoot !== undefined &&
+      (!value.tc3194NativeShareLinksRoot ||
+        JSON.stringify(value.tc3243SdkOwnsBusyRetryRoot) !== JSON.stringify(approvedTc3243SdkOwnsBusyRetryRoot))) {
+    throw new Error("Only the exact TC-3243 root admission is approved.");
+  }
+  if (value.tc3285SecretTypesRoot !== undefined &&
+      (!value.tc3243SdkOwnsBusyRetryRoot ||
+        JSON.stringify(value.tc3285SecretTypesRoot) !== JSON.stringify(approvedTc3285SecretTypesRoot))) {
+    throw new Error("Only the exact TC-3285 root admission is approved.");
   }
 }
 
@@ -4776,5 +5066,85 @@ export function validateTc2970RegistryVerdictCacheRootTransition(base?: LogoutRa
   if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc2970RegistryVerdictCacheRoot) ||
       base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
     throw new Error("The TC-2970 root admission may be introduced once and cannot change later.");
+  }
+}
+
+/** The exact TC-2913 OpenKey continuation root admission is introduced once and immutable. */
+export function validateTc2913OpenKeyContinuationRootTransition(base?: LogoutRatchet, current?: LogoutRatchet): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc2913OpenKeyContinuationRoot) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The TC-2913 root admission may be introduced once and cannot change later.");
+  }
+}
+
+/** The exact TC-2987 browser registry absent-reads root admission is introduced once and immutable. */
+export function validateTc2987RegistryAbsentReadsRootTransition(base?: LogoutRatchet, current?: LogoutRatchet): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc2987RegistryAbsentReadsRoot) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The TC-2987 root admission may be introduced once and cannot change later.");
+  }
+}
+
+/** The exact TC-2937 owner-signed share placement root admission is introduced once and immutable. */
+export function validateTc2937SharePlacementRootTransition(base?: LogoutRatchet, current?: LogoutRatchet): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc2937SharePlacementRoot) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The TC-2937 root admission may be introduced once and cannot change later.");
+  }
+}
+
+/** The exact TC-3030 tinycloud.one first-party origins root admission is introduced once and immutable. */
+export function validateTc3030FirstPartyOriginsRootTransition(base?: LogoutRatchet, current?: LogoutRatchet): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc3030FirstPartyOriginsRoot) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The TC-3030 root admission may be introduced once and cannot change later.");
+  }
+}
+
+/** The exact TC-3076 child-expiry root admission is introduced once and immutable. */
+export function validateTc3076ChildExpiryRootTransition(base?: LogoutRatchet, current?: LogoutRatchet): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc3076ChildExpiryRoot) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The TC-3076 root admission may be introduced once and cannot change later.");
+  }
+}
+
+/** The exact TC-3168 v1 default-node root admission is introduced once and immutable. */
+export function validateTc3168V1DefaultNodeRootTransition(base?: LogoutRatchet, current?: LogoutRatchet): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc3168V1DefaultNodeRoot) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The TC-3168 root admission may be introduced once and cannot change later.");
+  }
+}
+
+/** The exact TC-3172 delegateTo notBefore root admission is introduced once and immutable. */
+export function validateTc3172DelegateNotBeforeRootTransition(base?: LogoutRatchet, current?: LogoutRatchet): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc3172DelegateNotBeforeRoot) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The TC-3172 root admission may be introduced once and cannot change later.");
+  }
+}
+
+/** The exact TC-3194 native share links root admission is introduced once and immutable. */
+export function validateTc3194NativeShareLinksRootTransition(base?: LogoutRatchet, current?: LogoutRatchet): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc3194NativeShareLinksRoot) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The TC-3194 root admission may be introduced once and cannot change later.");
+  }
+}
+
+/** The exact TC-3243 account registry sync busy-retry root admission is introduced once and immutable. */
+export function validateTc3243SdkOwnsBusyRetryRootTransition(base?: LogoutRatchet, current?: LogoutRatchet): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc3243SdkOwnsBusyRetryRoot) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The TC-3243 root admission may be introduced once and cannot change later.");
+  }
+}
+
+/** The exact TC-3285 secret type root admission is introduced once and immutable. */
+export function validateTc3285SecretTypesRootTransition(base?: LogoutRatchet, current?: LogoutRatchet): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc3285SecretTypesRoot) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The TC-3285 root admission may be introduced once and cannot change later.");
   }
 }

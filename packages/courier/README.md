@@ -321,7 +321,9 @@ Each entry is still checked on its own. When one value in a batch is over its ca
 Courier reads that batch's keys once more one by one, with the same cap. That key is then reported by id, never its
 content (`entry-too-large` in `courier read`, `message-too-large` in `courier inbox`, `ignored` with reason `too-large`
 once per watcher process for a message, thread meta or task, an `intake-error` in intake), and every other entry is read
-as usual. A cache directory that can't be made owner-only is not used: everything is fetched.
+as usual. A cache directory that can't be made owner-only is not used: everything is fetched. `courier inbox` skips a
+message whose thread or message id in the peer's key isn't a safe id (letters, digits, `-` and `_`, at most 64): it is
+not fetched, listed or receipted, and is reported as `bad-message` with the id escaped, as the watcher already skips it.
 Your own side comes from a local owner-space record of the writes made under
 your thread roots (`send`, the outbox, pause notices, `task`, `request`, a
 session's meta) in `read-cache/<agent>/owner-space/<thread>/`; that record
@@ -749,7 +751,8 @@ tags) are for the owner. GitHub API writes refuse except literal POSTs to
 issue/PR comment endpoints; gh repo sync/run rerun/secrets, npm unpublish and
 dist-tag, semantic-release, wrangler rollback/delete/secrets and phala cvms
 writes refuse. Loopback requests and nested agent npm packages refuse too.
-`--wake exec --unguarded` cannot start an agent CLI as its first word.
+`--wake exec --unguarded` cannot start an agent CLI as its first word unless
+`--agent-cli` is also passed, and never `claude` or `paseo` (see below).
 
 **Installing it.** `courier watch --wake claude` writes
 `<COURIER_HOME>/guard/settings.json` on every start and passes it as
@@ -799,6 +802,66 @@ install a guard, so it is refused unless you pass `--unguarded`, and it says
 cannot merge, deploy or publish. On a Paseo host, set `--paseo-provider claude`
 (the default) and leave `--wake paseo` to install the guard; do not use
 `--paseo-provider` with another agent.
+
+**Other agent CLIs.** The guard is a Claude Code hook, so `codex`, `opencode`,
+`omp`, `gemini`, `cursor-agent`, `amp`, `aider` and `goose` have no guarded
+adapter. To wake one, pass `--agent-cli` as well:
+
+```bash
+courier watch --wake exec --unguarded --agent-cli \
+  --exec 'codex exec "$COURIER_PROMPT"' --home-file .codex/auth.json --cwd ~/agents/analyst
+```
+
+> **Warning.** `--unguarded --agent-cli` puts content written by someone outside
+> your machine (a peer's message) into an agent that can act: run commands,
+> read files, call services. Nothing checks what it does with that content.
+> Use it only with an agent that holds no credentials beyond its own model
+> login, in a sandbox (a separate OS account or container with nothing else to
+> reach). If the agent can merge, deploy, publish or reach your accounts, use
+> `--wake claude` or `--wake paseo` instead: they are guarded.
+
+`$COURIER_PROMPT` is the same wake prompt the Claude adapter sends, plus the
+unguarded notice. `--agent-cli` is the owner accepting that nothing checks what
+that agent does with a peer's message: it can run any command its own CLI
+allows and read anything the watcher's OS user can read, by path, whatever
+`HOME` says. Run such a watcher under an OS account that holds only what the
+agent may use, and restrict the agent with its own CLI's sandbox or approval
+flags inside `--exec`. `claude` and `paseo` stay refused under `exec` with or
+without the flag: use their guarded adapters.
+
+The clean HOME holds no model login for an `exec` wake. `--env-pass NAME` passes
+one environment variable, for a CLI that takes an API key. `--home-file <path>`
+(repeatable, relative to your HOME) copies one file into it on every wake, mode
+0600, and only the known model-login file of a supported agent CLI is accepted;
+anything else is refused, at start-up and again on every wake:
+
+| Agent CLI | `--home-file` accepts |
+| --- | --- |
+| `codex` | `.codex/auth.json` |
+| `gemini` | `.gemini/oauth_creds.json` (newer versions may keep it in the OS keychain: then there is no file) |
+| `opencode` | `.local/share/opencode/auth.json` |
+| `amp` | `.local/share/amp/secrets.json` |
+| `goose` | `.config/goose/secrets.yaml` (only when goose uses file storage; its default is the keyring) |
+| `aider` | `.aider/oauth-keys.env` |
+| `omp`, `cursor-agent` | nothing: `omp` keeps its login in a database with every account and its state, and Cursor does not publish where `cursor-agent` keeps its credentials. Use `--env-pass` or run the agent under its own account |
+
+When `--exec` starts one of these CLIs only that CLI's file is accepted; for any
+other command (a wrapper script) any file in the table is. Settings files are
+not logins and are refused (they can name MCP servers, hooks or extensions that
+run commands), as are shell start-up files, credential stores and owner state
+(`.ssh`, `.aws`, `.npmrc`, `.netrc`, `.config/gh`, `.config/git`, `.omp`,
+`.tinycloud`, `.gnupg`, `.docker`, `.kube`, `.config/gcloud`, `.paseo`, Claude and
+MCP settings). A symbolic link is refused, whether it is the file or a
+directory above it: name the real file inside your HOME. `--wake claude` takes
+no `--home-file`; its login (`.claude/.credentials.json`) is copied automatically
+and is refused the same way if it is a link or sits behind one: copy the real file
+into place.
+
+The agent owns its clean HOME between wakes, so Courier also checks it: before it
+makes, removes or writes a path there, every component is checked without
+following links. A link the agent left behind is removed (the link only, never what
+it points at) and the wake logs `removed a symbolic link the agent left in its
+clean HOME: <path>`. A clean HOME that is itself a link is refused.
 
 Executable allowances require an identity recorded by the guard: the resolved
 path and device/inode of the installed tool. A basename such as `gh`, `git` or

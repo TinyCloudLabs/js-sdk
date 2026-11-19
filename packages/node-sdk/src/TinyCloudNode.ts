@@ -1,3 +1,4 @@
+import type { SharePlacement, SharePlacementParent } from "@tinycloud/sdk-core/share-placement";
 import { decryptColumn, isKeyWrapV2, openKeyV2, sealKeyV2, type ColumnFormat } from "@tinycloud/sdk-services/encryption";
 import { createServiceContext } from "./recordingServiceContext";
 import { unrecordedFetchOf } from "./recordingRegistry";
@@ -115,6 +116,7 @@ import {
   CapabilityKeyRegistry,
   ICapabilityKeyRegistry,
   SharingService,
+  type EncodedShareData,
   ISharingService,
   // v2 types
   SiweConfig,
@@ -260,6 +262,7 @@ import {
   legacyParamsToPermissionEntries,
   resolveExpiryMs,
   extractSiweExpiration,
+  wholeSecondExpiry,
 } from "./delegateToHelpers";
 import { NodeSecretsService } from "./NodeSecretsService";
 
@@ -932,6 +935,8 @@ export interface TinyCloudNodeConfig {
   registryPolicy?: RegistryPolicy;
   /** `fail-closed` only: host for owners with no registry record. Default https://node.tinycloud.xyz; `null` refuses them with `NodeNotFoundError`. */
   newUserHost?: string | null;
+  /** Explicit wallet-owner signing for share-only placement; never a session key. */
+  sharePlacementSigner?: (message: string) => Promise<string>;
   /** `fail-closed` only: chain ID of the v1 registry subject built from the signer address (never the session chain). Default 1. */
   registryChainId?: number;
   /** `fail-closed` only: highest registry sequence seen per owner. Default: in-memory for this client. */
@@ -1044,6 +1049,25 @@ const TERMINAL_DELEGATION_REQUIRES_SESSION_KEY =
   "disableSubDelegation requires a session-key delegation to a did:key (not did:pkh); use the session-key DID or drop the flag";
 
 /**
+ * Check `DelegateToOptions.notBefore` against the expiry the delegation will actually be signed with, and return it
+ * as whole seconds since the epoch (floored, as the expiry is). `undefined` when none was requested.
+ */
+function resolveNotBeforeSecs(notBefore: Date | undefined, expiration: Date, nowMs: number): number | undefined {
+  if (notBefore === undefined) return undefined;
+  if (!(notBefore instanceof Date) || !Number.isFinite(notBefore.getTime()) || notBefore.getTime() < 0) {
+    throw new Error("delegateTo: notBefore must be a valid Date");
+  }
+  const notBeforeSecs = Math.floor(notBefore.getTime() / 1000);
+  if (notBeforeSecs >= Math.floor(expiration.getTime() / 1000)) {
+    throw new Error(`delegateTo: notBefore (${notBefore.toISOString()}) is not before the delegation's expiry (${expiration.toISOString()})`);
+  }
+  if (notBefore.getTime() > nowMs) {
+    throw new Error(`delegateTo: notBefore (${notBefore.toISOString()}) is in the future; the node would reject the delegation until then, so it must not be later than now`);
+  }
+  return notBeforeSecs;
+}
+
+/**
  * Options for {@link TinyCloudNode.delegateTo}.
  *
  * `expiry` accepts either an ms-format duration string (e.g. `"7d"`, `"1h"`)
@@ -1066,6 +1090,14 @@ const TERMINAL_DELEGATION_REQUIRES_SESSION_KEY =
 export interface DelegateToOptions {
   /** Override expiry. ms-format string ("7d", "1h") or raw milliseconds. */
   expiry?: string | number;
+  /**
+   * Sign the delegation with this not-before (`nbf`), to the whole second, so a delegation can be backdated to cover an
+   * issuer clock that runs ahead of the node's. Refused when it is in the future (the node checks a delegation against its own
+   * clock with no leeway, so a future `nbf` fails activation), when it is not before the delegation's expiry (the
+   * expiry delegateTo will sign, after the session cap and, on the runtime-grant path, the runtime grant's own end), or not a valid Date, and with `forceWalletSign`, whose SIWE
+   * path cannot carry it. Default: none, so the delegation is valid from the moment it is signed.
+   */
+  notBefore?: Date;
   /** Force the wallet-signed SIWE path even if the caps are derivable. Default false. */
   forceWalletSign?: boolean;
   /**
@@ -1374,6 +1406,21 @@ function replicaRestoreRefusal(error: unknown): ReplicaGateReason {
     }
   }
   return "gate_unavailable";
+}
+
+/**
+ * The node's busy or timeout answer, which the SDK has already retried (under
+ * its retry policy, honouring the node's Retry-After) by the time it reaches a
+ * caller. Read from the error or the error it wraps.
+ */
+function isSdkRetriedNodeAnswer(error: unknown): boolean {
+  let current = error;
+  for (let depth = 0; depth < 4 && typeof current === "object" && current !== null; depth += 1) {
+    const code = Reflect.get(current, "code");
+    if (code === ErrorCodes.NODE_BUSY || code === ErrorCodes.REQUEST_TIMEOUT) return true;
+    current = Reflect.get(current, "cause");
+  }
+  return false;
 }
 
 export class TinyCloudNode {
@@ -2141,6 +2188,9 @@ export class TinyCloudNode {
   private createReceiveOnlySharing(): SharingService {
     const receiveOnlyGraph = this._serviceGraph;
     return new SharingService({
+      createPlacement: this.config.sharePlacementSigner || this.config.privateKey
+        ? share => this.createPlacementForShare(receiveOnlyGraph, share) : undefined,
+      receivedPlacementTransport: share => this.transportForPlacedShare(receiveOnlyGraph, share),
       hosts: [this.config.host!],
       // session: undefined - not needed for receive()
       invoke: receiveOnlyGraph.invoke,
@@ -2277,7 +2327,7 @@ export class TinyCloudNode {
         }
       },
       {
-        resolveResource: (resource, access) => this.routingDestinations(resource, access),
+        resolveResource: (resource, access, dataRead) => this.routingDestinations(resource, access, undefined, dataRead),
         bindAudience: (authorization, nodeDid) => this.bindRoutedAudience(authorization, nodeDid, session),
         verifyDestination: (target) => verifyResourceDestination(target, globalThis.fetch.bind(globalThis)),
       },
@@ -2294,8 +2344,8 @@ export class TinyCloudNode {
     );
   }
 
-  private async routingDestinations(resource: string, access: ResourceAccess, noEntryHosts?: readonly string[]): Promise<ResourceDestination[]> {
-    const destinations = await this.registryDestinations(resource, access, noEntryHosts);
+  private async routingDestinations(resource: string, access: ResourceAccess, noEntryHosts?: readonly string[], dataRead?: boolean): Promise<ResourceDestination[]> {
+    const destinations = await this.registryDestinations(resource, access, noEntryHosts, dataRead);
     // Encryption-network traffic carries key material and public keys, so it
     // only uses the origin whose TLS terminates inside the node (TC-2923). The
     // identity check that follows runs against that origin; nothing retries on
@@ -2305,7 +2355,7 @@ export class TinyCloudNode {
       : destinations;
   }
 
-  private async registryDestinations(resource: string, access: ResourceAccess, noEntryHosts?: readonly string[]): Promise<ResourceDestination[]> {
+  private async registryDestinations(resource: string, access: ResourceAccess, noEntryHosts?: readonly string[], dataRead?: boolean): Promise<ResourceDestination[]> {
     const owner = resource.startsWith("urn:tinycloud:encryption:")
       ? parseNetworkId(resource.split("/")[0]).ownerDid : parseSpaceUri(resource)?.owner ??
         (() => { const key = /^tinycloud:key:(z[^:]+):[^/]+$/.exec(resource); return key ? `did:key:${key[1]}` : undefined; })();
@@ -2316,7 +2366,7 @@ export class TinyCloudNode {
     if (session) this.refreshRegistryOwner(pkhDid(session.address, session.chainId));
     // Auth receives constructor-trusted hosts separately and may accept an
     // explicit code-supplied sign-in override, never a restored host list.
-    if (this.auth) return this.auth.resolveResourceDestinations(resource, access, noEntryHosts);
+    if (this.auth) return this.auth.resolveResourceDestinations(resource, access, noEntryHosts, dataRead);
     const candidates = noEntryHosts ?? this.trustedNoEntryHosts;
     const subject = owner.startsWith("did:pkh:") ? pkhDid(owner.slice(owner.lastIndexOf(":") + 1), this.config.registryChainId ?? 1) : owner;
     const resolved = await resolveRegistryResource(subject, resource, access, {
@@ -2325,6 +2375,7 @@ export class TinyCloudNode {
       sequenceStore: this.config.registrySequenceStore,
       cacheStore: this.config.registryCacheStore,
       verdictCache: this.config.registryVerdictCache,
+      dataRead,
       onRegistryFallback: this.config.onRegistryFallback,
     });
     if (resolved.verdict.status === "unregistered") {
@@ -2369,14 +2420,48 @@ export class TinyCloudNode {
     return this.createResourceTransport(this._serviceGraph, this._serviceContext?.session ?? undefined);
   }
 
-  private createResourceTransport(graph: ServiceGraphLifetime, session?: ServiceSession): ResourceTransport {
+  private async createPlacementForShare(graph: ServiceGraphLifetime, share: EncodedShareData): Promise<SharePlacement> {
+    graph.assertActive();
+    const sign = this.config.sharePlacementSigner ?? (this.config.privateKey && this.signer
+      ? (message: string) => this.signer!.signMessage(message) : undefined);
+    if (!sign) throw new Error("Share placement requires an explicit wallet owner signer");
+    const node = await this.activeNodeIdentity();
+    graph.assertActive();
+    const { signSharePlacement } = await import("@tinycloud/sdk-core/share-placement");
+    const record = await signSharePlacement({ ...share.delegation, spaceId: share.spaceId }, { did: node.nodeDid, url: node.origin }, async message => {
+      graph.assertActive();
+      const signature = await sign(message);
+      graph.assertActive();
+      return signature;
+    });
+    graph.assertActive();
+    return record;
+  }
+
+  private async transportForPlacedShare(graph: ServiceGraphLifetime, share: EncodedShareData): Promise<ResourceTransport> {
+    if (this.config.tinycloudRegistryUrl === null) throw new Error("Share placement registry lookup is explicitly disabled");
+    const parent = { cid: share.delegation.cid, authHeader: share.delegation.authHeader, spaceId: share.spaceId };
+    const { verifySharePlacement } = await import("@tinycloud/sdk-core/share-placement");
+    const record = await verifySharePlacement(share.placement, parent);
+    graph.assertActive();
+    return this.createResourceTransport(graph, undefined, { record, parent });
+  }
+
+  private createResourceTransport(graph: ServiceGraphLifetime, session?: ServiceSession,
+    placement?: { record: SharePlacement; parent: SharePlacementParent }): ResourceTransport {
     const rawFetch = this.fetchForGraph(graph);
     return async (resources, send, options) => {
       graph.assertActive();
       return routeResourceRequest(resources, {
-        resolveResource: async (requestedResource, requestedAccess) => {
+        resolveResource: async (requestedResource, requestedAccess, dataRead) => {
           graph.assertActive();
-          const targets = await this.routingDestinations(requestedResource, requestedAccess);
+          const targets = placement && requestedResource === placement.parent.spaceId && requestedAccess !== "encryption"
+            ? await (await import("@tinycloud/sdk-core/share-placement")).sharePlacementDestinations(placement.record, placement.parent, {
+              registryUrl: this.config.tinycloudRegistryUrl ?? undefined, sequenceStore: this.config.registrySequenceStore,
+              cacheStore: this.config.registryCacheStore, registryChainId: this.config.registryChainId,
+              fetch: rawFetch as typeof fetch,
+            })
+            : await this.routingDestinations(requestedResource, requestedAccess, undefined, dataRead);
           graph.assertActive();
           return targets;
         },
@@ -2837,9 +2922,10 @@ export class TinyCloudNode {
       sequenceStore: this.config.registrySequenceStore,
       cacheStore: this.config.registryCacheStore,
     };
-    // With a verdict cache the prefetch is the lookup later routing joins, not an extra one.
+    // With a verdict cache the prefetch is the lookup later routing joins, not an extra one. Its result is
+    // discarded, so it may keep an absence for data reads.
     void (this.config.registryVerdictCache
-      ? lookupOwnerRegistryVerdict(subject, { ...options, verdictCache: this.config.registryVerdictCache })
+      ? lookupOwnerRegistryVerdict(subject, { ...options, verdictCache: this.config.registryVerdictCache, dataRead: true })
       : refreshOwnerRegistry(subject, options)).catch(() => undefined);
   }
 
@@ -3231,6 +3317,7 @@ export class TinyCloudNode {
   /** Prepare the OpenKey request before the approval click. */
   async prepareOpenKeySignIn(
     options?: Parameters<NodeUserAuthorization["prepareOpenKeySignIn"]>[0],
+    identity?: Parameters<NodeUserAuthorization["prepareOpenKeySignIn"]>[1],
   ): Promise<PreparedOpenKeyAuthorization> {
     if (!this.signer || !this.tc || !this.auth) {
       throw new Error("Cannot prepare OpenKey sign-in in session-only mode. Provide a signer in config.");
@@ -3238,7 +3325,14 @@ export class TinyCloudNode {
     await this.signOutInFlight;
     await this.accountRegistryTail;
     await this.wasmBindings.ensureInitialized?.();
-    return this.auth.prepareOpenKeySignIn(options);
+    return this.auth.prepareOpenKeySignIn(options, identity);
+  }
+
+  verifyPreparedOpenKeySignIn(
+    ...args: Parameters<NodeUserAuthorization["verifyPreparedOpenKeySignIn"]>
+  ): Promise<void> {
+    if (!this.auth) throw new Error("OpenKey authorization unavailable");
+    return this.auth.verifyPreparedOpenKeySignIn(...args);
   }
 
   /** Start OpenKey authorization synchronously, then complete normal session setup. */
@@ -3264,10 +3358,10 @@ export class TinyCloudNode {
         throw new Error("OpenKey account changed after sign-in preparation");
       }
       return this.auth!.completeOpenKeySignIn(pending, authorization);
-    });
+    }, pending.identity);
   }
 
-  private async signInWith(performSignIn: () => Promise<unknown>): Promise<void> {
+  private async signInWith(performSignIn: () => Promise<unknown>, identity?: PreparedOpenKeyAuthorization["identity"]): Promise<void> {
     // Refuse a caveated manifest before any signer, registry or host call.
     refuseCaveated(this.auth?.capabilityRequest?.manifests);
     // Read synchronously: a sign-out called after this sign-in started wins,
@@ -3276,7 +3370,7 @@ export class TinyCloudNode {
     const attempt = ++this.latestSessionAttempt;
     await this.signOutInFlight;
     try {
-      await this.establishSignIn(epoch, performSignIn);
+      await this.establishSignIn(epoch, performSignIn, identity);
     } catch (error) {
       // A sign-out during sign-in wins: end whatever this sign-in established,
       // unless a newer sign-in or restore has started since.
@@ -3287,7 +3381,7 @@ export class TinyCloudNode {
     }
   }
 
-  private async establishSignIn(epoch: number, performSignIn: () => Promise<unknown>): Promise<void> {
+  private async establishSignIn(epoch: number, performSignIn: () => Promise<unknown>, identity?: PreparedOpenKeyAuthorization["identity"]): Promise<void> {
     if (!this.signer || !this.tc) {
       throw new Error("Not signed in. Call signIn() first.");
     }
@@ -3301,8 +3395,8 @@ export class TinyCloudNode {
     // Ensure WASM is ready (critical for browser where WASM loads asynchronously)
     await this.wasmBindings.ensureInitialized?.();
 
-    const address = canonicalizeAddress(await this.signer.getAddress());
-    const chainId = await this.signer.getChainId();
+    const address = canonicalizeAddress(identity?.address ?? await this.signer.getAddress());
+    const chainId = identity?.chainId ?? await this.signer.getChainId();
     this.assertSessionEpoch(epoch, "Sign-in");
     const nextPrincipal = pkhDid(address, chainId);
     const priorPrincipal = this.replicaSessionPrincipal
@@ -4398,6 +4492,17 @@ export class TinyCloudNode {
           );
           return;
         }
+        // The node's busy and timeout answers reach here after the SDK has
+        // retried them under its retry policy and the node's Retry-After. A
+        // second loop would multiply the requests a busy node gets (up to 12
+        // per write instead of 4), so stop; the next sync tries again.
+        if (isSdkRetriedNodeAnswer(error)) {
+          console.warn(
+            "TinyCloud account registry sync stopped: the node is busy; the SDK already retried it",
+            error,
+          );
+          return;
+        }
         lastError = error;
         if (attempt < delays.length - 1) {
           await new Promise<void>((resolve, reject) => {
@@ -5390,6 +5495,9 @@ export class TinyCloudNode {
     });
     const keyProvider = new WasmKeyProvider({ sessionManager: input.manager });
     const sharingService = new SharingService({
+      createPlacement: this.config.sharePlacementSigner || this.config.privateKey
+        ? share => this.createPlacementForShare(graph, share) : undefined,
+      receivedPlacementTransport: share => this.transportForPlacedShare(graph, share),
       hosts: [input.host],
       invoke: graph.invoke,
       fetch: graph.fetch,
@@ -6592,6 +6700,9 @@ export class TinyCloudNode {
     // Recreate it for this graph instead of updating the receive-only instance
     // from the graph that was just retired during a subsequent sign-in.
     this._sharingService = new SharingService({
+      createPlacement: this.config.sharePlacementSigner || this.config.privateKey
+        ? share => this.createPlacementForShare(graph, share) : undefined,
+      receivedPlacementTransport: share => this.transportForPlacedShare(graph, share),
       hosts: [this.config.host!],
       session: serviceSession,
       invoke: graph.invoke,
@@ -6741,6 +6852,7 @@ export class TinyCloudNode {
   async createOwnerDelegation(
     params: CreateOwnerDelegationParams,
     assertActive?: () => void,
+    onPrepared?: (delegation: Delegation) => Promise<void>,
   ): Promise<OwnerDelegationReceipt> {
     const graph = this._serviceGraph;
     const assertOwnerGraphActive = assertActive ?? graph.assertActive.bind(graph);
@@ -6784,14 +6896,6 @@ export class TinyCloudNode {
     const signature = await this.signer.signMessage(prepared.siwe);
     assertOwnerGraphActive();
     const delegationSession = this.wasmBindings.completeSessionSetup({ ...prepared, signature });
-    const activation = await this.activateSignedSession(delegationSession, prepared.siwe, graph.signal);
-    assertOwnerGraphActive();
-    if (!activation.success) {
-      throw Object.assign(
-        new Error(`Owner delegation import failed: ${activation.status} ${activation.error ?? ""}`.trim()),
-        { cause: activation },
-      );
-    }
     const delegation: Delegation = {
       cid: delegationSession.delegationCid,
       delegateDID: params.delegateDid,
@@ -6805,6 +6909,17 @@ export class TinyCloudNode {
       createdAt: now,
       authHeader: delegationSession.delegationHeader.Authorization,
     };
+    if (onPrepared) await onPrepared(delegation);
+    assertOwnerGraphActive();
+    const activation = await this.activateSignedSession(delegationSession, prepared.siwe, graph.signal);
+    assertOwnerGraphActive();
+    if (!activation.success) {
+      throw Object.assign(
+        new Error(`Owner delegation import failed: ${activation.status} ${activation.error ?? ""}`.trim()),
+        { cause: activation },
+      );
+    }
+
     return {
       delegation,
       signedDagCbor: decodeAuthorizationBytes(delegationSession.delegationHeader.Authorization),
@@ -6978,22 +7093,34 @@ export class TinyCloudNode {
   }
 
   private async createRootDelegationForSharing(params: {
+    onPrepared?: (delegation: Delegation) => Promise<void>;
     shareKeyDID: string;
     spaceId: string;
     path: string;
     actions: string[];
+    resources?: Array<{ path: string; actions: string[] }>;
     requestedExpiry: Date;
   }, assertActive?: () => void): Promise<Delegation | undefined> {
     // A share past the technical limit is a clear refusal, not a swallowed failure below.
     assertExpiryWithinTechnicalLimit(params.requestedExpiry, "siwe");
+    // One resource keeps the path/actions shape; several are one permission each,
+    // in share order, so the returned delegation's flat path is the share's first.
+    const authority = params.resources && params.resources.length > 1
+      ? {
+        permissions: params.resources.map((resource) => ({
+          service: resource.actions[0]?.split("/", 1)[0] ?? "",
+          path: resource.path,
+          actions: [...resource.actions],
+        })),
+      }
+      : { path: params.path, actions: params.actions };
     try {
       return (await this.createOwnerDelegation({
         delegateDid: params.shareKeyDID,
         spaceId: params.spaceId,
-        path: params.path,
-        actions: params.actions,
+        ...authority,
         expiresAt: params.requestedExpiry,
-      }, assertActive)).delegation;
+      }, assertActive, params.onPrepared)).delegation;
     } catch {
       assertActive?.();
       return undefined;
@@ -7868,7 +7995,8 @@ export class TinyCloudNode {
     const requestedExpiryMs = resolveExpiryMs(options?.expiry);
     let expiresAt = new Date(now.getTime() + requestedExpiryMs);
     if (sessionExpiry !== undefined && sessionExpiry < expiresAt) {
-      expiresAt = sessionExpiry;
+      // At the session's expiry, to the whole second: the node compares a child's expiry with its parent's.
+      expiresAt = wholeSecondExpiry(sessionExpiry);
     }
     assertExpiryWithinTechnicalLimit(expiresAt, "siwe");
 
@@ -8341,6 +8469,9 @@ export class TinyCloudNode {
           "handed to onPrepared.",
       );
     }
+    if (options?.notBefore !== undefined && options.forceWalletSign) {
+      throw new Error("delegateTo: notBefore cannot be combined with forceWalletSign=true; the wallet-signed path cannot carry it.");
+    }
     if (options?.disableSubDelegation && did.startsWith("did:pkh:")) {
       throw new Error(TERMINAL_DELEGATION_REQUIRES_SESSION_KEY);
     }
@@ -8448,6 +8579,7 @@ export class TinyCloudNode {
       }
       throw new PermissionNotInManifestError(plan.missing ?? [], plan.granted ?? []);
     }
+    const notBeforeSecs = resolveNotBeforeSecs(options?.notBefore, plan.effectiveExpiration, Date.now());
     if (plan.path === "runtime") {
       const delegation = await this.createDelegationViaRuntimeGrant(
         did,
@@ -8458,6 +8590,7 @@ export class TinyCloudNode {
         onPrepared,
         options?.disableSubDelegation === true,
         options?.requireActivation === true,
+        notBeforeSecs,
       );
       return { delegation, prompted: false };
     }
@@ -8476,6 +8609,7 @@ export class TinyCloudNode {
       onPrepared,
       options?.disableSubDelegation === true,
       options?.requireActivation === true,
+      notBeforeSecs,
     );
     return { delegation, prompted: false };
   }
@@ -8786,6 +8920,7 @@ export class TinyCloudNode {
     onPrepared?: DelegateToOptions["onPrepared"],
     disableSubDelegation = false,
     requireActivation = false,
+    notBeforeSecs?: number,
   ): Promise<PortableDelegation> {
     const graph = this._serviceGraph;
     graph.assertActive();
@@ -8867,6 +9002,7 @@ export class TinyCloudNode {
       spaceId,
       abilities,
       expirationSecs,
+      notBeforeSecs,
     }, disableSubDelegation);
 
     // Translate the WASM result into a PortableDelegation. We don't
@@ -8927,6 +9063,7 @@ export class TinyCloudNode {
     onPrepared?: DelegateToOptions["onPrepared"],
     disableSubDelegation = false,
     requireActivation = false,
+    notBeforeSecs?: number,
   ): Promise<PortableDelegation> {
     const graph = this._serviceGraph;
     graph.assertActive();
@@ -8938,6 +9075,7 @@ export class TinyCloudNode {
       spaceId: grant.session.spaceId,
       abilities: this.permissionsToAbilities(entries),
       expirationSecs: Math.floor(expirationTime.getTime() / 1000),
+      notBeforeSecs,
     }, disableSubDelegation);
 
     const primary = result.resources[0];
@@ -10091,8 +10229,12 @@ export class TinyCloudNode {
     const { abilities, rawAbilities } = this.buildActivationAbilities(delegation);
 
     const now = new Date();
-    // The activated session lasts as long as the delegation it is proven by.
-    const expirationTime = delegation.expiry;
+    // The activated session lasts as long as the delegation it is proven by, to the whole second: the node
+    // compares a child's expiry with its parent's, and a child at the parent's milliseconds can read as later.
+    const expirationTime = wholeSecondExpiry(delegation.expiry);
+    if (expirationTime.getTime() <= now.getTime()) {
+      throw new Error("The delegation expires within a second; ask for a new one.");
+    }
     assertExpiryWithinTechnicalLimit(expirationTime, "siwe");
 
     // Prepare the session with:
@@ -10259,14 +10401,16 @@ export class TinyCloudNode {
       );
     }
 
-    // Default to the longest a sub-delegation may last: its parent's expiry.
+    // Default to the longest a sub-delegation may last: its parent's expiry, to the whole second (the node
+    // compares a child's expiry with its parent's, and a child at the parent's milliseconds can read as later).
     const now = new Date();
+    const parentExpiry = wholeSecondExpiry(parentDelegation.expiry);
     const requestedExpiry = params.expiryMs === undefined
-      ? parentDelegation.expiry
+      ? parentExpiry
       : new Date(now.getTime() + params.expiryMs);
     // Sub-delegation cannot outlive parent, so cap at parent's expiry
     const actualExpiry =
-      requestedExpiry > parentDelegation.expiry ? parentDelegation.expiry : requestedExpiry;
+      requestedExpiry > parentExpiry ? parentExpiry : requestedExpiry;
     assertExpiryWithinTechnicalLimit(actualExpiry, "siwe");
 
     // Build abilities for the sub-delegation

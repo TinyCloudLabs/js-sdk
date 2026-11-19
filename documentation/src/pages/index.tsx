@@ -240,7 +240,7 @@ function CoreValues() {
     { 
       title: "Privacy", 
       icon: "🛡️",
-      desc: "Data is stored, streamed, and computed upon in ways that minimize leakage with encryption strategies that ensure users do not need to trust an external party." 
+      desc: "Access is scoped by the capabilities you approve. Ordinary data is not end-to-end encrypted: the node that hosts a space can read it in order to serve it. Use the data vault to encrypt values before they are stored."
     },
     { 
       title: "Interoperability", 
@@ -267,6 +267,9 @@ function CoreValues() {
             </div>
           ))}
         </div>
+        <p className={styles.valueDescription}>
+          <a href="https://docs.tinycloud.xyz/concepts/security-and-trust">Security and trust: storage, key management, and access boundaries</a>
+        </p>
       </div>
     </section>
   );

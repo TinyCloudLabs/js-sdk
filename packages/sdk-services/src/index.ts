@@ -429,6 +429,10 @@ export type {
 
 export {
   SecretsService,
+  DEFAULT_SECRET_TYPE,
+  SECRET_TYPES,
+  isSecretType,
+  secretTypeOf,
   SECRET_NAME_RE,
   canonicalizeSecretScope,
   appSecretScope,
@@ -442,7 +446,9 @@ export {
 export type {
   ISecretsService,
   SecretCatalogEntry,
+  SecretEntry,
   SecretPayload,
+  SecretType,
   SecretsError,
   ParsedSecretCatalogKey,
   ResolvedSecretPath,

@@ -22,6 +22,21 @@ describe("revoked grant refusal", () => {
     expect(isRevokedGrantRefusal(refusal(`Invalid invocation: delegation-ancestor-revoked: ancestor=${CID} invoked=${CID}`))).toBe(true);
   });
 
+  test("a node's JSON revocation envelope is recognised, and only that envelope", () => {
+    const envelope = (code: string, error: unknown) => JSON.stringify({ code, error });
+    expect(isRevokedGrantRefusal(refusal(envelope("delegation_revoked", `delegation-revoked: ${CID}`)))).toBe(true);
+    expect(isRevokedGrantRefusal(refusal(envelope("parent_revoked", `delegation-ancestor-revoked: ancestor=${CID} invoked=${CID}`)))).toBe(true);
+    expect(isRevokedGrantRefusal(refusal(envelope("ancestor_revoked", `delegation-ancestor-revoked: ancestor=${CID} invoked=${CID}`)))).toBe(true);
+    for (const body of [
+      envelope("delegation_expired", `delegation-revoked: ${CID}`),
+      envelope("delegation_revoked", "the key was revoked by the owner"),
+      envelope("delegation_revoked", { text: `delegation-revoked: ${CID}` }),
+      `${envelope("delegation_revoked", `delegation-revoked: ${CID}`)} and then some other text`,
+      JSON.stringify({ error: `delegation-revoked: ${CID}` }),
+    ]) expect(isRevokedGrantRefusal(refusal(body)), body).toBe(false);
+    expect(isRevokedGrantRefusal(refusal(envelope("delegation_revoked", `delegation-revoked: ${CID}`), 403))).toBe(false);
+  });
+
   test("the KV service's typed revoked codes are recognised on a 401", () => {
     for (const code of ["AUTH_DELEGATION_REVOKED", "AUTH_DELEGATION_ANCESTOR_REVOKED"]) {
       expect(isRevokedGrantRefusal({ code, message: "refused", meta: { status: 401 } })).toBe(true);

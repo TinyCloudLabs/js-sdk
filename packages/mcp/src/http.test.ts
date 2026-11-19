@@ -563,22 +563,31 @@ test("challenges unauthenticated MCP requests with resource metadata", async () 
   expect(response.headers.get("access-control-allow-origin")).toBeNull();
 });
 
-test("public plugin discovery and challenges bind the distinct resource audience", async () => {
-  const app = await testApp();
-  const metadata = await app.fetch(request("/.well-known/oauth-protected-resource/chatgpt/mcp"));
-  expect(metadata.status).toBe(200);
-  const metadataDocument = await metadata.json() as Record<string, unknown>;
-  expect(metadataDocument).toMatchObject({
-    resource: "https://mcp.test/chatgpt/mcp",
-    authorization_servers: ["https://openkey.test/api/auth"],
-    scopes_supported: ["tinycloud:mcp"],
+for (const prefix of ["chatgpt", "claude", "grok", "muse"]) {
+  test(`/${prefix}/mcp discovery and challenges bind its own resource audience`, async () => {
+    const app = await testApp();
+    const metadata = await app.fetch(request(`/.well-known/oauth-protected-resource/${prefix}/mcp`));
+    expect(metadata.status).toBe(200);
+    const metadataDocument = await metadata.json() as Record<string, unknown>;
+    expect(metadataDocument).toMatchObject({
+      resource: `https://mcp.test/${prefix}/mcp`,
+      authorization_servers: ["https://openkey.test/api/auth"],
+      scopes_supported: ["tinycloud:mcp"],
+    });
+    expect(metadataDocument.bearer_methods_supported).toBeUndefined();
+    const unauthenticated = await app.fetch(request(`/${prefix}/mcp`, { method: "POST" }));
+    expect(unauthenticated.status).toBe(401);
+    expect(unauthenticated.headers.get("www-authenticate")).toContain(
+      `resource_metadata="https://mcp.test/.well-known/oauth-protected-resource/${prefix}/mcp"`,
+    );
   });
-  expect(metadataDocument.bearer_methods_supported).toBeUndefined();
-  const unauthenticated = await app.fetch(request("/chatgpt/mcp", { method: "POST" }));
-  expect(unauthenticated.status).toBe(401);
-  expect(unauthenticated.headers.get("www-authenticate")).toContain(
-    'resource_metadata="https://mcp.test/.well-known/oauth-protected-resource/chatgpt/mcp"',
-  );
+}
+
+test("an address no assistant was given is not a resource", async () => {
+  const app = await testApp();
+  for (const path of ["/gemini/mcp", "/.well-known/oauth-protected-resource/gemini/mcp", "/claude", "/claude/mcp/extra"]) {
+    expect((await app.fetch(request(path, { method: path.endsWith("/mcp") ? "POST" : "GET" }))).status, path).toBe(404);
+  }
 });
 
 test("invalid browser approvals return an inert page without reflecting state", async () => {

@@ -1452,7 +1452,7 @@ test("runtime grants that include decrypt end within a shorter session expiry", 
     await node.grantRuntimePermissions([permission]);
   });
 
-  expect(lastPrepareExpiryMs(node)).toBe(sessionEnd.getTime());
+  expect(lastPrepareExpiryMs(node)).toBe(Math.floor(sessionEnd.getTime() / 1000) * 1000);
 });
 
 function expectEveryExpiryNear(
@@ -2074,7 +2074,7 @@ test("mixed kv and decrypt runtime grants honour an explicit one-hour expiry for
     });
 
     const prepareSession = (node as any).wasmBindings.prepareSession;
-    expect(prepareSession.mock.calls[0][0].expirationTime).toBe(expiry.toISOString());
+    expect(prepareSession.mock.calls[0][0].expirationTime).toBe(new Date(Math.floor(expiry.getTime() / 1000) * 1000).toISOString());
   });
 
   test("useDelegation installs encryption delegations as raw runtime grants", async () => {

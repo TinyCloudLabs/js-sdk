@@ -13,6 +13,7 @@ import {
   check,
   failureMessage,
   gitRepo,
+  unfinishedBetaRelease,
   unfinishedStableRelease,
 } from "./check-npm-release-provenance.mjs";
 
@@ -930,4 +931,61 @@ test("cli: rejects an unknown mode or extra arguments", () => {
     assert.equal(result.status, 2);
     assert.match(result.stderr, /usage: check-npm-release-provenance\.mjs unpublished-stable\|unfinished-stable\|pre-publish\|post-publish/);
   }
+});
+
+// `resume: beta`: finish a beta publish that stopped after its version commit was pushed.
+const PRE = (changesets) => `${JSON.stringify({ mode: "pre", tag: "beta", initialVersions: {}, changesets }, null, 2)}\n`;
+const betaCommit = (r, versions, changesets = ["one"]) => r.commit(BETA, {
+  ".changeset/pre.json": PRE(changesets),
+  ...a(versions.a, { "@x/b": versions.b }),
+  ...b(versions.b),
+});
+
+test("unfinished-beta: the newest beta version commit whose versions npm lacks is the one to resume", (t) => {
+  const r = repository(t);
+  const version = betaCommit(r, { a: "1.1.0-beta.1", b: "2.0.0" });
+  r.commit("later merge on master", { "README.md": "docs\n" });
+  const npm = registry({ "@x/a@1.0.0": null, "@x/b@2.0.0": null });
+  const result = unfinishedBetaRelease({ repo: r.repo, view: npm.view });
+  assert.equal(result.releaseCommit, version);
+  assert.deepEqual(result.problems, []);
+  assert.deepEqual(result.missing.map((pkg) => `${pkg.name}@${pkg.version}`), ["@x/a@1.1.0-beta.1"]);
+});
+
+test("unfinished-beta: nothing to resume once npm shows every version of the commit (re-running is idempotent)", (t) => {
+  const r = repository(t);
+  betaCommit(r, { a: "1.1.0-beta.1", b: "2.0.0" });
+  const npm = registry({ "@x/a@1.1.0-beta.1": null, "@x/b@2.0.0": null });
+  const result = unfinishedBetaRelease({ repo: r.repo, view: npm.view });
+  assert.deepEqual(result.missing, []);
+  assert.deepEqual(result.problems, []);
+});
+
+test("unfinished-beta: a stable release newer than the beta version commit supersedes it and is never resumed", (t) => {
+  const r = repository(t);
+  betaCommit(r, { a: "1.1.0-beta.1", b: "2.0.0" });
+  r.git("rm", "--quiet", ".changeset/pre.json");
+  r.commit(STABLE, { ...a("1.1.0", { "@x/b": "2.0.0" }) });
+  const npm = registry({ "@x/b@2.0.0": null });
+  const result = unfinishedBetaRelease({ repo: r.repo, view: npm.view });
+  assert.equal(result.releaseCommit, undefined);
+  assert.match(result.problems.join(" "), /not a beta version commit/);
+});
+
+test("unfinished-beta: no beta version commit at all is reported, not guessed", (t) => {
+  const r = repository(t);
+  const npm = registry({});
+  const result = unfinishedBetaRelease({ repo: r.repo, view: npm.view });
+  assert.equal(result.releaseCommit, undefined);
+  assert.match(result.problems.join(" "), /no beta version commit/);
+});
+
+test("unfinished-beta: a newer beta version commit replaces an older unfinished one", (t) => {
+  const r = repository(t);
+  betaCommit(r, { a: "1.1.0-beta.1", b: "2.0.0" }, ["one"]);
+  const newer = betaCommit(r, { a: "1.1.0-beta.2", b: "2.0.0" }, ["one", "two"]);
+  const npm = registry({ "@x/b@2.0.0": null });
+  const result = unfinishedBetaRelease({ repo: r.repo, view: npm.view });
+  assert.equal(result.releaseCommit, newer);
+  assert.deepEqual(result.missing.map((pkg) => `${pkg.name}@${pkg.version}`), ["@x/a@1.1.0-beta.2"]);
 });

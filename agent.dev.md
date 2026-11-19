@@ -180,6 +180,15 @@ version metadata and make the immutable release checkout fail the clean-tree pub
   canonical write outcomes must not be truncated. Package/review state lives
   under `packages/mcp/plugin`. Default-branch merges and deployment require
   explicit owner approval; never enable auto-merge or bypass that gate.
+- `/claude/mcp`, `/grok/mcp` and `/muse/mcp` are the same restricted surface as
+  `/chatgpt/mcp`, one address per assistant directory (`RESTRICTED_ADDRESS_PREFIXES`
+  in `packages/mcp/src/http.ts`). Each is its own OAuth audience with its own
+  approval route and tenant state. A new prefix needs the matching OpenKey
+  audience and exact callback, and the connector's token-status client
+  registered for the new resource, before it can serve a request. A change one
+  directory's review asks for goes on that address only: `/claude/mcp` repeats
+  each tool's title as `annotations.title` (`ANNOTATION_TITLE_PREFIXES`), and
+  the other addresses' `tools/list` must stay byte-identical.
 - TC-2393's hosted-client requirements and source/live evidence are in
   `packages/mcp/plugin/client-compatibility.md`. Keep custom connection support
   separate from official-directory acceptance; metadata is not authenticated QA.
@@ -187,16 +196,20 @@ version metadata and make the immutable release checkout fail the clean-tree pub
   `src/tc-apps/`. The published skill is pinned under `src/tc-apps/vendor/`;
   update it with `bun scripts/sync-tc-apps-rules.ts`, then
   `bun run generate:operations-mcp`. Generation/checking is offline thereafter.
-- Personal apps have one layout, the one the skill's `layout.sh` calls new
-  (`src/tc-apps/layout.ts`): space `applications`, keys under
-  `xyz.tinycloud.tinyapps.<app>/`, discovery entry
-  `xyz.tinycloud.tinyapps.catalog/<app>/entry`, one SQL copy per app at
-  `<root>index`. The older `default` space folder `xyz.tinycloud.agent-data/`
-  (the skill's legacy layout) is deliberately not read or written (no
-  compatibility path, TC-2416); do not reintroduce a layout parameter or an
-  older-catalog check. Approvals are per app: a KV path prefix matches only on a
-  `/` boundary, so no single grant covers every app, and every grant is in the
-  `applications` space.
+- Personal apps retain their existing layout (`src/tc-apps/layout.ts`). New apps
+  use space `applications`, keys `xyz.tinycloud.tinyapps.<app>/`, discovery entry
+  `xyz.tinycloud.tinyapps.catalog/<app>/entry`, and SQL copy `<root>index`.
+  Existing legacy apps remain readable and writable in space `default` under
+  `xyz.tinycloud.agent-data/`; context reuses their existing grants without
+  requiring new-space approval. This restores access after the TC-2416 cutoff;
+  never silently migrate records or create a new-layout replacement for a known
+  legacy app. A readable new discovery entry selects that layout over its legacy
+  namesake. Query accepts `layout: "legacy"` for the shared
+  `xyz.tinycloud.agent-data.index` copy; omission still selects the new layout.
+  Legacy SQL keys are full KV keys and `entries` includes `app`; new copies use
+  app-relative keys. The migration tool stays removed. New-layout approvals
+  retain their per-app boundaries in `applications`; legacy permissions retain
+  the original legacy-root scope.
 - The rules generator adapts the CLI examples to MCP write inputs: keep the
   vendored CLI attribution intact. MCP put/move values omit top-level `by`,
   including edits of read-back records and catalogs. Keep this restriction
@@ -241,3 +254,12 @@ version metadata and make the immutable release checkout fail the clean-tree pub
   database or table is `NODE_ERROR` with `details.reason: "sql_database_missing"`
   (operations/src/operations/sql.ts). Drop that step when onboarding grants
   the schema for catalog apps (TC-2430).
+- A surface that does not register the catalog apps' tools (`CATALOG_APP_TOOLS`
+  in `packages/mcp/src/tools.ts`; today the restricted addresses) neither offers
+  nor accepts a catalog slug: `tinycloud_apps_context`'s `app` description omits
+  them, and `app: "healthlog"` or `"recipes"` is answered before the kernel with
+  `INPUT_INVALID`, `details.reason: "catalog_app_unavailable"` and the tiny-app
+  link, so no approval is planned. `/mcp` and `operations.json` are unaffected.
+  Keep the catalog section in the rules those addresses return: it is what makes
+  an assistant give the app link for a new meal or body-weight request instead
+  of creating a generic app for it.
