@@ -37,6 +37,7 @@
     "card-md-cli",
     "cli-signed-grant-coverage",
     "cli-skill-addressed-shares",
+    "courier-profile-lock",
     "courier-watch-state-unknown-outcome",
     "delegated-access-encryption",
     "feed-disconnect",
