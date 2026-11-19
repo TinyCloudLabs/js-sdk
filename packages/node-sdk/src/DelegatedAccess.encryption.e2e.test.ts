@@ -8,6 +8,7 @@ import { NodeWasmBindings } from "./NodeWasmBindings";
 import "./nodeDefaults";
 import "./replication/node-loader";
 import { TinyCloudNode } from "./TinyCloudNode";
+import { ownerFullAccess } from "@tinycloud/sdk-core";
 import { startLocalNode, type LocalNode } from "./test-support/local-node";
 import { startUnregisteredLocationRegistry, type UnregisteredLocationRegistry } from "./test-support/unregistered-location-registry";
 
@@ -81,6 +82,7 @@ describe.skipIf(!nodeBinary)(
         wasmBindings: new NodeWasmBindings(),
         domain: "delegated-encryption.test",
         autoCreateSpace: true,
+        ...ownerFullAccess(),
       });
       await owner.signIn();
       await owner.waitForAccountRegistrySync();

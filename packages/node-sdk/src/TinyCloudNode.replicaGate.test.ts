@@ -4,7 +4,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { mkdir, rmdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { extractRecapAttenuations, parseCanonicalRecapResource, pkhDid, type ReplicationEvent } from "@tinycloud/sdk-core";
+import { extractRecapAttenuations, ownerFullAccess, parseCanonicalRecapResource, pkhDid, type ReplicationEvent } from "@tinycloud/sdk-core";
 import { registerReplicationLoaders } from "./core";
 import { NodeWasmBindings } from "./NodeWasmBindings";
 import { PrivateKeySigner } from "./signers/PrivateKeySigner";
@@ -748,6 +748,7 @@ describe("browser replica gate without a profile directory", () => {
           signer,
           wasmBindings: new NodeWasmBindings(),
           autoBootstrapAccount: false,
+          ...ownerFullAccess(),
           replication: {
             enabled: true,
             prefixes: ["notes/"],

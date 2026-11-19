@@ -1,5 +1,5 @@
 import { privateKeyToAccount } from "viem/accounts";
-import { TinyCloudNode } from "@tinycloud/node-sdk";
+import { TinyCloudNode, ownerFullAccess } from "@tinycloud/node-sdk";
 import {
   TINYCLOUD_CANONICAL_IDENTITY_CLAIM,
   type CanonicalTinyCloudIdentity,
@@ -36,6 +36,7 @@ export async function provisionReferenceApplicationsSpace(host: string): Promise
     host,
     privateKey: REFERENCE_CANONICAL_KEY,
     autoBootstrapAccount: false,
+    ...ownerFullAccess(),
     autoCreateSpace: true,
   });
   await owner.signIn();

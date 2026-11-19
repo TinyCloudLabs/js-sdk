@@ -9,6 +9,7 @@ import { NodeWasmBindings } from "./NodeWasmBindings";
 import "./nodeDefaults";
 import "./replication/node-loader";
 import { TinyCloudNode } from "./TinyCloudNode";
+import { PrivateKeySigner } from "./signers/PrivateKeySigner";
 import { startUnregisteredLocationRegistry, type UnregisteredLocationRegistry } from "./test-support/unregistered-location-registry";
 
 // Never touch a real home: point HOME and tool homes at a throwaway dir first.
@@ -98,6 +99,7 @@ describe.skipIf(!nodeBinary)(
     });
 
     test("sql + kv manifest: network create returns 200 and the network exists", async () => {
+      const ownerAddress = await new PrivateKeySigner(ownerKey).getAddress();
       const node = new TinyCloudNode({
         host,
         tinycloudRegistryUrl: registry.url.origin,
@@ -117,6 +119,11 @@ describe.skipIf(!nodeBinary)(
               actions: ["read", "write", "schema"],
             },
             { service: "tinycloud.kv", path: "data/", actions: ["get", "put", "list"] },
+            {
+              service: "tinycloud.encryption",
+              path: `urn:tinycloud:encryption:did:pkh:eip155:1:${ownerAddress}:default`,
+              actions: ["network.create"],
+            },
           ],
         },
       });

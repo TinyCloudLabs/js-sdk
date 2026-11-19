@@ -14,7 +14,7 @@
  *   bun run src/tc-373-live-verify.ts
  *   TINYCLOUD_HOST=https://... bun run src/tc-373-live-verify.ts
  */
-import { TinyCloudNode } from "@tinycloud/node-sdk";
+import { TinyCloudNode, ownerFullAccess } from "@tinycloud/node-sdk";
 import { randomBytes } from "crypto";
 
 const HOST = process.env.TINYCLOUD_HOST ?? "https://node.tinycloud.xyz";
@@ -84,7 +84,7 @@ const key = `0x${randomBytes(32).toString("hex")}`;
 const node = new TinyCloudNode({
   privateKey: key,
   host: HOST,
-  prefix: "tc-373-verify",
+  ...ownerFullAccess("tc-373-verify"),
   autoCreateSpace: true,
 });
 

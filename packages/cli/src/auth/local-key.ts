@@ -1,6 +1,7 @@
 import { createProfileRegistryCacheStore, createProfileRegistrySequenceStore } from "@tinycloud/operations/state";
 import { TCWSessionManager, importKey, initPanicHook } from "@tinycloud/node-sdk-wasm";
 import { PrivateKeySigner, type TinyCloudNode } from "@tinycloud/node-sdk";
+import { ownerFullAccess } from "@tinycloud/sdk-core";
 import { randomBytes } from "node:crypto";
 import { createCliReplicationConfig, type ProfileReplicationSettings } from "../lib/replication-config.js";
 import { recordRegistryFallbackWarning } from "../output/warnings.js";
@@ -119,6 +120,8 @@ export async function localKeySignIn(options: {
     onRegistryFallback: recordRegistryFallbackWarning,
     tinycloudRegistryUrl: process.env.TC_REGISTRY_URL || options.tinycloudRegistryUrl,
     privateKey: options.privateKey,
+    // The local owner key signs for every action on its own default space.
+    ...ownerFullAccess(),
     host: options.host,
     autoCreateSpace: true,
     ...(options.keyAbilities ? { additionalRawAbilities: options.keyAbilities } : {}),

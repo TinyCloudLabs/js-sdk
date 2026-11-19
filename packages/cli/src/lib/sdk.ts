@@ -1,5 +1,6 @@
 import { createProfileRegistryCacheStore, createProfileRegistrySequenceStore } from "@tinycloud/operations/state";
 import { TinyCloudNode, signedCompactUcanExpiry, type PortableDelegation } from "@tinycloud/node-sdk";
+import { ownerFullAccess } from "@tinycloud/sdk-core";
 import type { ProfileReplicaLogoutPending } from "@tinycloud/sdk-services/kv/replication";
 import { CLI_NAME } from "@tinycloud/operations/cli-name";
 import { ProfileManager } from "../config/profiles.js";
@@ -172,7 +173,7 @@ export async function restoreProfileSessionNode(
       onRegistryFallback: recordRegistryFallbackWarning,
       ...(tinycloudRegistryUrl === undefined ? {} : { tinycloudRegistryUrl }),
       host: ctx.host,
-      ...(profile.authMethod === "local" && profile.privateKey ? { privateKey: profile.privateKey } : {}),
+      ...(profile.authMethod === "local" && profile.privateKey ? { privateKey: profile.privateKey, ...ownerFullAccess() } : {}),
     });
     await restoreProfileSession(node, ctx.profile, profile, persistedSessionData(ctx.profile, profile, session, key), session);
     return { node };
@@ -211,7 +212,7 @@ export async function storedSessionVerifiesLocally(profileName: string): Promise
       ...cliRetryPolicy(),
       ...(tinycloudRegistryUrl === undefined ? {} : { tinycloudRegistryUrl }),
       host: profile.host ?? DEFAULT_HOST,
-      ...(local ? { privateKey: profile.privateKey } : {}),
+      ...(local ? { privateKey: profile.privateKey, ...ownerFullAccess() } : {}),
     });
     await restoreProfileSession(node, profileName, profile, persistedSessionData(profileName, profile, session, key), session);
     return true;
@@ -287,6 +288,8 @@ export async function createSDKInstance(
       ...(tinycloudRegistryUrl === undefined ? {} : { tinycloudRegistryUrl }),
       host: ctx.host,
       privateKey: effectivePrivateKey,
+      // The local owner key signs for every action on its own default space.
+      ...ownerFullAccess(),
       ...(replication ? { replication } : {}),
     });
     if (node.replication) registerReplication(ctx.profile, node.replication);
@@ -335,6 +338,7 @@ export async function createSDKInstance(
     ...(tinycloudRegistryUrl === undefined ? {} : { tinycloudRegistryUrl }),
     host: ctx.host,
     privateKey: options?.privateKey,
+    ...(options?.privateKey ? ownerFullAccess() : {}),
     ...(replication ? { replication } : {}),
   });
   if (node.replication) registerReplication(ctx.profile, node.replication);

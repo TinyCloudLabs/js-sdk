@@ -9,7 +9,7 @@ import { createInterface } from "node:readline";
 import type { IncomingMessage } from "node:http";
 import { TinyCloudNode, grantAuthRequest, principalDidEquals, REPLICA_LOGOUT_PENDING_FILE, signedCompactUcanExpiry, type AuthDelegationArtifact, type PermissionEntry, type PortableDelegation, type RuntimeDelegationActivator, type TinyCloudSession } from "@tinycloud/node-sdk";
 import type { ProfileReplicaApprovalEntry, ProfileReplicaDeferredToken, ProfileReplicaLogoutPending, ProfileReplicaPreflight, ProfileReplicaPurge } from "@tinycloud/sdk-services/kv/replication";
-import { composeManifestRequest } from "@tinycloud/sdk-core";
+import { composeManifestRequest, ownerFullAccess } from "@tinycloud/sdk-core";
 import { invokeOperation } from "@tinycloud/operations";
 import { createProfileRegistryCacheStore, createProfileRegistrySequenceStore, namedProfilePath, profilePath } from "@tinycloud/operations/state";
 import { principalHashOf, readGateSnapshot, REPLICA_DENY_FLOOR_FILE } from "@tinycloud/replica/profile-gate";
@@ -2940,6 +2940,8 @@ async function refreshPreparedKeysSession(params: {
     onRegistryFallback: recordRegistryFallbackWarning,
     tinycloudRegistryUrl: process.env.TC_REGISTRY_URL || profile.tinycloudRegistryUrl,
     host, signer: ownerIdentitySigner(owner),
+    // The owner login asks OpenKey for every action on the default space, plus the named-key row.
+    ...ownerFullAccess(),
     additionalRawAbilities: keyAbilitiesFor(namedKeys),
     includeAccountRegistryPermissions: false, autoBootstrapAccount: false,
     ...(expiry ? { sessionExpirationMs: expiry.durationMs } : {}),

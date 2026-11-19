@@ -171,7 +171,7 @@ export async function createInvocationRuntime(
       registrySequenceStore: createProfileRegistrySequenceStore(profileName),
       onRegistryFallback: (_message, reason) => collectRegistryFallbackWarning(warnings, reason),
       ...(tinycloudRegistryUrl === undefined ? {} : { tinycloudRegistryUrl }),
-      ...(privateKey === undefined ? {} : { privateKey }),
+      ...(privateKey === undefined ? {} : { privateKey, ...nodeSdk.ownerFullAccess() }),
     });
 
     const activeSession = session === null ? undefined : normalizeSession(session, key);
