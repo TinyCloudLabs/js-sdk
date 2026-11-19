@@ -629,9 +629,9 @@ describe("node replication integration", () => {
         tinycloudHosts: ["https://signed-restore.example"],
         replicaStamp,
       });
-      expect(closed).toEqual(["https://signed-restore.example"]);
       expect(opened).toHaveLength(1);
       expect((await node.replication!.status()).map((entry) => entry.prefix)).toEqual(["notes/"]);
+      expect(closed).toEqual(["https://signed-restore.example"]);
       expect(opened).toHaveLength(1);
     } finally {
       globalThis.fetch = originalFetch;

@@ -121,7 +121,12 @@ export async function discoverNetwork(
     } catch (err) {
       const routing = routingFailure(err);
       if (routing) return { ok: false, error: encryptionError(routing) };
-      // Fall through to well-known
+      // Only an authoritative "no such network" may consult the advisory
+      // record; an HTTP, parse or transport failure must not (TC-2923).
+      return {
+        ok: false,
+        error: encryptionError({ code: "TRANSPORT_ERROR", cause: err instanceof Error ? err : new Error(String(err)) }),
+      };
     }
   }
 

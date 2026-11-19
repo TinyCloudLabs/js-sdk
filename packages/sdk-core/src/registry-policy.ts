@@ -6,7 +6,9 @@
  *
  * V2 owner keys are chain-independent: EOA records use the exact EIP-55
  * address and did:key records use the exact DID. V1 probes distinguish
- * legacy-only owners, never supply routing hosts.
+ * legacy-only owners and supply no routing host, with one exception (TC-3168):
+ * a verified v1-only record whose origins are exactly the default node routes
+ * there, as 3.11 did. It carries no v2 record or sequence authority.
  */
 
 import {
@@ -73,27 +75,46 @@ export function registryOwnerSubjectV1(
 }
 
 /**
- * The highest registry record sequence accepted per subject. A remembered
- * sequence marks the subject as registered: a later not-found or an older
- * record is `unavailable`, never `unregistered`.
- *
- * Ordinary accepted-record `set` calls advance the remembered sequence; a
- * failure is logged once and the accepted verdict stands. A `get` failure
- * fails the lookup closed. Authoritative cache invalidation may restate the
- * current maximum and requires that marker write to succeed before deletion.
+ * Monotonic registration history. Explicit legacy-only zero is distinct from
+ * accepted signed-v2 sequence zero; old untyped history remains unknown.
+ * Promotion to signed-v2 history must persist before acceptance. Ordinary
+ * fresh-record writes retain their best-effort policy; authoritative cache
+ * invalidation requires the marker write to succeed.
  */
-export interface RegistrySequenceStore {
-  get(subject: string): number | undefined | Promise<number | undefined>;
-  set(subject: string, sequence: number): void | Promise<void>;
+export type RegistryRegistrationKind = "legacy-v1" | "signed-v2" | "unknown";
+
+export interface RegistryRegistrationEvidence {
+  readonly kind: RegistryRegistrationKind;
+  readonly sequence: number;
 }
 
-/** In-memory {@link RegistrySequenceStore}. Does not persist across process restarts. */
-export function createInMemoryRegistrySequenceStore(): RegistrySequenceStore {
-  const sequences = new Map<string, number>();
+export interface RegistrySequenceStore {
+  get(subject: string): number | undefined | Promise<number | undefined>;
+  set(subject: string, sequence: number, kind?: RegistryRegistrationKind): void | Promise<void>;
+  /** Untyped historical numbers remain unknown, never inferred to be legacy-only. */
+  getRegistration?(subject: string): RegistryRegistrationEvidence | undefined | Promise<RegistryRegistrationEvidence | undefined>;
+}
+
+interface MemoryRegistrySequenceStore extends RegistrySequenceStore {
+  getRegistration(subject: string): RegistryRegistrationEvidence | undefined;
+  set(subject: string, sequence: number, kind?: RegistryRegistrationKind): void;
+}
+
+/** In-memory registration evidence. A legacy zero is not an accepted v2 sequence. */
+export function createInMemoryRegistrySequenceStore(): MemoryRegistrySequenceStore {
+  const registrations = new Map<string, RegistryRegistrationEvidence>();
   return {
-    get: (subject) => sequences.get(subject),
-    set: (subject, sequence) => {
-      if ((sequences.get(subject) ?? -1) < sequence) sequences.set(subject, sequence);
+    get: (subject) => registrations.get(subject)?.sequence,
+    getRegistration: (subject) => registrations.get(subject),
+    set: (subject, sequence, kind = "signed-v2") => {
+      if (!isSequence(sequence) || !isRegistrationKind(kind) || (kind === "legacy-v1" && sequence !== 0)) {
+        throw new Error("Invalid registry registration evidence");
+      }
+      const previous = registrations.get(subject);
+      if (!previous || sequence > previous.sequence || (sequence === previous.sequence &&
+          registrationRank(kind) > registrationRank(previous.kind))) {
+        registrations.set(subject, { sequence, kind });
+      }
     },
   };
 }
@@ -105,9 +126,8 @@ export function createInMemoryRegistrySequenceStore(): RegistrySequenceStore {
  * read-only storage) is still remembered for this page. A storage read that
  * throws, or a corrupt stored value, throws instead of being reset:
  * forgetting a sequence would let a registry not-found read as
- * `unregistered`. Persistent merges require a storage-key Web Lock; write
- * failures still retain per-page memory and the resolver's best-effort policy.
- * Remove `storageKey` to reset persisted history.
+ * `unregistered`. Persistent merges require a storage-key Web Lock. Never
+ * clear or reclassify stored history to bypass a registration refusal.
  */
 export function createLocalStorageRegistrySequenceStore(
   storage?: WebStorageLike,
@@ -115,53 +135,58 @@ export function createLocalStorageRegistrySequenceStore(
 ): RegistrySequenceStore {
   const backing = storage ?? defaultWebStorage();
   const memory = createInMemoryRegistrySequenceStore();
-  if (!backing) {
-    return memory;
-  }
+  if (!backing) return memory;
 
-  const read = (): Map<string, number> => {
-    const sequences = new Map<string, number>();
+  // Preserve old numeric entries verbatim until a verified observation advances them.
+  const read = (): Map<string, number | RegistryRegistrationEvidence> => {
+    const registrations = new Map<string, number | RegistryRegistrationEvidence>();
     const raw = backing.getItem(storageKey);
-    if (raw === null) return sequences;
+    if (raw === null) return registrations;
     let parsed: unknown;
-    try {
-      parsed = JSON.parse(raw);
-    } catch {
-      parsed = undefined;
-    }
+    try { parsed = JSON.parse(raw); } catch { parsed = undefined; }
     if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)) {
-      for (const [subject, sequence] of Object.entries(parsed)) {
-        if (!isSequence(sequence)) break;
-        sequences.set(subject, sequence);
+      for (const [subject, value] of Object.entries(parsed)) {
+        if (!isSequence(value) && !isRegistrationEvidence(value)) break;
+        registrations.set(subject, value);
       }
-      if (sequences.size === Object.keys(parsed).length) return sequences;
+      if (registrations.size === Object.keys(parsed).length) return registrations;
     }
     throw new Error(`Corrupt registry sequence store "${storageKey}"`);
   };
+  const evidence = (value: number | RegistryRegistrationEvidence): RegistryRegistrationEvidence =>
+    typeof value === "number" ? { sequence: value, kind: "unknown" } : value;
+  const getRegistration = (subject: string): RegistryRegistrationEvidence | undefined => {
+    const stored = read().get(subject);
+    const persisted = stored === undefined ? undefined : evidence(stored);
+    if (persisted) memory.set(subject, persisted.sequence, persisted.kind);
+    const current = memory.getRegistration(subject);
+    // Failed promotion must not turn a durable legacy marker into v2 authority.
+    if (current?.kind === "signed-v2" && persisted && persisted.kind !== "signed-v2") {
+      return { sequence: current.sequence, kind: "unknown" };
+    }
+    return current;
+  };
 
   return {
-    get: async (subject) => {
-      const sequence = Math.max(read().get(subject) ?? -1, (await memory.get(subject)) ?? -1);
-      return sequence < 0 ? undefined : sequence;
-    },
-    set: async (subject, sequence) => {
-      await memory.set(subject, sequence);
+    get: (subject) => getRegistration(subject)?.sequence,
+    getRegistration,
+    set: async (subject, sequence, kind = "signed-v2") => {
+      memory.set(subject, sequence, kind);
       // All owners share one JSON object, so its entire merge needs one lock.
-      // Cache-entry locks are separate and are never acquired from this callback.
       const navigator = globalThis.navigator as unknown as {
         locks?: { request<T>(name: string, action: () => Promise<T>): Promise<T> };
       } | undefined;
       const locks = navigator?.locks;
       if (!locks) throw new Error("Persistent registry sequence store requires Web Locks");
       await locks.request(storageKey, async () => {
-        const remembered = await memory.get(subject);
-        const sequences = read();
-        const previous = sequences.get(subject);
-        const highest = Math.max(previous ?? -1, remembered ?? -1, sequence);
-        await memory.set(subject, highest);
-        if (previous !== undefined && previous >= highest) return;
-        sequences.set(subject, highest);
-        backing.setItem(storageKey, JSON.stringify(Object.fromEntries(sequences)));
+        const registrations = read();
+        const stored = registrations.get(subject);
+        const previous = stored === undefined ? undefined : evidence(stored);
+        if (previous) memory.set(subject, previous.sequence, previous.kind);
+        const highest = memory.getRegistration(subject)!;
+        if (previous?.sequence === highest.sequence && previous.kind === highest.kind) return;
+        registrations.set(subject, highest);
+        backing.setItem(storageKey, JSON.stringify(Object.fromEntries(registrations)));
       });
     },
   };
@@ -169,6 +194,34 @@ export function createLocalStorageRegistrySequenceStore(
 
 function isSequence(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+}
+
+function isRegistrationKind(value: unknown): value is RegistryRegistrationKind {
+  return value === "legacy-v1" || value === "signed-v2" || value === "unknown";
+}
+
+function isRegistrationEvidence(value: unknown): value is RegistryRegistrationEvidence {
+  return value !== null && typeof value === "object" && "sequence" in value && "kind" in value &&
+    isSequence(value.sequence) && isRegistrationKind(value.kind) &&
+    (value.kind !== "legacy-v1" || value.sequence === 0);
+}
+
+function registrationRank(kind: RegistryRegistrationKind): number {
+  return kind === "signed-v2" ? 2 : kind === "unknown" ? 1 : 0;
+}
+
+async function readRegistryRegistration(
+  store: RegistrySequenceStore | undefined,
+  ownerKey: string,
+): Promise<RegistryRegistrationEvidence | undefined> {
+  if (!store) return undefined;
+  if (store.getRegistration) return store.getRegistration(ownerKey);
+  const sequence = await store.get(ownerKey);
+  return sequence === undefined ? undefined : { sequence, kind: "unknown" };
+}
+
+function v2SequenceBound(evidence: RegistryRegistrationEvidence | undefined): number | undefined {
+  return evidence?.kind === "legacy-v1" ? undefined : evidence?.sequence;
 }
 
 export interface ResolveOwnerHostsOptions {
@@ -208,7 +261,7 @@ export async function resolveOwnerHosts(
   assertRegistrySubject(subject);
   const ownerKey = registryOwnerKeyV2(subject);
   const store = options.sequenceStore;
-  const remembered = store === undefined ? undefined : await store.get(ownerKey);
+  const remembered = v2SequenceBound(await readRegistryRegistration(store, ownerKey));
   const cache = options.cacheStore;
   const authority = cache ? cacheAuthority(cache, ownerKey) : undefined;
   const highWater = Math.max(remembered ?? -1, authority?.sequence ?? -1);
@@ -235,6 +288,21 @@ interface OwnerRegistryResult {
 const cacheAuthorities = new WeakMap<RegistryCacheStore, Map<string, { sequence: number; invalidated: boolean; invalidationAttempt: number }>>();
 // The accepted decision's origin generation authorizes any later route-denial drop.
 const verdictRevisions = new WeakMap<RegistryVerdict, number>();
+
+function namesOnlyDefaultNode(hosts: readonly RegistryHost[]): boolean {
+  const origins = new Set<string>();
+  for (const host of hosts) {
+    for (const url of host.urls) {
+      try {
+        origins.add(exactHttpOrigin(url, "registry host"));
+      } catch {
+        return false;
+      }
+    }
+  }
+  return origins.size === 1 && origins.has(DEFAULT_TINYCLOUD_FALLBACK_HOST);
+}
+
 function cacheAuthority(cache: RegistryCacheStore, key: string) {
   let owners = cacheAuthorities.get(cache);
   if (!owners) cacheAuthorities.set(cache, owners = new Map());
@@ -279,7 +347,8 @@ async function refreshCachedOwnerRegistry(
   // Routing authority is caller-specific, even when cache identity is shared.
   // Recheck at the end of shared I/O and retain evidence observed before joining.
   const current = await cache.get(key);
-  const latest = await options.sequenceStore?.get(key);
+  const latestRegistration = await readRegistryRegistration(options.sequenceStore, key);
+  const latest = v2SequenceBound(latestRegistration);
   const authority = cacheAuthority(cache, key);
   const highWater = Math.max(remembered ?? -1, latest ?? -1, authority.sequence);
   assertRegistryRevision(subject, await cache.getRevision(key), revision!);
@@ -301,6 +370,16 @@ async function refreshCachedOwnerRegistry(
     return verified;
   }
   if (verdict.status === "unavailable") return verdict;
+  if (verdict.status === "registered" && verdict.legacy === "v1-default-node") {
+    // Signed-v2 evidence from another caller outranks a legacy-only answer.
+    if (highWater >= 0 || latestRegistration?.kind === "signed-v2") return {
+      status: "unavailable", subject, source: "offchain", reason: "unsupported-format",
+      message: "owner has a v1 location record but no signed-v2 routing record", hosts: [],
+    };
+    assertRegistryRevision(subject, await cache.getRevision(key), revision!);
+    assertInvalidationAttempt(subject, authority.invalidationAttempt, invalidationAttempt!);
+    return verdict;
+  }
   if (verdict.status === "registered") {
     // The cache may disappear after I/O; the verified result still needs this caller's bound.
     if (verdict.sequence < highWater) return {
@@ -313,7 +392,7 @@ async function refreshCachedOwnerRegistry(
     verdictRevisions.set(verdict, revision!);
     return verdict;
   }
-  if (highWater >= 0) return {
+  if (highWater >= 0 || latestRegistration?.kind === "legacy-v1") return {
     status: "unavailable", subject, source: "offchain", reason: "not-found-after-registered",
     message: "owner registration was remembered before registry absence could authorize onboarding", hosts: [],
   };
@@ -344,6 +423,10 @@ async function fetchOwnerRegistry(
 ): Promise<OwnerRegistryResult> {
   const ownerKey = registryOwnerKeyV2(subject);
   const store = options.sequenceStore;
+  const registration = await readRegistryRegistration(store, ownerKey);
+  const legacyKnown = registration?.kind === "legacy-v1";
+  const currentBound = v2SequenceBound(registration);
+  if (currentBound !== undefined) remembered = Math.max(remembered ?? -1, currentBound);
   const registryUrl = options.registryUrl ?? DEFAULT_TINYCLOUD_LOCATION_REGISTRY_URL;
   const baseUrl = registryUrl.replace(/\/$/, "");
   const fetchFn = options.fetch ?? globalThis.fetch;
@@ -369,7 +452,7 @@ async function fetchOwnerRegistry(
       accepted = await options.cacheStore.update(ownerKey, async (current, currentRevision) => {
         assertRegistryRevision(subject, currentRevision, revision!);
         assertInvalidationAttempt(subject, authority!.invalidationAttempt, invalidationAttempt!);
-        const highest = Math.max((await store?.get(ownerKey)) ?? -1, authority!.sequence);
+        const highest = Math.max(v2SequenceBound(await readRegistryRegistration(store, ownerKey)) ?? -1, authority!.sequence);
         const highWater = highest < 0 ? undefined : highest;
         if (current !== undefined) {
           const previous = await verifyRegistryCacheEntry(subject, ownerKey, current, highWater);
@@ -407,7 +490,7 @@ async function fetchOwnerRegistry(
       observation.kind === "http" && observation.status >= 400 && observation.status < 500) {
     await dropOwnerRegistryCache(subject, options.cacheStore, store, ownerKey, Math.max(remembered ?? 0, cached?.sequence ?? 0), revision!);
   }
-  const fresh = cached === undefined && remembered === undefined;
+  const fresh = cached === undefined && remembered === undefined && !legacyKnown;
   const coldOffline = fresh && v2.status === "unavailable" && registryOutage(observation);
   if (v2.status !== "unregistered" && !coldOffline) {
     await rememberAcceptedSequence(store, ownerKey, remembered, v2);
@@ -420,11 +503,22 @@ async function fetchOwnerRegistry(
 
   const v1Subject = legacyRegistrySubject(subject, options.registryChainId);
   const v1Observation = await observeRegistry(`${baseUrl}/v1/locations/${encodeURIComponent(v1Subject)}`, fetchFn, timeoutMs);
-  const v1 = await classifyObservation(v1Subject, v1Observation, 1, null);
+  const v1 = await classifyObservation(v1Subject, v1Observation, 1, legacyKnown ? 0 : null);
   if (v1.status === "registered") {
-    // Legacy registration is evidence, not v2 sequence authority. Zero marks
-    // known registration without preventing a future first v2 sequence of zero.
-    await store?.set(ownerKey, Math.max(remembered ?? 0, 0));
+    // Known legacy registration prevents fallback, but is not a v2 sequence.
+    await store?.set(ownerKey, 0, "legacy-v1");
+    // Only after the registry confirmed v2 absence: an outage could hide a newer v2 record.
+    if (v2.status === "unregistered" && cached === undefined && remembered === undefined && namesOnlyDefaultNode(v1.hosts)) {
+      const verdict: RegisteredRegistryVerdict = {
+        status: "registered",
+        subject,
+        source: "offchain",
+        sequence: v1.sequence,
+        hosts: [{ urls: [DEFAULT_TINYCLOUD_FALLBACK_HOST], source: "offchain" }],
+        legacy: "v1-default-node",
+      };
+      return { verdict, revision, invalidationAttempt };
+    }
     return { verdict: {
       status: "unavailable",
       subject,
@@ -459,7 +553,7 @@ async function dropOwnerRegistryCache(
   // Deletion cannot forget known registration. Unlike ordinary accepted-record
   // writes, this marker must persist before the signed cache is removed.
   try {
-    if (store) await store.set(key, Math.max(authority.sequence, (await store.get(key)) ?? -1));
+    if (store) await store.set(key, Math.max(authority.sequence, (await store.get(key)) ?? -1), "unknown");
     await cache.delete(key, expectedRevision, sequence);
   } catch (cause) {
     throw new RegistryUnavailableError(subject, undefined, { message: "cached storage settings could not be invalidated", cause });
@@ -543,17 +637,19 @@ async function rememberAcceptedSequence(
   remembered: number | undefined,
   verdict: RegistryVerdict,
 ): Promise<void> {
-  if (
-    store === undefined ||
-    verdict.status !== "registered" ||
-    (remembered !== undefined && verdict.sequence <= remembered)
-  ) return;
+  if (store === undefined || verdict.status !== "registered") return;
+  const previous = await store.getRegistration?.(ownerKey);
+  const promotion = previous?.kind === "legacy-v1" || previous?.kind === "unknown";
+  if (remembered !== undefined && verdict.sequence <= remembered && !promotion) return;
   try {
-    await store.set(ownerKey, verdict.sequence);
-  } catch (error) {
+    await store.set(ownerKey, verdict.sequence, "signed-v2");
+  } catch (cause) {
+    if (promotion) throw new RegistryUnavailableError(ownerKey, undefined, {
+      message: "verified registration history could not be persisted", cause,
+    });
     if (!sequenceWriteWarned) {
       sequenceWriteWarned = true;
-      console.warn("[tinycloud:registry] could not remember the registry sequence:", error);
+      console.warn("[tinycloud:registry] could not remember the registry sequence:", cause);
     }
   }
 }
@@ -692,6 +788,31 @@ export interface LookupOwnerRegistryVerdictOptions {
   registryChainId?: number;
   /** Value-free warning only after a fallback route is selected. */
   onRegistryFallback?: (reason: string, code?: RegistryFallbackReason) => void;
+  /** Opt-in reuse of fresh verdicts; without it every call asks the registry. */
+  verdictCache?: RegistryVerdictCache;
+  /** A signed data read whose result answers only that read: the absent-reads cache serves nothing else. */
+  dataRead?: boolean;
+}
+
+/** The owner a cached verdict is for, and the reading client's own fail-closed stores. */
+export interface RegistryVerdictScope {
+  dataRead?: boolean;
+  registryUrl: string;
+  subject: string;
+  sequenceStore?: RegistrySequenceStore;
+  cacheStore?: RegistryCacheStore;
+}
+
+/**
+ * Opt-in, in-memory reuse of registry verdicts (TC-2970), keyed by registry URL
+ * and owner DID. Create one with `createRegistryVerdictCache` from
+ * `@tinycloud/sdk-core/registry-verdict-cache`.
+ */
+export interface RegistryVerdictCache {
+  /** The owner's fresh verdict if the scope's stores allow it, else `lookup`'s, shared with concurrent callers. */
+  get(scope: RegistryVerdictScope, lookup: () => Promise<RegistryVerdict>): Promise<RegistryVerdict>;
+  /** Drops the owner's verdict for this registry: the next call asks the registry. */
+  invalidate(registryUrl: string, subject: string): void;
 }
 
 /**
@@ -708,10 +829,16 @@ export async function lookupOwnerRegistryVerdict(
       message: "no location registry is configured",
     });
   }
+  return options.verdictCache
+    ? options.verdictCache.get({ ...options, registryUrl: options.registryUrl ?? DEFAULT_TINYCLOUD_LOCATION_REGISTRY_URL, subject }, () => lookupOwnerRegistry(subject, options))
+    : lookupOwnerRegistry(subject, options);
+}
+
+async function lookupOwnerRegistry(subject: string, options: LookupOwnerRegistryVerdictOptions): Promise<RegistryVerdict> {
   let verdict: RegistryVerdict;
   try {
     verdict = await resolveOwnerHosts(subject, {
-      registryUrl: options.registryUrl,
+      registryUrl: options.registryUrl ?? undefined,
       sequenceStore: options.sequenceStore,
       cacheStore: options.cacheStore,
       fetch: options.fetch,
@@ -744,9 +871,13 @@ export async function resolveRegistryResource(
   access: "read" | "write" | "host" | "encryption",
   options: LookupOwnerRegistryVerdictOptions,
 ): Promise<{ verdict: RegistryVerdict; hosts: RegistryHost[] }> {
-  const verdict = await lookupOwnerRegistryVerdict(subject, options);
+  const verdict = await lookupOwnerRegistryVerdict(subject, { ...options, dataRead: access === "read" && options.dataRead });
   if (verdict.status === "unregistered") return { verdict, hosts: [] };
   if (verdict.status === "unavailable") throw new RegistryUnavailableError(subject, verdict);
+  // TC-3168: every resource of a v1-only owner on the default node goes there, and nowhere else.
+  if (verdict.legacy === "v1-default-node") {
+    return { verdict, hosts: [{ urls: [DEFAULT_TINYCLOUD_FALLBACK_HOST], source: "offchain" }] };
+  }
   const record = verdict.record;
   if (record === undefined) {
     throw new RegistryUnavailableError(subject, undefined, {
@@ -754,6 +885,7 @@ export async function resolveRegistryResource(
     });
   }
   const denyRoute = async (): Promise<never> => {
+    options.verdictCache?.invalidate(options.registryUrl ?? DEFAULT_TINYCLOUD_LOCATION_REGISTRY_URL, subject);
     if (options.cacheStore) {
       await dropOwnerRegistryCache(subject, options.cacheStore, options.sequenceStore, registryOwnerKeyV2(subject), verdict.sequence, verdictRevisions.get(verdict)!);
     }
@@ -878,8 +1010,11 @@ export async function resolveFailClosedTinyCloudHosts(
     try {
       hosts = hostsForVerdict(verdict, newUserHost);
     } catch (error) {
-      if (error instanceof NodeNotFoundError && error.verdict.status === "registered" && options.cacheStore) {
-        await dropOwnerRegistryCache(subject, options.cacheStore, options.sequenceStore, registryOwnerKeyV2(subject), error.verdict.sequence, verdictRevisions.get(error.verdict)!);
+      if (error instanceof NodeNotFoundError && error.verdict.status === "registered") {
+        options.verdictCache?.invalidate(options.registryUrl ?? DEFAULT_TINYCLOUD_LOCATION_REGISTRY_URL, subject);
+        if (options.cacheStore) {
+          await dropOwnerRegistryCache(subject, options.cacheStore, options.sequenceStore, registryOwnerKeyV2(subject), error.verdict.sequence, verdictRevisions.get(error.verdict)!);
+        }
       }
       throw error;
     }

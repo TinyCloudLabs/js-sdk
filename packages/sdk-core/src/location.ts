@@ -43,6 +43,9 @@ export interface LocationRecordV2 extends LocationRecordV2Payload {
   signature: string;
 }
 
+/** A request callback, without runtime-specific native fetch static properties. */
+type LocationFetch = (...args: Parameters<typeof fetch>) => ReturnType<typeof fetch>;
+
 export interface VerifyOwnerNodeBindingOptions {
   /** Registry that serves the owner's signed location record. */
   registryUrl: string;
@@ -75,7 +78,7 @@ export interface PublishLocationRecordOptions {
   /** Signer for `subject`; the registry never receives private key material. */
   signer: LocationRecordSigner;
   /** Custom fetch implementation. Defaults to globalThis.fetch. */
-  fetch?: typeof fetch;
+  fetch?: LocationFetch;
   now?: () => Date;
 }
 
@@ -834,7 +837,7 @@ function compareAscii(left: string, right: string): number {
 export async function fetchLocationRecord(
   registryUrl: string,
   subject: string,
-  fetchFn: typeof fetch = globalThis.fetch,
+  fetchFn: LocationFetch = globalThis.fetch,
   signal?: AbortSignal,
 ): Promise<LocationRecord | null> {
   const url = `${registryUrl.replace(/\/$/, "")}/v1/locations/${encodeURIComponent(subject)}`;

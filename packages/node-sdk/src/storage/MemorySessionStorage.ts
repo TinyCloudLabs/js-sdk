@@ -1,4 +1,4 @@
-import { ISessionStorage, PersistedSessionData } from "@tinycloud/sdk-core";
+import { ISessionStorage, PersistedSessionData, registerOwnedSessionStorage } from "@tinycloud/sdk-core";
 
 /**
  * In-memory session storage for Node.js.
@@ -18,12 +18,27 @@ import { ISessionStorage, PersistedSessionData } from "@tinycloud/sdk-core";
  */
 export class MemorySessionStorage implements ISessionStorage {
   private sessions: Map<string, PersistedSessionData> = new Map();
+  private readonly retired = new Map<string, Set<string>>();
+
+  constructor() {
+    if (new.target !== MemorySessionStorage) return;
+    registerOwnedSessionStorage(this, (address, signature) => {
+      const key = address.toLowerCase();
+      let retired = this.retired.get(key);
+      if (!retired) this.retired.set(key, retired = new Set());
+      retired.add(signature);
+      if (this.sessions.get(key)?.signature === signature) this.sessions.delete(key);
+    });
+  }
 
   /**
    * Save a session for an address.
    */
   async save(address: string, session: PersistedSessionData): Promise<void> {
     const normalizedAddress = address.toLowerCase();
+    if (this.retired.get(normalizedAddress)?.has(session.signature)) {
+      throw new Error("Session was cancelled by sign-out.");
+    }
     this.sessions.set(normalizedAddress, session);
   }
 

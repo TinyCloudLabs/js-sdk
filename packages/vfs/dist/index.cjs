@@ -92,6 +92,19 @@ function fromWorkerError(error) {
 // src/bridge.ts
 var import_meta = {};
 var WAIT_SLICE_MS = 1e3;
+var DEFAULT_BRIDGE_TIMEOUT_MS = 12e4;
+var testHooks = {};
+var TinyCloudVfsBridgeTimeoutError = class extends Error {
+  code = "ETIMEDOUT";
+  errno = -110;
+  syscall = "bridge";
+  timeoutMs;
+  constructor(requestType, timeoutMs) {
+    super(`worker did not answer "${requestType}" within ${timeoutMs}ms, bridge '/'`);
+    this.name = "TinyCloudVfsBridgeTimeoutError";
+    this.timeoutMs = timeoutMs;
+  }
+};
 function createWaitSignal() {
   const buffer = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT);
   return {
@@ -107,10 +120,22 @@ function resolveWorkerSpecifier() {
 }
 var TinyCloudVfsBridge = class {
   worker;
+  timeoutMs;
   constructor(init) {
-    const specifier = resolveWorkerSpecifier();
-    this.worker = typeof specifier === "string" ? new import_node_worker_threads.Worker(specifier) : new import_node_worker_threads.Worker(specifier);
-    const response = this.requestSync({ type: "init", init });
+    this.timeoutMs = testHooks.timeoutMs ?? DEFAULT_BRIDGE_TIMEOUT_MS;
+    if (testHooks.createWorker) {
+      this.worker = testHooks.createWorker();
+    } else {
+      const specifier = resolveWorkerSpecifier();
+      this.worker = typeof specifier === "string" ? new import_node_worker_threads.Worker(specifier) : new import_node_worker_threads.Worker(specifier);
+    }
+    let response;
+    try {
+      response = this.requestSync({ type: "init", init });
+    } catch (error) {
+      void this.worker.terminate();
+      throw error;
+    }
     if (!response.ok) {
       this.worker.terminate();
       throw createEIO("init", "/", response.error.message);
@@ -130,8 +155,14 @@ var TinyCloudVfsBridge = class {
       },
       [port1]
     );
+    const deadline = Date.now() + this.timeoutMs;
     while (Atomics.load(view, 0) === 0) {
-      Atomics.wait(view, 0, 0, WAIT_SLICE_MS);
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) {
+        port2.close();
+        throw new TinyCloudVfsBridgeTimeoutError(request.type, this.timeoutMs);
+      }
+      Atomics.wait(view, 0, 0, Math.min(WAIT_SLICE_MS, remaining));
     }
     const response = (0, import_node_worker_threads.receiveMessageOnPort)(port2)?.message;
     port2.close();

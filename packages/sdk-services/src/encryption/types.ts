@@ -11,6 +11,7 @@ import type { Json } from "./canonical";
 import type { PermissionHint } from "../types";
 import type { RoutingFailure } from "../resourceRouting";
 
+import type { KeyWrapContext } from "./keyWrap";
 /** Default ciphersuite identifier for v1 envelopes. */
 export const DEFAULT_ENCRYPTION_ALG = "x25519-aes256gcm/v1" as const;
 
@@ -65,10 +66,9 @@ export interface InlineEncryptedEnvelope {
   ciphertext: string;
   /** Base64-encoded associated data, if any. */
   aad?: string;
-  /** Caller-supplied metadata. Not authenticated against the node. */
+  /** Caller metadata; v2 wraps bind it to the node-authenticated header. */
   metadata?: Record<string, string>;
 }
-
 /**
  * Node-published network descriptor. The node DB is authoritative; a
  * cached copy may also live under
@@ -197,6 +197,7 @@ export interface EncryptionCrypto {
   sealToNetworkKey(
     networkPublicKey: Uint8Array,
     symmetricKey: Uint8Array,
+    options?: { keyWrapV2: boolean; context: KeyWrapContext },
   ): Uint8Array;
   /**
    * Open a wrapped symmetric key that was re-encrypted to the
@@ -206,6 +207,7 @@ export interface EncryptionCrypto {
   openWithReceiverKey(
     receiverPrivateKey: Uint8Array,
     wrappedKey: Uint8Array,
+    expected?: KeyWrapContext,
   ): Uint8Array;
   /**
    * Verify an ed25519 signature over `message` produced by the node

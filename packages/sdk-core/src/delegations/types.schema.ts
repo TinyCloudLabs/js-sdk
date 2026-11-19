@@ -10,6 +10,7 @@
 import { z } from "zod";
 import type {
   FetchFunction,
+  ResourceTransport,
   InvokeAnyFunction,
   InvokeFunction,
   ServiceSession,
@@ -194,7 +195,20 @@ export const DelegationSchema = z.object({
 
 export type Delegation = z.infer<typeof DelegationSchema>;
 
-/** Node-confirmed lifecycle state for one delegation. */
+/** A node-signed renewal stamp returned as untrusted status evidence. */
+export const RenewalStampHistorySchema = z.object({
+  cid: z.string().min(1),
+  lease_cid: z.string().min(1),
+  generation: z.number().int().nonnegative().safe(),
+  previous_stamp_cid: z.string().min(1),
+  new_end: z.number().int().nonnegative().safe(),
+  signed_bytes: z.string().min(1),
+  signature: z.string().min(1),
+}).strict();
+
+export type RenewalStampHistory = z.infer<typeof RenewalStampHistorySchema>;
+
+/** Node-confirmed lifecycle state plus optional #547 renewal evidence. */
 export const DelegationStatusSchema = z.object({
   cid: z.string().min(1),
   status: z.enum(["active", "revoked", "expired", "unavailable", "not_found"]),
@@ -202,6 +216,8 @@ export const DelegationStatusSchema = z.object({
   active: z.boolean(),
   revoked: z.boolean(),
   expired: z.boolean(),
+  effective_expiry: z.number().int().nullable().optional(),
+  renewal_history: z.array(RenewalStampHistorySchema).optional(),
 }).strict().superRefine((value, context) => {
   const valid = value.status === "active"
     ? value.exists && value.active && !value.revoked && !value.expired
@@ -516,10 +532,17 @@ export type IngestOptions = z.infer<typeof IngestOptionsSchema>;
  * Parameters for generating a share link.
  */
 export const GenerateShareParamsSchema = z.object({
-  /** Resource path to share */
-  path: z.string(),
-  /** Actions to authorize */
+  includePlacement: z.boolean().optional(),
+  /** Resource path to share. Give either `path` (with `actions`) or `resources`. */
+  path: z.string().optional(),
+  /** Actions to authorize on `path` */
   actions: z.array(z.string()).optional(),
+  /**
+   * Several resources in one share: one root delegation and one link cover them all
+   * (e.g. a transcript key and an audio prefix). Paths get `pathPrefix` like `path`;
+   * omitted actions default like `actions`. At most 16, no duplicate paths.
+   */
+  resources: z.array(z.object({ path: z.string(), actions: z.array(z.string()).optional() })).optional(),
   /** When the share link expires */
   expiry: z.coerce.date().optional(),
   /** Encoding schema for the link */
@@ -547,9 +570,7 @@ export type GenerateShareParams = z.infer<typeof GenerateShareParamsSchema>;
 // We use z.unknown().refine() for runtime type checking while preserving TypeScript types.
 
 /**
- * Signs invocations with the session's own did:key and no proof. The node
- * accepts these for listing the delegations that key issued and for revoking
- * a delegation that key is the delegator of.
+ * Signs short-lived proofless invocations with the session's own did:key.
  */
 export interface SessionInvocationSigner {
   /** The session key's bare did:key (no fragment). */
@@ -558,7 +579,9 @@ export interface SessionInvocationSigner {
    * Signs one short-lived invocation carrying exactly `attenuation` and no
    * proof; returns the `Authorization` header value.
    */
-  sign(attenuation: Readonly<Record<string, Readonly<Record<string, readonly unknown[]>>>>): Promise<string>;
+  sign(attenuation: Readonly<Record<string, Readonly<Record<string, readonly unknown[]>>>>, nodeAudience?: string): Promise<string>;
+  /** Signs the exact delegation-status invocation through a platform-specific WASM binding, when available. */
+  signDelegationStatus?(cid: string): Promise<string>;
 }
 
 /**
@@ -589,6 +612,8 @@ export const DelegationManagerConfigSchema = z.object({
   signOwnerRevocation: z.custom<(cid: string) => Promise<string>>().optional(),
   /** Optional signer for proofless invocations by the session's own did:key (issued-delegation list and revoke) */
   sessionInvocationSigner: z.custom<SessionInvocationSigner>().optional(),
+  /** Resource-specific transport supplied by the owning platform graph. */
+  resourceTransport: z.custom<ResourceTransport>().optional(),
   /** Optional custom fetch implementation */
   fetch: z.unknown().refine(
     (val): val is FetchFunction => val === undefined || typeof val === "function",

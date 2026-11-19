@@ -36,12 +36,14 @@ import {
   parseSpaceUri,
   NodeNotFoundError,
   RegistryUnavailableError,
+  AccountSetupRequiredError,
   discoverLocalTinyCloudNode,
   exactHttpOrigin,
   assertSpaceCreationAllowed,
   createInMemoryRegistrySequenceStore,
   createInMemoryRegistryCacheStore,
   type RegistryCacheStore,
+  type RegistryVerdictCache,
   type RegistryFallbackReason,
   registryOwnerSubjectV1,
   type LocalNodeIdentityStore,
@@ -53,6 +55,7 @@ import {
   EXPIRY,
   assertExpiryWithinTechnicalLimit,
   canonicalizeAddress,
+  verifyEip191MessageSignature,
   makePkhSpaceId,
   pkhDid,
   extractImmutableSiweFields,
@@ -71,6 +74,7 @@ import {
   ENCRYPTION,
   publicJwk,
   type CapabilityPresentationEnvelopeV1,
+  endToEndNodeHost,
 } from "@tinycloud/sdk-core";
 import { parseEncryptionResource } from "@tinycloud/sdk-services/encryption/resource";
 import {
@@ -95,12 +99,13 @@ import {
 } from "./strategies";
 import { MemorySessionStorage } from "../storage/MemorySessionStorage";
 import { clearPersistedSessionIfOwn } from "../storage/clearPersistedSessionIfOwn";
-import type { OpenKeyBridgeInput, NodeUserAuthorizationAuthorizeFn } from "./openKeyBridge";
+import type { OpenKeyBridgeInput, NodeUserAuthorizationAuthorizeFn, OpenKeySignInIdentity } from "./openKeyBridge";
 
 export type OpenKeyAuthorizeInput = OpenKeyBridgeInput;
 
 /** SIWE and session key prepared before an OpenKey approval click. */
 export interface PreparedOpenKeyAuthorization {
+  readonly identity?: OpenKeySignInIdentity;
   readonly request: OpenKeyAuthorizeInput;
   readonly prepared: PreparedOpenKeySession;
   readonly keyId: string;
@@ -153,9 +158,6 @@ function pkhSpaceIdentity(spaceId: string): string {
 const DECRYPT_ACTION = ENCRYPTION.DECRYPT;
 
 const NETWORK_CREATE_ACTION = ENCRYPTION.NETWORK_CREATE;
-
-/** Creating the per-share named keys: allowed at sign-in only beside decrypt, on the owner's default-network `share/` prefix (TC-2242). */
-const KEY_CREATE_ACTION = "tinycloud.encryption/key.create";
 
 /** `<status> - <server text>` for a failed host activation. */
 function describeHostFailure(result: SpaceHostResult): string {
@@ -282,6 +284,8 @@ export interface NodeUserAuthorizationConfig {
   spaceCreationHandler?: ISpaceCreationHandler;
   /** Host hints used only for owners absent from both registry namespaces. */
   tinycloudHosts?: string[];
+  /** Constructor-trusted no-entry hosts; Node supplies these separately from restored host data. */
+  registryNoEntryHosts?: readonly string[];
   /** TinyCloud location registry URL. Default: https://registry.tinycloud.xyz. */
   tinycloudRegistryUrl?: string | null;
   /** Host hints for genuine no-entry onboarding. Never used for registered or unavailable owners. */
@@ -302,6 +306,8 @@ export interface NodeUserAuthorizationConfig {
   /** `fail-closed` only: highest registry sequence seen per owner. Default: in-memory. */
   registrySequenceStore?: RegistrySequenceStore;
   registryCacheStore?: RegistryCacheStore;
+  /** Opt-in reuse of registry verdicts across lookups; default: every lookup asks the registry. */
+  registryVerdictCache?: RegistryVerdictCache;
   /** Value-free warning after an actual cached-settings or default-node fallback. */
   onRegistryFallback?: (reason: string, code?: RegistryFallbackReason) => void;
   /**
@@ -357,6 +363,10 @@ export interface NodeUserAuthorizationConfig {
   capabilityRequest?: ComposedManifestRequest;
   /** Include canonical account registry read/create-update/list permissions when composing `manifest` and plain sign-in. Default true. */
   includeAccountRegistryPermissions?: boolean;
+  /** @internal Derived from the browser bootstrap policy. */
+  includeImplicitCapabilitiesRead?: boolean;
+  /** @internal Refuse new-account setup before requesting a signature. */
+  requireExistingAccount?: boolean;
   /**
    * Replication sign-in augmentation (TC-858 §4.1): prefixes whose reads a
    * local replica may serve. For each prefix the session request gains one
@@ -425,12 +435,14 @@ export class NodeUserAuthorization implements IUserAuthorization {
   private readonly autoCreateSpace: boolean;
   private readonly spaceCreationHandler?: ISpaceCreationHandler;
   private tinycloudHosts?: string[];
+  private registryNoEntryHosts: readonly string[];
   private readonly tinycloudRegistryUrl?: string | null;
   private readonly tinycloudFallbackHosts?: string[] | null;
   private readonly newUserHost?: string | null;
   private readonly registryChainId?: number;
   private readonly registrySequenceStore: RegistrySequenceStore;
   private readonly registryCacheStore: RegistryCacheStore;
+  private readonly registryVerdictCache?: RegistryVerdictCache;
   private readonly onNodeNotFound?: OnNodeNotFound;
   private readonly onRegistryFallback?: (reason: string, code?: RegistryFallbackReason) => void;
   /** Verdict from the last `fail-closed` host resolution, reused by {@link assertMayCreateSpace}. */
@@ -455,6 +467,8 @@ export class NodeUserAuthorization implements IUserAuthorization {
   private _manifest?: Manifest | Manifest[];
   private _capabilityRequest?: ComposedManifestRequest;
   private readonly includeAccountRegistryPermissions: boolean;
+  private readonly includeImplicitCapabilitiesRead: boolean;
+  private readonly requireExistingAccount: boolean;
 
   private sessionManager: ISessionManager;
   private activeSessionKeyId = "default";
@@ -466,6 +480,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
    * cancellation cleanup, so no later write can land between the two.
    */
   private persistenceQueue: Promise<void> = Promise.resolve();
+  private readonly pendingPersistence = new Set<PersistedSessionData>();
   private extensions: Extension[] = [];
   private _session?: ClientSession;
   private _tinyCloudSession?: TinyCloudSession;
@@ -527,6 +542,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
     this.autoCreateSpace = config.autoCreateSpace ?? false;
     this.spaceCreationHandler = config.spaceCreationHandler;
     this.tinycloudHosts = config.tinycloudHosts;
+    this.registryNoEntryHosts = config.registryNoEntryHosts ?? config.tinycloudHosts ?? [];
     this.tinycloudRegistryUrl = config.tinycloudRegistryUrl;
     this.tinycloudFallbackHosts = config.tinycloudFallbackHosts;
     this.newUserHost = config.newUserHost;
@@ -534,6 +550,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
     this.registrySequenceStore =
       config.registrySequenceStore ?? createInMemoryRegistrySequenceStore();
     this.registryCacheStore = config.registryCacheStore ?? createInMemoryRegistryCacheStore();
+    this.registryVerdictCache = config.registryVerdictCache;
     this.onNodeNotFound = config.onNodeNotFound;
     this.onRegistryFallback = config.onRegistryFallback;
     this.autoDiscoverLocalNode = config.autoDiscoverLocalNode;
@@ -546,6 +563,8 @@ export class NodeUserAuthorization implements IUserAuthorization {
     this.siweConfig = config.siweConfig;
     this.includeAccountRegistryPermissions =
       config.includeAccountRegistryPermissions ?? true;
+    this.includeImplicitCapabilitiesRead = config.includeImplicitCapabilitiesRead !== false;
+    this.requireExistingAccount = config.requireExistingAccount === true;
     this.replication =
       config.replication?.enabled === true ? config.replication : undefined;
     this.establishReplicaStamp = config.establishReplicaStamp;
@@ -663,6 +682,25 @@ export class NodeUserAuthorization implements IUserAuthorization {
     return run;
   }
 
+  private persistSession(address: string, data: PersistedSessionData, generation: number): Promise<void> {
+    this.assertSignInCurrent(generation);
+    this.pendingPersistence.add(data);
+    return this.enqueuePersistence(async () => {
+      this.assertSignInCurrent(generation);
+      let failure: { error: unknown } | undefined;
+      try {
+        await this.sessionStorage.save(address, data);
+      } catch (error) {
+        failure = { error };
+      }
+      if (generation !== this.sessionGeneration) {
+        await clearPersistedSessionIfOwn(this.sessionStorage, address, data.signature);
+        this.assertSignInCurrent(generation);
+      }
+      if (failure) throw failure.error;
+    }).finally(() => { this.pendingPersistence.delete(data); });
+  }
+
   /** @internal Atomically adopt the state staged by TinyCloudNode.restoreSession. */
   installRestoredSession(
     sessionManager: ISessionManager,
@@ -703,22 +741,30 @@ export class NodeUserAuthorization implements IUserAuthorization {
   }
 
   /** Refresh the primary space's registry destinations, including after restore. */
-  async ensureTinyCloudHosts(): Promise<void> {
+  async ensureTinyCloudHosts(assertCurrent?: () => void): Promise<void> {
     if (this._address === undefined || this._chainId === undefined) {
       throw new Error("Cannot resolve TinyCloud hosts: sign in or restore a session first.");
     }
-    await this.resolveTinyCloudHostsForSignIn(this._address, this._chainId, this._tinyCloudSession?.spaceId);
+    await this.resolveTinyCloudHostsForSignIn(this._address, this._chainId, this._tinyCloudSession?.spaceId, assertCurrent);
   }
 
-  private async resolveTinyCloudHostsForSignIn(address: string, chainId: number, restoredSpaceId?: string): Promise<void> {
+  private async resolveTinyCloudHostsForSignIn(address: string, chainId: number, restoredSpaceId?: string, assertCurrent?: () => void): Promise<void> {
+    assertCurrent?.();
     const spaceId = restoredSpaceId ?? this.resolveSignInCapabilities(address, chainId).spaceId;
     const destinations = await this.resolveResourceDestinations(spaceId, "read");
-    for (const destination of destinations) await verifyResourceDestination(destination, globalThis.fetch.bind(globalThis));
+    if (this.requireExistingAccount && this.registryVerdict?.status === "unregistered") {
+      throw new AccountSetupRequiredError();
+    }
+    for (const destination of destinations) {
+      assertCurrent?.();
+      await verifyResourceDestination(destination, globalThis.fetch.bind(globalThis));
+    }
+    assertCurrent?.();
     this.tinycloudHosts = destinations.map(({ url }) => url);
   }
 
-  /** Current full-resource registry routing; saved hosts are only no-entry hints. */
-  async resolveResourceDestinations(resource: string, access: ResourceAccess, noEntryHosts: readonly string[] = this.tinycloudHosts ?? []): Promise<ResourceDestination[]> {
+  /** Current registry routing; mutable restored hosts never supply no-entry authority. */
+  async resolveResourceDestinations(resource: string, access: ResourceAccess, noEntryHosts: readonly string[] = this.registryNoEntryHosts, dataRead?: boolean): Promise<ResourceDestination[]> {
     const owner = resource.startsWith("urn:tinycloud:encryption:")
       ? parseNetworkId(resource.split("/")[0]).ownerDid
       : parseSpaceUri(resource)?.owner ?? (() => {
@@ -734,10 +780,13 @@ export class NodeUserAuthorization implements IUserAuthorization {
           registryChainId: this.registryChainId,
           sequenceStore: this.registrySequenceStore,
           cacheStore: this.registryCacheStore,
+          verdictCache: this.registryVerdictCache,
+          dataRead,
           onRegistryFallback: this.onRegistryFallback,
         });
         this.registryVerdict = resolved.verdict;
         if (resolved.verdict.status === "unregistered") {
+          if (this.requireExistingAccount) throw new AccountSetupRequiredError();
           if (noEntryHosts.length === 0 && (this.autoDiscoverLocalNode ?? true)) {
             const local = await discoverLocalTinyCloudNode({
               localNodeUrl: this.localNodeUrl,
@@ -776,6 +825,20 @@ export class NodeUserAuthorization implements IUserAuthorization {
 
   get registryRecordPresent(): boolean {
     return this.registryVerdict?.status === "registered";
+  }
+
+  /** @internal Gates optional setup only; every actual operation still resolves its route afresh. */
+  allowsAutomaticSetup(resource: string): boolean {
+    const verdict = this.registryVerdict;
+    if (verdict === undefined || verdict.status === "unregistered") return true;
+    if (verdict.status !== "registered") return false;
+    // A v1-only owner on the default node (TC-3168) gets 3.11's setup there; no other record-less verdict does.
+    if (verdict.record === undefined) return verdict.legacy === "v1-default-node";
+    if (resource.startsWith("urn:tinycloud:encryption:")) return verdict.record.encryptionNode !== null;
+    const identity = pkhSpaceIdentity(resource);
+    return verdict.record.spaces.some((space) =>
+      pkhSpaceIdentity(space.space) === identity &&
+      space.nodes.some((node) => node.mode === "read-write"));
   }
 
   /** Refresh membership before hosting; a saved no-entry verdict never authorizes a later creation. */
@@ -889,6 +952,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
       {
         includeAccountRegistryPermissions:
           this.includeAccountRegistryPermissions,
+        includeImplicitCapabilitiesRead: this.includeImplicitCapabilitiesRead,
       }
     );
     return this._capabilityRequest;
@@ -1183,7 +1247,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
         : { ...parseNetworkId(entry.path), kind: "network" as const };
       const sharePrefix = parsed.kind === "prefix" && parsed.network === "default" &&
         parsed.prefix === "share" && entry.actions.length > 0 &&
-        entry.actions.every((action) => action === DECRYPT_ACTION || action === KEY_CREATE_ACTION) &&
+        entry.actions.every((action) => action === DECRYPT_ACTION) &&
         didPrincipalMatches(parsed.ownerDid, currentDid);
       if (parsed.kind !== "network" && !sharePrefix) {
         throw new ManifestValidationError("named keys go in manifest.keys");
@@ -1354,7 +1418,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
     };
 
     checkCurrent();
-    await this.ensureTinyCloudHosts();
+    await this.ensureTinyCloudHosts(checkCurrent);
     checkCurrent();
     const host = context?.host ?? this.primaryTinyCloudHost;
     const spaceId = context?.spaceId ?? (typeof targetSpaceId === "string" ? targetSpaceId : this._tinyCloudSession.spaceId);
@@ -1365,7 +1429,9 @@ export class NodeUserAuthorization implements IUserAuthorization {
         checkCurrent();
         try {
           await verifyResourceDestination(destination, globalThis.fetch.bind(globalThis));
+          checkCurrent();
           const result = await activateSessionWithHost(destination.url, this._tinyCloudSession.delegationHeader, signal);
+          checkCurrent();
           results.push(result.skipped?.includes(spaceId) ? { ...result, success: false, status: 403, error: "The session does not activate the requested space" } : result);
         } catch (error) {
           if (routingFailure(error) || signal?.aborted) throw error;
@@ -1387,20 +1453,25 @@ export class NodeUserAuthorization implements IUserAuthorization {
     // Get peer ID from TinyCloud server
     const peerId = await fetchPeerId(host, spaceId, signal);
     checkCurrent();
+    // Keep host-only construction in the existing deferred browser hosting entry.
+    const { withHostExpiry } = await import("../space-hosting.js");
+    checkCurrent();
 
     // Generate host SIWE message
-    const siwe = this.wasm.generateHostSIWEMessage(
+    const now = new Date();
+    const hostSiwe = this.wasm.generateHostSIWEMessage(
       context && siweParameters
         ? siweParameters(peerId)
         : {
             address,
             chainId,
             domain: this.domain,
-            issuedAt: new Date().toISOString(),
+            issuedAt: now.toISOString(),
             spaceId,
             peerId,
           },
     );
+    const siwe = withHostExpiry(hostSiwe, now, EXPIRY.HOSTING_YEARS, this.siweConfig?.expirationTime);
 
     checkCurrent();
     const signing = this.signMessage(siwe, purpose);
@@ -1435,8 +1506,8 @@ export class NodeUserAuthorization implements IUserAuthorization {
    * Create a specific space on the server via host delegation.
    * Used for lazy creation of additional spaces (e.g., public).
    */
-  async hostPublicSpace(spaceId: string): Promise<boolean> {
-    return (await this.hostSpace(spaceId)).success;
+  async hostPublicSpace(spaceId: string, signal?: AbortSignal): Promise<boolean> {
+    return (await this.hostSpace(spaceId, undefined, signal)).success;
   }
 
   /**
@@ -1498,7 +1569,9 @@ export class NodeUserAuthorization implements IUserAuthorization {
       }
       if (record.encryptionNode && resources.some((resource) => resource.startsWith("urn:tinycloud:encryption:"))) {
         const node = record.nodes.find((candidate) => candidate.did === record.encryptionNode)!;
-        targets.set(node.url, { url: node.url, nodeDid: node.did });
+        // Encryption traffic uses the node's TEE-terminated origin (TC-2923), like TinyCloudNode routing.
+        const url = endToEndNodeHost(node.url);
+        targets.set(url, { url, nodeDid: node.did });
       }
     }
     let result: SpaceHostResult | undefined;
@@ -1737,6 +1810,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
       createdAt,
       version: "1.0",
       tinycloudHosts: this.tinycloudHosts,
+      ...(this._spaceHosting !== "unknown" ? { spaceHosting: this._spaceHosting } : {}),
       ...(replicaStamp ? { replicaStamp } : {}),
     };
   }
@@ -1867,15 +1941,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
       now.toISOString(),
       replicaStamp,
     );
-    await this.enqueuePersistence(async () => {
-      await this.sessionStorage.save(address, persistedData);
-      // Signed out while saving: remove exactly the record this save wrote.
-      // A newer sign-in's save is queued behind this and lands afterwards.
-      if (generation !== this.sessionGeneration) {
-        await this.sessionStorage.clear(address);
-      }
-    });
-    // Never publish a session that was signed out while it was being saved.
+    await this.persistSession(address, persistedData, generation);
     this.assertSignInCurrent(generation);
 
     // Set current session
@@ -1906,11 +1972,11 @@ export class NodeUserAuthorization implements IUserAuthorization {
   /**
    * Sign out and clear the current session.
    */
-  async signOut(): Promise<void> {
-    if (this._address) {
-      await this.clearPersistedSession(this._address);
-    }
-    this._session = undefined;
+  signOut(): Promise<void> {
+    const address = this._address;
+    const signature = this._tinyCloudSession?.signature;
+    this.resetSession(this.sessionManager, this.activeSessionKeyId, this.tinycloudHosts);
+    return this.clearPersistedSession(address, signature);
   }
 
   /**
@@ -1964,7 +2030,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
    * const session = await auth.signInWithPreparedSession(prepared, signature, keyId, jwk);
    * ```
    */
-  async prepareSessionForSigning(): Promise<{
+  async prepareSessionForSigning(identity?: OpenKeySignInIdentity): Promise<{
     prepared: {
       siwe: string;
       jwk: Record<string, unknown>;
@@ -1977,8 +2043,9 @@ export class NodeUserAuthorization implements IUserAuthorization {
     chainId: number;
   }> {
     refuseCaveated(this.getCapabilityRequest()?.manifests);
-    const address = canonicalizeAddress(await this.signer.getAddress());
-    const chainId = await this.signer.getChainId();
+    const address = canonicalizeAddress(identity?.address ?? await this.signer.getAddress());
+    const chainId = identity?.chainId ?? await this.signer.getChainId();
+    if (this.requireExistingAccount) await this.resolveTinyCloudHostsForSignIn(address, chainId);
     await this.refreshNamedKeyFeatureForSignIn(address, chainId);
 
     // Create a session key
@@ -2020,6 +2087,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
       spaceId,
       jwk,
       ...this.buildSiweOverrides(),
+      ...(identity ? { uri: this.sessionManager.getDID(keyId) } : {}),
     });
 
     return {
@@ -2043,6 +2111,16 @@ export class NodeUserAuthorization implements IUserAuthorization {
    * @param jwk - The JWK from `prepareSessionForSigning()`
    */
   async signInWithPreparedSession(
+    prepared: { siwe: string; jwk: Record<string, unknown>; spaceId: string; verificationMethod: string },
+    signature: string,
+    keyId: string,
+    jwk: Record<string, unknown>,
+  ): Promise<ClientSession> {
+    const generation = this.sessionGeneration;
+    return this.completePreparedSession(prepared, signature, keyId, jwk, generation);
+  }
+
+  private async completePreparedSession(
     prepared: {
       siwe: string;
       jwk: Record<string, unknown>;
@@ -2052,7 +2130,10 @@ export class NodeUserAuthorization implements IUserAuthorization {
     signature: string,
     keyId: string,
     jwk: Record<string, unknown>,
+    generation: number,
+    identity?: OpenKeySignInIdentity,
   ): Promise<ClientSession> {
+    this.assertSignInCurrent(generation);
     // Complete session setup with the prepared session + signature
     const session = this.wasm.completeSessionSetup({
       ...prepared,
@@ -2062,10 +2143,12 @@ export class NodeUserAuthorization implements IUserAuthorization {
     // Parse address and chainId from the prepared session
     // The SIWE message contains this info, but we need to extract it
     // For now, we'll get it from the signer since it should match
-    const address = canonicalizeAddress(await this.signer.getAddress());
-    const chainId = await this.signer.getChainId();
+    const address = canonicalizeAddress(identity?.address ?? await this.signer.getAddress());
+    const chainId = identity?.chainId ?? await this.signer.getChainId();
+    this.assertSignInCurrent(generation);
 
     await this.resolveTinyCloudHostsForSignIn(address, chainId);
+    this.assertSignInCurrent(generation);
 
     // Create client session (web-core compatible)
     const clientSession: ClientSession = {
@@ -2109,7 +2192,8 @@ export class NodeUserAuthorization implements IUserAuthorization {
 
     const replicaStamp = await this.establishReplicaStamp?.(tinyCloudSession);
     const persistedData = this.persistedData(tinyCloudSession, expiresAt, createdAt, replicaStamp);
-    await this.sessionStorage.save(address, persistedData);
+    await this.persistSession(address, persistedData, generation);
+    this.assertSignInCurrent(generation);
 
     // Set current session
     this._session = clientSession;
@@ -2120,16 +2204,19 @@ export class NodeUserAuthorization implements IUserAuthorization {
 
     // Verify SDK-node protocol compatibility and discover supported features.
     await this.refreshNodeInfo();
+    this.assertSignInCurrent(generation);
 
     // Call extension hooks
     for (const ext of this.extensions) {
       if (ext.afterSignIn) {
         await ext.afterSignIn(clientSession);
+        this.assertSignInCurrent(generation);
       }
     }
 
     // Ensure space exists (creates if needed when autoCreateSpace is true)
     await this.ensureSpaceExists();
+    this.assertSignInCurrent(generation);
 
     return clientSession;
   }
@@ -2209,7 +2296,10 @@ export class NodeUserAuthorization implements IUserAuthorization {
   /** Finish address, host and SIWE preparation before an approval click. */
   async prepareOpenKeySignIn(
     options?: Parameters<NodeUserAuthorization["signInWithOpenKey"]>[1],
+    identity?: OpenKeySignInIdentity,
   ): Promise<PreparedOpenKeyAuthorization> {
+    const generation = this.sessionGeneration;
+    identity = identity ? Object.freeze({ ...identity, address: canonicalizeAddress(identity.address) }) : undefined;
     refuseCaveated(this.getCapabilityRequest()?.manifests);
     assertMaxExpiresAt(options?.maxExpiresAt);
     // A per-call host override is the host this session will actually use,
@@ -2222,17 +2312,21 @@ export class NodeUserAuthorization implements IUserAuthorization {
         throw new Error("OpenKey authorization host must not be empty");
       }
       this.tinycloudHosts = [overrideHost];
+      this.registryNoEntryHosts = this.tinycloudHosts;
     }
 
     // OpenKey binds the target host into its authorization context. Resolve
     // the same host activation will use before asking OpenKey to prepare or
     // sign anything; signInWithPreparedSession is intentionally too late.
-    const signingAddress = canonicalizeAddress(await this.signer.getAddress());
-    const signingChainId = await this.signer.getChainId();
+    const signingAddress = canonicalizeAddress(identity?.address ?? await this.signer.getAddress());
+    const signingChainId = identity?.chainId ?? await this.signer.getChainId();
+    this.assertSignInCurrent(generation);
     await this.resolveTinyCloudHostsForSignIn(signingAddress, signingChainId);
+    this.assertSignInCurrent(generation);
 
     // 1. Prepare — this creates a SIWE bound to a fresh session key.
-    const { prepared, keyId, jwk, address, chainId } = await this.prepareSessionForSigning();
+    const { prepared, keyId, jwk, address, chainId } = await this.prepareSessionForSigning(identity);
+    this.assertSignInCurrent(generation);
 
     // 2. Build the presentation envelope from the instance manifest (if
     //    any). This is the SUPPORTED production path for surfacing an
@@ -2259,24 +2353,48 @@ export class NodeUserAuthorization implements IUserAuthorization {
       jwk: publicJwk(jwk),
       verificationMethod: prepared.verificationMethod,
       host: hostHint,
-      keyId: options?.openkeyKeyId,
+      keyId: identity?.keyId ?? options?.openkeyKeyId,
       presentation,
       // Present only when set, so the default request shape is unchanged.
       ...(options?.expiryChangeable === true ? { expiryChangeable: true } : {}),
     };
     return {
+      ...(identity ? { identity } : {}),
       request: originalRequest,
       prepared,
       keyId,
       jwk,
       address,
       chainId,
-      generation: this.sessionGeneration,
+      generation,
       createdAt: Date.now(),
       // Kept in memory with the pending request. It is not part of `request`, so it is never sent to OpenKey, and
       // nothing here is persisted.
       ...(options?.maxExpiresAt === undefined ? {} : { maxExpiresAt: options.maxExpiresAt }),
     };
+  }
+
+  /** Verify the new continuation before OpenKey resolves and before any activation. */
+  async verifyPreparedOpenKeySignIn(
+    pending: PreparedOpenKeyAuthorization,
+    result: OpenKeyAuthorizationResultV1,
+    origin: string,
+  ): Promise<void> {
+    this.assertSignInCurrent(pending.generation);
+    if (!pending.identity || Date.now() - pending.createdAt > 5 * 60_000) throw new Error("OpenKey identity preparation expired");
+    const original = new SiweMessage(pending.request.siwe);
+    const key = publicJwk(pending.jwk);
+    if (!key || original.address.toLowerCase() !== pending.identity.address.toLowerCase() ||
+        original.chainId !== pending.identity.chainId || original.domain !== new URL(origin).host ||
+        original.uri !== this.sessionManager.getDID(pending.keyId)) throw new Error("OpenKey identity or session key changed");
+    const localKey = publicJwk(JSON.parse(this.sessionManager.jwk(pending.keyId) ?? "null"));
+    if (!localKey || ["kty", "crv", "x"].some(field => key[field] !== localKey[field] || key[field] !== pending.request.jwk[field])) {
+      throw new Error("OpenKey session JWK changed");
+    }
+    await this.verifyOpenKeyResult(result, pending.prepared, {
+      identity: pending.identity, allowExpirationChange: pending.request.expiryChangeable === true, maxExpiresAt: pending.maxExpiresAt,
+    });
+    this.assertSignInCurrent(pending.generation);
   }
 
   /** Complete a prepared approval. The caller starts authorization before awaiting this method. */
@@ -2298,14 +2416,17 @@ export class NodeUserAuthorization implements IUserAuthorization {
     for (let attempt = 0; ; ) {
       try {
         result ??= await authorization;
+        this.assertSignInCurrent(pending.generation);
         signed = await this.verifyOpenKeyResult(result, prepared, {
           // Relax only for a request that actually carried the opt-in.
           allowExpirationChange: originalRequest.expiryChangeable === true,
           maxExpiresAt: pending.maxExpiresAt,
+          identity: pending.identity,
         });
         signature = result.signature;
         break;
       } catch (error) {
+        this.assertSignInCurrent(pending.generation);
         if (!options?.retryResult) throw error;
         const next = await options.retryResult(
           error instanceof Error ? error : new Error(String(error)),
@@ -2317,7 +2438,8 @@ export class NodeUserAuthorization implements IUserAuthorization {
       }
     }
     // Verification retries never repeat network activation or create a new SIWE.
-    return this.signInWithPreparedSession(signed, signature, keyId, jwk);
+    this.assertSignInCurrent(pending.generation);
+    return this.completePreparedSession(signed, signature, keyId, jwk, pending.generation, pending.identity);
   }
 
   /**
@@ -2423,18 +2545,20 @@ export class NodeUserAuthorization implements IUserAuthorization {
     jwk: Record<string, unknown>,
     options?: { expiryChangeable?: boolean; maxExpiresAt?: OpenKeyMaxExpiresAt },
   ): Promise<ClientSession> {
+    const generation = this.sessionGeneration;
     const signed = await this.verifyOpenKeyResult(result, prepared, {
       allowExpirationChange: options?.expiryChangeable === true,
       maxExpiresAt: options?.maxExpiresAt,
     });
-    return this.signInWithPreparedSession(signed, result.signature, keyId, jwk);
+    this.assertSignInCurrent(generation);
+    return this.completePreparedSession(signed, result.signature, keyId, jwk, generation);
   }
 
   /** Validate a candidate without activating a network session, so paste retries reuse one preparation. */
   private async verifyOpenKeyResult(
     result: OpenKeyAuthorizationResultV1,
     prepared: PreparedOpenKeySession,
-    options?: { allowExpirationChange?: boolean; maxExpiresAt?: OpenKeyMaxExpiresAt },
+    options?: { allowExpirationChange?: boolean; maxExpiresAt?: OpenKeyMaxExpiresAt; identity?: OpenKeySignInIdentity },
   ): Promise<PreparedOpenKeySession> {
     if (result.protocolVersion !== 1) {
       throw new Error(`Unsupported OpenKey protocol version ${result.protocolVersion}`);
@@ -2450,56 +2574,29 @@ export class NodeUserAuthorization implements IUserAuthorization {
     // Verify the signer matches what we expect. If the address that signed
     // does not match the address the local signer will present, refuse the
     // session — the widget returned bytes signed by someone else.
-    const expectedAddress = canonicalizeAddress(await this.signer.getAddress());
+    const expectedAddress = canonicalizeAddress(options?.identity?.address ?? await this.signer.getAddress());
     if (canonicalizeAddress(result.address) !== expectedAddress) {
       throw new Error(
         `OpenKey returned signature from ${result.address} but expected ${expectedAddress}`,
       );
     }
 
-    // (2) Recover the signer from the signature over the exact bytes we are
-    // about to complete the session with. SiweMessage.verify() calls
-    // ethers.verifyMessage(EIP4361Message, signature) internally and matches
-    // the recovered address (case-insensitive) against the message's address
-    // field. Any mismatch throws, which is exactly the failure mode we want.
+    // Verify the bytes returned by OpenKey before interpreting their fields.
+    if (!await verifyEip191MessageSignature(result.signedMessage, result.signature, expectedAddress)) {
+      throw new Error("OpenKey signature verification failed");
+    }
     let parsedSignedSiwe: SiweMessage;
     try {
       parsedSignedSiwe = new SiweMessage(result.signedMessage);
-    } catch (err) {
-      throw new Error(
-        `OpenKey signedMessage is not a parseable SIWE: ${(err as Error).message}`,
-      );
+    } catch {
+      throw new Error("OpenKey signedMessage is not a parseable SIWE");
     }
-    const verifyResult = await parsedSignedSiwe.verify(
-      { signature: result.signature },
-      { suppressExceptions: true },
-    );
-    if (!verifyResult.success) {
-      const errData = verifyResult.error;
-      const type =
-        errData && typeof errData === "object" && "type" in errData
-          ? (errData as { type?: string }).type
-          : undefined;
-      const details =
-        errData && typeof errData === "object" && "expected" in errData
-          ? ` (expected=${(errData as { expected?: unknown }).expected}, received=${(errData as { received?: unknown }).received})`
-          : "";
-      throw new Error(
-        `OpenKey signature verification failed${type ? `: ${type}` : ""}${details}`,
-      );
+    if (new SiweMessage(parsedSignedSiwe).prepareMessage() !== result.signedMessage) {
+      throw new Error("OpenKey signedMessage is not a canonical SIWE");
     }
-    // Belt-and-braces: the SIWE `address` field must match what OpenKey
-    // reported and what the local signer will present. verify() checks
-    // signature-vs-siwe-address; we additionally cross-check the caller's
-    // claim and the local signer.
-    if (
-      canonicalizeAddress(parsedSignedSiwe.address) !== expectedAddress
-    ) {
-      throw new Error(
-        `OpenKey signedMessage.address (${parsedSignedSiwe.address}) does not match local signer address (${expectedAddress})`,
-      );
+    if (canonicalizeAddress(parsedSignedSiwe.address) !== expectedAddress) {
+      throw new Error("OpenKey signedMessage owner does not match the expected signer");
     }
-
     // The expiry this code goes on to read (persisted `expiresAt`, the immutable-field comparison, the changed-expiry
     // check) comes from the message's `Expiration Time` LINES. The parsed message must have an expiry of its own, and it
     // must be the same instant as that line, so text inside the (ReCap-bearing, uncompared) statement can never stand in
@@ -2512,6 +2609,17 @@ export class NodeUserAuthorization implements IUserAuthorization {
     const parsedExpiryMs = Date.parse(parsedExpiry);
     if (!Number.isFinite(parsedExpiryMs) || parsedExpiryMs !== Date.parse(lineExpiry)) {
       throw new Error("OpenKey signedMessage Expiration Time line does not match the message's own expiry");
+    }
+
+    const now = Date.now();
+    const clockSkew = 30_000;
+    const issuedAt = Date.parse(parsedSignedSiwe.issuedAt ?? "");
+    const expiresAt = Date.parse(parsedSignedSiwe.expirationTime ?? "");
+    const notBefore = parsedSignedSiwe.notBefore === undefined ? undefined : Date.parse(parsedSignedSiwe.notBefore);
+    if (!Number.isFinite(issuedAt) || issuedAt > now + clockSkew ||
+        !Number.isFinite(expiresAt) || expiresAt <= now || issuedAt >= expiresAt ||
+        (notBefore !== undefined && (!Number.isFinite(notBefore) || notBefore > now + clockSkew || notBefore >= expiresAt))) {
+      throw new Error("OpenKey signedMessage is outside its valid time range");
     }
 
     // (3) Immutable-fields comparison. Any drift on domain/address/URI/version/
@@ -2528,6 +2636,14 @@ export class NodeUserAuthorization implements IUserAuthorization {
     // plain SIWE flows (no urn:recap: resource) the statement remains
     // byte-immutable.
     const originalHasRecap = /(?:^|\n)-\s+urn:recap:/i.test(prepared.siwe);
+    if (originalHasRecap) {
+      try {
+        if (!this.wasm.parseVerifiedRecapFromSiwe) throw new Error("Strict ReCap verification unavailable");
+        this.wasm.parseVerifiedRecapFromSiwe(result.signedMessage);
+      } catch {
+        throw new Error("OpenKey signedMessage has an invalid ReCap");
+      }
+    }
     const originalFields = extractImmutableSiweFields(prepared.siwe);
     const signedFields = extractImmutableSiweFields(result.signedMessage);
     if (options?.allowExpirationChange === true) {
@@ -2928,11 +3044,18 @@ export class NodeUserAuthorization implements IUserAuthorization {
    * Clear persisted session data. With `ownSignature`, a stored session that provably has a different
    * signature (a newer sign-in for the same address) is left alone.
    */
-  async clearPersistedSession(address?: string, ownSignature?: string): Promise<void> {
+  clearPersistedSession(address?: string, ownSignature?: string): Promise<void> {
+    const invalidations: Promise<void>[] = [];
     const targetAddress = address ?? this._address;
     if (targetAddress) {
-      await clearPersistedSessionIfOwn(this.sessionStorage, targetAddress, ownSignature);
+      invalidations.push(clearPersistedSessionIfOwn(this.sessionStorage, targetAddress, ownSignature));
     }
+    for (const pending of this.pendingPersistence) {
+      if (pending.address !== targetAddress || pending.signature !== ownSignature) {
+        invalidations.push(clearPersistedSessionIfOwn(this.sessionStorage, pending.address, pending.signature));
+      }
+    }
+    return Promise.all(invalidations).then(() => undefined);
   }
 
   /**

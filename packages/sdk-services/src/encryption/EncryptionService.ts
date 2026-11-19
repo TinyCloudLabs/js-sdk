@@ -104,6 +104,10 @@ export interface DecryptTransport {
 export { DecryptTransportResponseError } from "@tinycloud/sdk-services/internal/decrypt-transport-response-error";
 
 export interface EncryptionServiceConfig {
+  /** Write TCW2 key wraps. Disabled by default. */
+  keyWrapV2?: boolean;
+  /** Require TCW2 incoming network-key wraps, not signed receiver responses. Disabled by default. */
+  requireKeyWrapV2?: boolean;
   crypto: EncryptionCrypto;
   signer: DecryptInvocationSigner;
   transport: DecryptTransport;
@@ -180,7 +184,8 @@ export class EncryptionService
         networkPublicKey,
         plaintext,
         ...(options?.aad !== undefined ? { aad: options.aad } : {}),
-        alg: options?.alg ?? descriptor.alg,
+        keyWrapV2: options?.keyWrapV2 ?? this._config.keyWrapV2 ?? false,
+        ...(options?.alg !== undefined ? { alg: options.alg } : {}),
         keyVersion: options?.keyVersion ?? descriptor.keyVersion,
         ...(options?.metadata !== undefined ? { metadata: options.metadata } : {}),
       });
@@ -204,7 +209,7 @@ export class EncryptionService
   ): Promise<Result<Uint8Array, EncryptionError>> {
     try {
       this.assertActive();
-      const validated = validateEnvelope(this.crypto, envelope);
+      const validated = validateEnvelope(this.crypto, envelope, this._config.requireKeyWrapV2 ?? false);
       if (!validated.ok) return validated;
       if (
         options?.aad !== undefined &&
@@ -359,6 +364,7 @@ export class EncryptionService
         this.crypto,
         receiverKey.privateKey,
         verified.data,
+        { purpose: "receiver-key", networkId: body.networkId, keyPath: body.keyPath ?? "", keyVersion: body.keyVersion, metadata: {} },
       );
       const plaintext = decryptEnvelopeWithKey(
         this.crypto,

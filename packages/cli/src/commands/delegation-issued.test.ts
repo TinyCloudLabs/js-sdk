@@ -237,7 +237,7 @@ describe("tc delegation list --granted from a delegate profile", () => {
     ]);
     for (const query of queries) {
       const claims = claimsOf(query.headers.Authorization!);
-      expect(claims.att).toEqual({ [`${AGENT_DID}/delegation`]: { "tinycloud.delegation/list": [{}] } });
+      expect(claims.att).toEqual({ [`tinycloud:${AGENT_DID.slice("did:".length)}:agent/delegation`]: { "tinycloud.delegation/list": [{}] } });
       expect(claims.prf).toEqual([]);
     }
   });

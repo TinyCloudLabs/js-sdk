@@ -166,13 +166,12 @@ version metadata and make the immutable release checkout fail the clean-tree pub
   entry to `agent.changelog.md` so future agents can see what changed and why.
 - PR descriptions should list cross-repo dependencies, node/API implications, tests run, and any
   required changesets.
-- Exact Share-key creation is runtime consent, not a static manifest entry.
-  `TinyCloudWeb.requestPermissions(entries, { expiryMs })` accepts only
-  `tinycloud.encryption/key.create` on the authenticated owner's canonical
-  `urn:tinycloud:encryption:<ownerDid>:default/share/<id>` key. Approval stays
-  bound to the same signed session; decline, session replacement and unsupported
-  native shells cannot install a grant. Keep the static manifest and native
-  ceiling restrictions intact.
+- Share publishing never creates the share key and never requests
+  `tinycloud.encryption/key.create`: it encrypts to the deterministic
+  `share/<id>` key's public key (unauthenticated GET), and the node records the
+  key when the share policy is registered. The `<network>/share/` manifest
+  prefix accepts `decrypt` only; `key.create` remains for `apps/` keys via
+  `manifest.keys`.
 - The public ChatGPT candidate is `/chatgpt/mcp`, not the broad `/mcp` service.
   Tool bindings are public opt-in; keep recovery-tool mapping restricted to the
   selected surface. Public approvals/state are separate and require matching
@@ -181,34 +180,61 @@ version metadata and make the immutable release checkout fail the clean-tree pub
   canonical write outcomes must not be truncated. Package/review state lives
   under `packages/mcp/plugin`. Default-branch merges and deployment require
   explicit owner approval; never enable auto-merge or bypass that gate.
+- `/claude/mcp`, `/grok/mcp` and `/muse/mcp` are the same restricted surface as
+  `/chatgpt/mcp`, one address per assistant directory (`RESTRICTED_ADDRESS_PREFIXES`
+  in `packages/mcp/src/http.ts`). Each is its own OAuth audience with its own
+  approval route and tenant state. A new prefix needs the matching OpenKey
+  audience and exact callback, and the connector's token-status client
+  registered for the new resource, before it can serve a request. A change one
+  directory's review asks for goes on that address only: `/claude/mcp` repeats
+  each tool's title as `annotations.title` (`ANNOTATION_TITLE_PREFIXES`), and
+  the other addresses' `tools/list` must stay byte-identical.
+- TC-2393's hosted-client requirements and source/live evidence are in
+  `packages/mcp/plugin/client-compatibility.md`. Keep custom connection support
+  separate from official-directory acceptance; metadata is not authenticated QA.
 - Hosted personal apps live in `packages/operations/src/operations/apps.ts` and
   `src/tc-apps/`. The published skill is pinned under `src/tc-apps/vendor/`;
   update it with `bun scripts/sync-tc-apps-rules.ts`, then
   `bun run generate:operations-mcp`. Generation/checking is offline thereafter.
-- Personal apps have two layouts, chosen per app as the skill's `layout.sh` does
-  (`src/tc-apps/layout.ts`). `new`: space `applications`, keys under
-  `xyz.tinycloud.tinyapps.<app>/`, discovery entry
-  `xyz.tinycloud.tinyapps.catalog/<app>/entry`, one SQL copy per app at
-  `<root>index`. `legacy`: space `default`, `xyz.tinycloud.agent-data/`, one
-  shared copy. Legacy apps stay legacy until the owner moves them. Keep the
-  two rules in step with the skill: the discovery entry, written last by a
-  move, is what switches an app to `new`. Approvals are per app: a KV path
-  prefix matches only on a `/` boundary, so no single grant covers every app.
+- Personal apps retain their existing layout (`src/tc-apps/layout.ts`). New apps
+  use space `applications`, keys `xyz.tinycloud.tinyapps.<app>/`, discovery entry
+  `xyz.tinycloud.tinyapps.catalog/<app>/entry`, and SQL copy `<root>index`.
+  Existing legacy apps remain readable and writable in space `default` under
+  `xyz.tinycloud.agent-data/`; context reuses their existing grants without
+  requiring new-space approval. This restores access after the TC-2416 cutoff;
+  never silently migrate records or create a new-layout replacement for a known
+  legacy app. A readable new discovery entry selects that layout over its legacy
+  namesake. Query accepts `layout: "legacy"` for the shared
+  `xyz.tinycloud.agent-data.index` copy; omission still selects the new layout.
+  Legacy SQL keys are full KV keys and `entries` includes `app`; new copies use
+  app-relative keys. The migration tool stays removed. New-layout approvals
+  retain their per-app boundaries in `applications`; legacy permissions retain
+  the original legacy-root scope.
 - The rules generator adapts the CLI examples to MCP write inputs: keep the
   vendored CLI attribution intact. MCP put/move values omit top-level `by`,
   including edits of read-back records and catalogs. Keep this restriction
   expressible in the generated JSON Schema; stored/read-back records retain `by`.
 - Personal-app context can bundle one app's folder and the app list via `app`
-  and `access` (`change` by default, or `read`). A generic change bundle includes app-list
-  put so creating the app needs only the separate older-catalog check; omitting
-  `app` retains per-call approvals. Reads reuse an existing read-only folder grant.
+  and `access` (`change` by default, or `read`). A generic change bundle grants
+  catalog-root get/list, get/put only on `xyz.tinycloud.tinyapps.catalog/<app>/entry`,
+  and CRUD on that app's folder. Never grant catalog-root put. Omitting `app`
+  retains per-call approvals; read access never adds discovery-entry writes.
+  Reads reuse an existing read-only folder grant.
   Catalog slugs are handled before generic app-id validation: Health Log bundles
   app-list read and its exact database read/write; Recipes bundles app-list and
   knowledge reads and learns its database from the notes. Both support read-only
   access; Recipes never requests writes. Catalog grants stay in applications.
+  Previously signed catalog-wide grants remain valid and reusable until revoked
+  or expired; narrower requests do not retroactively narrow them.
+- Hosted MCP passes its configured public origin as ordinary OpenKey
+  `requesterOrigin`; the prepared SIWE domain and consent label use that host.
+  This is caller-reported attribution, not verified app identity or a signed
+  manifest. Deploy matching OpenKey API/web support before the MCP change,
+  only with owner authorization. Approval reasons say TinyCloud connector,
+  describe each scope's actual actions, and do not change vendored CLI skills.
 - Never add a response `deadlineMs` to personal-record writes: deadlines abandon
   work rather than cancel it. Preserve per-op outcomes after any committed write,
-  including a partial move or failed derived-copy upkeep.
+  including a failed derived-copy upkeep.
 - Generic retrieval lives in `packages/operations/src/operations/read.ts` and
   `read-scope.ts`. Explicit subtree/database consent uses the existing
   request-bound approval kernel; GET/HEAD must never broaden implicitly.
@@ -228,3 +254,12 @@ version metadata and make the immutable release checkout fail the clean-tree pub
   database or table is `NODE_ERROR` with `details.reason: "sql_database_missing"`
   (operations/src/operations/sql.ts). Drop that step when onboarding grants
   the schema for catalog apps (TC-2430).
+- A surface that does not register the catalog apps' tools (`CATALOG_APP_TOOLS`
+  in `packages/mcp/src/tools.ts`; today the restricted addresses) neither offers
+  nor accepts a catalog slug: `tinycloud_apps_context`'s `app` description omits
+  them, and `app: "healthlog"` or `"recipes"` is answered before the kernel with
+  `INPUT_INVALID`, `details.reason: "catalog_app_unavailable"` and the tiny-app
+  link, so no approval is planned. `/mcp` and `operations.json` are unaffected.
+  Keep the catalog section in the rules those addresses return: it is what makes
+  an assistant give the app link for a new meal or body-weight request instead
+  of creating a generic app for it.

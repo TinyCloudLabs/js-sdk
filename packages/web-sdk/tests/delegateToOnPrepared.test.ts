@@ -48,6 +48,7 @@ afterAll(() => {
 
 const BOB_DID = "did:pkh:eip155:1:0x00000000000000000000000000000000000000BB";
 const OWNER = "0x0000000000000000000000000000000000000001";
+const SPACE = `tinycloud:pkh:eip155:1:${OWNER}:default`;
 
 let events: string[] = [];
 let registry: UnregisteredLocationRegistry;
@@ -77,7 +78,7 @@ mock.module("@tinycloud/web-sdk-wasm", () => ({
         expiry: Math.floor((Date.now() + 3600_000) / 1000),
         resources: [{
           service: "kv",
-          space: "space://web",
+          space: SPACE,
           path: "items/",
           actions: ["tinycloud.kv/get"],
         }],
@@ -154,7 +155,7 @@ async function makeSignedInWeb(): Promise<InstanceType<typeof TinyCloudWeb>> {
         address: OWNER,
         chainId: 1,
         sessionKey: "default",
-        spaceId: "space://web",
+        spaceId: SPACE,
         delegationCid: "bafyparent",
         delegationHeader: { Authorization: "Bearer parent" },
         verificationMethod: "did:key:z6MkWebSession",
