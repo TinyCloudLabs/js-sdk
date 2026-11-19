@@ -42,7 +42,6 @@ async function recordPrivateDiagnostic(): Promise<void> {
 describe("tinycloud bug-report --attach", () => {
   test("a declined confirmation sends no request and does not expose local secrets", async () => {
     await recordPrivateDiagnostic();
-    delete process.env.TINYCLOUD_BUG_ATTACH_TOKEN;
     const stored = await readFile(diagnosticLogPath(root), "utf8");
     expect(stored).not.toContain("sam@example.com");
     expect(stored).not.toContain("did:key:z6Mkabc123");
