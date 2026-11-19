@@ -30,7 +30,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - id: setup
         uses: ./.github/actions/conformance-setup
       - name: Run MCP Phala deploy environment consumer regression
@@ -150,7 +150,7 @@ jobs:
         # the only edit needed to change the split.
         shard: [0, 1, 2]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: ./.github/actions/conformance-setup
       # One bun process per file, found by glob so new files are picked up.
       # Fails on a failing file, on a file that runs past its per-file timeout,

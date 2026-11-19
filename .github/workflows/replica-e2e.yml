@@ -46,7 +46,7 @@ jobs:
       matrix:
         database: [sqlite, postgres]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
 
@@ -88,23 +88,23 @@ jobs:
           fi
           echo "relevant=$relevant" >> "$GITHUB_OUTPUT"
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         if: ${{ steps.relevance.outputs.relevant == 'true' }}
         with:
           node-version: 22.23.2
 
-      - uses: oven-sh/setup-bun@v2
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         if: ${{ steps.relevance.outputs.relevant == 'true' }}
         with:
           bun-version: 1.3.14
       - name: Cache Bun packages
         if: ${{ steps.relevance.outputs.relevant == 'true' }}
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: ~/.bun/install/cache
           key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
         if: ${{ steps.relevance.outputs.relevant == 'true' }}
         with:
           toolchain: 1.99.0
@@ -205,7 +205,7 @@ jobs:
       # otherwise a size failure cascades into misleading ENOENT failures for the node binary.
       - name: Log in to GHCR
         if: ${{ !cancelled() && steps.relevance.outputs.relevant == 'true' }}
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -277,7 +277,7 @@ jobs:
         run: bun .github/scripts/check-replica-junit.mjs ${{ matrix.database == 'sqlite' && '--cli-replica-command' || '' }}
       - name: Upload backend JUnit reports
         if: ${{ always() && steps.relevance.outputs.relevant == 'true' }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: tc858-junit-${{ matrix.database == 'postgres' && 'pg16' || 'sqlite' }}
           path: ${{ runner.temp }}/replica-junit/*.xml
@@ -363,7 +363,7 @@ jobs:
     env:
       PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.cache/ms-playwright
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
 
@@ -405,23 +405,23 @@ jobs:
           fi
           echo "relevant=$relevant" >> "$GITHUB_OUTPUT"
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         if: ${{ steps.relevance.outputs.relevant == 'true' }}
         with:
           node-version: 22.x
 
-      - uses: oven-sh/setup-bun@v2
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         if: ${{ steps.relevance.outputs.relevant == 'true' }}
         with:
           bun-version: 1.3.14
       - name: Cache Bun packages
         if: ${{ steps.relevance.outputs.relevant == 'true' }}
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: ~/.bun/install/cache
           key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
         if: ${{ steps.relevance.outputs.relevant == 'true' }}
         with:
           targets: wasm32-unknown-unknown
@@ -451,7 +451,7 @@ jobs:
 
       - name: Cache Playwright browsers
         if: ${{ steps.relevance.outputs.relevant == 'true' }}
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: ${{ env.PLAYWRIGHT_BROWSERS_PATH }}
           key: playwright-${{ runner.os }}-${{ steps.playwright-version.outputs.version }}
