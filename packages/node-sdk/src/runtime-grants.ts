@@ -266,8 +266,10 @@ export async function issueRuntimeGrants<Operation>(
 
   // The session may have been replaced or signed out while signing.
   graph.assertActive();
-  const rawCarrier = spaces.find((spaceId) => !missingSpaceIds.includes(spaceId)) ??
-    (rawEntries.length > 0 ? spaces[0] : undefined);
+  // Raw resources ride only on an activated session: a refused (404) one installs nothing.
+  const rawCarrier = activateResult.success
+    ? spaces.find((spaceId) => !missingSpaceIds.includes(spaceId)) ?? (rawEntries.length > 0 ? spaces[0] : undefined)
+    : undefined;
   const delegations: PortableDelegation[] = [];
   for (const spaceId of spaces) {
     const entries = [

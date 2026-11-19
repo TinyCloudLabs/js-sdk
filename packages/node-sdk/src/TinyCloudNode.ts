@@ -7741,10 +7741,17 @@ export class TinyCloudNode {
     return { recap: exactVerifiedRecap(verified), expiresAt };
   }
 
+  /**
+   * `routedNotFoundIsFault`: a 404 from a node the registry routes a requested
+   * space to is a routing fault (`ResourceNotRoutedError`) instead of the
+   * node's refusal. Only runtime grants opt in; replay and best-effort
+   * activations keep the refusal.
+   */
   private async activateResourceSession(
     delegationHeader: TinyCloudSession["delegationHeader"],
     resources: Iterable<string>,
     signal: AbortSignal = this._serviceGraph.signal,
+    { routedNotFoundIsFault = false }: { routedNotFoundIsFault?: boolean } = {},
   ): Promise<SpaceHostResult> {
     const targets = new Map<string, { destination: ResourceDestination; spaces: string[] }>();
     const routedSpaces: string[] = [];
@@ -7796,7 +7803,7 @@ export class TinyCloudNode {
           }
           succeeded.push(target.url);
           accepted.push(result);
-        } else if (result.status === 404 && spaces.length > 0) {
+        } else if (routedNotFoundIsFault && result.status === 404 && spaces.length > 0) {
           // The registry routes these spaces to this node: its 404 is a routing fault, not a missing space.
           failed.push({ url: target.url, status: result.status, cause: new ResourceNotRoutedError(spaces[0]!) });
         } else {
@@ -7980,7 +7987,8 @@ export class TinyCloudNode {
       abilities: (entries) => this.permissionsToAbilities(entries),
       resources: (entries, spaceId) => this.delegatedResourcesForEntries(entries, spaceId),
       activationResources: (delegation) => this.activationResources(delegation),
-      activate: (header, resources, signal) => this.activateResourceSession(header, resources, signal),
+      activate: (header, resources, signal) =>
+        this.activateResourceSession(header, resources, signal, { routedNotFoundIsFault: true }),
       spaceIdsEqual: (a, b) => this.spaceIdsEqual(a, b),
       operations: (entries, spaceId) => this.permissionOperations(entries, spaceId),
       install: (grant) => this.runtimePermissionGrants.push(grant),
