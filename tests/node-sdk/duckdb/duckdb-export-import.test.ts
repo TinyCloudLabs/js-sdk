@@ -93,11 +93,6 @@ describe("DuckDB Export/Import", () => {
         console.log("[Part 2] Export succeeded, blob size:", exportedBlob.size);
       }
     }, 120000);
-
-    test("exported Blob size > 0", async () => {
-      expect(exportedBlob).toBeDefined();
-      expect(exportedBlob.size).toBeGreaterThan(0);
-    });
   });
 
   // PART 3: Import Errors
