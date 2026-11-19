@@ -3381,5 +3381,23 @@
       "ceiling": { "index.mjs": 1528939, "index.cjs": 1462340 }
     },
     "reason": "SharingService refuses tinycloud.delegation actions in share links (sharing.generate, the child delegation a recipient creates from a received link, and preflightGenerate); sdk-core is bundled into the web-sdk root. Canonical Node 22/Bun 1.3.14 CI on #1043 (800a57fb, master 400cf7f1 merged in) measured index.mjs 1528939 and index.cjs 1462340 gzip -9 bytes: +103 and +48 over the TC-3285 ceilings 1528836 and 1462292. No other ceiling moves. Details: TC-3286"
+  },
+  "tc2944VaultPathClassifierRoot": {
+    "label": "vault paths classified by what they cover, for the dedicated vault address (TC-2944)",
+    "ruling": "size-ruling: Naomi 2026-11-19, TC-2944: web-sdk root bundle growth from the vault-path classifier accepted at CI's measured numbers (about +700 / +330 B); security routing. Details: TC-2944",
+    "base": "e7e5d47bf76ea6c5a851c57bec470c108725299b",
+    "sourceCommits": ["f5259377681da055a78d5a4508176f939b4eaa35"],
+    "canonicalCI": {
+      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44533528238",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44533528238/job/135592824606",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44533528238/job/135592824800"
+      ]
+    },
+    "root": {
+      "delta": { "index.mjs": 686, "index.cjs": 273 },
+      "ceiling": { "index.mjs": 1529625, "index.cjs": 1462613 }
+    },
+    "reason": "The vault routing classifier (sdk-services resourceRouting, sdk-core delegation classification, node-sdk activation routing) reads which resources a request or grant names or covers by their ancestors, so a request or grant that reaches vault data goes to the dedicated vault address; sdk-services, sdk-core and node-sdk are bundled into the web-sdk root. Canonical Node 22/Bun 1.3.14 CI on #1069 (f5259377, master e7e5d47b merged in) measured index.mjs 1529625 and index.cjs 1462613 gzip -9 bytes: +686 and +273 over the TC-3286 ceilings 1528939 and 1462340 (+722 and +361 over the merge base). No other ceiling moves. Details: TC-2944"
   }
 }
