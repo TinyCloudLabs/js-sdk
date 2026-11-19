@@ -909,7 +909,7 @@ describe("an expired or invalid stored session needs a new sign-in, not a retry"
     expect(shareCliError(failure)).toMatchObject({
       code: "AUTH_REQUIRED",
       exitCode: 3,
-      message: expect.stringContaining("tc --profile expired auth login --device --manifest builtin:share-publishing"),
+      message: expect.stringContaining("tc --profile expired auth login --manifest builtin:share-publishing"),
     });
     expect(requests).toEqual([]);
     expect(shareRequests).not.toContain("/invoke");

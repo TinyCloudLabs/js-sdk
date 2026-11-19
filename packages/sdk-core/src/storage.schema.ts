@@ -101,6 +101,8 @@ export const PersistedSessionDataSchema = z.object({
    * existed — those restore and lazily re-resolve their hosts.
    */
   tinycloudHosts: z.array(z.string()).optional(),
+  /** Last hosting observation for the primary space on the persisted host. */
+  spaceHosting: z.enum(["hosted", "not-hosted"]).optional(),
   /**
    * Replica gate stamp from a fresh sign-in (`establishSessionStamp`). Restore validates it with
    * `restoreSessionStamp` and never re-establishes it. Absent for sessions persisted before

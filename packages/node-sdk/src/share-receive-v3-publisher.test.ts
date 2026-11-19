@@ -4,7 +4,7 @@ import { sha256 } from "@noble/hashes/sha256";
 import { base58btc } from "multiformats/bases/base58";
 import { httpUrlToMultiaddr, signLocationRecord, type CredentialFlowDescriptor } from "@tinycloud/sdk-core";
 import { canonicalize, signCompactUcanAuthorization, toBase64Url, verifyCompactUcanAuthorization } from "@tinycloud/share-envelope";
-import { publishEmailShareV3 } from "../../cli/src/share/email-publish-v3.js";
+import { publishEmailShareV3 } from "./share-publish.js";
 import * as emailProof from "./credentials/email-proof.js";
 import { completeEmailProofWithIssuerKeys, createEd25519HolderSigner } from "./credentials/email-proof.js";
 import { makeWitness } from "./credentials/test-support/witness-stub.mjs";

@@ -22,7 +22,31 @@ import { publicJwk, type CapabilityPresentationEnvelopeV1 } from "@tinycloud/sdk
  * `OpenKey` instance from `@openkey/sdk` — without either package
  * needing to import from the other.
  */
+export interface OpenKeySignInIdentity {
+  readonly address: string;
+  readonly chainId: number;
+  readonly keyId: string;
+  readonly keyType: "MANAGED" | "EXTERNAL";
+  readonly requestId: string;
+}
+
+export interface OpenKeyContinuation {
+  cancel(): void | Promise<void>;
+  authorize(prepare: (identity: OpenKeySignInIdentity) => Promise<OpenKeyBridgeInput>): ReturnType<OpenKeyAuthorizeTinyCloud["authorizeTinyCloud"]>;
+}
+
 export interface OpenKeyAuthorizeTinyCloud {
+  supportsTinyCloudSignIn?(): Promise<boolean>;
+  getContinuationProvider?(): { request(args: { method: string; params?: unknown[] }): Promise<unknown> };
+  beginTinyCloudSignIn?(options: {
+    chainId: number | (() => Promise<number>);
+    verify: (input: {
+      result: Awaited<ReturnType<OpenKeyAuthorizeTinyCloud["authorizeTinyCloud"]>>;
+      identity: OpenKeySignInIdentity;
+      request: Omit<OpenKeyBridgeInput, "verificationMethod">;
+      origin: string;
+    }) => Promise<boolean>;
+  }): OpenKeyContinuation;
   authorizeTinyCloud(request: {
     protocolVersion: 1;
     siwe: string;

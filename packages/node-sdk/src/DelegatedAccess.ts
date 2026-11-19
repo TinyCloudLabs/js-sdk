@@ -92,9 +92,12 @@ export class DelegatedAccess {
     });
     this._serviceContext = lifetime ? lifetime.track(context) : context;
 
-    // Create and initialize KV service with path prefix from delegation
-    // Strip trailing slash to avoid double-slash in paths
-    const prefix = this._delegation.path.replace(/\/$/, '');
+    // Create and initialize KV service with path prefix from delegation.
+    // Strip trailing slash to avoid double-slash in paths. A delegation of
+    // several resources has no one prefix: its KV takes full keys.
+    const prefix = (this._delegation.resources?.length ?? 0) > 1
+      ? undefined
+      : this._delegation.path.replace(/\/$/, '');
     this._kv = new KVService({ prefix });
     this._kv.initialize(this._serviceContext);
     this._serviceContext.registerService('kv', this._kv);
@@ -140,10 +143,18 @@ export class DelegatedAccess {
   }
 
   /**
-   * The path this access is scoped to.
+   * The path this access is scoped to: the first resource when the delegation carries several
+   * (see `resources`).
    */
   get path(): string {
     return this._delegation.path;
+  }
+
+  /**
+   * Every resource the delegation grants, when it lists them.
+   */
+  get resources(): PortableDelegation["resources"] {
+    return this._delegation.resources;
   }
 
   /**

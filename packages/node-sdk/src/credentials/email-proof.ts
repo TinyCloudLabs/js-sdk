@@ -641,6 +641,15 @@ export function emailProofRequirement(address: string): CredentialRequirement {
   return emailRequirement(normalizeAddress(address, DEFAULT_EMAIL_PROOF_PROFILE), DEFAULT_EMAIL_PROOF_PROFILE);
 }
 
+/**
+ * The pinned OpenCredentials ticket (did:key) descriptor an email-addressed share binds to. It is accepted only when it
+ * matches the pinned issuer, origin, mailbox step and descriptor digest.
+ */
+export async function emailProofDescriptor(address: string, options: { readonly fetch?: typeof fetch; readonly signal?: AbortSignal } = {}): Promise<CredentialFlowDescriptor> {
+  const signal = options.signal ?? AbortSignal.timeout(STEP_TIMEOUT_MS);
+  return witnessDescriptor(DEFAULT_EMAIL_PROOF_PROFILE, emailProofRequirement(address), { fetch: options.fetch, signal }, "request");
+}
+
 /** Discovers the catalog and returns the descriptor only if it matches the pinned issuer, origin, step, and digest. */
 async function witnessDescriptor(
   profile: EmailProofProfileId,

@@ -3,7 +3,7 @@ import { authorizationVerdictOf, validatedCapabilityOf } from "@tinycloud/sdk-se
 import { DELEGATION_CID_PATTERN } from "./contract.js";
 import type { OperationExecutionOutcome } from "./contract.js";
 import { operationError } from "./errors.js";
-import { isRevokedGrantRefusal, REVOKED_GRANT_MESSAGE } from "./revoked-grant.js";
+import { isRevokedGrantRefusal, nodeRefusalText, REVOKED_GRANT_MESSAGE } from "./revoked-grant.js";
 
 export type NodeRevocation =
   | Readonly<{ reason: "delegation_revoked"; revokedCid: string }>
@@ -14,14 +14,15 @@ const NODE_REVOCATION_BODY =
   /^(?:Invalid invocation: )?delegation-(?:(revoked): ([A-Za-z0-9]+)|(ancestor-revoked): ancestor=([A-Za-z0-9]+) invoked=([A-Za-z0-9]+))$/;
 
 /**
- * Classify a definite node refusal from a KV SDK service error. The SDK puts
- * the entire node response after its `: 401 - ` separator; never search for a
- * marker within arbitrary error prose or accept a different HTTP status.
+ * Classify a definite node refusal from a KV or SQL SDK service error. The SDK
+ * puts the entire node response after its `: 401 - ` separator; never search
+ * for a marker within arbitrary error prose or accept a different HTTP status.
+ * The response is the refusal text, alone or in the node's revocation envelope.
  */
 export function nodeRevocationOf(error: unknown): NodeRevocation | undefined {
   if (
     typeof error !== "object" || error === null ||
-    !("service" in error) || error.service !== "kv" ||
+    !("service" in error) || (error.service !== "kv" && error.service !== "sql") ||
     !("code" in error) ||
     (error.code !== "AUTH_UNAUTHORIZED" && error.code !== "AUTH_DELEGATION_REVOKED" && error.code !== "AUTH_DELEGATION_ANCESTOR_REVOKED") ||
     !("message" in error) || typeof error.message !== "string" ||
@@ -34,7 +35,7 @@ export function nodeRevocationOf(error: unknown): NodeRevocation | undefined {
   const separator = ": 401 - ";
   const start = message.indexOf(separator);
   if (start < 0) return undefined;
-  const body = message.slice(start + separator.length);
+  const body = nodeRefusalText(message.slice(start + separator.length));
   const match = NODE_REVOCATION_BODY.exec(body);
   if (match === null || match[0] !== body) return undefined;
   if (match[1] !== undefined && code !== "AUTH_DELEGATION_ANCESTOR_REVOKED") {

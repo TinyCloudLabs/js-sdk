@@ -114,3 +114,42 @@ test("subscribe readiness precedes drain; a wake during drain and reconnect both
   expect(unwrap(await getFeedHandoff(handoff, "response-missed-wakeup", "runtime-one"))?.state)
     .toBe("delivered");
 });
+
+test("once returns after the first batch it hands off; later responses wait for the next run", async () => {
+  const output = database();
+  const responses = database();
+  const handoff = database();
+  unwrap(await initializeFeedDatabases({ output, responses }));
+  unwrap(await initializeFeedHandoff(handoff));
+  unwrap(await publishFeedCard(output, card));
+  const answer = (responseId: string) => ({
+    cardId: card.cardId, revision: card.revision, issuanceId: card.issuanceId,
+    responseId, kind: "followup" as const, text: responseId, createdAt: card.createdAt,
+  });
+  unwrap(await appendFeedResponse(output, responses, answer("pending-one")));
+  unwrap(await appendFeedResponse(output, responses, answer("pending-two")));
+  const delivered: string[] = [];
+  const run = async (transport: { hooks: FeedHooks; opened: Promise<void>; ready: () => void }, deliver: (item: FeedResponse) => Promise<void>) => {
+    const listening = listenFeedResponses({
+      responses, handoff, recipient: "runtime-one", hooks: transport.hooks, once: true,
+      subscription: { space: "owner-space", service: "sql", pathPrefix: "app/feed_responses_agentone" },
+      deliver: async (item) => { delivered.push(item.responseId); await deliver(item); return "delivered"; },
+      signal: new AbortController().signal,
+    });
+    await transport.opened;
+    transport.ready();
+    await listening; // Returns without an abort.
+  };
+
+  const first = hooksFixture();
+  await run(first, async (item) => {
+    if (item.responseId !== "pending-one") return;
+    unwrap(await appendFeedResponse(output, responses, answer("arrives-during-batch")));
+    first.wake();
+  });
+  expect(delivered).toEqual(["pending-one", "pending-two"]);
+  expect(unwrap(await getFeedHandoff(handoff, "arrives-during-batch", "runtime-one"))).toBeNull();
+
+  await run(hooksFixture(), async () => {});
+  expect(delivered).toEqual(["pending-one", "pending-two", "arrives-during-batch"]);
+});

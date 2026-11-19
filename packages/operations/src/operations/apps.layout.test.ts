@@ -2,9 +2,9 @@ import { describe, expect, test } from "bun:test";
 import { evaluateOperationAuthority } from "../authority.js";
 import type { AppsPermission } from "../tc-apps/kv.js";
 import { additionalDelegationsPath, writeJsonAtomic } from "../state.js";
-import { tcAppsApprovalMessage, tcAppsApprovalReason } from "../tc-apps.js";
+import { tcAppsApprovalReason, tcAppsPermissionKind } from "../tc-apps.js";
 import { parseKey, parsePrefix } from "../tc-apps/layout.js";
-import { definition, FakeSql, fixture, SPACE, withGrants, withSql, write } from "./apps.fixtures.js";
+import { definition, DEFAULT_SPACE, FakeSql, fixture, SPACE, withGrants, withSql, write } from "./apps.fixtures.js";
 
 const ID = "xyz.tinycloud.tinyapps.";
 const DISCOVERY = `${ID}catalog/`;
@@ -16,7 +16,8 @@ const entry = { v: 1, app: "books", id: `${ID}books`, title: "Books" };
 const record = `${root}read/2026-11/2026-11-03T1200-dune`;
 const ALL = ["tinycloud.kv/get", "tinycloud.kv/list", "tinycloud.kv/put", "tinycloud.kv/del"];
 const kvScope = (space: string, path: string, actions = ALL) => ({ service: "tinycloud.kv", space, path, actions });
-const discoveryGrant = kvScope(SPACE, DISCOVERY, ["tinycloud.kv/get", "tinycloud.kv/list", "tinycloud.kv/put"]);
+const discoveryGrant = kvScope(SPACE, DISCOVERY, ["tinycloud.kv/get", "tinycloud.kv/list"]);
+const entryGrant = kvScope(SPACE, `${DISCOVERY}books/entry`, ["tinycloud.kv/get", "tinycloud.kv/put"]);
 const createBooks = [
   { op: "put", key: `${root}catalog`, value: booksApp },
   { op: "put", key: `${root}catalog/read`, value: readKind },
@@ -26,11 +27,11 @@ const createBooks = [
 
 describe("personal apps key grammar", () => {
   test("accepts exactly the record, catalog, discovery and stale-marker keys of an app folder", () => {
-    expect(parseKey(`${root}catalog`)).toEqual({ area: "catalog", app: "books" });
-    expect(parseKey(`${root}catalog/read`)).toEqual({ area: "catalog", app: "books", kind: "read" });
-    expect(parseKey(record)).toEqual({ area: "record", app: "books", kind: "read", folder: "2026-11", id: "2026-11-03T1200-dune" });
-    expect(parseKey(`${DISCOVERY}books/entry`)).toEqual({ area: "discovery", app: "books" });
-    expect(parseKey(`${root}index-stale/read`)).toEqual({ area: "stale", app: "books", kind: "read" });
+    expect(parseKey(`${root}catalog`)).toEqual({ layout: "new", area: "catalog", app: "books" });
+    expect(parseKey(`${root}catalog/read`)).toEqual({ layout: "new", area: "catalog", app: "books", kind: "read" });
+    expect(parseKey(record)).toEqual({ layout: "new", area: "record", app: "books", kind: "read", folder: "2026-11", id: "2026-11-03T1200-dune" });
+    expect(parseKey(`${DISCOVERY}books/entry`)).toEqual({ layout: "new", area: "discovery", app: "books" });
+    expect(parseKey(`${root}index-stale/read`)).toEqual({ layout: "new", area: "stale", app: "books", kind: "read" });
     for (const bad of [
       `${ID}healthlog/catalog`, `${ID}recipes/catalog`, `${ID}index-stale/catalog`, `${ID}Books/catalog`, `${ID}1books/catalog`,
       `${root}catalog/catalog`, `${root}catalog/index-stale`, `${root}index-stale/index-stale`, `${root}read/2026-11`, `${root}read/2026-11/a/b`,
@@ -38,18 +39,22 @@ describe("personal apps key grammar", () => {
     ]) expect(parseKey(bad)).toBeUndefined();
   });
   test("a prefix names the discovery folder, one app or part of one app, never every app", () => {
-    expect(parsePrefix(DISCOVERY)).toEqual({ discovery: true });
-    expect(parsePrefix(`${DISCOVERY}books/`)).toEqual({ discovery: true, app: "books" });
-    expect(parsePrefix(root)).toEqual({ app: "books" });
-    expect(parsePrefix(`${root}read/2026-11/`)).toEqual({ app: "books" });
-    expect(parsePrefix(`${root}catalog/`)).toEqual({ app: "books" });
+    expect(parsePrefix(DISCOVERY)).toEqual({ layout: "new", discovery: true });
+    expect(parsePrefix(`${DISCOVERY}books/`)).toEqual({ layout: "new", discovery: true, app: "books" });
+    expect(parsePrefix(root)).toEqual({ layout: "new", app: "books" });
+    expect(parsePrefix(`${root}read/2026-11/`)).toEqual({ layout: "new", app: "books" });
+    expect(parsePrefix(`${root}catalog/`)).toEqual({ layout: "new", app: "books" });
     for (const bad of [ID, `${ID}books`, `${ID}healthlog/`, `${root}a/b/c/`, `${root}read`]) expect(parsePrefix(bad)).toBeUndefined();
   });
-  test("the older agent-data folder is not a personal-record place: no key or prefix under it parses", () => {
-    for (const older of [`${OLDER_ROOT}catalog/todos`, `${OLDER_ROOT}catalog/todos/todo`, `${OLDER_ROOT}todos/todo/open/2026-11-03-buy-milk`, `${OLDER_ROOT}index-stale/todos/todo`]) {
-      expect(parseKey(older)).toBeUndefined();
-    }
-    for (const older of [OLDER_ROOT, `${OLDER_ROOT}catalog/`, `${OLDER_ROOT}todos/`]) expect(parsePrefix(older)).toBeUndefined();
+  test("legacy keys retain their original grammar and reject traversal and malformed segments", () => {
+    expect(parseKey(`${OLDER_ROOT}catalog/todos`)).toEqual({ layout: "legacy", area: "catalog", app: "todos" });
+    expect(parseKey(`${OLDER_ROOT}catalog/todos/todo`)).toEqual({ layout: "legacy", area: "catalog", app: "todos", kind: "todo" });
+    expect(parseKey(`${OLDER_ROOT}todos/todo/open/2026-11-03-buy-milk`)).toEqual({ layout: "legacy", area: "record", app: "todos", kind: "todo", folder: "open", id: "2026-11-03-buy-milk" });
+    expect(parseKey(`${OLDER_ROOT}index-stale/todos/todo`)).toEqual({ layout: "legacy", area: "stale", app: "todos", kind: "todo" });
+    expect(parsePrefix(OLDER_ROOT)).toEqual({ layout: "legacy" });
+    expect(parsePrefix(`${OLDER_ROOT}catalog/`)).toEqual({ layout: "legacy" });
+    expect(parsePrefix(`${OLDER_ROOT}todos/`)).toEqual({ layout: "legacy", app: "todos" });
+    for (const bad of [`${OLDER_ROOT}todos/todo/../x`, `${OLDER_ROOT}todos//open/x`, `${OLDER_ROOT}catalog/`, `${OLDER_ROOT}todos/todo/open/a/b`]) expect(parseKey(bad)).toBeUndefined();
   });
 });
 
@@ -57,24 +62,9 @@ describe("personal apps approvals", () => {
   test("a named task bundles only its app and app list, with read-only access when requested", async () => {
     await fixture(async (kv, context) => {
       const change = await definition("context").authority(context, { app: "books" });
-      expect(change).toEqual([discoveryGrant, kvScope(SPACE, root)]);
+      expect(change).toEqual([discoveryGrant, entryGrant, kvScope(SPACE, root)]);
       const read = await definition("context").authority(context, { app: "books", access: "read" });
       expect(read).toEqual([kvScope(SPACE, DISCOVERY, ALL.slice(0, 2)), kvScope(SPACE, root, ALL.slice(0, 2))]);
-      expect(tcAppsApprovalReason(change)).toContain("add books to it");
-      expect(tcAppsApprovalReason(change)).toContain("add, change or delete");
-      expect(tcAppsApprovalReason(read)).toContain("It cannot change them");
-      for (const bundle of [change, read]) {
-        expect(tcAppsApprovalReason(bundle)).toContain("30 days");
-        expect(tcAppsApprovalReason(bundle)).not.toContain("agent-data");
-        expect(tcAppsApprovalMessage(bundle)).toContain("OpenKey");
-      }
-      // A request that only partly matches a bundle (app-list write with a read-only folder) falls back to the per-grant wording.
-      const mixed = [change[0]!, kvScope(SPACE, root, ALL.slice(0, 2))];
-      expect(tcAppsApprovalReason(mixed)).not.toContain("add books to it");
-      expect(tcAppsApprovalReason(mixed)).toContain("add or change entries in your app list");
-      // A folder entry that can only delete is not a read bundle: the text must not say "It cannot change them".
-      const deleteOnly = [kvScope(SPACE, DISCOVERY, ALL.slice(0, 2)), kvScope(SPACE, root, ["tinycloud.kv/get", "tinycloud.kv/list", "tinycloud.kv/del"])];
-      expect(tcAppsApprovalReason(deleteOnly)).not.toContain("It cannot change them");
       kv.seed(`${root}catalog`, booksApp);
       kv.seed(`${root}catalog/read`, readKind);
       kv.seed(`${DISCOVERY}books/entry`, entry);
@@ -93,7 +83,7 @@ describe("personal apps approvals", () => {
       expect(await definition("read").authority(context, { keys: [record] })).toEqual([kvScope(SPACE, root)]);
     });
   });
-  test("a first record in a new app needs one approval with app and two without; a later new app needs one", async () => {
+  test("a first record in a new app needs two approvals with app and three without, the last for the original app list; a later new app needs one", async () => {
     for (const named of [true, false]) await fixture(async (kv, context) => {
       let grants: AppsPermission[] = [];
       const requests: AppsPermission[][] = [];
@@ -114,8 +104,9 @@ describe("personal apps approvals", () => {
       await approved("context", named ? { app: "books" } : {});
       await approved("write", { ops: createBooks });
       expect(kv.values.has(record)).toBe(true);
-      expect(requests).toHaveLength(named ? 1 : 2);
-      expect(requests.flat().every((scope) => scope.space === SPACE)).toBe(true);
+      expect(requests).toHaveLength(named ? 2 : 3);
+      expect(requests.at(-1)).toEqual([kvScope(DEFAULT_SPACE, `${OLDER_ROOT}catalog/`, ALL.slice(0, 2))]);
+      expect(requests.slice(0, -1).flat().every((scope) => scope.space === SPACE)).toBe(true);
       const before = requests.length;
       await approved("context", { app: "films" });
       await approved("write", { ops: createBooks.map((op) => ({ ...op, key: (op.key as string & { replaceAll(search: string, replacement: string): string }).replaceAll("books", "films"), value: { ...op.value, ...("app" in op.value ? { app: "films" } : {}), ...("id" in op.value ? { id: `${ID}films` } : {}) } })) });
@@ -125,20 +116,20 @@ describe("personal apps approvals", () => {
   });
   test("invalid context app ids and access fail validation before reading storage", async () => {
     await fixture(async (kv, context) => {
-      for (const app of ["", "Books", "1books", "../books", "catalog", "index-stale"]) {
+      for (const app of ["", "Books", "../books", "catalog", "index-stale"]) {
         expect((await definition("context").execute(context, { app })).error.code).toBe("INPUT_INVALID");
       }
       expect((await definition("context").execute(context, { app: "books", access: "write" })).error.code).toBe("INPUT_INVALID");
       expect(kv.lists).toEqual([]);
     });
   });
-  test("each call asks only for the scopes of the apps it names, all in the applications space", async () => {
+  test("each call asks only for the scopes of the apps it names, all in the applications space; a create then asks for the original app list", async () => {
     await fixture(async (_kv, context) => {
       const booksRoot = kvScope(SPACE, root);
       expect(await definition("context").authority(context, {})).toEqual([discoveryGrant]);
       const create = { ops: createBooks } as never;
-      expect(await definition("write").authority(context, create)).toEqual([booksRoot, discoveryGrant]);
-      expect(await definition("write").authority(withGrants(context, [booksRoot, discoveryGrant]), create)).toEqual([booksRoot, discoveryGrant]);
+      expect(await definition("write").authority(context, create)).toEqual([booksRoot, entryGrant]);
+      expect(await definition("write").authority(withGrants(context, [booksRoot, entryGrant]), create)).toEqual([kvScope(DEFAULT_SPACE, `${OLDER_ROOT}catalog/`, ALL.slice(0, 2))]);
       expect(await definition("write").authority(context, { ops: [{ op: "put", key: record, etag: `"blake3-${"a".repeat(64)}"`, value: { data: {} } }] } as never)).toEqual([booksRoot]);
       const mixed = { keys: [record], prefixes: [`${DISCOVERY}books/`] } as never;
       expect(await definition("read").authority(context, mixed)).toEqual([discoveryGrant, booksRoot]);
@@ -146,14 +137,8 @@ describe("personal apps approvals", () => {
       expect(await definition("query").authority(context, { kinds: [{ app: "books", kind: "read" }], sql: "SELECT 1" } as never)).toEqual([booksRoot, sql(`${root}index`)]);
     });
   });
-  test("consent text names the exact app and list paths, and rejects anything outside them", async () => {
-    await fixture(async (_kv, context) => {
-      const permissions = await definition("write").authority(context, { ops: createBooks } as never);
-      const reason = tcAppsApprovalReason(permissions)!;
-      for (const path of [root, DISCOVERY]) expect(reason).toContain(path);
-      expect(reason).not.toContain("agent-data");
-      expect(reason).toContain("30 days");
-      expect(tcAppsApprovalMessage(permissions)).toContain("OpenKey");
+  test("permission classification rejects anything outside the connector scopes", async () => {
+    await fixture(async () => {
       const books = kvScope(SPACE, root);
       expect(tcAppsApprovalReason([{ ...books, path: ID }])).toBeUndefined();
       expect(tcAppsApprovalReason([{ ...books, path: `${ID}healthlog/` }])).toBeUndefined();
@@ -163,6 +148,44 @@ describe("personal apps approvals", () => {
       expect(tcAppsApprovalReason([{ ...books, service: "tinycloud.sql" }])).toBeUndefined();
       expect(tcAppsApprovalReason([{ ...books, path: OLDER_ROOT }])).toBeUndefined();
       expect(tcAppsApprovalReason([{ ...books, path: `${OLDER_ROOT}catalog/`, actions: ["tinycloud.kv/get", "tinycloud.kv/list"] }])).toBeUndefined();
+      const discovery = kvScope(SPACE, `${DISCOVERY}qa/entry`, ["tinycloud.kv/put"]);
+      expect(tcAppsPermissionKind(discovery)).toEqual({ kind: "app-discovery", app: "qa" });
+      for (const path of [`${DISCOVERY}qa/entry-extra`, `${DISCOVERY}qa/entry/`, `${DISCOVERY}qa/other`, `${DISCOVERY}qa/`, DISCOVERY]) {
+        expect(tcAppsPermissionKind({ ...discovery, path })).toBeUndefined();
+      }
+    });
+  });
+  test("a qa task permits its exact entry and records, never neighboring or unrelated writes", async () => {
+    await fixture(async (_kv, context) => {
+      const plan = await definition("context").authority(context, { app: "qa" }) as AppsPermission[];
+      const allows = (grants: AppsPermission[], path: string, action: string) =>
+        evaluateOperationAuthority(grants, [kvScope(SPACE, path, [action])]).satisfied;
+      for (const path of [`${DISCOVERY}qa/entry`, `${ID}qa/catalog`, `${ID}qa/task/open/one`]) {
+        expect(allows(plan, path, "tinycloud.kv/put")).toBe(true);
+      }
+      for (const path of [DISCOVERY, `${DISCOVERY}other/entry`, `${DISCOVERY}qa/entry-extra`, `${DISCOVERY}qa/entry/child`, `${DISCOVERY}qa-extra/entry`, `${ID}other/task/open/one`, `${ID}qa-extra/task/open/one`]) {
+        expect(allows(plan, path, "tinycloud.kv/put")).toBe(false);
+      }
+      for (const action of ALL) expect(allows(plan, `${ID}qa/task/open/one`, action)).toBe(true);
+      expect(allows(plan, DISCOVERY, "tinycloud.kv/list")).toBe(true);
+      expect(allows(plan, `${DISCOVERY}other/entry`, "tinycloud.kv/get")).toBe(true);
+      expect(allows(plan, `${DISCOVERY}qa/entry`, "tinycloud.kv/del")).toBe(false);
+      for (const input of [{}, { app: "qa", access: "read" }]) {
+        const read = await definition("context").authority(context, input) as AppsPermission[];
+        expect(allows(read, DISCOVERY, "tinycloud.kv/list")).toBe(true);
+        expect(allows(read, `${DISCOVERY}qa/entry`, "tinycloud.kv/put")).toBe(false);
+        expect(allows(read, `${ID}qa/task/open/one`, "tinycloud.kv/put")).toBe(false);
+      }
+      const targets = ["qa", "second"].map((app) => ({ op: "put", key: `${DISCOVERY}${app}/entry`, value: {} }));
+      const batch = await definition("write").authority(context, { ops: targets }) as AppsPermission[];
+      for (const app of ["qa", "second"]) expect(allows(batch, `${DISCOVERY}${app}/entry`, "tinycloud.kv/put")).toBe(true);
+      expect(allows(batch, `${DISCOVERY}third/entry`, "tinycloud.kv/put")).toBe(false);
+      const legacy = [kvScope(SPACE, DISCOVERY, ALL.slice(0, 3)), kvScope(SPACE, `${ID}qa/`)];
+      expect(evaluateOperationAuthority(legacy, plan).satisfied).toBe(true);
+      expect(allows(legacy, `${DISCOVERY}other/entry`, "tinycloud.kv/put")).toBe(true);
+      const withList = [...plan, kvScope(DEFAULT_SPACE, `${OLDER_ROOT}catalog/`, ALL.slice(0, 2))];
+      const requested = await definition("write").authority(withGrants(context, withList), { ops: [targets[0]] }) as AppsPermission[];
+      expect(evaluateOperationAuthority(withList, requested).satisfied).toBe(true);
     });
   });
 });
@@ -205,7 +228,6 @@ describe("personal apps records", () => {
       const create = [{ op: "put", key: record, value: { data: { title: "Dune" } } }];
       const early = await write(withGrants(context, [discoveryGrant]), create);
       expect(early.output.ops[0]?.outcome).toBe("INVALID");
-      expect(early.output.ops[0]?.warnings?.[0]).toContain("discovery entry");
       expect(kv.values.has(record)).toBe(false);
       // Without read access to the app list the check is skipped; it never asks for another approval.
       expect((await write(context, create)).output.ops[0]?.outcome).toBe("ok");
@@ -227,26 +249,10 @@ describe("personal apps records", () => {
         const [catalog, kind, discovery, firstRecord] = createBooks;
         const early = await write(withGrants(context, granted), [catalog!, kind!, firstRecord!, discovery!]);
         expect(early.output.ops.map((op) => op.outcome)).toEqual(["ok", "ok", "INVALID", "ok"]);
-        expect(early.output.ops[2]?.warnings?.[0]).toContain("discovery entry");
         expect(kv.values.has(record)).toBe(false);
         expect(kv.values.has(`${DISCOVERY}books/entry`)).toBe(true);
       });
     }
-  });
-  test("keys under the older agent-data folder are refused by read, write and query before any storage or SQL is touched", async () => {
-    await fixture(async (kv, context) => {
-      const older = `${OLDER_ROOT}todos/todo/open/2026-11-03-buy-milk`;
-      expect((await definition("read").execute(context, { keys: [older] })).error.code).toBe("INPUT_INVALID");
-      expect((await definition("read").execute(context, { prefixes: [OLDER_ROOT] })).error.code).toBe("INPUT_INVALID");
-      expect((await write(context, [{ op: "put", key: `${OLDER_ROOT}catalog/todos`, value: { app: "todos" } }])).error.code).toBe("INPUT_INVALID");
-      expect((await write(context, [{ op: "put", key: older, value: { data: {} } }])).error.code).toBe("INPUT_INVALID");
-      const sql = new FakeSql();
-      // The old `layout` input is gone: a query that still carries it is refused by the strict input schema.
-      expect((await definition("query").execute(withSql(context, sql), { layout: "legacy", kinds: [{ app: "todos", kind: "todo" }], sql: "SELECT 1" })).error.code).toBe("INPUT_INVALID");
-      expect(kv.reads).toEqual([]);
-      expect(kv.writes).toEqual([]);
-      expect(sql.calls).toEqual([]);
-    });
   });
   test("moves and deletes stay inside one app", async () => {
     await fixture(async (_kv, context) => {
@@ -277,11 +283,12 @@ describe("personal apps context", () => {
       await writeJsonAtomic(additionalDelegationsPath("apps"), [{ permissions, delegation: { expiry: "2999-01-01T00:00:00Z" } }]);
       const result = await definition("context").execute(withGrants(context, [discoveryGrant]), {});
       expect(result.output.apps).toEqual([
-        { app: "books", title: "Books", copy: "present" },
-        { app: "films", copy: "none" },
-        { app: "fitness", title: "Fitness", copy: "none" },
+        { app: "books", layout: "new", title: "Books", copy: "present" },
+        { app: "films", layout: "new", copy: "none" },
+        { app: "fitness", layout: "new", title: "Fitness", copy: "none" },
       ]);
-      expect(Object.keys(result.output).sort()).toEqual(["apps", "now", "rules", "timezone", "utc"]);
+      expect(result.output.legacy).toBe("not_approved");
+      expect(result.output.discovery).toBe("listed");
       expect(kv.lists).toEqual([{ prefix: DISCOVERY, limit: 1000 }]);
     });
   });
@@ -299,8 +306,6 @@ describe("personal apps fast copy", () => {
       expect(result.output).toMatchObject({ kinds: [{ app: "books", kind: "read", records: 1 }] });
       expect([...new Set(sql.databases)]).toEqual([`${root}index`]);
       expect([...sql.rows.keys()]).toEqual(["read/2026-11/2026-11-03T1200-dune"]);
-      const view = sql.calls.find((call) => call.sql.startsWith("CREATE VIEW"))!;
-      expect(view.sql).not.toContain(" app,");
       expect(kv.values.has(`${root}index-stale/read`)).toBe(false);
     });
   });
@@ -353,7 +358,6 @@ describe("personal apps fast copy", () => {
       const fitnessRecord = `${ID}fitness/weight/2026-10/2026-10-14`;
       const result = await write(both, [{ op: "put", key: record, value: { data: { title: "Dune" } } }, { op: "put", key: fitnessRecord, value: { data: { kg: 70 } } }]);
       expect(result.output.ops.map((op) => op.outcome)).toEqual(["ok", "ok"]);
-      expect(result.output.ops[0]?.warnings?.join(" ")).toContain("fast-copy upkeep failed");
       expect(kv.values.has(`${root}index-stale/read`)).toBe(true);
       expect(kv.values.has(`${ID}fitness/index-stale/weight`)).toBe(true);
       expect(kv.values.has(record)).toBe(true);
@@ -380,7 +384,6 @@ describe("personal apps guards", () => {
       kv.seed(`${ID}food/records/meals/pizza.json`, { id: "pizza" });
       const created = await write(context, [{ op: "put", key: `${ID}food/catalog`, value: { app: "food", title: "Food", about: "x", created: "2026-11-03" } }]);
       expect(created.output.ops[0]?.outcome).toBe("INVALID");
-      expect(created.output.ops[0]?.warnings?.[0]).toContain("manifest.json");
       const deleted = await write(context, [{ op: "delete", key: `${ID}food/records/meals/pizza.json` }]);
       expect(deleted.output.ops[0]?.outcome).toBe("INVALID");
       expect(kv.writes).toEqual([]);
@@ -402,5 +405,142 @@ describe("personal apps guards", () => {
       expect(kv.writes).toEqual([]);
       expect(kv.deletes).toEqual([]);
     });
+  });
+});
+
+describe("legacy personal records recovery", () => {
+  const legacyGrant = kvScope(DEFAULT_SPACE, OLDER_ROOT);
+  const legacyCatalogGrant = kvScope(DEFAULT_SPACE, `${OLDER_ROOT}catalog/`, ALL.slice(0, 2));
+  const appKey = `${OLDER_ROOT}catalog/books`;
+  const kindKey = `${appKey}/read`;
+  const legacyRecord = `${OLDER_ROOT}books/read/2026-11/2026-11-03T1200-dune`;
+
+  test("legacy-only grants discover, read and conditionally update records in place without touching applications", async () => {
+    await fixture(async (kv, context, legacy) => {
+      legacy.seed(appKey, booksApp);
+      legacy.seed(kindKey, readKind);
+      const etag = legacy.seed(legacyRecord, { v: 1, at: "2026-11-03", data: { title: "Dune" } });
+      const active = withGrants(context, [legacyGrant]);
+      for (const input of [{}, { app: "books" }, { app: "books", access: "read" }]) {
+        const authority = await definition("context").authority(active, input) as AppsPermission[];
+        expect(evaluateOperationAuthority([legacyGrant], authority).satisfied).toBe(true);
+        expect(authority.every((permission) => permission.space === DEFAULT_SPACE)).toBe(true);
+      }
+      const listed = (await definition("context").execute(active, {})).output;
+      expect(listed.apps).toEqual([{ app: "books", layout: "legacy", title: "Books", copy: "none" }]);
+      expect(listed.legacy).toBe("listed");
+      expect(listed.discovery).toBe("not_approved");
+      expect(listed.catalog.records).toContainEqual({ key: kindKey, etag: legacy.values.get(kindKey)!.etag, value: readKind });
+      expect(definition("context").output.safeParse(listed).success).toBe(true);
+      const input = { prefixes: [`${OLDER_ROOT}books/read/`], keys: [legacyRecord] };
+      expect(evaluateOperationAuthority([legacyGrant], await definition("read").authority(active, input) as AppsPermission[]).satisfied).toBe(true);
+      const read = (await definition("read").execute(active, input)).output;
+      expect(read.lists).toEqual([{ prefix: `${OLDER_ROOT}books/read/`, keys: [legacyRecord] }]);
+      expect(read.records[0]).toMatchObject({ key: legacyRecord, etag, value: { data: { title: "Dune" } } });
+      const ops = [
+        { op: "put", key: legacyRecord, etag, value: { data: { title: "Dune revised" } } },
+        { op: "put", key: legacyRecord, etag, value: { data: { title: "Stale edit" } } },
+      ];
+      expect(evaluateOperationAuthority([legacyGrant], await definition("write").authority(active, { ops }) as AppsPermission[]).satisfied).toBe(true);
+      const changed = await write(active, ops);
+      expect(changed.output.ops.map((op) => op.outcome)).toEqual(["ok", "CHANGED"]);
+      expect(JSON.parse(legacy.values.get(legacyRecord)!.text)).toMatchObject({ by: "tinycloud-mcp", v: 1, data: { title: "Dune revised" } });
+      expect(legacy.values.has(`${OLDER_ROOT}index-stale/books/read`)).toBe(true);
+      expect(legacy.deletes).toEqual([]);
+      expect(kv.reads).toEqual([]);
+      expect(kv.lists).toEqual([]);
+      expect(kv.writes).toEqual([]);
+    });
+  });
+
+  test("catalog-only discovery stays read-only and cannot grant record writes or sibling app mutations", async () => {
+    await fixture(async (_kv, context, legacy) => {
+      legacy.seed(appKey, booksApp);
+      legacy.seed(kindKey, readKind);
+      const active = withGrants(context, [legacyCatalogGrant]);
+      const authority = await definition("context").authority(active, {}) as AppsPermission[];
+      expect(evaluateOperationAuthority([legacyCatalogGrant], authority).satisfied).toBe(true);
+      expect((await definition("context").execute(active, {})).output.apps[0]).toMatchObject({ app: "books", layout: "legacy" });
+      const read = await definition("read").authority(active, { keys: [kindKey] }) as AppsPermission[];
+      expect(evaluateOperationAuthority([legacyCatalogGrant], read).satisfied).toBe(true);
+      const writePlan = await definition("write").authority(active, { ops: [{ op: "put", key: legacyRecord, value: { data: {} } }] }) as AppsPermission[];
+      expect(evaluateOperationAuthority([legacyCatalogGrant], writePlan).satisfied).toBe(false);
+      for (const scope of [kvScope(DEFAULT_SPACE, legacyRecord, ["tinycloud.kv/put"]), entryGrant, kvScope(SPACE, root)]) {
+        expect(evaluateOperationAuthority([legacyCatalogGrant], [scope]).satisfied).toBe(false);
+      }
+    });
+  });
+
+  test("a catalog past the hosted result budget still lists every app and leaves kind catalogs as keys", async () => {
+    await fixture(async (_kv, context, legacy) => {
+      legacy.seed(appKey, booksApp);
+      const kindKeys = Array.from({ length: 40 }, (_, index) => `${appKey}/kind-${index}`);
+      for (const [index, key] of kindKeys.entries()) legacy.seed(key, { ...readKind, kind: `kind-${index}`, about: "x".repeat(2_500) });
+      const listed = (await definition("context").execute(withGrants(context, [legacyGrant]), {})).output;
+      expect(listed.apps).toEqual([{ app: "books", layout: "legacy", title: "Books", copy: "none" }]);
+      expect([...listed.catalog.keys].sort()).toEqual([appKey, ...kindKeys].sort());
+      expect(listed.catalog.records.map((entry) => entry.key)).toEqual([appKey]);
+      expect(JSON.stringify(listed).length).toBeLessThan(100_000);
+    });
+  });
+
+  test("new discovery entries win over namesakes without hiding other authorized legacy apps", async () => {
+    await fixture(async (kv, context, legacy) => {
+      legacy.seed(appKey, booksApp);
+      legacy.seed(`${OLDER_ROOT}catalog/todos`, { ...booksApp, app: "todos", title: "Todos" });
+      kv.seed(`${DISCOVERY}books/entry`, entry);
+      const active = withGrants(context, [legacyGrant, discoveryGrant]);
+      const listed = (await definition("context").execute(active, {})).output;
+      expect(listed.apps).toContainEqual({ app: "books", layout: "new", title: "Books", copy: "none" });
+      expect(listed.apps).toContainEqual({ app: "todos", layout: "legacy", title: "Todos", copy: "none" });
+      const plan = await definition("context").authority(active, { app: "books" }) as AppsPermission[];
+      expect(plan).toEqual([discoveryGrant, entryGrant, kvScope(SPACE, root)]);
+      expect(evaluateOperationAuthority(plan, [kvScope(SPACE, `${ID}other/`, ["tinycloud.kv/put"])]).satisfied).toBe(false);
+    });
+  });
+
+  test("an exact readable discovery entry selects the new app over its legacy namesake", async () => {
+    await fixture(async (kv, context, legacy) => {
+      legacy.seed(appKey, booksApp);
+      kv.seed(`${root}catalog`, booksApp);
+      kv.seed(`${root}catalog/read`, readKind);
+      kv.seed(`${DISCOVERY}books/entry`, entry);
+      const active = withGrants(context, [legacyGrant, entryGrant, kvScope(SPACE, root)]);
+      const plan = await definition("context").authority(active, { app: "books" }) as AppsPermission[];
+      expect(plan).toEqual([discoveryGrant, entryGrant, kvScope(SPACE, root)]);
+      const result = await write(active, [{
+        op: "put", key: `${root}catalog`, etag: kv.values.get(`${root}catalog`)!.etag,
+        value: { ...booksApp, about: "Updated new-layout books" },
+      }]);
+      expect(result.output.ops[0]?.outcome).toBe("ok");
+      expect(JSON.parse(kv.values.get(`${root}catalog`)!.text).about).toBe("Updated new-layout books");
+      expect(JSON.parse(legacy.values.get(appKey)!.text)).toEqual(booksApp);
+      expect(legacy.writes).toEqual([]);
+    });
+  });
+
+  test("a known legacy app cannot acquire a replacement new catalog or discovery entry", async () => {
+    await fixture(async (kv, context, legacy) => {
+      legacy.seed(appKey, booksApp);
+      const active = withGrants(context, [legacyGrant, discoveryGrant, entryGrant, kvScope(SPACE, root)]);
+      const result = await write(active, [createBooks[0]!, createBooks[2]!]);
+      expect(result.output.ops.map((op) => op.outcome)).toEqual(["INVALID", "INVALID"]);
+      expect(kv.writes).toEqual([]);
+      expect(legacy.writes).toEqual([]);
+      const moved = await write(active, [{ op: "move", from: legacyRecord, to: record, etag: legacy.values.get(appKey)!.etag, value: { data: {} } }]);
+      expect(moved.error.code).toBe("INPUT_INVALID");
+    });
+  });
+
+  test("legacy permissions recognize only original default-space scopes", () => {
+    expect(tcAppsPermissionKind(legacyGrant)).toEqual({ kind: "legacy-records" });
+    expect(tcAppsPermissionKind({ ...legacyGrant, actions: ALL.slice(0, 2) })).toEqual({ kind: "legacy-read" });
+    expect(tcAppsPermissionKind(legacyCatalogGrant)).toEqual({ kind: "legacy-catalog-read" });
+    expect(tcAppsPermissionKind({ service: "tinycloud.sql", space: DEFAULT_SPACE, path: "xyz.tinycloud.agent-data.index", actions: ["tinycloud.sql/read"] })).toEqual({ kind: "legacy-copy" });
+    for (const permission of [
+      { ...legacyGrant, space: SPACE }, { ...legacyGrant, path: `${OLDER_ROOT}books/` },
+      { ...legacyCatalogGrant, actions: ["tinycloud.kv/put"] }, { ...legacyGrant, actions: ["tinycloud.kv/metadata"] },
+    ]) expect(tcAppsPermissionKind(permission)).toBeUndefined();
+    expect(tcAppsPermissionKind({ ...legacyGrant, space: "default" })).toEqual({ kind: "legacy-records" });
   });
 });

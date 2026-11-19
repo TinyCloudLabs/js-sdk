@@ -45,7 +45,7 @@ confirmation flow. Ask for an IANA timezone, not a city or precise location.
 ## Reusable read consent and complete delivery
 
 The private hosted and local surfaces expose `tinycloud_auth_read_scope` and
-`tinycloud_read`. The restricted public ChatGPT surface is unchanged. Native
+`tinycloud_read`. The restricted public surface is unchanged. Native
 connector grants also expose `tinycloud_read`, within their existing read-only
 capability ceiling; they cannot use it to approve broader access.
 
@@ -134,6 +134,17 @@ personal-record tools, and omits local-only `tinycloud_secrets_status` and
 exact requested operation; approved delegations arrive only through that flow,
 which binds them to the requesting OpenKey account and stored request.
 
+The hosted server also serves a restricted surface with only `tinycloud_connect`
+and the four personal-record tools, for assistant directories: `/chatgpt/mcp`,
+`/claude/mcp`, `/grok/mcp` and `/muse/mcp` beside `/mcp`. Every address is its
+own OAuth resource with its own protected-resource metadata, approval route
+(`/<prefix>/connect`) and tenant state, so a token or approval for one opens no
+other. An address works only once OpenKey issues tokens for its audience and
+accepts its approval callback, and the server's token-status client is
+registered for it. The addresses list the same five tools. `/claude/mcp` also
+repeats each tool's `title` as `annotations.title`, where Claude's directory
+reads the listing name; the other addresses do not.
+
 For personal records, ask naturally: “Add renew passport to my todos.”
 `tinycloud_apps_context` supplies the rules and the app list, `tinycloud_apps_read`
 reads records with ETags, and `tinycloud_apps_write` creates, conditionally edits,
@@ -144,25 +155,34 @@ These tools are hosted-only and share the coding-agent skill's records without a
 local CLI or skill installation. A new app lives in the owner's `applications`
 space under `xyz.tinycloud.tinyapps.<app>/` with a discovery entry at
 `xyz.tinycloud.tinyapps.catalog/<app>/entry`, as `tc-apps` skill 0.3.11 does.
-Records under `xyz.tinycloud.agent-data/` in the `default` space are not read or
-written by these tools; they stay where they are, untouched. An app that exists
-only there is not listed, and a chat app that creates an app with the same name
-creates a new one; the command-line skill then lists the new app (its rule is that
-a discovery entry means the new layout) and not the older records of that name.
-Approvals are per app, all in the `applications` space. After connect, pass `app`
-to `tinycloud_apps_context` to approve the app's folder and app list together: a
-new app needs one request, and so does each later new app. Omitting `app` retains
-per-call approvals (two for the first new app). `access: "read"` requests only read
-access; the default `"change"` also covers adding the app to the list and adding,
-changing or deleting its records. Each grant lasts 30 days, and records use one
-prefix grant per app, not one grant per key.
+Existing records under `xyz.tinycloud.agent-data/` in the `default` space remain
+readable and writable in place. Context lists already-authorized legacy apps and
+reuses their existing grants; a legacy-only connection does not need to approve
+the new layout first. Follow the app's `layout` and existing catalog, including
+matching meal or weight kinds, rather than creating a replacement app or moving
+records. A readable new discovery entry takes precedence over a legacy namesake.
+The connector does not migrate data.
+
+New-layout approvals are per app in the `applications` space. After connect,
+pass `app` to `tinycloud_apps_context` to approve that app's folder and app-list
+reads together. Change access adds get/put only on its exact discovery entry,
+never catalog-root writes. Omitting `app` retains per-call approvals.
+`access: "read"` requests only read access; the default `"change"` also covers
+adding, changing or deleting records. Each new-layout grant lasts 30 days and
+uses one prefix per app rather than one grant per key. Existing legacy apps
+retain their original legacy-root permission scope.
 For Health Log on hosted `/mcp`, `app: "healthlog"` bundles app-list read
 and Health Log database read/write into one task approval; `access: "read"`
 requests read only. A first meal without `app` retains three task approvals.
 `app: "recipes"` bundles app-list and Recipes-notes reads; its database is
 learned from those notes and SQL read access is requested separately.
-Recipes writes remain unsupported. The public ChatGPT surface has no generic
-SQL tools; the catalog rules direct it to the app link when those tools are absent.
+Recipes writes remain unsupported. The restricted public surface has no generic
+SQL or knowledge tools, so it cannot work with either app: there `app`'s
+description names no catalog slug, and `app: "healthlog"` or `app: "recipes"`
+returns `INPUT_INVALID` with `details.reason: "catalog_app_unavailable"` and the
+app's tiny-app link, without requesting any approval. The catalog rules still
+route meals, body weight and recipes to those apps, so the assistant gives the
+link rather than saving that data as generic records.
 Generic KV tools retain their exact-input scopes. The connector asks for an
 IANA timezone once, not the owner's city or precise location. In Claude
 **Settings → Connectors → TinyCloud**, set `tinycloud_apps_write` to
@@ -199,10 +219,14 @@ If the owner declines, stop rather than asking again in that conversation.
 
 For larger questions, offer “a fast, searchable copy of your records” after
 answering from KV when no copy is approved. It needs separate approval and is
-optional; KV records remain the source of truth. The SQL database is per app,
-`xyz.tinycloud.tinyapps.<app>/index`, with read/write/schema authority. Writes sync
-the copy when authorized or mark changed kinds stale; queries rebuild stale
-kinds before answering and return checked per-kind record counts.
+optional; KV records remain the source of truth. New-layout copies use the
+per-app database `xyz.tinycloud.tinyapps.<app>/index`. For a legacy app, pass
+`layout: "legacy"` to query its shared `xyz.tinycloud.agent-data.index` database
+in `default`; `entries` exposes full KV keys and an `app` column. Omitted layout
+still means new. Both require read/write/schema authority. Writes sync an
+authorized copy or mark changed kinds stale; queries rebuild stale kinds before
+answering and return checked per-kind record counts. Concurrent marker changes
+prevent a rebuild from claiming the copy is fresh.
 `COPY_PARTIAL` is an `ok` result listing remaining kinds; the next query resumes.
 A nonretryable `NODE_ERROR` with `error.details.reason: "copy_unavailable"`
 requires node-team resolution. Answer from KV, do not retry in a loop or rename

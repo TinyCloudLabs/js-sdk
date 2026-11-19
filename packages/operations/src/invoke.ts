@@ -35,6 +35,7 @@ import {
   isExactCapabilityMemberSubset,
   validateExactCapabilities,
 } from "./authority.js";
+import { invalidInputMessage } from "./invalid-input.js";
 import {
   createOrReusePermissionRequest,
   buildPermissionRequestArtifact,
@@ -380,7 +381,7 @@ async function prepareInvocation(
       unresolvedContextSummary(target),
       operationError(
         definition.invalidInputErrorCode ?? "INPUT_INVALID",
-        "The operation input is invalid.",
+        invalidInputMessage(definition.input, parsedInput.error),
         {
           details: zodIssueDetails(parsedInput.error),
         },

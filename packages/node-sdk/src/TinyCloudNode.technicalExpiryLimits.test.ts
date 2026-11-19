@@ -570,3 +570,88 @@ describe("createRootDelegationForSharing (the share link's wallet-signed root)",
     expect(await createRoot(failing, new Date(Date.now() + 100 * YEAR_MS))).toBeUndefined();
   });
 });
+
+// TC-3076: the node compares a child's expiry with its parent's. A parent signed with milliseconds (a wallet-signed SIWE
+// grant) is read to the whole second, so a child that keeps the milliseconds can sit after it and be refused with
+// "Child delegation expiry exceeds parent expiry". A child held to the parent's whole second is not after the parent under
+// either reading, so it is accepted by a node that compares milliseconds and by one that compares whole seconds.
+describe("a child under a parent with milliseconds is held to the parent's whole second (TC-3076)", () => {
+  const PARENT = new Date("2027-11-15T23:12:08.053Z");
+  const WHOLE = new Date("2027-11-15T23:12:08.000Z");
+  /** The node's rule as it was: the child may not end after the parent, compared in milliseconds. */
+  const acceptsByMilliseconds = (childMs: number, parentMs: number) => childMs <= parentMs;
+  /** The node's rule as it reads now: the parent's expiry is whole seconds. */
+  const acceptsByWholeSeconds = (childMs: number, parentMs: number) => childMs <= Math.floor(parentMs / 1000) * 1000;
+  const received = (expiry: Date, delegateDID: string) => ({
+    cid: "parent-cid",
+    delegationHeader: { Authorization: "parent.header.signature" },
+    spaceId: SESSION_SPACE,
+    path: "router/",
+    actions: ["tinycloud.kv/get"],
+    expiry,
+    delegateDID,
+    ownerAddress: "0x0000000000000000000000000000000000000001",
+    chainId: 1,
+  });
+  const preparedExpiries = (s: { prepareSession: { mock: { calls: unknown[][] } } }) =>
+    s.prepareSession.mock.calls.map((call) => Date.parse((call[0] as { expirationTime: string }).expirationTime));
+
+  test("the rule that refuses a child at the parent's milliseconds accepts the whole-second child", () => {
+    expect(acceptsByMilliseconds(PARENT.getTime(), PARENT.getTime())).toBe(true);
+    expect(acceptsByWholeSeconds(PARENT.getTime(), PARENT.getTime())).toBe(false);
+    expect(acceptsByMilliseconds(WHOLE.getTime(), PARENT.getTime())).toBe(true);
+    expect(acceptsByWholeSeconds(WHOLE.getTime(), PARENT.getTime())).toBe(true);
+  });
+
+  test("useDelegation activates its session at the delegation's whole second, accepted by both rules", async () => {
+    const s = mockedNode("9999-12-31T23:59:59.000Z", { signer: true });
+    await s.node.useDelegation(received(PARENT, s.node.did) as never);
+    const [child] = preparedExpiries(s);
+    expect(child).toBe(WHOLE.getTime());
+    expect(acceptsByMilliseconds(child!, PARENT.getTime())).toBe(true);
+    expect(acceptsByWholeSeconds(child!, PARENT.getTime())).toBe(true);
+  });
+
+  test("a delegation that already ends on a whole second is activated at exactly that expiry", async () => {
+    const s = mockedNode("9999-12-31T23:59:59.000Z", { signer: true });
+    await s.node.useDelegation(received(WHOLE, s.node.did) as never);
+    expect(preparedExpiries(s)).toEqual([WHOLE.getTime()]);
+  });
+
+  test("a delegation with less than a second left is refused before the wallet is asked", async () => {
+    const s = mockedNode("9999-12-31T23:59:59.000Z", { signer: true });
+    const ends = new Date(Math.floor(Date.now() / 1000) * 1000 + 999);
+    await expect(s.node.useDelegation(received(ends, s.node.did) as never)).rejects.toThrow("expires within a second");
+    expect(s.prepareSession).not.toHaveBeenCalled();
+    expect(s.signMessage).not.toHaveBeenCalled();
+  });
+
+  test("createSubDelegation defaults to the parent's whole second and caps a longer request there", async () => {
+    const s = mockedNode("9999-12-31T23:59:59.000Z", { signer: true });
+    const target = { path: "router/", actions: ["tinycloud.kv/get"], delegateDID: "did:key:z6MkChild" };
+    const defaulted = await s.node.createSubDelegation(received(PARENT, "did:key:z6MkReceiver") as never, target);
+    const capped = await s.node.createSubDelegation(received(PARENT, "did:key:z6MkReceiver") as never, { ...target, expiryMs: 10 * YEAR_MS });
+    expect(defaulted.expiry).toEqual(WHOLE);
+    expect(capped.expiry).toEqual(WHOLE);
+    expect(preparedExpiries(s)).toEqual([WHOLE.getTime(), WHOLE.getTime()]);
+  });
+
+  test("createSubDelegation leaves a request shorter than the parent as asked", async () => {
+    const s = mockedNode("9999-12-31T23:59:59.000Z", { signer: true });
+    const target = { path: "router/", actions: ["tinycloud.kv/get"], delegateDID: "did:key:z6MkChild", expiryMs: 60_000 };
+    const before = Date.now();
+    const shorter = await s.node.createSubDelegation(received(new Date(before + 3_600_000 + 53), "did:key:z6MkReceiver") as never, target);
+    expect(shorter.expiry.getTime()).toBeGreaterThanOrEqual(before + 60_000);
+    expect(shorter.expiry.getTime()).toBeLessThan(before + 120_000);
+  });
+
+  test("grantRuntimePermissions held to a session that ends on milliseconds ends at the session's whole second", async () => {
+    const s = mockedNode(PARENT.toISOString(), { signer: true, covered: false });
+    await s.node.grantRuntimePermissions([ENTRY], { expiry: 10 * YEAR_MS }).catch(() => undefined);
+    expect(s.prepareSession).toHaveBeenCalled();
+    const [child] = preparedExpiries(s);
+    expect(child).toBe(WHOLE.getTime());
+    expect(acceptsByMilliseconds(child!, PARENT.getTime())).toBe(true);
+    expect(acceptsByWholeSeconds(child!, PARENT.getTime())).toBe(true);
+  });
+});

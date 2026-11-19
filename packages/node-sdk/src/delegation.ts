@@ -1,4 +1,5 @@
 import {
+  sameTinyCloudNode,
   canonicalizeRecapCaveats,
   decodeBase64Url,
   Delegation,
@@ -662,7 +663,7 @@ export async function activateValidatedRuntimeDelegation(
   },
 ): Promise<ValidatedRuntimeDelegation> {
   let host = normalizedHost(options.host);
-  const differentHost = delegation.host !== undefined && normalizedHost(delegation.host) !== host;
+  const differentHost = delegation.host !== undefined && !sameTinyCloudNode(normalizedHost(delegation.host), host);
   if (!(delegation.expiry instanceof Date) || Number.isNaN(delegation.expiry.getTime())) {
     reject("authority_invalid", "Runtime delegation has an invalid expiry.");
   }
