@@ -37,9 +37,11 @@ describe("program name", () => {
     const state = join(home, "state");
     const config = join(state, ".tinycloud");
     mkdirSync(config, { recursive: true, mode: 0o700 });
+    const { version: installed } = JSON.parse(readFileSync(resolve(PACKAGE_DIR, "package.json"), "utf-8")) as { version: string };
+    const newer = installed.replace(/\d+$/, (build) => String(Number(build) + 1));
     writeFileSync(join(config, "update-check.json.beta"), JSON.stringify({
       checkedAt: Date.now(),
-      version: "1.7.0-beta.31",
+      version: newer,
     }), { mode: 0o600 });
     const { TC_PROFILE: _profile, TC_HOST: _host, TC_HOME: _home, TC_PRIVATE_KEY: _key, ...ambient } = process.env;
     try {
@@ -49,8 +51,8 @@ describe("program name", () => {
           env: { ...ambient, CI: "", TC_NO_AUTO_UPDATE: "", HOME: home, TC_HOME: state },
         });
         expect(result.status).toBe(0);
-        expect(result.stdout).toContain("1.7.0-beta.30");
-        expect(result.stderr).toContain("1.7.0-beta.31");
+        expect(result.stdout).toContain(installed);
+        expect(result.stderr).toContain(newer);
       }
     } finally {
       rmSync(home, { recursive: true, force: true });
