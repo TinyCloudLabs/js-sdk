@@ -1827,6 +1827,10 @@ export class TinyCloudWeb {
    * permissions are requested. Permissions already covered by the session
    * or an existing runtime grant return without a new delegation, so
    * `expiryMs` does not apply to them.
+   *
+   * `options.onBehalfOf` names the app the permissions are for when this
+   * app asks on its behalf; the prompt names both. `options.allowPromptSuppression: false`
+   * always shows the prompt, ignoring an earlier 30-day opt-out, and offers none.
    */
   async requestPermissions(
     additional: PermissionEntry[],
