@@ -805,7 +805,7 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
 
   auth
     .command("logout")
-    .description(`Clear the local session and remove local replicas. An agent (delegate-session) profile keeps its key, so a new grant can be imported for it; other profiles' keys are deleted and the next sign-in creates a new one. With --revoke, revoke owner-controlled node grants and the session CID before deleting local files.`)
+    .description(`Clear the local session and remove local replicas. An agent (delegate-session) profile with no local replica state keeps its key, so a new grant can be imported for it; other profiles' keys are deleted and the next sign-in creates a new one. With --revoke, revoke owner-controlled node grants and the session CID before deleting local files.`)
     .option("--keep-replicas", "Keep legacy replicas only when this profile has no replica gate or flag-owned state")
     .option("--revoke", "Revoke owner-controlled grants and the session CID on the node before local logout")
     .option("--discard-local-changes", "Approve deletion of the exact local replica paths and identities listed before logout; with --revoke, deletion waits for every node receipt")
