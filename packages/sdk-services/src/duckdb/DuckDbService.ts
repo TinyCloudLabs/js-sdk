@@ -21,6 +21,7 @@ import {
   storageRejectionError,
   parseStorageRejection,
   nodeRetryError,
+  databaseSizeLimitError,
 } from "../errors";
 import {
   formatServiceResponseError,
@@ -462,6 +463,8 @@ export class DuckDbService extends BaseService implements IDuckDbService {
     if (response.status === 413 && parseStorageRejection(errorText)) {
       return err(storageRejectionError("duckdb", 413, meta, errorText));
     }
+    const sizeLimit = databaseSizeLimitError("duckdb", response.status, meta, errorText);
+    if (sizeLimit) return err(sizeLimit);
     const retryError = nodeRetryError("duckdb", `DuckDB ${operation} failed: ${response.status} - ${errorText}`, response, errorText);
     if (retryError) return err(retryError);
 
