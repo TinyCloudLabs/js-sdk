@@ -36,31 +36,25 @@ export function isDeviceDefaultDecrypt(permission: Pick<PermissionEntry, "servic
 }
 
 /**
- * The first entry OpenKey's device flow refuses: any entry in a secrets space ("secrets"), or any encryption entry
- * other than decrypt on the owner's default network. OpenKey admits exactly that one encryption entry
- * (openkey apps/api/src/services/device-authorization.ts, deviceRequestPermissions).
+ * The first entry OpenKey's device flow refuses: any entry in a secrets space ("secrets"), or any encryption entry, in
+ * either spelling of the service. OpenKey's device sign-in grants no encryption permission at all, not even decrypt on
+ * the owner's default network (openkey apps/api/src/services/device-authorization.ts, deviceRequestPermissions, TC-3204).
  */
 export function deviceRefusal(entries: readonly PermissionEntry[]): PermissionEntry | "secrets" | undefined {
   for (const entry of entries) {
     if (entry.space === "secrets" || entry.space?.endsWith(":secrets") === true) return "secrets";
-    if (entry.service === ENCRYPTION_PERMISSION_SERVICE && !isDeviceDefaultDecrypt(entry)) return entry;
+    if (/^(?:tinycloud\.)?encryption$/i.test(entry.service)) return entry;
   }
   return undefined;
 }
 
-const DEVICE_DECRYPT_ALLOWED = "tinycloud.encryption/decrypt on the default network (space \"default\", path \"\")";
-
 /**
- * The DEVICE_AUTH_UNSUPPORTED_SCOPE message: what was refused, what --device allows, and `next` ("Use … for this
- * manifest."). `subject` ("this manifest", "this request") names who asked for the secrets space. Request text is
- * escaped and clipped.
+ * The DEVICE_AUTH_UNSUPPORTED_SCOPE message: the cause only. `subject` ("this manifest", "this request") names who
+ * asked for it. Request text is escaped and clipped.
  */
-export function deviceRefusalMessage(refused: PermissionEntry | "secrets", subject: string, next: string): string {
-  const allowed = `The only encryption permission --device can ask for is ${DEVICE_DECRYPT_ALLOWED}.`;
-  if (refused === "secrets") {
-    return `--device can't authorize the secrets space, and ${subject} asks for it. ${allowed} ${next}`;
-  }
+export function deviceRefusalMessage(refused: PermissionEntry | "secrets", subject: string): string {
+  if (refused === "secrets") return `--device can't ask for the secrets space, and ${subject} asks for it.`;
   const actions = refused.actions.slice(0, 5).map((action) => safeClipped(action)).join(", ") || "no actions";
-  return `--device can't ask for ${actions} on space "${safeClipped(refused.space ?? "")}", path "${safeClipped(refused.path)}"` +
-    `${refused.caveats?.length ? " with extra limits" : ""}. ${allowed} ${next}`;
+  return `--device can't ask for encryption permissions, and ${subject} asks for ${actions} on space "${safeClipped(refused.space ?? "")}", path "${safeClipped(refused.path)}"` +
+    `${refused.caveats?.length ? " with extra limits" : ""}.`;
 }

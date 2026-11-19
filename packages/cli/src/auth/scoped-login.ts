@@ -241,7 +241,7 @@ export function isRawCidRevocationPermission(permission: PermissionEntry): boole
     permission.actions.includes("tinycloud.delegation/revoke");
 }
 function actionTuples(permission: PermissionEntry, ownerDid: string): string[] {
-  // A device request's default decrypt entry is what OpenKey signs as the owner's own default network.
+  // OpenKey's device sign-in no longer signs this entry (TC-3204), so --device never asks for it; it remains the owner's own default network if an approval carries it.
   if (isDeviceDefaultDecrypt({ ...permission, space: permission.space ?? "" })) {
     return [JSON.stringify([permission.service, ENCRYPTION_MANIFEST_SPACE, normalizePkhIdentifier(`urn:tinycloud:encryption:${ownerDid}:default`), permission.actions[0]])];
   }
