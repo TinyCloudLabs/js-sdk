@@ -1,8 +1,11 @@
-import { CLI_NAME } from "@tinycloud/operations/cli-name";
+import { CLI_NAME as RUN_AS } from "@tinycloud/operations/cli-name";
 import { isInteractive, shouldOutputJson } from "./formatter.js";
 import { pickTagline } from "./taglines.js";
 import { theme } from "./theme.js";
 import { execSync } from "node:child_process";
+
+// Run by npx, the command to type is long; the banner still names the product.
+const CLI_NAME = RUN_AS.startsWith("npx ") ? "tinycloud" : RUN_AS;
 
 let bannerEmitted = false;
 

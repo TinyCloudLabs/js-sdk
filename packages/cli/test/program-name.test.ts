@@ -24,7 +24,11 @@ describe("program name", () => {
           env: { ...ambient, HOME: home },
         });
         expect(JSON.parse(result.stderr)).toEqual({
-          error: { code: "AUTH_REQUIRED", message: "Not authenticated. Run `tinycloud auth login` or `tinycloud init` first." },
+          error: {
+            code: "AUTH_REQUIRED",
+            message: "This computer isn't signed in.",
+            hint: "Next: `tinycloud onboard` asks the owner for approval and waits for it.",
+          },
         });
       }
     } finally {

@@ -5,6 +5,7 @@ import { CLI_NAME } from "@tinycloud/operations/cli-name";
 import { ProfileManager } from "../config/profiles.js";
 import { resolveProfilePosture, type CLIContext, type ProfileConfig } from "../config/types.js";
 import { CLIError, wrapError } from "../output/errors.js";
+import { signInNextLine } from "../output/next.js";
 import { DEFAULT_HOST, ExitCode, PROFILE_COMMIT_LOCK_TIMEOUT_MS } from "../config/constants.js";
 import { replayAdditionalDelegations } from "./permissions.js";
 import { sessionExpiredError } from "../auth/session-expired.js";
@@ -566,8 +567,9 @@ export async function ensureAuthenticated(
   if (!session) {
     throw new CLIError(
       "AUTH_REQUIRED",
-      `Not authenticated. Run \`${CLI_NAME} auth login\` or \`${CLI_NAME} init\` first.`,
+      "This computer isn't signed in.",
       ExitCode.AUTH_REQUIRED,
+      { hint: signInNextLine() },
     );
   }
 
