@@ -25,6 +25,6 @@ describe("the not-signed-in error", () => {
     const { error } = JSON.parse(result.stderr) as { error: { code: string; message: string; hint?: string } };
     expect(error.code).toBe("AUTH_REQUIRED");
     expect(error.message).toBe("This computer isn't signed in.");
-    expect(error.hint).toMatch(/^Next: `(tinycloud|tc|npx -y @tinycloud\/cli@\S+) onboard` asks the owner for approval and waits for it\.$/);
+    expect(error.hint).toMatch(/^Next: `(tinycloud|tc|npx --prefix "\$HOME" -y -p @tinycloud\/cli@\S+ tinycloud) onboard` asks the owner for approval and waits for it\.$/);
   });
 });

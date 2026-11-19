@@ -26,7 +26,8 @@ function computer(): { home: string; env: Record<string, string | undefined> } {
 describe("the Next: line after onboard", () => {
   test("names the skill save command in the CLI's own form", () => {
     expect(saveGuideNextLine("tinycloud")).toBe("Next: `tinycloud skill save` saves a short guide to TinyCloud in your skills folder, so you have it next time.");
-    expect(saveGuideNextLine("npx -y @tinycloud/cli@1.8.0")).toContain("`npx -y @tinycloud/cli@1.8.0 skill save`");
+    const npx = 'npx --prefix "$HOME" -y -p @tinycloud/cli@1.8.0 tinycloud';
+    expect(saveGuideNextLine(npx)).toContain(`\`${npx} skill save\``);
   });
 
   test("is offered when no guide is saved in a client's skills folder", () => {
