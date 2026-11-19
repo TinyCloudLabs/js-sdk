@@ -141,6 +141,11 @@ jobs:
           TC_REPLICATION_E2E_NODE_BIN: ${{ runner.temp }}/tinycloud
         run: bash "$GITHUB_WORKSPACE/.github/scripts/run-private-tests.sh" bun test --max-concurrency=1 packages/cli/src/commands/onboard.timeout.e2e.test.ts
 
+      - name: Run onboard re-run e2e (the session's space is re-checked, real node)
+        env:
+          TC_REPLICATION_E2E_NODE_BIN: ${{ runner.temp }}/tinycloud
+        run: bash "$GITHUB_WORKSPACE/.github/scripts/run-private-tests.sh" bun test --max-concurrency=1 packages/cli/src/commands/onboard.rerun-recheck.e2e.test.ts
+
       - name: Run auth grant --timeout e2e (approval wait bound, kill seams, real node)
         env:
           TC_REPLICATION_E2E_NODE_BIN: ${{ runner.temp }}/tinycloud
