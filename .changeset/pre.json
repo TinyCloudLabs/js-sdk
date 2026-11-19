@@ -33,9 +33,16 @@
     "auth-request-grant-timeout",
     "auth-request-stale-link",
     "auth-retry-grant-hint",
+    "feed-disconnect",
+    "mcp-agent-discovery",
     "native-share-recording-links",
     "node-sdk-delegate-not-before",
     "node-sdk-registry-sync-busy",
+    "onboard-rerun-space-recheck",
+    "revoke-issued-space-not-found",
+    "share-links-no-delegation-actions",
+    "tc-2652-profile-show-output",
+    "tc-2653-profile-loading",
     "tc-3141-legacy-list-lazy",
     "tc-3285-secret-types"
   ]

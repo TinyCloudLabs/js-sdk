@@ -10352,7 +10352,8 @@ var init_host = __esm({
 });
 
 // src/config/profiles.ts
-import { chmod as chmod3, lstat as lstat6, readdir as readdir5, rm as rm6 } from "fs/promises";
+import { constants as fsConstants5 } from "fs";
+import { chmod as chmod3, lstat as lstat6, open as open7, readdir as readdir5, rm as rm6 } from "fs/promises";
 import { CLI_NAME as CLI_NAME9 } from "@tinycloud/operations/cli-name";
 import { join as join11 } from "path";
 import {
@@ -10368,6 +10369,60 @@ import {
   writeSession,
   withPinnedProfileDirectory as withPinnedProfileDirectory2
 } from "@tinycloud/operations/state";
+function isTransientProfileEntryError(error) {
+  const code5 = error.code;
+  return code5 === "ENOENT" || code5 === "ENOTDIR" || code5 === "ELOOP" || code5 === "EISDIR";
+}
+async function secureProfileDirectory(directory) {
+  const rootFlags = fsConstants5.O_RDONLY | fsConstants5.O_DIRECTORY | (process.platform === "linux" ? 0 : fsConstants5.O_NOFOLLOW);
+  let root;
+  try {
+    root = await open7(directory, rootFlags);
+  } catch (error) {
+    if (error.code === "ENOENT") return;
+    throw error;
+  }
+  try {
+    const info = await root.stat();
+    if (!info.isDirectory()) {
+      throw new CLIError("PROFILE_INVALID", "Profile directory is not a real directory.");
+    }
+    if ((info.mode & 511) !== PRIVATE_DIR_MODE) {
+      await root.chmod(PRIVATE_DIR_MODE);
+    }
+    const pinnedDirectory2 = process.platform === "linux" ? `/proc/self/fd/${root.fd}` : directory;
+    let entries;
+    try {
+      entries = await readdir5(pinnedDirectory2, { withFileTypes: true });
+    } catch (error) {
+      if (isTransientProfileEntryError(error)) return;
+      throw error;
+    }
+    for (const entry of entries) {
+      if (!entry.isFile()) continue;
+      let file;
+      try {
+        file = await open7(
+          join11(pinnedDirectory2, entry.name),
+          fsConstants5.O_RDONLY | fsConstants5.O_NOFOLLOW | fsConstants5.O_NONBLOCK
+        );
+      } catch (error) {
+        if (isTransientProfileEntryError(error)) continue;
+        throw error;
+      }
+      try {
+        const fileInfo = await file.stat();
+        if (fileInfo.isFile() && (fileInfo.mode & 511) !== 384) {
+          await file.chmod(384);
+        }
+      } finally {
+        await file.close();
+      }
+    }
+  } finally {
+    await root.close();
+  }
+}
 var ProfileManager;
 var init_profiles = __esm({
   "src/config/profiles.ts"() {
@@ -10444,7 +10499,11 @@ var init_profiles = __esm({
        * Throws CLIError if the profile doesn't exist.
        */
       static async getProfile(name) {
-        const profile = await withPinnedProfileDirectory2(name, (directory) => directory ? readJson(join11(directory, "profile.json")) : Promise.resolve(null));
+        const profile = await withPinnedProfileDirectory2(name, async (directory) => {
+          if (!directory) return null;
+          await secureProfileDirectory(directory);
+          return readJson(join11(directory, "profile.json"));
+        });
         if (!profile) {
           throw new CLIError(
             "PROFILE_NOT_FOUND",
@@ -17002,7 +17061,7 @@ async function seal(plaintextBytes, key32) {
   blob.set(ciphertext, HEADER_LENGTH + nonce.length);
   return { blob, cid: await computeCid(blob) };
 }
-async function open8(blob, key32) {
+async function open9(blob, key32) {
   if (blob.length < HEADER_LENGTH + NONCE_LENGTH + TAG_LENGTH) {
     throw new TypeError(`sealed blob too short: ${blob.length} bytes`);
   }
@@ -17419,7 +17478,7 @@ async function openRecordChecked(record3, key, nowMs) {
   if (key.length !== 32) throw new LinkError("invalid_argument", "a link key is 32 bytes");
   let plaintext;
   try {
-    plaintext = await open8(body, key);
+    plaintext = await open9(body, key);
   } catch {
     throw new LinkError("body_open_failed");
   }
@@ -18194,11 +18253,11 @@ var init_links = __esm({
 });
 
 // src/lib/browser.ts
-import open11 from "open";
+import open12 from "open";
 async function tryOpenBrowser(url) {
   let launcher;
   try {
-    launcher = await open11(url);
+    launcher = await open12(url);
   } catch {
     return false;
   }
@@ -19097,8 +19156,8 @@ var init_scoped_login = __esm({
 
 // src/auth/pending-code.ts
 import { createHash as createHash2 } from "crypto";
-import { constants as fsConstants5 } from "fs";
-import { open as open12, rm as rm7 } from "fs/promises";
+import { constants as fsConstants6 } from "fs";
+import { open as open13, rm as rm7 } from "fs/promises";
 import { join as join14 } from "path";
 import { profilePath as profilePath7 } from "@tinycloud/operations/state";
 function hashOf(code5) {
@@ -19116,7 +19175,7 @@ async function live(profile) {
   let records;
   let handle;
   try {
-    handle = await open12(file, fsConstants5.O_RDONLY | fsConstants5.O_NOFOLLOW | fsConstants5.O_NONBLOCK);
+    handle = await open13(file, fsConstants6.O_RDONLY | fsConstants6.O_NOFOLLOW | fsConstants6.O_NONBLOCK);
     const info = await handle.stat();
     if (!info.isFile() || info.uid !== process.getuid?.()) return [];
     if ((info.mode & 63) !== 0) await handle.chmod(384).catch(() => void 0);
@@ -20238,7 +20297,7 @@ __export(approval_request_exports, {
   trackApprovalResult: () => trackApprovalResult
 });
 import { createECDH as createECDH2, createHash as createHash4, createPrivateKey, randomBytes as randomBytes5, randomUUID as randomUUID2, sign } from "crypto";
-import { open as open13 } from "fs/promises";
+import { open as open14 } from "fs/promises";
 import { join as join16 } from "path";
 import { setTimeout as wait } from "timers/promises";
 import { additionalDelegationsPath as additionalDelegationsPath3, profilePath as profilePath10 } from "@tinycloud/operations/state";
@@ -20303,7 +20362,7 @@ async function syncCommandFiles(profile, result) {
     throw invalid2("The verified command result and history have not both been saved.");
   }
   for (const path of [localGrantArtifactsPath(profile), grantHistoryPath(profile), profilePath10(profile)]) {
-    const handle = await open13(path, "r");
+    const handle = await open14(path, "r");
     try {
       await handle.sync();
     } finally {
@@ -20876,13 +20935,13 @@ async function completeApprovalResult(profile, delegation) {
         const grants = await loadAdditionalDelegations(profile);
         const stored = grants.find((item) => item.delegation.cid === verifiedDelegation.delegationCid && item.delegation.siweProof?.siwe === verifiedDelegation.siwe && item.delegation.siweProof?.signature === verifiedDelegation.signature);
         if (stored) {
-          const file = await open13(additionalDelegationsPath3(profile), "r");
+          const file = await open14(additionalDelegationsPath3(profile), "r");
           try {
             await file.sync();
           } finally {
             await file.close();
           }
-          const directory = await open13(profilePath10(profile), "r");
+          const directory = await open14(profilePath10(profile), "r");
           try {
             await directory.sync();
           } finally {
@@ -21194,7 +21253,7 @@ var init_browser_auth = __esm({
 // src/commands/account.ts
 init_profiles();
 init_constants();
-import open7 from "open";
+import open8 from "open";
 import { readFile as readFile7 } from "fs/promises";
 
 // src/lib/account-access.ts
@@ -21517,7 +21576,7 @@ function registerAccountCommand(program) {
     billing.command(name).description(`${name === "status" ? "Show" : "Open"} account billing page`).option("--open", "Open account.tinycloud.xyz in your browser").action(async (options) => {
       try {
         if (options.open) {
-          await open7(ACCOUNT_BILLING_URL);
+          await open8(ACCOUNT_BILLING_URL);
         }
         outputJson({ url: ACCOUNT_BILLING_URL, opened: Boolean(options.open) });
       } catch (error) {
@@ -28872,7 +28931,7 @@ init_constants();
 init_errors();
 init_session_expired();
 init_warnings();
-import { chmod as chmod4, link as link2, open as open10, readFile as readFile9, stat as stat4, unlink as unlink4 } from "fs/promises";
+import { chmod as chmod4, link as link2, open as open11, readFile as readFile9, stat as stat4, unlink as unlink4 } from "fs/promises";
 import { dirname as dirname5, join as join13 } from "path";
 import { createHash } from "crypto";
 import { createProfileRegistryCacheStore as createProfileRegistryCacheStore2, createProfileRegistrySequenceStore as createProfileRegistrySequenceStore2, writeJsonAtomic as writeJsonAtomic2 } from "@tinycloud/operations/state";
@@ -34294,7 +34353,7 @@ async function importAesKey2(key32, usage3) {
     [usage3]
   );
 }
-async function open9(blob, key32) {
+async function open10(blob, key32) {
   if (blob.length < HEADER_LENGTH2 + NONCE_LENGTH2 + TAG_LENGTH2) {
     throw new TypeError(`sealed blob too short: ${blob.length} bytes`);
   }
@@ -34858,7 +34917,7 @@ async function resolveLegacyV2(link5, options) {
     if (await computeCid2(sealed) !== parsed.ciphertextCid) throw new ShareReceiveError("cid-mismatch", "legacy envelope CID does not match");
     let plaintext;
     try {
-      plaintext = await open9(sealed, parsed.key32);
+      plaintext = await open10(sealed, parsed.key32);
     } catch {
       throw new ShareReceiveError("decrypt-failed", "legacy envelope could not be opened");
     }
@@ -36438,7 +36497,7 @@ function createEncryptedProfileHistory(profileName2, sessionSigner) {
       await link2(found.file, target);
       await chmod4(target, PRIVATE_HISTORY_MODE);
       await unlink4(found.file);
-      const directory = await open10(dirname5(found.file), "r");
+      const directory = await open11(dirname5(found.file), "r");
       try {
         await directory.sync();
       } finally {
@@ -36700,6 +36759,34 @@ async function ensureSpaceSetup(ctx, delegation, permissions, timeoutMs) {
   if (!report) return;
   await awaitSpaceSetup(report, { probe: kvSpaceProbe(ctx, permissions), ...timeoutMs === void 0 ? {} : { timeoutMs } });
 }
+async function recheckSpaceHosting(ctx, sessionSpaceId, permissions, options) {
+  if (options.confirmed.has(sessionSpaceId)) return;
+  const probe = kvSpaceProbe(ctx, permissions, options.restore);
+  const first = await probe().catch(() => "transient");
+  if (first === "hosted") options.confirmed.add(sessionSpaceId);
+  if (first !== "unhosted") return;
+  await awaitSpaceSetup({ ready: null, pending: true }, {
+    probe,
+    ...options.timeoutMs === void 0 ? {} : { timeoutMs: options.timeoutMs },
+    ...options.sleep === void 0 ? {} : { sleep: options.sleep },
+    ...options.now === void 0 ? {} : { now: options.now },
+    ...options.write === void 0 ? {} : { write: options.write }
+  });
+  options.confirmed.add(sessionSpaceId);
+}
+function createSpaceRecheck() {
+  const confirmed = /* @__PURE__ */ new Set();
+  let settled = false;
+  return {
+    settle: () => {
+      settled = true;
+    },
+    check: async (ctx, sessionSpaceId, permissions, options = {}) => {
+      if (settled) return;
+      await recheckSpaceHosting(ctx, sessionSpaceId, permissions, { ...options, confirmed });
+    }
+  };
+}
 
 // src/commands/auth.ts
 init_scoped_login();
@@ -36728,7 +36815,7 @@ init_owner_did();
 import { randomBytes as randomBytes6, timingSafeEqual } from "crypto";
 import { createServer } from "http";
 import { createInterface as createInterface3 } from "readline";
-import open14 from "open";
+import open15 from "open";
 import { publicJwk as publicJwk3 } from "@tinycloud/sdk-core";
 var MAX_BODY_BYTES2 = 1024 * 1024;
 var RESULT_FIELDS = ["address", "permissions", "protocolVersion", "selectedActionKeys", "signature", "signedMessage"];
@@ -36933,7 +37020,7 @@ async function startPreparedOpenKeyHandoff(options) {
     console.error(`Open this URL in a browser to authenticate: ${url}`);
     if (!options.noPopup && !options.paste) {
       try {
-        await open14(url);
+        await open15(url);
       } catch {
         console.error("Could not open browser. Use the printed URL or paste the signed code.");
       }
@@ -41437,13 +41524,46 @@ async function connectFeedAgent(registry, source, activate) {
   return grant;
 }
 
+// src/feed/disconnect.ts
+init_constants();
+init_errors();
+async function disconnectFeedAgent(registry, agentId, revoke) {
+  const found = await registry.query("SELECT authorization_json FROM feed_agents WHERE agent_id = ?", [agentId]);
+  if (!found.ok && !/no such table/i.test(found.error.message)) throw cliErrorFromService(found.error);
+  const row = found.ok ? found.data.rows[0] : void 0;
+  if (!row) {
+    throw new CLIError("FEED_AGENT_NOT_FOUND", `No agent is connected under the feed token "${agentId}". Nothing was changed.`, ExitCode.NOT_FOUND);
+  }
+  const authorization = row[0];
+  let cid;
+  try {
+    const parsed = JSON.parse(authorization);
+    if (parsed !== null && typeof parsed === "object" && "cid" in parsed) cid = parsed.cid;
+  } catch {
+    cid = void 0;
+  }
+  if (typeof cid !== "string" || cid === "") {
+    throw new CLIError("FEED_GRANT_UNREADABLE", `The registry row for "${agentId}" has no readable grant ID, so the grant can't be revoked from it. Nothing was changed.`, ExitCode.ERROR);
+  }
+  let nodeHadNoGrant = false;
+  try {
+    await revoke(cid);
+  } catch (error) {
+    if (!(error instanceof CLIError) || error.code !== "TARGET_NOT_FOUND") throw error;
+    nodeHadNoGrant = true;
+  }
+  const removed = await registry.execute("DELETE FROM feed_agents WHERE agent_id = ? AND authorization_json = ?", [agentId, authorization]);
+  if (!removed.ok) throw cliErrorFromService(removed.error);
+  return nodeHadNoGrant ? { agentId, cid, revoked: false, nodeHadNoGrant: true, removed: true } : { agentId, cid, revoked: true, removed: true };
+}
+
 // src/feed/export.ts
 init_constants();
 init_errors();
 import { createHash as createHash6, randomUUID as randomUUID3 } from "crypto";
 import { isUtf8 } from "buffer";
 import { constants } from "fs";
-import { link as link3, lstat as lstat9, open as open15, readFile as readFile12, readlink, realpath as realpath2, rm as rm8, unlink as unlink5 } from "fs/promises";
+import { link as link3, lstat as lstat9, open as open16, readFile as readFile12, readlink, realpath as realpath2, rm as rm8, unlink as unlink5 } from "fs/promises";
 import { basename as basename2, dirname as dirname8, join as join18, resolve as resolve5 } from "path";
 var RawExportRefusal = class extends Error {
 };
@@ -41556,7 +41676,7 @@ async function sidecarRows(options, keys) {
 async function publishSnapshot(outFile, snapshot, signal) {
   const parentPath = dirname8(outFile);
   await assertTrustedOutputDirectory(parentPath);
-  const parent = await open15(parentPath, constants.O_RDONLY | (constants.O_DIRECTORY ?? 0) | (constants.O_NOFOLLOW ?? 0));
+  const parent = await open16(parentPath, constants.O_RDONLY | (constants.O_DIRECTORY ?? 0) | (constants.O_NOFOLLOW ?? 0));
   const temporary = join18(parentPath, `.${basename2(outFile)}.${randomUUID3()}.tmp`);
   let created = false;
   try {
@@ -41568,7 +41688,7 @@ async function publishSnapshot(outFile, snapshot, signal) {
       }
     };
     await assertStableParent();
-    const file = await open15(temporary, "wx", 384);
+    const file = await open16(temporary, "wx", 384);
     created = true;
     try {
       await file.chmod(384);
@@ -42124,6 +42244,20 @@ slash prefix and output are explicit; source get/sync grants are separate from f
       return handleError(error);
     }
   });
+  agentOptions(feed.command("disconnect").description("Owner: revoke an agent's feed grant and remove it from the registry")).addHelpText("after", `
+Reads the grant ID from the owner registry and revokes it with this profile's own key, so no OpenKey approval is
+needed. Run it with the profile that ran feed connect: a profile can revoke only grants its own key issued. The registry
+row is removed only after the revoke succeeds; the token stays reserved for the same agent DID.
+`).action(async (options, command) => {
+    try {
+      const { node, sql: sql2, profile } = await context(command);
+      outputJson(await disconnectFeedAgent(sql2.db(REGISTRY), options.agent, async (cid) => {
+        await revokeIssuedDelegation(node, profile, cid);
+      }));
+    } catch (error) {
+      return handleError(error);
+    }
+  });
   agentOptions(feed.command("publish").description("Agent: publish an immutable card issuance")).requiredOption("--file <path>", "Card JSON file").action(async (options, command) => {
     try {
       const { output: output2 } = await context(command);
@@ -42413,7 +42547,7 @@ init_storage();
 init_errors();
 init_constants();
 import { randomUUID as randomUUID4 } from "crypto";
-import { lstat as lstat10, open as open16, rename as rename3, rm as rm9 } from "fs/promises";
+import { lstat as lstat10, open as open17, rename as rename3, rm as rm9 } from "fs/promises";
 import { basename as basename3, dirname as dirname9, join as join20 } from "path";
 async function validatePrivateOutput(path, label = "output") {
   try {
@@ -42440,7 +42574,7 @@ async function writePrivateOutput(path, value4, label = "output") {
   const temp = join20(parentPath, `.${basename3(path)}.${randomUUID4()}.tmp`);
   let created = false;
   try {
-    const handle = await open16(temp, "wx", PRIVATE_FILE_MODE);
+    const handle = await open17(temp, "wx", PRIVATE_FILE_MODE);
     created = true;
     try {
       await handle.writeFile(value4);
@@ -42455,7 +42589,7 @@ async function writePrivateOutput(path, value4, label = "output") {
     throw new CLIError("ERROR", `Could not write ${label.toLowerCase()} "${path}"${code5}.`, ExitCode.ERROR);
   }
   try {
-    const parent = await open16(parentPath, "r");
+    const parent = await open17(parentPath, "r");
     try {
       await parent.sync();
     } finally {
@@ -43169,6 +43303,7 @@ ${deadlineMs === void 0 ? "\nWaiting for approval. Re-run this command after an 
           }
         });
       };
+      const spaceRecheck = createSpaceRecheck();
       for (const [index, step] of ONBOARD_STEPS.entries()) {
         currentStep = index + 1;
         const session2 = await ProfileManager.getSession(ctx.profile);
@@ -43186,9 +43321,16 @@ ${deadlineMs === void 0 ? "\nWaiting for approval. Re-run this command after an 
             delegationData.permissions,
             deadlineMs === void 0 ? void 0 : spaceSetupTimeoutMs({ deadlineMs, step: currentStep, of: ONBOARD_STEPS.length })
           );
+          spaceRecheck.settle();
           profile = await ProfileManager.getProfile(ctx.profile);
           continue;
         }
+        await spaceRecheck.check(
+          { profile: ctx.profile, host: ctx.host },
+          String(session2?.spaceId),
+          step.permissions,
+          deadlineMs === void 0 ? {} : { timeoutMs: spaceSetupTimeoutMs({ deadlineMs, step: currentStep, of: ONBOARD_STEPS.length }) }
+        );
         await ensureDelegationAuthority({
           ctx,
           profile,
@@ -43332,11 +43474,37 @@ function registerProfileCommand(program) {
       const isDefault = profileName2 === config.defaultProfile;
       const posture = resolveProfilePosture(p);
       const operatorType = resolveProfileOperatorType(p);
+      const profileDetails = {
+        name: p.name,
+        tinycloudRegistryUrl: p.tinycloudRegistryUrl,
+        host: p.host,
+        chainId: p.chainId,
+        spaceName: p.spaceName,
+        did: p.did,
+        sessionDid: p.sessionDid,
+        ownerDid: p.ownerDid,
+        ownerKeyPrimary: p.ownerKeyPrimary,
+        spaceId: p.spaceId,
+        defaultSpace: p.defaultSpace,
+        createdAt: p.createdAt,
+        posture,
+        operatorType,
+        authMethod: p.authMethod,
+        authSignedOut: p.authSignedOut,
+        legacyReplicaCleanup: p.legacyReplicaCleanup,
+        address: p.address,
+        openkeyHost: p.openkeyHost,
+        autoDiscoverLocalNode: p.autoDiscoverLocalNode,
+        localNodeUrl: p.localNodeUrl,
+        localLinkName: p.localLinkName,
+        expectedNodeDid: p.expectedNodeDid,
+        pinnedLocalNodeDids: p.pinnedLocalNodeDids,
+        namedKeys: p.namedKeys,
+        replication: p.replication
+      };
       if (shouldOutputJson()) {
         outputJson({
-          ...p,
-          posture,
-          operatorType,
+          ...profileDetails,
           hasKey,
           hasSession,
           isDefault
@@ -43454,8 +43622,8 @@ function parseOperatorType(raw) {
 init_profile_replicas();
 import { CLI_NAME as CLI_NAME32 } from "@tinycloud/operations/cli-name";
 import { randomBytes as randomBytes7 } from "crypto";
-import { constants as fsConstants6 } from "fs";
-import { mkdir as mkdir7, open as open17, readdir as readdir6, rename as rename4, unlink as unlink6, lstat as lstat11 } from "fs/promises";
+import { constants as fsConstants7 } from "fs";
+import { mkdir as mkdir7, open as open18, readdir as readdir6, rename as rename4, unlink as unlink6, lstat as lstat11 } from "fs/promises";
 import { basename as basename4, dirname as dirname10, join as join21, resolve as resolve6 } from "path";
 
 // src/lib/replication-report.ts
@@ -43923,7 +44091,7 @@ function describeStatus(status) {
 async function writeFileAtomic(path, bytes) {
   const target = resolve6(path);
   const temp = join21(dirname10(target), `.${basename4(target)}.${randomBytes7(6).toString("hex")}.tmp`);
-  const handle = await open17(temp, fsConstants6.O_CREAT | fsConstants6.O_EXCL | fsConstants6.O_WRONLY, 384);
+  const handle = await open18(temp, fsConstants7.O_CREAT | fsConstants7.O_EXCL | fsConstants7.O_WRONLY, 384);
   try {
     await handle.writeFile(bytes);
     await handle.sync();
@@ -43972,7 +44140,7 @@ async function withPinnedLocalDirectory(profile, parent, name, action) {
   });
   if (!before) return null;
   if (before.isSymbolicLink() || !before.isDirectory()) throw localPathChanged(profile);
-  const handle = await open17(path, fsConstants6.O_RDONLY | fsConstants6.O_DIRECTORY | fsConstants6.O_NOFOLLOW).catch((error) => {
+  const handle = await open18(path, fsConstants7.O_RDONLY | fsConstants7.O_DIRECTORY | fsConstants7.O_NOFOLLOW).catch((error) => {
     if (error.code === "ELOOP" || error.code === "ENOTDIR" || error.code === "ENOENT") throw localPathChanged(profile);
     throw error;
   });
@@ -44001,7 +44169,7 @@ async function readReportFile(profile, parent, name) {
   });
   if (!before) return null;
   if (before.isSymbolicLink() || !before.isFile()) throw localPathChanged(profile);
-  const handle = await open17(path, fsConstants6.O_RDONLY | fsConstants6.O_NOFOLLOW).catch((error) => {
+  const handle = await open18(path, fsConstants7.O_RDONLY | fsConstants7.O_NOFOLLOW).catch((error) => {
     if (error.code === "ELOOP" || error.code === "ENOTDIR" || error.code === "ENOENT") throw localPathChanged(profile);
     throw error;
   });
@@ -46483,7 +46651,7 @@ function receiveJson(result, path) {
 
 // src/share/io.ts
 import { constants as constants2 } from "fs";
-import { lstat as lstat12, mkdir as mkdir8, mkdtemp, open as open18, readFile as readFile18, realpath as realpath3, stat as stat6, link as link4, rename as rename5, rm as rm10, unlink as unlink7 } from "fs/promises";
+import { lstat as lstat12, mkdir as mkdir8, mkdtemp, open as open19, readFile as readFile18, realpath as realpath3, stat as stat6, link as link4, rename as rename5, rm as rm10, unlink as unlink7 } from "fs/promises";
 import { randomBytes as randomBytes8 } from "crypto";
 import { basename as basename5, join as join24, resolve as resolve7, sep as sep3 } from "path";
 init_errors();
@@ -46559,7 +46727,7 @@ async function writeShareOutput(directory, filename, bytes, force) {
   const outputDirectory = resolve7(directory);
   await assertDirectory(outputDirectory);
   const safeName = safeFilename(filename);
-  const directoryHandle = await open18(outputDirectory, constants2.O_RDONLY | (constants2.O_DIRECTORY ?? 0) | (constants2.O_NOFOLLOW ?? 0));
+  const directoryHandle = await open19(outputDirectory, constants2.O_RDONLY | (constants2.O_DIRECTORY ?? 0) | (constants2.O_NOFOLLOW ?? 0));
   const stableDirectory = await realpath3(outputDirectory);
   const outputPath = join24(stableDirectory, safeName);
   const directoryIdentity = await directoryHandle.stat();
@@ -46583,7 +46751,7 @@ async function writeShareOutput(directory, filename, bytes, force) {
       if (error.code !== "ENOENT") throw error;
     }
     temporaryPath = stagingPath;
-    handle = await open18(temporaryPath, constants2.O_WRONLY | constants2.O_CREAT | constants2.O_EXCL | (constants2.O_NOFOLLOW ?? 0), 384);
+    handle = await open19(temporaryPath, constants2.O_WRONLY | constants2.O_CREAT | constants2.O_EXCL | (constants2.O_NOFOLLOW ?? 0), 384);
     await handle.writeFile(bytes);
     await handle.close();
     handle = void 0;
@@ -46616,7 +46784,7 @@ init_profiles();
 
 // src/share/html-folder.ts
 import { constants as constants3, existsSync as existsSync2 } from "fs";
-import { lstat as lstat13, open as open19, readdir as readdir7, realpath as realpath4, stat as stat7 } from "fs/promises";
+import { lstat as lstat13, open as open20, readdir as readdir7, realpath as realpath4, stat as stat7 } from "fs/promises";
 import { basename as basename6, dirname as dirname11, isAbsolute, join as join25, relative as relativePath, resolve as resolve8, sep as sep4 } from "path";
 
 // ../share-sdk/dist/html-bundle.js
@@ -46971,9 +47139,9 @@ function scanMarkup(html, options) {
     if (comments > MAX_ARTIFACT_COMMENTS) fail("limit", "artifact page has too many comments");
   };
   while (index < length5) {
-    const open20 = html.indexOf("<", index);
-    if (open20 === -1) return;
-    index = open20 + 1;
+    const open21 = html.indexOf("<", index);
+    if (open21 === -1) return;
+    index = open21 + 1;
     const next = html[index] ?? "";
     if (html.startsWith("!--", index)) {
       countComment();
@@ -47574,7 +47742,7 @@ async function readRegularFile(root, path, relative, remaining, limit, hooks = {
     await hooks.beforeOpen?.();
     before = await lstat13(path);
     await hooks.afterLstat?.();
-    handle = await open19(path, constants3.O_RDONLY | (constants3.O_NOFOLLOW ?? 0) | (constants3.O_NONBLOCK ?? 0));
+    handle = await open20(path, constants3.O_RDONLY | (constants3.O_NOFOLLOW ?? 0) | (constants3.O_NONBLOCK ?? 0));
   } catch (error) {
     if (error.code === "ELOOP") return problem("symbolic link");
     if (isRaceError(error)) return problem(CHANGED);
@@ -47633,7 +47801,7 @@ async function listFolderDirectory(root, absolute, relative, hooks = {}) {
     if (before.isSymbolicLink()) return problem("symbolic link");
     if (!before.isDirectory()) return problem(CHANGED);
     await hooks.afterLstat?.();
-    const handle = await open19(absolute, constants3.O_RDONLY | (constants3.O_DIRECTORY ?? 0) | (constants3.O_NOFOLLOW ?? 0));
+    const handle = await open20(absolute, constants3.O_RDONLY | (constants3.O_DIRECTORY ?? 0) | (constants3.O_NOFOLLOW ?? 0));
     try {
       await hooks.afterOpen?.();
       const info = await handle.stat();
