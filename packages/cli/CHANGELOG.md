@@ -1,5 +1,28 @@
 # @tinycloud/cli
 
+## 1.8.0-beta.17
+
+### Patch Changes
+
+- 01b7932: `auth import` of a delegation addressed to an agent (delegate-session) profile's own key now makes it the profile's session, replacing a live, expired or signed-out one, so `auth status` reports the new expiry and commands work until it passes. `auth logout` on such a profile with no local replica state clears the session but keeps the key, so a new grant can be imported for it; other logouts still delete the key. Logout output says which: `keyKept` and a `message` ("Signed out. The key is kept, so a new grant can be imported for it. Grants already made for this key stay valid until they expire unless the owner revokes them." or "Signed out. The key was deleted; the next sign-in creates a new one.").
+
+  Details: TC-3434
+
+- 57e16d4: Accept a verified owner-signed whole-request grant when it covers every requested permission, including when the signed grant contains additional owner-approved permissions. Legacy scoped manifest logins retain their narrowed-approval behavior.
+
+  Details: TC-599
+
+- d94bfbf: The `tinycloud-cli` skill now says that `--to did:` and `--to domain:` create addressed shares. It no longer says that sharing to a domain or DID is unavailable. `--to email:` is still refused with `UNAVAILABLE`, and the skill now points the owner to share.tinycloud.xyz for one email address. The publish examples that used `--to email:` now use `--to domain:`.
+
+  Details: TC-2929
+
+- c58e7e7: CLI bug-report uploads now use `feedback.tinycloud.xyz`.
+
+  Details: TC-2515
+
+- Updated dependencies [df0de7e]
+  - @tinycloud/operations@0.9.1-beta.11
+
 ## 1.8.0-beta.16
 
 ### Patch Changes

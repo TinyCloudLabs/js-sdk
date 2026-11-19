@@ -20,7 +20,7 @@ import { logoutInventorySnapshot, planLogoutRevocations, type LogoutRevocationPl
 import { assertShareHistoryAllowsKeyDrop } from "../share/history-guard.js";
 import {
   assertPendingLogoutOwner, assertPendingRemoteLogoutSession, clearProfileCredentials, eraseApprovedLegacyReplicas,
-  finishLegacyReplicaCleanup, gateHeldByAnotherAccount, profilePurge, recoverPendingLogout, refuseRestoredGate,
+  finishLegacyReplicaCleanup, gateHeldByAnotherAccount, logoutKeepsKey, profilePurge, recoverPendingLogout, refuseRestoredGate,
 } from "../lib/logout-pending.js";
 import {
   outputJson,
@@ -222,6 +222,24 @@ async function existingReplicaRoots(profile: string): Promise<string[]> {
     }
   }
   return roots;
+}
+
+/**
+ * Whether a plain logout of this profile keeps its key: a delegate-session profile with no replica gate, pending
+ * logout or replica root to erase (TC-3434). Such a logout drops no key, so it needs no share-history check.
+ */
+async function logoutWillKeepKey(name: string): Promise<boolean> {
+  if (!logoutKeepsKey(await ProfileManager.getProfile(name))) return false;
+  for (const child of [REPLICA_GATE_FILE, REPLICA_LOGOUT_PENDING_FILE, "replicas", "replication"]) {
+    try {
+      await lstat(join(profilePath(name), child));
+      return false;
+    } catch (error) {
+      if (typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT") continue;
+      throw error;
+    }
+  }
+  return true;
 }
 
 function displayLogoutInventory(approval: ProfileReplicaPreflight, discardLocalChanges: boolean): void {
@@ -614,7 +632,7 @@ export async function finishProfileLogout(
               "Replica files or pending intents survived without a durable logout marker; credentials remain for retry.",
               ExitCode.ERROR);
           }
-          await clearProfileCredentials(ctx.profile, true);
+          await clearProfileCredentials(ctx.profile, true, false, logoutKeepsKey(profile));
         }
       }
     } catch (error) {
@@ -788,12 +806,12 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
 
   auth
     .command("logout")
-    .description(`Clear the local session and remove local replicas. With --revoke, revoke owner-controlled node grants and the session CID before deleting local files.`)
+    .description(`Clear the local session and remove local replicas. An agent (delegate-session) profile with no local replica state keeps its key, so a new grant can be imported for it; other profiles' keys are deleted and the next sign-in creates a new one. With --revoke, revoke owner-controlled node grants and the session CID before deleting local files.`)
     .option("--keep-replicas", "Keep legacy replicas only when this profile has no replica gate or flag-owned state")
     .option("--revoke", "Revoke owner-controlled grants and the session CID on the node before local logout")
     .option("--discard-local-changes", "Approve deletion of the exact local replica paths and identities listed before logout; with --revoke, deletion waits for every node receipt")
     .option("--approve-inventory <token>", "After a refused pending remote logout, confirm the exact changed paths printed by the previous command; requires --discard-local-changes")
-    .option("--force", "Log out even when recorded shares could not be checked or hold unexpired shares that need the current session key")
+    .option("--force", "Log out even when recorded shares could not be checked or hold unexpired shares that need the current session key (no effect when the key is kept)")
     .action(async (options, cmd) => {
       try {
         const globalOpts = cmd.optsWithGlobals();
@@ -814,7 +832,10 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
             "--approve-inventory only applies to a separate plain logout after a refused pending remote revocation.",
             ExitCode.USAGE_ERROR);
         }
-        if (!options.revoke && !options.force) await assertShareHistoryAllowsKeyDrop(ctx.profile, "logout");
+        // --keep-replicas always deletes the key (legacy replicas stay fenced only by the shred), so it is checked.
+        if (!options.revoke && !options.force && (options.keepReplicas || !await logoutWillKeepKey(ctx.profile))) {
+          await assertShareHistoryAllowsKeyDrop(ctx.profile, "logout");
+        }
         const online = options.revoke ? await revokeForLogout(ctx, options.discardLocalChanges === true) : undefined;
         const replicasRemoved = await finishProfileLogout(ctx, {
           keepReplicas: options.keepReplicas,
@@ -822,9 +843,14 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
           approveInventory: options.approveInventory,
           online,
         });
+        const keyKept = await ProfileManager.getStoredKey(ctx.profile) !== null;
         outputJson({
           profile: ctx.profile,
           authenticated: false,
+          keyKept,
+          message: keyKept
+            ? "Signed out. The key is kept, so a new grant can be imported for it. Grants already made for this key stay valid until they expire unless the owner revokes them."
+            : "Signed out. The key was deleted; the next sign-in creates a new one.",
           replicasRemoved,
           replicasKept: options.keepReplicas === true,
           warning: online
@@ -1017,7 +1043,8 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
         
         const session = initialSnapshot ? initialSnapshot.session : await ProfileManager.getSession(ctx.profile);
         const key = initialSnapshot ? initialSnapshot.key : await ProfileManager.getKey(ctx.profile);
-        const keyOnlyOpenKey = !session && profile.authMethod !== "local" && key !== null && !options.device;
+        // A signed-out profile keeps its key, but only a sign-in may use it again.
+        const keyOnlyOpenKey = !session && profile.authMethod !== "local" && key !== null && profile.authSignedOut !== true && !options.device;
         if (profile.authMethod === "openkey" || options.device || keyOnlyOpenKey) assertNoCaveatLimits(requested);
         // Recover a durable approval ACK before the permissions fast path can return.
         await completeApprovalResult(ctx.profile);
@@ -1239,17 +1266,25 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
           );
         }
         // Identify the persisted profile before a session restore can replay
-        // old grants, or first-session bootstrap can modify local profile data.
+        // old grants, or a bootstrap can modify local profile data. A grant to
+        // a delegate-session profile's own key becomes its session, replacing
+        // a live, expired or signed-out one (TC-3434).
         const profile = await ProfileManager.getProfile(ctx.profile);
         let bootstrap: DelegatedSessionBootstrap | undefined;
         let node;
-        try {
-          node = await ensureAuthenticated(ctx);
-        } catch (error) {
-          const session = await ProfileManager.getSession(ctx.profile);
-          if (session || resolveProfilePosture(profile) !== "delegate-session") throw error;
-          bootstrap = await bootstrapDelegatedSession(ctx, imported.delegation);
+        if (delegationTargetsDelegateSessionKey(profile, imported.delegation.delegateDID)) {
+          await recoverPendingLogout(ctx.profile);
+          bootstrap = await bootstrapDelegatedSession(ctx, imported.delegation, { replaceSession: true });
           node = bootstrap.node;
+        } else {
+          try {
+            node = await ensureAuthenticated(ctx);
+          } catch (error) {
+            const session = await ProfileManager.getSession(ctx.profile);
+            if (session || resolveProfilePosture(profile) !== "delegate-session") throw error;
+            bootstrap = await bootstrapDelegatedSession(ctx, imported.delegation);
+            node = bootstrap.node;
+          }
         }
         // Only signed compact bytes can classify an import as cross-user.
         // Transport metadata cannot turn a damaged session grant into a silent
@@ -1826,6 +1861,15 @@ function isRequestBoundDelegationEnvelope(value: unknown): boolean {
     Object.hasOwn(candidate, "requestId");
 }
 
+/**
+ * Whether a grant to `delegateDid` is for a delegate-session profile's own key. Importing one makes it the profile's
+ * session, replacing a live, expired or signed-out one, so the profile works until the grant expires (TC-3434).
+ */
+function delegationTargetsDelegateSessionKey(profile: ProfileConfig, delegateDid: string): boolean {
+  return resolveProfilePosture(profile) === "delegate-session" &&
+    delegateDid.split("#", 1)[0] === (profile.sessionDid ?? profile.did).split("#", 1)[0];
+}
+
 type AuthImportOutput = {
   cid: string;
   effectivePermissions: PermissionEntry[];
@@ -1837,21 +1881,21 @@ async function importRequestBoundDelegationWithBootstrap(
   ctx: CLIContext,
   artifact: unknown,
 ): Promise<void> {
-  const session = await ProfileManager.getSession(ctx.profile);
-  if (session !== null) {
-    await importRequestBoundDelegation(ctx, artifact);
-    return;
-  }
-
   const profile = await ProfileManager.getProfile(ctx.profile);
-  if (resolveProfilePosture(profile) !== "delegate-session") {
+  const transport = typeof artifact === "object" && artifact !== null && "delegation" in artifact ? artifact.delegation : undefined;
+  const delegateDid = typeof transport === "object" && transport !== null && "delegateDID" in transport
+    ? transport.delegateDID : undefined;
+  const replaceSession = typeof delegateDid === "string" && delegationTargetsDelegateSessionKey(profile, delegateDid);
+  if (!replaceSession &&
+      (resolveProfilePosture(profile) !== "delegate-session" || await ProfileManager.getSession(ctx.profile) !== null)) {
     await importRequestBoundDelegation(ctx, artifact);
     return;
   }
 
   const candidate = artifact as { delegation: PortableDelegation };
   const delegation = normalizePortableDelegation(candidate.delegation);
-  const bootstrap = await bootstrapDelegatedSession(ctx, delegation);
+  if (replaceSession) await recoverPendingLogout(ctx.profile);
+  const bootstrap = await bootstrapDelegatedSession(ctx, delegation, { replaceSession });
   try {
     await importRequestBoundDelegation(ctx, artifact);
   } catch (error) {

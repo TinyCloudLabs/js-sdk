@@ -9631,19 +9631,29 @@ async function assertPendingRemoteLogoutSession(name, expected) {
     }
   }, { requireProfile: true });
 }
-async function clearProfileCredentials(name, syncDirectory = false, legacyCleanup = false) {
+function logoutKeepsKey(profile) {
+  return resolveProfilePosture(profile) === "delegate-session" && profile.legacyReplicaCleanup !== true;
+}
+async function clearProfileCredentials(name, syncDirectory = false, legacyCleanup = false, keepKey = false) {
   await ProfileManager.withLock(name, async () => {
     const profile = await ProfileManager.getProfile(name);
-    const { namedKeys: _namedKeys, ...signedOutProfile } = profile;
+    const { namedKeys: _namedKeys, authKeyRetained: _authKeyRetained, ...signedOutProfile } = profile;
     await rm5(join10(profilePath4(name), "approval-pending.json"), { force: true });
-    await ProfileManager.setProfileDurable(name, { ...signedOutProfile, authSignedOut: true, ...legacyCleanup ? { legacyReplicaCleanup: true } : {} });
+    await ProfileManager.setProfileDurable(name, {
+      ...signedOutProfile,
+      authSignedOut: true,
+      ...keepKey ? { authKeyRetained: true } : {},
+      ...legacyCleanup ? { legacyReplicaCleanup: true } : {}
+    });
     let failed = false;
     let error;
-    try {
-      await ProfileManager.removeKey(name);
-    } catch (cause) {
-      failed = true;
-      error = cause;
+    if (!keepKey) {
+      try {
+        await ProfileManager.removeKey(name);
+      } catch (cause) {
+        failed = true;
+        error = cause;
+      }
     }
     try {
       await ProfileManager.clearSession(name);
@@ -9668,7 +9678,7 @@ async function finishSignedOutCredentialRemoval(name) {
     throw error;
   });
   if (profile?.authSignedOut !== true) return;
-  for (const file of ["session.json", "key.json"]) {
+  for (const file of profile.authKeyRetained === true ? ["session.json"] : ["session.json", "key.json"]) {
     try {
       await lstat5(join10(profilePath4(name), file));
     } catch (error) {
@@ -9676,8 +9686,9 @@ async function finishSignedOutCredentialRemoval(name) {
       throw error;
     }
     await ProfileManager.withLock(name, async () => {
-      if ((await ProfileManager.getProfile(name)).authSignedOut === true) {
-        await clearProfileCredentials(name, true);
+      const current = await ProfileManager.getProfile(name);
+      if (current.authSignedOut === true) {
+        await clearProfileCredentials(name, true, false, current.authKeyRetained === true);
       }
     }, { requireProfile: true });
     return;
@@ -9802,6 +9813,7 @@ var init_logout_pending = __esm({
     init_profile_gate();
     init_profiles();
     init_constants();
+    init_types();
     init_errors();
     init_profile_replicas();
     init_replication_log();
@@ -9823,7 +9835,7 @@ __export(sdk_exports, {
   selectSignerJwk: () => selectSignerJwk,
   storedSessionVerifiesLocally: () => storedSessionVerifiesLocally
 });
-import { createProfileRegistryCacheStore, createProfileRegistrySequenceStore } from "@tinycloud/operations/state";
+import { createProfileRegistryCacheStore, createProfileRegistrySequenceStore, profilePath as profilePath5 } from "@tinycloud/operations/state";
 import { TinyCloudNode, signedCompactUcanExpiry } from "@tinycloud/node-sdk";
 import { CLI_NAME as CLI_NAME7 } from "@tinycloud/operations/cli-name";
 import { liveStoredLease, ownerSessionLacksProof, restoreStoredSession } from "@tinycloud/operations/profile";
@@ -10062,7 +10074,7 @@ async function createSDKInstance(ctx, options) {
   }
   return node;
 }
-async function bootstrapDelegatedSession(ctx, delegation) {
+async function bootstrapDelegatedSession(ctx, delegation, options = {}) {
   const written = await ProfileManager.withLock(ctx.profile, async () => {
     const previousProfile = await ProfileManager.getProfile(ctx.profile);
     if (resolveProfilePosture(previousProfile) !== "delegate-session") {
@@ -10080,7 +10092,8 @@ async function bootstrapDelegatedSession(ctx, delegation) {
         ExitCode.PERMISSION_DENIED
       );
     }
-    if (await ProfileManager.getSession(ctx.profile) !== null) {
+    const previousSession = await ProfileManager.getSession(ctx.profile);
+    if (previousSession !== null && options.replaceSession !== true) {
       throw new CLIError(
         "PROFILE_CHANGED_DURING_IMPORT",
         `Profile "${ctx.profile}" gained a session (another login or import) after this import checked it. Nothing was saved; run the import again.`,
@@ -10088,7 +10101,11 @@ async function bootstrapDelegatedSession(ctx, delegation) {
       );
     }
     if (signedLifetimePassed(delegation)) throw delegationExpiredError();
-    const jwk = signerJwkForProfile(ctx.profile, void 0, await ProfileManager.getKey(ctx.profile));
+    const jwk = signerJwkForProfile(
+      ctx.profile,
+      previousSession && "jwk" in previousSession ? previousSession.jwk : void 0,
+      await ProfileManager.getStoredKey(ctx.profile)
+    );
     const session = {
       delegationHeader: delegation.delegationHeader,
       delegationCid: delegation.cid,
@@ -10096,15 +10113,25 @@ async function bootstrapDelegatedSession(ctx, delegation) {
       jwk,
       verificationMethod: sessionDid
     };
-    const { namedKeys: _namedKeys, ...previousFields } = previousProfile;
+    const {
+      namedKeys: _namedKeys,
+      authSignedOut: _authSignedOut,
+      authKeyRetained: _authKeyRetained,
+      ...previousFields
+    } = previousProfile;
     const profile = { ...previousFields, sessionDid, spaceId: delegation.spaceId };
     try {
       await ProfileManager.setSession(ctx.profile, session);
-      await ProfileManager.setProfile(ctx.profile, profile);
+      if (previousProfile.authSignedOut === true) {
+        await syncAuthCredentialFiles(profilePath5(ctx.profile));
+        await ProfileManager.setProfileDurable(ctx.profile, profile);
+      } else {
+        await ProfileManager.setProfile(ctx.profile, profile);
+      }
     } catch (error) {
-      throw annotate(error, await restoreBeforeBootstrap(ctx.profile, previousProfile));
+      throw annotate(error, await restoreBeforeBootstrap(ctx.profile, previousProfile, previousSession));
     }
-    return { previousProfile, profile, session };
+    return { previousProfile, previousSession, profile, session };
   });
   const abandon = async (cause) => {
     const reported = cause instanceof CLIError && cause.code === "AUTH_REQUIRED" && signedLifetimePassed(delegation) ? delegationExpiredError() : cause;
@@ -10117,7 +10144,7 @@ async function bootstrapDelegatedSession(ctx, delegation) {
       if (profile === null || BOOTSTRAP_PROFILE_FIELDS.some((field) => profile[field] !== written.profile[field]) || JSON.stringify(session) !== JSON.stringify(written.session)) {
         return `Profile "${ctx.profile}" changed while the import was pending (another login, logout or profile update), so its newer state was kept and the provisional session was not rolled back.`;
       }
-      return restoreBeforeBootstrap(ctx.profile, written.previousProfile);
+      return restoreBeforeBootstrap(ctx.profile, written.previousProfile, written.previousSession);
     }, { timeoutMs: PROFILE_COMMIT_LOCK_TIMEOUT_MS }).catch((error) => (
       // The lock or a read failed: the import's error stays the one reported.
       `Rolling back the provisional session of profile "${ctx.profile}" could not run (${failureName(error)}); check \`${CLI_NAME7} --profile ${ctx.profile} context\`.`
@@ -10132,15 +10159,15 @@ async function bootstrapDelegatedSession(ctx, delegation) {
   }
   return { node, abandon };
 }
-async function restoreBeforeBootstrap(profileName2, previousProfile) {
+async function restoreBeforeBootstrap(profileName2, previousProfile, previousSession) {
   const failures = [];
   for (const write2 of [
-    () => ProfileManager.clearSession(profileName2),
+    () => previousSession === null ? ProfileManager.clearSession(profileName2) : ProfileManager.setSession(profileName2, previousSession),
     () => ProfileManager.updateProfile(profileName2, (current) => {
       const restored = { ...current };
       for (const field of BOOTSTRAP_PROFILE_FIELDS) {
         if (previousProfile[field] === void 0) delete restored[field];
-        else restored[field] = previousProfile[field];
+        else Object.assign(restored, { [field]: previousProfile[field] });
       }
       return restored;
     })
@@ -10192,6 +10219,7 @@ var init_sdk = __esm({
   "src/lib/sdk.ts"() {
     "use strict";
     init_profiles();
+    init_storage();
     init_types();
     init_errors();
     init_constants();
@@ -10204,7 +10232,7 @@ var init_sdk = __esm({
     init_replication_registry();
     init_logout_pending();
     init_replication_registry();
-    BOOTSTRAP_PROFILE_FIELDS = ["sessionDid", "spaceId"];
+    BOOTSTRAP_PROFILE_FIELDS = ["sessionDid", "spaceId", "authSignedOut", "authKeyRetained"];
   }
 });
 
@@ -10360,7 +10388,7 @@ import {
   assertRealProfileDirectory,
   ProfileSymlinkError as ProfileSymlinkError2,
   namedProfilePath as namedProfilePath2,
-  profilePath as profilePath5,
+  profilePath as profilePath6,
   readSession,
   recordProfileDeletion,
   refuseWriteToDeletedProfile as refuseWriteToDeletedProfile2,
@@ -10464,7 +10492,7 @@ var init_profiles = __esm({
       }
       /** Owner-only profile directory (0700), created or tightened before any write into it. */
       static async ensureProfileDir(name) {
-        const profileDir = profilePath5(name);
+        const profileDir = profilePath6(name);
         if (profileDir !== join11(PROFILES_DIR, name)) {
           await chmod3(profileDir, PRIVATE_DIR_MODE);
           return profileDir;
@@ -10530,7 +10558,7 @@ var init_profiles = __esm({
       }
       /** Removes profile.json under the profile lock (rollback of a profile a failed login created). */
       static async removeProfileConfig(name) {
-        await _ProfileManager.withLock(name, () => rm6(join11(profilePath5(name), "profile.json"), { force: true }));
+        await _ProfileManager.withLock(name, () => rm6(join11(profilePath6(name), "profile.json"), { force: true }));
       }
       /**
        * Returns true if a profile directory exists.
@@ -10585,7 +10613,7 @@ var init_profiles = __esm({
           return;
         }
         await _ProfileManager.withLock(name, async () => {
-          const directory = profilePath5(name);
+          const directory = profilePath6(name);
           for (const file of ["session.json", "key.json"]) await rm6(join11(directory, file), { force: true });
           for (const entry of await readdir5(directory)) {
             if (entry !== ".lock" && entry !== "profile.json") await rm6(join11(directory, entry), { recursive: true, force: true });
@@ -10596,7 +10624,8 @@ var init_profiles = __esm({
       }
       // ── Key management ──────────────────────────────────────────────────
       /**
-       * Returns the parsed JWK for a profile, or null if no key exists.
+       * Returns the parsed JWK for a profile, or null if no key exists or the
+       * profile is signed out.
        */
       static async getKey(name) {
         return withPinnedProfileDirectory2(name, async (directory) => {
@@ -10606,6 +10635,14 @@ var init_profiles = __esm({
           const key = await readJson(join11(directory, "key.json"));
           return (await readJson(profileFile))?.authSignedOut === true ? null : key;
         });
+      }
+      /**
+       * Returns the parsed JWK for a profile even while it is signed out, or null
+       * if no key exists. Logout keeps the key; only sign-in reads it this way, so
+       * the next sign-in keeps the key that the profile's grants are bound to.
+       */
+      static async getStoredKey(name) {
+        return withPinnedProfileDirectory2(name, async (directory) => directory ? readJson(join11(directory, "key.json")) : null);
       }
       /**
        * Saves a JWK key under the profile lock (0600, in an owner-only profile
@@ -10620,7 +10657,7 @@ var init_profiles = __esm({
       }
       /** Removes key.json under the profile lock (rollback of a key a failed login created). */
       static async removeKey(name) {
-        await _ProfileManager.withLock(name, () => rm6(join11(profilePath5(name), "key.json"), { force: true }));
+        await _ProfileManager.withLock(name, () => rm6(join11(profilePath6(name), "key.json"), { force: true }));
       }
       // ── Session management ──────────────────────────────────────────────
       /**
@@ -10653,7 +10690,7 @@ var init_profiles = __esm({
        * created or tightened to 0700.
        */
       static async getCacheDir(name) {
-        const alreadyPinned = profilePath5(name) !== namedProfilePath2(name);
+        const alreadyPinned = profilePath6(name) !== namedProfilePath2(name);
         return _ProfileManager.withLock(name, async () => {
           const cacheDir = join11(await _ProfileManager.ensureProfileDir(name), "cache");
           await ensureDir(cacheDir);
@@ -19121,7 +19158,7 @@ function verifyScopedLogin(data, key, sessionDid, requested, expected = {}) {
       throw new CLIError("OPENKEY_SCOPE_MISMATCH", `OpenKey signed decrypt for a network not owned by the approving identity. ${notStored}`, ExitCode.PERMISSION_DENIED);
     }
   }
-  if (!scopeCovers(requested, approved, signed.ownerDid)) {
+  if (!expected.exactApproval && !scopeCovers(requested, approved, signed.ownerDid)) {
     throw new CLIError("OPENKEY_GRANT_BROADENED", `The signed grant contains authority beyond the requested ${expected.purpose === "grant" ? "grant" : "manifest"}. ${notStored}`, ExitCode.PERMISSION_DENIED);
   }
   if (expected.exactApproval && !scopeCovers(approved, requested, signed.ownerDid)) {
@@ -19159,12 +19196,12 @@ import { createHash as createHash2 } from "crypto";
 import { constants as fsConstants6 } from "fs";
 import { open as open13, rm as rm7 } from "fs/promises";
 import { join as join14 } from "path";
-import { profilePath as profilePath7 } from "@tinycloud/operations/state";
+import { profilePath as profilePath8 } from "@tinycloud/operations/state";
 function hashOf(code5) {
   return createHash2("sha256").update(code5.trim().toLowerCase()).digest("hex");
 }
 function fileOf(profile) {
-  return join14(profilePath7(profile), FILE);
+  return join14(profilePath8(profile), FILE);
 }
 async function write(profile, records) {
   if (records.length === 0) await rm7(fileOf(profile), { force: true });
@@ -19339,7 +19376,7 @@ import { join as join15 } from "path";
 import { REPLICA_LOGOUT_PENDING_FILE as REPLICA_LOGOUT_PENDING_FILE3 } from "@tinycloud/node-sdk";
 import { CLI_NAME as CLI_NAME14 } from "@tinycloud/operations/cli-name";
 import { isLocalOwnerProfile as isLocalOwnerProfile3, ownerSessionLacksProof as ownerSessionLacksProof3 } from "@tinycloud/operations/profile";
-import { ProfileLockTimeoutError as ProfileLockTimeoutError2, profilePath as profilePath8 } from "@tinycloud/operations/state";
+import { ProfileLockTimeoutError as ProfileLockTimeoutError2, profilePath as profilePath9 } from "@tinycloud/operations/state";
 function assertNotLocalOwner(profileName2, profile, flow) {
   if (profile === null || !isLocalOwnerProfile3(profile)) return;
   throw new CLIError(
@@ -19355,7 +19392,7 @@ async function readProfileSnapshot(profileName2) {
   });
   return {
     profile,
-    key: await ProfileManager.getKey(profileName2),
+    key: await ProfileManager.getStoredKey(profileName2),
     session: await ProfileManager.getSession(profileName2)
   };
 }
@@ -19434,7 +19471,7 @@ async function commitLogin(profileName2, snapshot, commit) {
       );
     }
     try {
-      await lstat7(join15(profilePath8(profileName2), REPLICA_LOGOUT_PENDING_FILE3));
+      await lstat7(join15(profilePath9(profileName2), REPLICA_LOGOUT_PENDING_FILE3));
       throw new CLIError(
         "REPLICA_GATED",
         "A durable logout started while sign-in was awaiting approval; no session or key was saved. Finish logout and start a fresh sign-in.",
@@ -19452,8 +19489,9 @@ async function commitLogin(profileName2, snapshot, commit) {
       await ProfileManager.setKey(profileName2, commit.key);
       await ProfileManager.setSession(profileName2, commit.session);
       if (current.profile?.authSignedOut === true || commit.durable === true) {
-        await syncAuthCredentialFiles(profilePath8(profileName2));
-        await ProfileManager.setProfileDurable(profileName2, { ...profile, authSignedOut: false });
+        await syncAuthCredentialFiles(profilePath9(profileName2));
+        const { authKeyRetained: _authKeyRetained, ...signedIn } = profile;
+        await ProfileManager.setProfileDurable(profileName2, { ...signedIn, authSignedOut: false });
       } else {
         await ProfileManager.setProfile(profileName2, profile);
       }
@@ -19532,7 +19570,7 @@ var init_owner_key = __esm({
 
 // src/auth/refused-approval.ts
 import { rmdir as rmdir4 } from "fs/promises";
-import { profilePath as profilePath9 } from "@tinycloud/operations/state";
+import { profilePath as profilePath10 } from "@tinycloud/operations/state";
 async function discardRefusedApproval(site, error, result) {
   if (!isPermanentRefusal(error)) return false;
   if (result === void 0 && !wasRefusedAfterApproval(error)) return false;
@@ -19575,7 +19613,7 @@ async function deleteCreatedProfileKey(site) {
     }
     return { kind: "deleted" };
   });
-  if (removedProfile) await rmdir4(profilePath9(site.profileName)).catch(() => void 0);
+  if (removedProfile) await rmdir4(profilePath10(site.profileName)).catch(() => void 0);
   return outcome;
 }
 async function refusing(site, step) {
@@ -20300,7 +20338,7 @@ import { createECDH as createECDH2, createHash as createHash4, createPrivateKey,
 import { open as open14 } from "fs/promises";
 import { join as join16 } from "path";
 import { setTimeout as wait } from "timers/promises";
-import { additionalDelegationsPath as additionalDelegationsPath3, profilePath as profilePath10 } from "@tinycloud/operations/state";
+import { additionalDelegationsPath as additionalDelegationsPath3, profilePath as profilePath11 } from "@tinycloud/operations/state";
 import { principalDidEquals as principalDidEquals2 } from "@tinycloud/node-sdk";
 import { canonicalizeRecapCaveats, parseSignedCompactUcanAttenuation as parseSignedCompactUcanAttenuation3 } from "@tinycloud/sdk-core";
 import { admitOwnerRenewalLease, RENEWAL_LEASE_ORIGINAL_EXPIRED } from "@tinycloud/sdk-core/delegations/renewal";
@@ -20361,7 +20399,7 @@ async function syncCommandFiles(profile, result) {
   if (!stored || canonicalJson(JSON.parse(JSON.stringify(stored.delegation))) !== canonicalJson(JSON.parse(JSON.stringify(result.delegation))) || !history) {
     throw invalid2("The verified command result and history have not both been saved.");
   }
-  for (const path of [localGrantArtifactsPath(profile), grantHistoryPath(profile), profilePath10(profile)]) {
+  for (const path of [localGrantArtifactsPath(profile), grantHistoryPath(profile), profilePath11(profile)]) {
     const handle = await open14(path, "r");
     try {
       await handle.sync();
@@ -20386,7 +20424,7 @@ async function recoverApprovalCommand(profile, approval, request) {
   const acquired = acquisitions.get(approval);
   if (!acquired) return void 0;
   return ProfileManager.withLock(profile, async () => {
-    const entries = await readJson(join16(profilePath10(profile), STATE_FILE)) ?? [];
+    const entries = await readJson(join16(profilePath11(profile), STATE_FILE)) ?? [];
     const matching = entries.filter((item) => item.commandIntent === approvalCommandIntent(request));
     if (matching.length !== 1 || matching[0].requestId !== acquired.requestId) throw invalid2("Ambiguous command approval.");
     const entry = matching[0];
@@ -20402,7 +20440,7 @@ async function commitApprovalCommand(profile, approval, request, result) {
   const acquired = acquisitions.get(approval);
   if (!acquired) throw invalid2("Command approval is not tracked.");
   await ProfileManager.withLock(profile, async () => {
-    const entries = await readJson(join16(profilePath10(profile), STATE_FILE)) ?? [];
+    const entries = await readJson(join16(profilePath11(profile), STATE_FILE)) ?? [];
     const matching = entries.filter((item) => item.commandIntent === approvalCommandIntent(request));
     if (matching.length !== 1 || matching[0].requestId !== acquired.requestId) throw invalid2("Ambiguous command approval.");
     const entry = matching[0];
@@ -20411,7 +20449,7 @@ async function commitApprovalCommand(profile, approval, request, result) {
       throw invalid2("A different result is already saved for this command.");
     }
     entry.command = { request, result };
-    await writeJsonDurable(join16(profilePath10(profile), STATE_FILE), entries);
+    await writeJsonDurable(join16(profilePath11(profile), STATE_FILE), entries);
     await persistCommandFiles(profile, result);
     acquisitions.set(approval, entry);
   }, { requireProfile: true });
@@ -20446,7 +20484,7 @@ async function updatePending(profile, update) {
   }, { requireProfile: true });
 }
 async function activePending(profile) {
-  const path = join16(profilePath10(profile), STATE_FILE);
+  const path = join16(profilePath11(profile), STATE_FILE);
   if (!(await readJson(path))?.length) return [];
   return ProfileManager.withLock(profile, async () => {
     const entries = await readJson(path) ?? [];
@@ -20928,7 +20966,7 @@ async function completeApprovalResult(profile, delegation) {
       if (current.ownerDid?.toLowerCase() !== verifiedSession.ownerDid.toLowerCase()) return;
       const session = await ProfileManager.getSession(profile);
       if (session && session.delegationCid === verifiedDelegation.delegationCid && session.signature === verifiedDelegation.signature && session.siwe === verifiedDelegation.siwe) {
-        await syncAuthCredentialFiles(profilePath10(profile));
+        await syncAuthCredentialFiles(profilePath11(profile));
         await ProfileManager.setProfileDurable(profile, current);
         saved = true;
       } else {
@@ -20941,7 +20979,7 @@ async function completeApprovalResult(profile, delegation) {
           } finally {
             await file.close();
           }
-          const directory = await open14(profilePath10(profile), "r");
+          const directory = await open14(profilePath11(profile), "r");
           try {
             await directory.sync();
           } finally {
@@ -21652,7 +21690,7 @@ import { createInterface } from "readline/promises";
 import { stderr, stdin } from "process";
 var MAX_BODY_BYTES = 256 * 1024;
 var MAX_CONTENT_BYTES = 128 * 1024;
-var ATTACHMENT_URL = "https://bugs.tinycloud.xyz/reports";
+var ATTACHMENT_URL = "https://feedback.tinycloud.xyz/reports";
 async function readToken(useStdin) {
   if (useStdin && stdin.isTTY) throw new CLIError("BUG_REPORT_TOKEN_INPUT", "Give the attachment token by piping it to --token-stdin or setting TINYCLOUD_BUG_ATTACH_TOKEN.");
   const token = useStdin ? await new Promise((resolve10) => {
@@ -21829,7 +21867,7 @@ import { createInterface as createInterface5 } from "readline";
 import { TinyCloudNode as TinyCloudNode3, grantAuthRequest, principalDidEquals as principalDidEquals3, REPLICA_LOGOUT_PENDING_FILE as REPLICA_LOGOUT_PENDING_FILE4, signedCompactUcanExpiry as signedCompactUcanExpiry3 } from "@tinycloud/node-sdk";
 import { composeManifestRequest } from "@tinycloud/sdk-core";
 import { invokeOperation } from "@tinycloud/operations";
-import { createProfileRegistryCacheStore as createProfileRegistryCacheStore4, createProfileRegistrySequenceStore as createProfileRegistrySequenceStore4, namedProfilePath as namedProfilePath3, profilePath as profilePath11 } from "@tinycloud/operations/state";
+import { createProfileRegistryCacheStore as createProfileRegistryCacheStore4, createProfileRegistrySequenceStore as createProfileRegistrySequenceStore4, namedProfilePath as namedProfilePath3, profilePath as profilePath12 } from "@tinycloud/operations/state";
 import { REPLICA_GATE_FILE as REPLICA_GATE_FILE3 } from "@tinycloud/sdk-services/kv/replication/contractConstants";
 
 // src/lib/logout-revocation.ts
@@ -21839,7 +21877,7 @@ init_permissions();
 import { readFile as readFile8 } from "fs/promises";
 import { join as join12 } from "path";
 import { principalDidEquals } from "@tinycloud/node-sdk";
-import { additionalDelegationsPath as additionalDelegationsPath2, profilePath as profilePath6 } from "@tinycloud/operations/state";
+import { additionalDelegationsPath as additionalDelegationsPath2, profilePath as profilePath7 } from "@tinycloud/operations/state";
 import { withoutBearer } from "@tinycloud/operations/delegation-binding";
 import { parseSignedCompactUcanAttenuation, parseSignedSiweCacao } from "@tinycloud/sdk-core";
 function inventoryError(cid, detail) {
@@ -21880,7 +21918,7 @@ async function signedGrantOwner(cid, authorization, ownerDid, issuer) {
   return resources.length > 0 && resources.every((resource) => /^tinycloud:pkh:eip155:[1-9]\d*:0x[0-9a-fA-F]{40}:[^/]+\//.test(resource) && !ownerSpaceResource(resource, ownerDid)) ? "other" : "unknown";
 }
 async function logoutInventorySnapshot(profileName2) {
-  const root = profilePath6(profileName2);
+  const root = profilePath7(profileName2);
   return JSON.stringify(await Promise.all([
     optionalFile(join12(root, "auth-grant-artifacts.json")),
     optionalFile(additionalDelegationsPath2(profileName2)),
@@ -21901,7 +21939,7 @@ async function planLogoutRevocations(input) {
   const { profileName: profileName2, profile, session, node } = input;
   const sessionCid = session.delegationCid;
   if (!session.ownerDid || !sessionCid) throw inventoryError(sessionCid || "session", "the active session has no owner or CID");
-  const root = profilePath6(profileName2);
+  const root = profilePath7(profileName2);
   const included = /* @__PURE__ */ new Set();
   const unresolved = /* @__PURE__ */ new Set();
   const excluded = [];
@@ -38076,7 +38114,7 @@ async function promptAuthMethod() {
 }
 async function hasGatedReplicaState(profile, name, replicationEnabled) {
   if (replicationEnabled || profile.replication !== void 0) return true;
-  const root = profilePath11(name);
+  const root = profilePath12(name);
   for (const path of [join17(root, REPLICA_GATE_FILE3), join17(root, REPLICA_LOGOUT_PENDING_FILE4), join17(root, "replication")]) {
     try {
       await lstat8(path);
@@ -38096,7 +38134,7 @@ async function existingReplicaRoots(profile) {
   const roots = [];
   for (const name of ["replicas", "replication"]) {
     try {
-      await lstat8(join17(profilePath11(profile), name));
+      await lstat8(join17(profilePath12(profile), name));
       roots.push(name);
     } catch (error) {
       if (typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT") continue;
@@ -38104,6 +38142,19 @@ async function existingReplicaRoots(profile) {
     }
   }
   return roots;
+}
+async function logoutWillKeepKey(name) {
+  if (!logoutKeepsKey(await ProfileManager.getProfile(name))) return false;
+  for (const child of [REPLICA_GATE_FILE3, REPLICA_LOGOUT_PENDING_FILE4, "replicas", "replication"]) {
+    try {
+      await lstat8(join17(profilePath12(name), child));
+      return false;
+    } catch (error) {
+      if (typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT") continue;
+      throw error;
+    }
+  }
+  return true;
 }
 function displayLogoutInventory(approval, discardLocalChanges) {
   if (approval.unknownPaths.length === 0 && !discardLocalChanges) return;
@@ -38124,7 +38175,7 @@ async function preflightLogout(purge, principal, discardLocalChanges) {
 }
 async function logoutGateSnapshot(profile) {
   const files = await Promise.all([REPLICA_GATE_FILE3, REPLICA_DENY_FLOOR_FILE].map(async (name) => {
-    const path = join17(profilePath11(profile), name);
+    const path = join17(profilePath12(profile), name);
     try {
       const file = await lstat8(path, { bigint: true });
       return { bytes: await readFile10(path, "utf8"), dev: String(file.dev), ino: String(file.ino) };
@@ -38339,7 +38390,7 @@ async function finishProfileLogout(ctx, options = {}) {
           let remotePending = false;
           try {
             const pending = JSON.parse(await readFile10(
-              join17(profilePath11(ctx.profile), REPLICA_LOGOUT_PENDING_FILE4),
+              join17(profilePath12(ctx.profile), REPLICA_LOGOUT_PENDING_FILE4),
               "utf8"
             ));
             pendingMarker = pending;
@@ -38451,7 +38502,7 @@ async function finishProfileLogout(ctx, options = {}) {
             options.discardLocalChanges === true
           );
         } else {
-          const gate = await readGateSnapshot(profilePath11(ctx.profile));
+          const gate = await readGateSnapshot(profilePath12(ctx.profile));
           if (roots.length || gate && (gate.principalHash !== null || gate.intents.length)) {
             throw new CLIError(
               "REPLICA_GATED",
@@ -38459,7 +38510,7 @@ async function finishProfileLogout(ctx, options = {}) {
               ExitCode.ERROR
             );
           }
-          await clearProfileCredentials(ctx.profile, true);
+          await clearProfileCredentials(ctx.profile, true, false, logoutKeepsKey(profile));
         }
       }
     } catch (error) {
@@ -38595,7 +38646,7 @@ function registerAuthCommand(program, options) {
       return handleError(error);
     }
   });
-  auth.command("logout").description(`Clear the local session and remove local replicas. With --revoke, revoke owner-controlled node grants and the session CID before deleting local files.`).option("--keep-replicas", "Keep legacy replicas only when this profile has no replica gate or flag-owned state").option("--revoke", "Revoke owner-controlled grants and the session CID on the node before local logout").option("--discard-local-changes", "Approve deletion of the exact local replica paths and identities listed before logout; with --revoke, deletion waits for every node receipt").option("--approve-inventory <token>", "After a refused pending remote logout, confirm the exact changed paths printed by the previous command; requires --discard-local-changes").option("--force", "Log out even when recorded shares could not be checked or hold unexpired shares that need the current session key").action(async (options2, cmd) => {
+  auth.command("logout").description(`Clear the local session and remove local replicas. An agent (delegate-session) profile with no local replica state keeps its key, so a new grant can be imported for it; other profiles' keys are deleted and the next sign-in creates a new one. With --revoke, revoke owner-controlled node grants and the session CID before deleting local files.`).option("--keep-replicas", "Keep legacy replicas only when this profile has no replica gate or flag-owned state").option("--revoke", "Revoke owner-controlled grants and the session CID on the node before local logout").option("--discard-local-changes", "Approve deletion of the exact local replica paths and identities listed before logout; with --revoke, deletion waits for every node receipt").option("--approve-inventory <token>", "After a refused pending remote logout, confirm the exact changed paths printed by the previous command; requires --discard-local-changes").option("--force", "Log out even when recorded shares could not be checked or hold unexpired shares that need the current session key (no effect when the key is kept)").action(async (options2, cmd) => {
     try {
       const globalOpts = cmd.optsWithGlobals();
       const ctx = await ProfileManager.resolveContext(globalOpts, { storedSession: "unused" });
@@ -38623,7 +38674,9 @@ function registerAuthCommand(program, options) {
           ExitCode.USAGE_ERROR
         );
       }
-      if (!options2.revoke && !options2.force) await assertShareHistoryAllowsKeyDrop(ctx.profile, "logout");
+      if (!options2.revoke && !options2.force && (options2.keepReplicas || !await logoutWillKeepKey(ctx.profile))) {
+        await assertShareHistoryAllowsKeyDrop(ctx.profile, "logout");
+      }
       const online = options2.revoke ? await revokeForLogout(ctx, options2.discardLocalChanges === true) : void 0;
       const replicasRemoved = await finishProfileLogout(ctx, {
         keepReplicas: options2.keepReplicas,
@@ -38631,9 +38684,12 @@ function registerAuthCommand(program, options) {
         approveInventory: options2.approveInventory,
         online
       });
+      const keyKept = await ProfileManager.getStoredKey(ctx.profile) !== null;
       outputJson({
         profile: ctx.profile,
         authenticated: false,
+        keyKept,
+        message: keyKept ? "Signed out. The key is kept, so a new grant can be imported for it. Grants already made for this key stay valid until they expire unless the owner revokes them." : "Signed out. The key was deleted; the next sign-in creates a new one.",
         replicasRemoved,
         replicasKept: options2.keepReplicas === true,
         warning: online ? `The node confirmed revocation of the listed CIDs before local logout. Files you already shared stay available until each share expires or you revoke it (\`${CLI_NAME21} share revoke <id>\`).` : options2.keepReplicas ? "Legacy replica files remain on disk; this local logout clears the session but does not revoke node grants. Purge the files before a future sign-in if they must not be reused." : `Logout is local; delegations and grants on the node stay valid until they expire. Use \`${CLI_NAME21} delegation revoke <cid>\` to end access now.`,
@@ -38784,7 +38840,7 @@ ${appsAgentScopeNotice(preset.mode, preset.appIds)}
       }
       const session = initialSnapshot ? initialSnapshot.session : await ProfileManager.getSession(ctx.profile);
       const key = initialSnapshot ? initialSnapshot.key : await ProfileManager.getKey(ctx.profile);
-      const keyOnlyOpenKey = !session && profile.authMethod !== "local" && key !== null && !options2.device;
+      const keyOnlyOpenKey = !session && profile.authMethod !== "local" && key !== null && profile.authSignedOut !== true && !options2.device;
       if (profile.authMethod === "openkey" || options2.device || keyOnlyOpenKey) assertNoCaveatLimits(requested);
       await completeApprovalResult(ctx.profile);
       let node;
@@ -38973,13 +39029,19 @@ ${appsAgentScopeNotice(preset.mode, preset.appIds)}
       const profile = await ProfileManager.getProfile(ctx.profile);
       let bootstrap;
       let node;
-      try {
-        node = await ensureAuthenticated(ctx);
-      } catch (error) {
-        const session = await ProfileManager.getSession(ctx.profile);
-        if (session || resolveProfilePosture(profile) !== "delegate-session") throw error;
-        bootstrap = await bootstrapDelegatedSession(ctx, imported.delegation);
+      if (delegationTargetsDelegateSessionKey(profile, imported.delegation.delegateDID)) {
+        await recoverPendingLogout(ctx.profile);
+        bootstrap = await bootstrapDelegatedSession(ctx, imported.delegation, { replaceSession: true });
         node = bootstrap.node;
+      } else {
+        try {
+          node = await ensureAuthenticated(ctx);
+        } catch (error) {
+          const session = await ProfileManager.getSession(ctx.profile);
+          if (session || resolveProfilePosture(profile) !== "delegate-session") throw error;
+          bootstrap = await bootstrapDelegatedSession(ctx, imported.delegation);
+          node = bootstrap.node;
+        }
       }
       const signedAudience = kind === "compact" ? verifiedCompactAudience(node, imported.delegation) : void 0;
       let transportMatchesAudience = false;
@@ -39439,20 +39501,22 @@ function isRequestBoundDelegationEnvelope(value4) {
   const candidate = value4;
   return candidate.kind === "tinycloud.auth.delegation" && candidate.version === 1 && Object.hasOwn(candidate, "requestId");
 }
+function delegationTargetsDelegateSessionKey(profile, delegateDid) {
+  return resolveProfilePosture(profile) === "delegate-session" && delegateDid.split("#", 1)[0] === (profile.sessionDid ?? profile.did).split("#", 1)[0];
+}
 async function importRequestBoundDelegationWithBootstrap(ctx, artifact) {
-  const session = await ProfileManager.getSession(ctx.profile);
-  if (session !== null) {
-    await importRequestBoundDelegation(ctx, artifact);
-    return;
-  }
   const profile = await ProfileManager.getProfile(ctx.profile);
-  if (resolveProfilePosture(profile) !== "delegate-session") {
+  const transport = typeof artifact === "object" && artifact !== null && "delegation" in artifact ? artifact.delegation : void 0;
+  const delegateDid = typeof transport === "object" && transport !== null && "delegateDID" in transport ? transport.delegateDID : void 0;
+  const replaceSession = typeof delegateDid === "string" && delegationTargetsDelegateSessionKey(profile, delegateDid);
+  if (!replaceSession && (resolveProfilePosture(profile) !== "delegate-session" || await ProfileManager.getSession(ctx.profile) !== null)) {
     await importRequestBoundDelegation(ctx, artifact);
     return;
   }
   const candidate = artifact;
   const delegation = normalizePortableDelegation(candidate.delegation);
-  const bootstrap = await bootstrapDelegatedSession(ctx, delegation);
+  if (replaceSession) await recoverPendingLogout(ctx.profile);
+  const bootstrap = await bootstrapDelegatedSession(ctx, delegation, { replaceSession });
   try {
     await importRequestBoundDelegation(ctx, artifact);
   } catch (error) {
@@ -39912,7 +39976,7 @@ async function persistCurrentLocalSession(profileName2, profile, session, replic
       );
     }
     try {
-      await lstat8(join17(profilePath11(profileName2), REPLICA_LOGOUT_PENDING_FILE4));
+      await lstat8(join17(profilePath12(profileName2), REPLICA_LOGOUT_PENDING_FILE4));
       throw new CLIError(
         "PROFILE_CHANGED_DURING_LOGIN",
         "A durable logout started while the local grant was in flight; its session and key were not restored.",
@@ -40133,7 +40197,7 @@ async function refreshPreparedOpenKeySession(params) {
   let handoff;
   let preparedDid;
   let handedBackSiwe;
-  const gateWasActive = await readGateSnapshot(profilePath11(profileName2)).then((gate) => gate !== void 0 && gate.principalHash !== null, () => true);
+  const gateWasActive = await readGateSnapshot(profilePath12(profileName2)).then((gate) => gate !== void 0 && gate.principalHash !== null, () => true);
   try {
     if (namedKeys !== void 0) process.stderr.write(KEYS_APPROVAL_NOTE(namedKeys.prefix));
     await node.signInWithOpenKey(async (prepared) => {
@@ -40318,7 +40382,7 @@ async function refreshPreparedKeysSession(params) {
 async function undoPreparedAttempt(profileName2, node, owner, gateWasActive) {
   if (!gateWasActive) {
     const undone = await ProfileManager.withLock(profileName2, async () => {
-      const gate = await readGateSnapshot(profilePath11(profileName2));
+      const gate = await readGateSnapshot(profilePath12(profileName2));
       if (gate === void 0 || gate.principalHash !== await principalHashOf(gate.salt, owner)) return false;
       if (await ProfileManager.getSession(profileName2) !== null) return false;
       await node.signOut();
@@ -44038,7 +44102,7 @@ init_theme();
 import {
   ProfileSymlinkError as ProfileSymlinkError3,
   ProfileDeletedError as ProfileDeletedError3,
-  profilePath as profilePath12,
+  profilePath as profilePath13,
   readAdditionalDelegations as readAdditionalDelegations2,
   readSession as readSession2,
   withProfileLock as withProfileLock5,
@@ -44140,7 +44204,7 @@ function assertName(name) {
   return name;
 }
 async function withReplicaRoot(profile, action, create5 = false) {
-  const profileDirectory = profilePath12(profile);
+  const profileDirectory = profilePath13(profile);
   const readRoot = async (directory, recheckProfile) => {
     if (create5) {
       if (recheckProfile) await recheckProfile();
@@ -44244,7 +44308,7 @@ function assertLegacyLogoutClear(dir) {
 }
 async function withLegacyReplicaRead(profile, action) {
   await withProfileLock5(profile, async () => {
-    const dir = profilePath12(profile);
+    const dir = profilePath13(profile);
     assertLegacyLogoutClear(dir);
     const session = await readSession2(profile);
     let checkDelivery;
