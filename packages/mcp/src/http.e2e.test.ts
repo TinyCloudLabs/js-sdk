@@ -1523,7 +1523,7 @@ test(`/mcp apps approvals Health Log ${namedApp ? "bundled" : "per-call"} save t
         const request = JSON.parse(Buffer.from(redirect.searchParams.get("permissions")!, "base64url").toString("utf8"));
         if (namedApp) {
           expect(request.reason).toContain("whole Health Log database");
-          expect(request.reason).toContain("30 days");
+          expect(request.reason).not.toMatch(/\b\d+ (days?|hours?)\b/);
           expect(request.permissions).toHaveLength(2);
           expect(request.permissions.every((entry: { space: string }) => entry.space.endsWith(":applications"))).toBe(true);
         }
