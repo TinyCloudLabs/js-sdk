@@ -1,5 +1,13 @@
 # @tinycloud/courier
 
+## 0.7.0-beta.9
+
+### Minor Changes
+
+- b228ca4: Read exact messages with `read <thread> --peer <peer> --message <id>` (repeat up to 20 ids), without downloading the thread archive. Each side reports found, missing or incomplete outcomes; message reads use a 64 KiB per-value limit and a shared 10-second data-read deadline. Receipt-update warnings use fixed text.
+
+  Details: TC-2749
+
 ## 0.7.0-beta.8
 
 ### Minor Changes

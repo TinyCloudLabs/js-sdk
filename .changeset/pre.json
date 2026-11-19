@@ -48,6 +48,7 @@
     "share-links-no-delegation-actions",
     "tc-2652-profile-show-output",
     "tc-2653-profile-loading",
+    "tc-2749-bounded-courier-messages",
     "tc-3141-legacy-list-lazy",
     "tc-3285-secret-types",
     "vault-dedicated-address"
