@@ -263,6 +263,12 @@ Every step logs one JSON object per line on stdout (`start`, `hook-event`,
 adapter start), `woke` with `runMs`, errors). `--once` does a single catch-up pass,
 wakes immediately and exits. Run one watcher per Courier agent.
 
+Other Courier commands may share `COURIER_HOME` with that watcher. The profile
+lock covers only local reads and merged writes, not network requests. A live
+holder is reported with its pid; leave its lock in place and retry. A service
+watcher logs `profile-locked` and retries at the polling cadence (at most five
+minutes); `--once` reports the timeout and exits.
+
 Each Courier agent keeps its watcher state under its own key,
 `me/state/agents/<its did:key id>/` (`watch.json`, `paused/`, `wake-claims/`),
 so two agents of one owner can share the space and run their watchers at the

@@ -11,7 +11,7 @@ import { canonicalJson } from './canonical.js';
 import { cmd } from './program.js';
 import { CourierError } from './errors.js';
 import { AGENT_GRANT, AGENT_GRANT_EXPIRY } from './keys.js';
-import { profileDir, loadKey, withProfileTransaction, type AgentKey, type Profile } from './profile.js';
+import { profileDir, loadKey, loadProfile, withProfileLock, withProfileTransaction, type AgentKey, type Profile } from './profile.js';
 import {
   ackRef, clearPending, holdsApproval, knownResult, loadPendingForWrite, markCommitted, recordResultEnvelope, recordResultRef, resultEnvelopeOf,
   resultSeen, savePending, stageOf, approvalPhase, type PendingGrantRequest,
@@ -142,11 +142,11 @@ async function settleLapsed(pending: PendingGrantRequest, key: AgentKey): Promis
     if (error.code === 'network' || error.code === 'unavailable') {
       throw new CourierError('approval-unavailable', `OpenKey could not be asked whether this expired request was approved (${error.message}). Nothing was lost: the saved request is kept. Run \`${cmd('init --wait')}\` again once OpenKey is reachable.`);
     }
-    throw collectFailure(error, false);
+    throw collectFailure(error, pending);
   }
 }
 
-async function createPending(profile: Profile, want: WantedRequest): Promise<PendingGrantRequest> {
+async function createPending(profile: Profile, want: WantedRequest, expected: PendingGrantRequest | undefined): Promise<PendingGrantRequest> {
   const relay = generateRelayKey();
   const request: OpenKeyApprovalRequestV1 = { ...requestSpec(profile, want), grantLifetimeSeconds: want.lifetime, resultEncryptionPublicJwk: relay.publicJwk };
   let created: CreatedLink & { readonly record: LinkRecord };
@@ -161,7 +161,14 @@ async function createPending(profile: Profile, want: WantedRequest): Promise<Pen
     record: created.record, apiOrigin: want.apiOrigin, linkApiOrigin: want.linkApiOrigin, openkeyOrigin: want.openkeyOrigin,
     relayPrivateKey: relay.privateKey, ackId: randomUUID(),
   };
-  savePending(pending); // saved before the link is shown: a link that was shown can always be resumed
+  withProfileLock(() => {
+    const current = loadProfile();
+    if (bareDid(loadKey().did) !== want.signer.did || current.courierDid !== profile.courierDid
+      || current.host !== profile.host || current.openkeyHost !== profile.openkeyHost) {
+      throw new CourierError('profile-changed', 'The Courier profile changed while requesting approval. Nothing was replaced; run the command again.');
+    }
+    savePending(pending, expected ?? null);
+  }); // saved before the link is shown: a link that was shown can always be resumed
   return pending;
 }
 
@@ -177,22 +184,22 @@ export async function requestApproval(profile: Profile, key: AgentKey, expiry: s
   });
 }
 
-/** Call only inside the shared profile transaction, including automated owner requests. */
+/** Profile reads and sidecar commits are short locked sections; approval discovery and creation run unlocked. */
 export async function requestApprovalInTransaction(profile: Profile, key: AgentKey, expiry: string | undefined, options: { openkeyApiHost?: string } = {}): Promise<PendingGrantRequest> {
   const want = wanted(profile, key, expiry, options.openkeyApiHost);
-  const existing = loadPendingForWrite();
+  let existing = withProfileLock(() => loadPendingForWrite());
   if (existing && existing.request.issuer === want.signer.did) {
     if (!holdsApproval(existing) && requestLapsed(existing) && matches(existing, profile, want)) {
       const settled = await settleLapsed(existing, key);
       if (settled === 'open') return existing;
-      if (settled === 'expired') clearPending();
+      if (settled === 'expired') { clearPending(existing); existing = undefined; }
     }
-    if (holdsApproval(existing)) {
+    if (existing && holdsApproval(existing)) {
       throw new CourierError('usage', `Approval request ${existing.requestId} has already been approved by the owner. Run \`${cmd('init --wait')}\` to finish it first; \`${cmd('init --request')}\` can ask for another approval after that. To discard that approval instead, run \`${cmd('init --rotate-key --request')}\`: it replaces the agent key, CLEARS every pairing (peers must be re-paired by hand), deletes grant.json and puts the profile back to awaiting-grant, so there is no working grant until the owner approves.`);
     }
-    if (matches(existing, profile, want) && !requestLapsed(existing)) return existing;
+    if (existing && matches(existing, profile, want) && !requestLapsed(existing)) return existing;
   }
-  return createPending(profile, want);
+  return createPending(profile, want, existing);
 }
 
 export interface WaitOptions {
@@ -214,20 +221,20 @@ export async function waitApproval(profile: Profile, key: AgentKey, expiry: stri
   return withProfileTransaction(async current => {
     if (loadKey().did !== key.did || current.courierDid !== profile.courierDid) throw new CourierError('profile-changed', 'The Courier key changed while requesting approval.');
     const want = wanted(current, key, expiry, options.openkeyApiHost);
-    const existing = loadPendingForWrite();
+    const existing = withProfileLock(() => loadPendingForWrite());
     if (existing && existing.request.issuer === want.signer.did) {
       if (holdsApproval(existing)) return { pending: existing, resumed: true };
       if (matches(existing, current, want)) {
         if (requestLapsed(existing)) {
           if (await settleLapsed(existing, key) === 'expired') {
-            clearPending();
+            clearPending(existing);
             throw expiredError();
           }
         }
         return { pending: existing, resumed: true };
       }
     }
-    return { pending: await createPending(current, want), resumed: false };
+    return { pending: await createPending(current, want, existing), resumed: false };
   });
 }
 
@@ -240,19 +247,19 @@ function resultGoneError(): CourierError {
  * `init --request` is not blocked; anything that a retry can fix (a rejected proof, one malformed reply, OpenKey down) keeps it and
  * its relay key. `resultSeen` is whether the result reference was already saved, i.e. whether the failing call was the fetch.
  */
-function collectFailure(error: ApprovalClientError, resultSeen: boolean): CourierError {
+function collectFailure(error: ApprovalClientError, pending: PendingGrantRequest): CourierError {
   switch (error.code) {
     case 'request_expired':
-      clearPending();
+      clearPending(pending);
       return expiredError();
     case 'not_found':
-      clearPending();
-      return resultSeen ? resultGoneError() : expiredError();
+      clearPending(pending);
+      return resultSeen(pending) ? resultGoneError() : expiredError();
     case 'result_expired':
-      clearPending();
+      clearPending(pending);
       return resultGoneError();
     case 'acknowledged':
-      clearPending(); // nothing local to finish from, and a kept record would block `init --request`
+      clearPending(pending); // nothing local to finish from, and a kept record would block `init --request`
       return new CourierError('approval-consumed', `OpenKey says this approval was already collected, so it cannot be fetched again. If this machine has no grant, run \`${cmd('init --request')}\` and approve the new link.`);
     case 'request_binding':
       return new CourierError('approval-rejected', `OpenKey rejected this machine's proof or the request binding (check the system clock). The saved request is kept: run \`${cmd('init --wait')}\` again.`);
@@ -296,7 +303,7 @@ async function verifiedPayload(profile: Profile, pending: PendingGrantRequest, k
     }
     return payload;
   } catch (error) {
-    clearPending();
+    clearPending(pending);
     throw withRefusalNotice(isApprovalClientError(error) ? new CourierError('approval-result-invalid', `The approved result was refused. ${error.message}`) : error, delegationCid);
   }
 }
@@ -305,17 +312,17 @@ async function verifiedPayload(profile: Profile, pending: PendingGrantRequest, k
 async function acknowledge(pending: PendingGrantRequest, key: AgentKey): Promise<void> {
   const ref = ackRef(pending);
   if (!ref) {
-    clearPending();
+    clearPending(pending);
     return;
   }
   try {
     await ackApprovalResult(requesterState(pending, key), ref, pending.ackId, { timeoutMs: ACK_TIMEOUT_MS });
-    clearPending();
+    clearPending(pending);
   } catch (error) {
     if (!isApprovalClientError(error)) throw error;
     if (error.code === 'ack_conflict') {
       // OpenKey holds another acknowledgement for this result: nothing more can be sent, and a kept record would block `init --request`.
-      clearPending();
+      clearPending(pending);
       console.error('The grant is installed. OpenKey already holds a different acknowledgement for this approval, so there is nothing left to send.');
       return;
     }
@@ -345,7 +352,7 @@ export async function completeApproval(profile: Profile, key: AgentKey, pending:
         });
       } catch (error) {
         if (!isApprovalClientError(error)) throw error;
-        throw collectFailure(error, resultSeen(pending));
+        throw collectFailure(error, pending);
       }
       if (collected.status === 'deadline') return 'deadline';
       recordResultEnvelope(pending, collected.relay);
@@ -363,7 +370,7 @@ export async function completeApproval(profile: Profile, key: AgentKey, pending:
         // Refused because of THIS machine's clock (issued "in the future", no future expiry): the approval is fine and is kept.
         throw new CourierError((error as CourierError).code, `${(error as CourierError).message}\nThe system clock may be wrong. Nothing was installed and the saved approval is kept (it is not something to revoke): check the system clock, then run \`${cmd('init --wait')}\` again.`);
       } else {
-        if (error instanceof CourierError && REFUSED_CODES[error.code]) clearPending();
+        if (error instanceof CourierError && REFUSED_CODES[error.code]) clearPending(pending);
         throw withRefusalNotice(error, payload.delegationCid);
       }
     }

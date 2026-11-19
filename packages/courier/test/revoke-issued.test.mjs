@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { revokePeer } from '../dist/revoke.js';
-import { withProfileTransaction, saveProfile, loadProfile } from '../dist/profile.js';
 import { peerReadPermissions } from '../dist/keys.js';
 
 const space = 'tinycloud:pkh:eip155:1:0x1:agents';
@@ -47,19 +46,9 @@ test('listing failure and wrong holder/scope keep pairing and revoke nothing', a
   }
 });
 
-test('profile transaction holds lock across await, serializes saves and releases on error', async () => {
-  saveProfile({ ...fixture().profile, peers: {}, label: 'initial', openkeyHost: 'http://127.0.0.1', status: 'ready' });
-  let unlock;
-  const gate = new Promise((resolve) => { unlock = resolve; });
-  const events = [];
-  const first = withProfileTransaction(async (p, save) => { events.push('first'); await gate; p.label = 'saved'; save(); });
-  const second = withProfileTransaction(async (p) => { events.push('second'); assert.equal(p.label, 'saved'); throw new Error('expected'); });
-  await new Promise((r) => setTimeout(r, 30));
-  assert.deepEqual(events, ['first']);
-  unlock();
-  await first;
-  await assert.rejects(second, /expected/);
-  await withProfileTransaction(async () => assert.equal(loadProfile().label, 'saved'));
+test('concurrent revokes keep both removals and never hold the profile lock during network work', async t => {
+  const { concurrentRevokes } = await import('./support/concurrent-revoke.mjs');
+  await concurrentRevokes(t);
 });
 
 
