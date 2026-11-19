@@ -2,7 +2,7 @@ import type { SharePlacement, SharePlacementParent } from "@tinycloud/sdk-core/s
 import { decryptColumn, isKeyWrapV2, openKeyV2, sealKeyV2, type ColumnFormat } from "@tinycloud/sdk-services/encryption";
 import { createServiceContext } from "./recordingServiceContext";
 import { unrecordedFetchOf } from "./recordingRegistry";
-import { signedCompactUcanExpiry } from "./delegation";
+import { MissingSpacesError, signedCompactUcanExpiry } from "./delegation";
 import {
   createResourceRoutingFetch,
   routeResourceRequest,
@@ -256,7 +256,8 @@ import { FileSessionStorage } from "./storage/FileSessionStorage";
 import { clearPersistedSessionIfOwn } from "./storage/clearPersistedSessionIfOwn";
 import { MemorySessionStorage } from "./storage/MemorySessionStorage";
 import type { PortableDelegation, SessionGrantProof, VerifiedSessionGrant } from "./delegation";
-import { DelegatedAccess } from "./DelegatedAccess";
+import { DelegatedAccess, type DelegatedEncryptionFactory } from "./DelegatedAccess";
+import { secretReadResult } from "./secretRead";
 import { WasmKeyProvider } from "./keys/WasmKeyProvider";
 import {
   legacyParamsToPermissionEntries,
@@ -315,21 +316,6 @@ export type SecretReadResult =
   | { status: "corrupt_envelope" }
   | { status: "decrypt_failed" }
   | { status: "invalid_payload" };
-
-function isSecretPayload(
-  value: unknown,
-): value is { value: string; createdAt: string; updatedAt: string } {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    "value" in value &&
-    typeof (value as { value?: unknown }).value === "string" &&
-    "createdAt" in value &&
-    typeof (value as { createdAt?: unknown }).createdAt === "string" &&
-    "updatedAt" in value &&
-    typeof (value as { updatedAt?: unknown }).updatedAt === "string"
-  );
-}
 
 /**
  * Full actions the session key's root delegation grants over a space. Used for
@@ -6500,6 +6486,8 @@ export class TinyCloudNode {
       address: string | undefined;
       chainId: number;
       serviceGraph?: ServiceGraphLifetime;
+      /** The session whose delegation proves decrypt authority; defaults to this node's. */
+      session?: ServiceSession;
     },
   ): DataVaultService {
     const wasm = this.wasmBindings;
@@ -6522,7 +6510,7 @@ export class TinyCloudNode {
         networkId: `urn:tinycloud:encryption:${ownerDid}:${DEFAULT_ENCRYPTION_NETWORK_NAME}`,
         service: encryptionService,
         decryptCapabilityProof: () => ({
-          proofs: [this.requireServiceSession().delegationCid],
+          proofs: [(nodeContext?.session ?? this.requireServiceSession()).delegationCid],
         }),
       },
       tc: {
@@ -7475,28 +7463,7 @@ export class TinyCloudNode {
       resolved.vaultKey,
     );
 
-    if (result.status !== "ok") {
-      if (result.status === "permission_required") {
-        const hint = parsePermissionHint(result.hint);
-        if (hint === undefined) return { status: "read_failed" };
-        return {
-          status: "permission_required",
-          hint: {
-            service: hint.service,
-            ...(hint.space === undefined ? {} : { space: hint.space }),
-            path: hint.path,
-            actions: [...hint.actions],
-          },
-        };
-      }
-      // `aad_mismatch` needs `expectAad`, which this read never sets.
-      if (result.status === "aad_mismatch") return { status: "read_failed" };
-      return { status: result.status };
-    }
-    if (!isSecretPayload(result.entry.value)) {
-      return { status: "invalid_payload" };
-    }
-    return { status: "ok", value: result.entry.value.value };
+    return secretReadResult(result);
   }
 
   private getBaseSecrets(spaceId: string): ISecretsService {
@@ -7847,12 +7814,15 @@ export class TinyCloudNode {
   }
 
   private activateRoutedDelegation(delegation: PortableDelegation, signal?: AbortSignal): Promise<SpaceHostResult> {
-    const resources = this.operationsFromDelegation(delegation).map((operation) =>
+    return this.activateResourceSession(delegation.delegationHeader, this.activationResources(delegation), signal);
+  }
+
+  private activationResources(delegation: PortableDelegation): string[] {
+    return this.operationsFromDelegation(delegation).map((operation) =>
       operation.resource?.startsWith("urn:tinycloud:encryption:")
         ? operation.resource.split("/")[0]!
         : operation.spaceId ?? delegation.spaceId,
     );
-    return this.activateResourceSession(delegation.delegationHeader, resources, signal);
   }
 
   private activateSignedSession(
@@ -7990,6 +7960,20 @@ export class TinyCloudNode {
     if (bySpace.size === 0 && rawEntries.length > 0) {
       bySpace.set(session.spaceId, []);
     }
+    // The grant is a root SIWE from this account, so it can only authorize
+    // the account's own spaces; refuse before asking for a signature.
+    const foreignSpaces = [...bySpace.keys()].filter((spaceId) => {
+      const parsed = parseSpaceUri(spaceId);
+      return parsed?.address === undefined ||
+        parsed.chainId !== String(session.chainId) ||
+        parsed.address !== canonicalizeAddress(session.address);
+    });
+    if (foreignSpaces.length > 0) {
+      throw Object.assign(
+        new Error(`Runtime permissions can only be granted in this account's own spaces, not ${foreignSpaces.join(", ")}.`),
+        { code: "SPACE_NOT_OWNED", spaceIds: foreignSpaces },
+      );
+    }
 
     const now = new Date();
     const requestedExpiryMs = resolveExpiryMs(options?.expiry);
@@ -8000,94 +7984,132 @@ export class TinyCloudNode {
     }
     assertExpiryWithinTechnicalLimit(expiresAt, "siwe");
 
-    const delegations: PortableDelegation[] = [];
-    let rawEntriesAttached = false;
-    for (const [spaceId, entries] of bySpace) {
-      const rawForDelegation = !rawEntriesAttached ? rawEntries : [];
-      if (rawForDelegation.length > 0) {
-        rawEntriesAttached = true;
-      }
-      const delegatedEntries = [...entries, ...rawForDelegation];
-      const abilities = this.permissionsToAbilities(entries);
-      const prepared = (() => {
-        try {
-          return this.wasmBindings.prepareSession({
-            abilities,
-            ...(rawForDelegation.length > 0
-              ? { rawAbilities: this.permissionsToRawAbilities(rawForDelegation) }
-              : {}),
-            address: this.wasmBindings.ensureEip55(session.address),
-            chainId: session.chainId,
-            domain: this.siweDomain,
-            issuedAt: now.toISOString(),
-            expirationTime: expiresAt.toISOString(),
-            spaceId,
-            jwk: session.jwk,
-          });
-        } catch (error) {
-          if (
-            rawForDelegation.some((entry) => this.isRawRevocationPermissionEntry(entry)) &&
-            /invalid ReCap resource URI/i.test(error instanceof Error ? error.message : String(error))
-          ) {
-            throw Object.assign(
-              new Error("This WASM build cannot encode raw urn:cid ReCap resources."),
-              { code: "RAW_RECAP_RESOURCE_UNSUPPORTED", cause: error },
-            );
-          }
-          throw error;
-        }
-      })();
-
-      if (options?.signMessage !== undefined) {
-        this.assertRuntimeGrantMessage(prepared.siwe, session);
-      }
-      const signature = options?.signMessage !== undefined
-        ? await options.signMessage(prepared.siwe)
-        : await this.signer!.signMessage(prepared.siwe);
-      if (
-        options?.signMessage !== undefined &&
-        !(await verifyEip191MessageSignature(prepared.siwe, signature, session.address))
-      ) {
-        throw new Error("The signature does not match the account that owns this session.");
-      }
-      // Nothing is activated for a session that ended while the wallet signed.
-      graph.assertActive();
-      const delegatedSession = this.wasmBindings.completeSessionSetup({
-        ...prepared,
-        signature,
-      });
-      const delegation = this.runtimeDelegationFromSession(
-        delegatedSession,
-        delegatedEntries,
-        spaceId,
-        session,
-        expiresAt,
-        { siwe: prepared.siwe, signature },
-      );
-
-      const activateResult = await this.activateRoutedDelegation(delegation, graph.signal).catch((error: unknown) => {
-        graph.assertActive();
-        throw error;
-      });
-      if (!activateResult.success) {
+    // One SIWE covers every requested space (per-space abilities in one
+    // ReCap) plus the raw resources, so the owner approves once.
+    const spaces = [...bySpace.keys()];
+    const primarySpaceId = spaces[0]!;
+    const spaceAbilities = Object.fromEntries(
+      [...bySpace].map(([spaceId, entries]) => [spaceId, this.permissionsToAbilities(entries)]),
+    );
+    const prepared = (() => {
+      try {
+        return this.wasmBindings.prepareSession({
+          abilities: spaceAbilities[primarySpaceId]!,
+          ...(spaces.length > 1 ? { spaceAbilities } : {}),
+          ...(rawEntries.length > 0
+            ? { rawAbilities: this.permissionsToRawAbilities(rawEntries) }
+            : {}),
+          address: this.wasmBindings.ensureEip55(session.address),
+          chainId: session.chainId,
+          domain: this.siweDomain,
+          issuedAt: now.toISOString(),
+          expirationTime: expiresAt.toISOString(),
+          spaceId: primarySpaceId,
+          jwk: session.jwk,
+        });
+      } catch (error) {
         if (
-          rawForDelegation.some((entry) => this.isRawRevocationPermissionEntry(entry)) &&
-          activateResult.status === 401 &&
-          /Cannot find parent delegation/i.test(activateResult.error ?? "")
+          rawEntries.some((entry) => this.isRawRevocationPermissionEntry(entry)) &&
+          /invalid ReCap resource URI/i.test(error instanceof Error ? error.message : String(error))
         ) {
           throw Object.assign(
-            new Error("The host cannot activate a root raw-CID revoke authority without a parent delegation."),
-            { code: "RAW_RECAP_RESOURCE_UNSUPPORTED", cause: activateResult },
+            new Error("This WASM build cannot encode raw urn:cid ReCap resources."),
+            { code: "RAW_RECAP_RESOURCE_UNSUPPORTED", cause: error },
           );
         }
+        throw error;
+      }
+    })();
+
+    if (options?.signMessage !== undefined) {
+      this.assertRuntimeGrantMessage(prepared.siwe, session);
+    }
+    const signature = options?.signMessage !== undefined
+      ? await options.signMessage(prepared.siwe)
+      : await this.signer!.signMessage(prepared.siwe);
+    if (
+      options?.signMessage !== undefined &&
+      !(await verifyEip191MessageSignature(prepared.siwe, signature, session.address))
+    ) {
+      throw new Error("The signature does not match the account that owns this session.");
+    }
+    // Nothing is activated for a session that ended while the wallet signed.
+    graph.assertActive();
+    const delegatedSession = this.wasmBindings.completeSessionSetup({
+      ...prepared,
+      signature,
+    });
+    // One portable delegation per space, all proven by the one signed session;
+    // the raw resources ride with the first.
+    const perSpace = spaces.map((spaceId, index) => {
+      const entries = [...bySpace.get(spaceId)!, ...(index === 0 ? rawEntries : [])];
+      return {
+        spaceId,
+        entries,
+        delegation: this.runtimeDelegationFromSession(
+          delegatedSession,
+          entries,
+          spaceId,
+          session,
+          expiresAt,
+          { siwe: prepared.siwe, signature },
+        ),
+      };
+    });
+
+    const activateResult = await this.activateResourceSession(
+      delegatedSession.delegationHeader,
+      perSpace.flatMap(({ delegation }) => this.activationResources(delegation)),
+      graph.signal,
+    ).catch((error: unknown) => {
+      graph.assertActive();
+      // A registered owner whose signed record lists none of the requested
+      // spaces: no node serves them because they were never set up.
+      const requested = spaces.filter((spaceId) => bySpace.get(spaceId)!.length > 0);
+      if (
+        error instanceof NodeNotFoundError &&
+        error.verdict.status === "registered" &&
+        error.verdict.record !== undefined &&
+        rawEntries.length === 0 &&
+        requested.length > 0 &&
+        requested.every((spaceId) =>
+          !error.verdict.record!.spaces.some(({ space }) => this.spaceIdsEqual(space, spaceId)))
+      ) {
+        throw new MissingSpacesError(requested, []);
+      }
+      throw error;
+    });
+    // The node attaches a delegation only to spaces it hosts; it reports the
+    // rest as skipped (or refuses with 404 when it hosts none). Activation
+    // never creates a space. A skipped space the registry routes to that node
+    // already failed above as RESOURCE_NOT_ROUTED (a routing fault); what is
+    // left in `skipped` has no location record, i.e. was never set up.
+    const missingSpaceIds = activateResult.success
+      ? spaces.filter((spaceId) => bySpace.get(spaceId)!.length > 0 &&
+        activateResult.skipped?.some((skipped) => this.spaceIdsEqual(skipped, spaceId)))
+      : activateResult.status === 404 ? spaces.filter((spaceId) => bySpace.get(spaceId)!.length > 0) : [];
+    if (!activateResult.success && missingSpaceIds.length === 0) {
+      if (
+        rawEntries.some((entry) => this.isRawRevocationPermissionEntry(entry)) &&
+        activateResult.status === 401 &&
+        /Cannot find parent delegation/i.test(activateResult.error ?? "")
+      ) {
         throw Object.assign(
-          new Error(`Failed to activate runtime permission delegation: ${describeHostFailure(activateResult)}`),
-          { cause: activateResult },
+          new Error("The host cannot activate a root raw-CID revoke authority without a parent delegation."),
+          { code: "RAW_RECAP_RESOURCE_UNSUPPORTED", cause: activateResult },
         );
       }
+      throw Object.assign(
+        new Error(`Failed to activate runtime permission delegation: ${describeHostFailure(activateResult)}`),
+        { cause: activateResult },
+      );
+    }
 
-      // The session may have been replaced or signed out while signing.
-      graph.assertActive();
+    // The session may have been replaced or signed out while signing.
+    graph.assertActive();
+    const delegations: PortableDelegation[] = [];
+    for (const { spaceId, entries, delegation } of perSpace) {
+      if (missingSpaceIds.includes(spaceId)) continue;
       this.runtimePermissionGrants.push({
         session: {
           delegationHeader: delegatedSession.delegationHeader,
@@ -8097,11 +8119,14 @@ export class TinyCloudNode {
           jwk: session.jwk,
         },
         delegation,
-        operations: this.permissionOperations(delegatedEntries, spaceId),
+        operations: this.permissionOperations(entries, spaceId),
         expiresAt,
         provenance: "runtime",
       });
       delegations.push(delegation);
+    }
+    if (missingSpaceIds.length > 0) {
+      throw new MissingSpacesError(missingSpaceIds, delegations);
     }
 
     return delegations;
@@ -10137,6 +10162,40 @@ export class TinyCloudNode {
   }
 
   /**
+   * Encryption for a `useDelegation` access: signed with the access's
+   * delegated session (never this node's own session) and bound to the
+   * encryption network of the delegation's owner.
+   */
+  private delegatedEncryptionFactory(
+    graph: ServiceGraphLifetime,
+    host: string,
+    session: TinyCloudSession,
+    delegation: PortableDelegation,
+  ): DelegatedEncryptionFactory {
+    const serviceSession: ServiceSession = {
+      delegationHeader: session.delegationHeader,
+      delegationCid: session.delegationCid,
+      spaceId: session.spaceId,
+      verificationMethod: session.verificationMethod,
+      jwk: session.jwk,
+    };
+    const owner = () => ({
+      host,
+      did: pkhDid(delegation.ownerAddress, delegation.chainId),
+      address: delegation.ownerAddress,
+      chainId: delegation.chainId,
+    });
+    return {
+      encryption: () => this.createEncryptionService({ graph, session: serviceSession, ...owner() }),
+      vault: (kv, encryption) => this.createVaultService(delegation.spaceId, kv, encryption, {
+        ...owner(),
+        serviceGraph: graph,
+        session: serviceSession,
+      }),
+    };
+  }
+
+  /**
    * Use a delegation received from another user.
    *
    * This creates a new session key for this user that chains from the
@@ -10205,6 +10264,7 @@ export class TinyCloudNode {
         this.wasmBindings.invokeAny,
         this.config.telemetry,
         graph,
+        this.delegatedEncryptionFactory(graph, targetHost, session, delegation),
       );
     }
 
@@ -10317,6 +10377,7 @@ export class TinyCloudNode {
       this.wasmBindings.invokeAny,
       this.config.telemetry,
       graph,
+      this.delegatedEncryptionFactory(graph, targetHost, session, delegation),
     );
   }
 
