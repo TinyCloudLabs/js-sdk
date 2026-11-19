@@ -3,6 +3,7 @@ import { NodeWasmBindings } from "./NodeWasmBindings";
 import { PrivateKeySigner } from "./signers/PrivateKeySigner";
 import { TinyCloudNode } from "./TinyCloudNode";
 import { activateValidatedRuntimeDelegation, siweRuntimeDelegation, type PortableDelegation } from "./delegation";
+import { unregisteredLocationRegistryResponse } from "./test-support/unregistered-location-registry";
 
 const signer = new PrivateKeySigner("4f3edf983ac636a65a842ce7c78d9aa706d3b113bce036f4d9c5c1b5605dce6f");
 const address = await signer.getAddress();
@@ -12,6 +13,7 @@ const key = JSON.parse(manager.jwk("default")!);
 const did = manager.getDID("default");
 const space = (name: string) => wasm.makeSpaceId(address, 1, name);
 const host = "https://session-grant.test";
+const REGISTRY = "https://registry.fixture.test";
 async function fixture(foreign = false) {
   const primary = space("applications");
   const secondary = foreign ? wasm.makeSpaceId("0x0000000000000000000000000000000000000001", 1, "account") : space("account");
@@ -23,7 +25,7 @@ async function fixture(foreign = false) {
   const signature = await signer.signMessage(prepared.siwe);
   const session = { ...wasm.completeSessionSetup({ ...prepared, signature }), spaceId: primary, jwk: key, verificationMethod: did,
     address, chainId: 1, siwe: prepared.siwe, signature };
-  const node = new TinyCloudNode({ host, wasmBindings: wasm, autoBootstrapAccount: false });
+  const node = new TinyCloudNode({ host, tinycloudRegistryUrl: REGISTRY, wasmBindings: wasm, autoBootstrapAccount: false });
   await node.restoreSession(session);
   const grant: PortableDelegation = { cid: session.delegationCid, delegationHeader: session.delegationHeader, spaceId: primary,
     path: "feed", actions: ["tinycloud.sql/read"], resources: [
@@ -34,7 +36,9 @@ async function fixture(foreign = false) {
 }
 test("validated signed-session activation preserves both resource spaces and its requested primary route", async () => {
   const { node, grant, primary, secondary } = await fixture();
-  const fetch = spyOn(globalThis, "fetch").mockResolvedValue(Response.json({ activated: [], skipped: [] }));
+  // The fixture owner has no location record; every other request answers as the node.
+  const fetch = spyOn(globalThis, "fetch").mockImplementation(Object.assign(async (input: string | URL | Request, init?: RequestInit) =>
+    unregisteredLocationRegistryResponse(input, REGISTRY, init) ?? Response.json({ activated: [], skipped: [] }), { preconnect: globalThis.fetch.preconnect }));
   try {
     const installed = await activateValidatedRuntimeDelegation(node, grant, { host });
     expect(new Set(installed.effectivePermissions.map(p => p.space))).toEqual(new Set([primary, secondary]));

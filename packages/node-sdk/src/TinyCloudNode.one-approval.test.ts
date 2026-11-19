@@ -3,6 +3,12 @@ import { NodeWasmBindings } from "./NodeWasmBindings";
 import { PrivateKeySigner } from "./signers/PrivateKeySigner";
 import type { PermissionEntry } from "@tinycloud/sdk-core";
 import { TinyCloudNode } from "./TinyCloudNode";
+import { unregisteredLocationRegistryResponse } from "./test-support/unregistered-location-registry";
+
+const REGISTRY = "https://registry.fixture.test";
+/** The fixture owner has no location record; every other request answers as the node. */
+const nodeFetch = (body: object) => Object.assign(async (input: string | URL | Request, init?: RequestInit) =>
+  unregisteredLocationRegistryResponse(input, REGISTRY, init) ?? Response.json(body), { preconnect: globalThis.fetch.preconnect });
 
 const signer = new PrivateKeySigner("4f3edf983ac636a65a842ce7c78d9aa706d3b113bce036f4d9c5c1b5605dce6f");
 const address = await signer.getAddress();
@@ -26,10 +32,10 @@ test("one multi-space parent issues a child clipped to its actual shorter signed
     }, issuedAt: new Date(Date.now() - 1000).toISOString(), expirationTime: expiry.toISOString() });
   const signature = await signer.signMessage(prepared.siwe);
   const session = wasm.completeSessionSetup({ ...prepared, signature });
-  const node = new TinyCloudNode({ host: "https://node.test", autoBootstrapAccount: false, wasmBindings: wasm });
+  const node = new TinyCloudNode({ host: "https://node.test", tinycloudRegistryUrl: REGISTRY, autoBootstrapAccount: false, wasmBindings: wasm });
   await node.restoreSession({ ...session, spaceId: space("applications"), jwk: key, verificationMethod: did,
     address, chainId: 1, siwe: prepared.siwe, signature });
-  const fetch = spyOn(globalThis, "fetch").mockResolvedValue(Response.json({ activated: [], skipped: [] }));
+  const fetch = spyOn(globalThis, "fetch").mockImplementation(nodeFetch({ activated: [], skipped: [] }));
   try {
     setSystemTime(new Date(issued));
     // Numeric milliseconds match feed connect's existing parseExpiry(...)-Date.now() semantics.
@@ -45,11 +51,11 @@ test("primary routing prefers requested applications, otherwise first canonical 
   const { composeManifestRequest } = await import("@tinycloud/sdk-core");
   for (const names of [["zeta", "account"], ["account", "applications", "alpha"], ["bravo", space("alpha")], ["bravo", space("alpha").toLowerCase()]]) {
     const permissions = names.map(space => ({ service: "tinycloud.kv", space, path: "notes/", actions: ["tinycloud.kv/get"] }));
-    const node = new TinyCloudNode({ host: "https://node.test", signer, wasmBindings: wasm, autoBootstrapAccount: false,
+    const node = new TinyCloudNode({ host: "https://node.test", tinycloudRegistryUrl: REGISTRY, signer, wasmBindings: wasm, autoBootstrapAccount: false,
       includeAccountRegistryPermissions: false,
       capabilityRequest: composeManifestRequest([{ app_id: "fixture", name: "Fixture", space: names[0], prefix: "", defaults: false, includePublicSpace: false, permissions }], { includeAccountRegistryPermissions: false }),
     });
-    const fetch = spyOn(globalThis, "fetch").mockResolvedValue(Response.json({ activated: [], skipped: [], protocol: 1, version: "1.0.0", features: [] }));
+    const fetch = spyOn(globalThis, "fetch").mockImplementation(nodeFetch({ activated: [], skipped: [], protocol: 1, version: "1.0.0", features: [] }));
     try {
       await node.signIn();
       expect(node.spaceId?.toLowerCase()).toBe(space(names.includes("applications") ? "applications" : names.includes("account") ? "account" : "alpha").toLowerCase());
