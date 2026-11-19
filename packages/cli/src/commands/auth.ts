@@ -55,7 +55,8 @@ function resolveOpenKeyHost(profile: ProfileConfig): string {
   return process.env.TC_OPENKEY_HOST ?? profile.openkeyHost ?? DEFAULT_OPENKEY_HOST;
 }
 import { startAuthFlow } from "../auth/browser-auth.js";
-import { APPROVAL_TIMEOUT_OPTION_DESCRIPTION, parseApprovalTimeout, type ApprovalWait } from "../auth/approval-wait.js";
+import { APPROVAL_TIMEOUT_OPTION_DESCRIPTION, parseApprovalTimeout, spaceSetupTimeoutMs, type ApprovalWait } from "../auth/approval-wait.js";
+import { SIGN_IN_TIMEOUT_OPTION_DESCRIPTION } from "../auth/sign-in-timeout.js";
 import { storedGrantsCovering } from "../auth/covering-grants.js";
 import { approvalCommandIntent, approvalRenewalOf, approvalResultNeedsAck, commitApprovalCommand, completeApprovalResult, pendingApprovalKey, recoverApprovalCommand, trackApprovalResult } from "../auth/approval-request.js";
 import {
@@ -645,10 +646,16 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
     .option("--keys <folder>", "Also let this sign-in create and use encryption keys in this folder (for example `qa`). The node must support named keys. With OpenKey, the first time on a profile also needs `--owner`.")
     .option("--replication-prefix <prefix>", "Add replication get+sync authority for a folder prefix ending in /, or root (repeatable)", (prefix: string, values: string[] = []) => [...values, prefix])
     .option("--replication-allow-secrets", "Allow replication of secret material (network-wide decrypt warning)")
+    .option("--timeout <duration>", `OpenKey sign-in only (not --device, --paste, --keys or replication). ${SIGN_IN_TIMEOUT_OPTION_DESCRIPTION}`)
     .action(async (options, cmd) => {
       try {
+        // Refused before anything is created or contacted. A sign-in is one approval: step 1 of 1.
+        const deadlineMs = options.timeout === undefined ? undefined : Date.now() + parseApprovalTimeout(options.timeout);
         if (options.device && options.paste) {
           throw new CLIError("INVALID_ARGUMENT", "--device and --paste are mutually exclusive.", ExitCode.USAGE_ERROR);
+        }
+        if (deadlineMs !== undefined && (options.device || options.paste || options.method === "local" || options.keys !== undefined)) {
+          throw new CLIError("INVALID_ARGUMENT", "--timeout applies only to an OpenKey sign-in through an approval link; it can't be used with --device, --paste, --keys or --method local.", ExitCode.USAGE_ERROR);
         }
         const scoped = options.device || options.manifest || options.expiry || options.owner;
         if (scoped && options.method === "local") {
@@ -680,6 +687,9 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
           ...(options.replicationAllowSecrets === true || profileConfig?.replication?.allowSecrets === true ? { allowSecrets: true } : {}),
           ...(owner === undefined ? {} : { ownerDid: owner }),
         };
+        if (deadlineMs !== undefined && replicationOptions.prefixes.length > 0) {
+          throw new CLIError("INVALID_ARGUMENT", "--timeout can't be used with a replication sign-in (--replication-prefix, or replication saved on this profile).", ExitCode.USAGE_ERROR);
+        }
         const loginPermissions = permissions === undefined
           ? undefined
           : buildReplicationLoginRequest(permissions, {
@@ -738,7 +748,7 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
         } else if (options.keys !== undefined) {
           method = (profileConfig?.authMethod === "openkey" || options.paste || options.owner) ? "openkey" : "local";
         } else {
-          method = scoped ? "openkey" : await promptAuthMethod();
+          method = scoped || deadlineMs !== undefined ? "openkey" : await promptAuthMethod();
         }
         if (method === "openkey" && (options.keys !== undefined || replicationOptions.prefixes.length > 0) &&
           !options.paste && options.popup !== false && !process.stdin.isTTY && !process.stderr.isTTY) {
@@ -776,6 +786,7 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
             force: options.force === true,
             keys: options.keys,
             ...(created === undefined ? {} : { createdProfile: { previousDefaultProfile: created.previousDefaultProfile } }),
+            ...(deadlineMs === undefined ? {} : { approvalWait: { deadlineMs, step: 1, of: 1 } }),
           });
           if (!preparedCommitted) await persistReplicationLogin(ctx.profile, replicationOptions);
           if (replicationOptions.allowSecrets) writeReplicationSecretsWarning();
@@ -2663,7 +2674,8 @@ async function handleOpenKeyAuth(
   const { profile, delegationData, declined, legacyNested } = await refreshOpenKeySession(profileName, host, options);
 
   reportDeclined(declined, legacyNested);
-  await ensureSpaceSetup({ profile: profileName, host }, delegationData, delegationData.permissions as PermissionEntry[] | undefined);
+  await ensureSpaceSetup({ profile: profileName, host }, delegationData, delegationData.permissions as PermissionEntry[] | undefined,
+    options.approvalWait === undefined ? undefined : spaceSetupTimeoutMs(options.approvalWait));
   outputJson({
     authenticated: true,
     profile: profileName,
@@ -2740,6 +2752,8 @@ interface OpenKeyLoginOptions {
   createdProfile?: CreatedProfile;
   /** `auth rotate`: the new session key; key.json keeps the old key until the approval is verified and committed. */
   rotation?: { jwk: object; did: string };
+  /** `--timeout`: bound the wait for the owner's approval (approval-link sign-in only; the prepared hand-offs never take it). */
+  approvalWait?: ApprovalWait;
 }
 
 /** Only a fresh SDK-prepared, OpenKey-signed owner session may establish replica consent. */
@@ -3124,6 +3138,7 @@ export async function refreshOpenKeySession(
     // The plain paste link lets the user pick the lifetime; the signed result has no `--expiry` ceiling.
     ...(plainPasteLink ? { expiryChangeable: true } : {}),
     ...(permissions && options.reason ? { reason: options.reason } : {}),
+    ...(options.approvalWait === undefined ? {} : { approvalWait: options.approvalWait }),
   });
   seen.result = delegationData;
 

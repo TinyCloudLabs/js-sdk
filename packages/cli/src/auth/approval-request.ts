@@ -243,6 +243,11 @@ export async function pendingApprovalKey(profile: string): Promise<Ed25519Privat
   return entries.find((entry) => entry.commandIntent === undefined && !entry.committed)?.signingKey;
 }
 
+/** Whether this profile holds a sign-in request not yet committed (not a command's approval, not an invitation): rerunning the sign-in resumes it. */
+export async function hasPendingSignIn(profile: string): Promise<boolean> {
+  return (await activePending(profile)).some((entry) => entry.commandIntent === undefined && entry.request.context === undefined && !entry.committed);
+}
+
 async function forgetApproval(profile: string, entry: PendingApproval): Promise<void> {
   await updatePending(profile, (items) => items.filter((item) => item.requestId !== entry.requestId));
 }
