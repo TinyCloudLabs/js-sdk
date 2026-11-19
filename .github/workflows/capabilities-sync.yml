@@ -44,6 +44,10 @@ env:
   # derive it from the header's REGISTRY_SOURCE_GIT_SHA (see the header note above).
   ANCHOR_NODE_REV: d7f511f52256a076999ab22e0ad9fdcb69699326
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   diff:
     runs-on: ubuntu-latest

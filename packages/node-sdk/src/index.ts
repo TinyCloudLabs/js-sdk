@@ -293,7 +293,7 @@ export { NodeWasmBindings } from "./NodeWasmBindings";
 
 // Delegation
 export { DelegatedAccess } from "./DelegatedAccess";
-export type { RestorableSession } from "./DelegatedAccess";
+export type { DelegatedSecretReadInput, RestorableSession } from "./DelegatedAccess";
 export {
   serializeDelegation,
   deserializeDelegation,
@@ -304,6 +304,7 @@ export {
   signedCompactUcanExpiry,
   RUNTIME_DELEGATION_REJECTIONS,
   RuntimeDelegationRejectedError,
+  MissingSpacesError,
 } from "./delegation";
 export type {
   PortableDelegation,
