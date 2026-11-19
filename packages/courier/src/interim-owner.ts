@@ -1,10 +1,10 @@
 import { courierNode } from './node.js';
 import fs from 'node:fs';
 import path from 'node:path';
-import { loadGrant, loadKey, loadProfile, profileDir, withProfileTransaction, writeSecure } from './profile.js';
+import { loadGrant, loadKey, loadProfile, profileDir, saveProfile, withProfileLock, writeSecure } from './profile.js';
 import type { PendingGrantRequest } from './approval-phase.js';
 import type { GrantPayload } from './grant.js';
-import type { Profile } from './profile.js';
+import type { AgentKey, Profile } from './profile.js';
 import { readApprovalEntry } from './approval-phase.js';
 import { approvalIntent, matchesApprovalIntent, requestApprovalInTransaction } from './grant-request.js';
 import { requestHash } from './canonical.js';
@@ -59,7 +59,8 @@ function pendingForEpisode(episode: OwnerEpisode, profile: Profile): string | un
 
 /** No node, KV, approval discovery, or grant activation is involved in terminal startup states. */
 export async function preflightOwner(options: { request?: boolean } = {}): Promise<OwnerPreflight> {
-  return withProfileTransaction(async (profile, save) => {
+  const local = withProfileLock<OwnerPreflight | { renewalProfile: Profile } | { requestProfile: Profile; key: AgentKey; episode: OwnerEpisode }>(() => {
+    const profile = loadProfile();
     const grant = loadGrant();
     const old = loadOwnerEpisode();
     if (!grant) return { state: 'approval-required' };
@@ -72,8 +73,7 @@ export async function preflightOwner(options: { request?: boolean } = {}): Promi
     if (old && !same && old.phase !== 'complete') writeSecure(episodeFile(), { ...old, phase: 'complete' });
     if (grant.renewal) {
       if (Date.parse(grant.renewal.receipt.leaseExpiresAt) <= Date.now()) return { state: 'approval-required' };
-      try { await courierNode(profile); return { state: 'live' }; }
-      catch { return { state: 'approval-unavailable' }; }
+      return { renewalProfile: profile };
     }
     // Lapsed startup never makes a network request, including on supervisor restart.
     if (!end || !Number.isFinite(savedEnd) || Math.min(end, savedEnd) <= Date.now()) {
@@ -95,34 +95,49 @@ export async function preflightOwner(options: { request?: boolean } = {}): Promi
         return { state: 'approval-unavailable' };
       }
       const episode: OwnerEpisode = { ...identity, intentHash, requestId: entry.pending.requestId, requestHash: requestHash(entry.pending.request), phase: 'requested' };
-      profile.version = 4; save(); writeSecure(episodeFile(), episode);
+      profile.version = 4; saveProfile(profile); writeSecure(episodeFile(), episode);
       return { state: 'live', approvalUrl: entry.pending.approvalUrl, notify: true };
     }
     const episode: OwnerEpisode = { ...identity, intentHash, requestId: null, requestHash: null, phase: 'creating' };
-    profile.version = 4; save(); writeSecure(episodeFile(), episode);
-    try {
-      const pending = await requestApprovalInTransaction(profile, key, undefined);
-      episode.requestId = pending.requestId;
-      episode.requestHash = requestHash(pending.request);
-      episode.phase = 'requested';
-      writeSecure(episodeFile(), episode);
-      return { state: 'live', approvalUrl: pending.approvalUrl, notify: true };
-    } catch {
-      episode.phase = 'unavailable';
-      writeSecure(episodeFile(), episode);
-      return { state: 'approval-unavailable', notify: true };
-    }
+    profile.version = 4; saveProfile(profile); writeSecure(episodeFile(), episode);
+    return { requestProfile: profile, key, episode };
   });
+  if ('renewalProfile' in local) {
+    try { await courierNode(local.renewalProfile); return { state: 'live' }; }
+    catch { return { state: 'approval-unavailable' }; }
+  }
+  if (!('requestProfile' in local)) return local;
+  const { requestProfile: profile, key, episode } = local;
+  const expected = requestHash(episode);
+  const commit = (next: OwnerEpisode): void => withProfileLock(() => {
+    const current = loadOwnerEpisode();
+    if (!current || requestHash(current) !== expected || loadGrant()?.delegationCid !== episode.ownerGrantCid
+      || loadProfile().courierDid !== episode.courierDid) {
+      throw new CourierError('profile-changed', 'Courier approval state changed while requesting approval. It was kept; run the command again.');
+    }
+    writeSecure(episodeFile(), next);
+  });
+  let pending: PendingGrantRequest;
+  try {
+    pending = await requestApprovalInTransaction(profile, key, undefined);
+  } catch (error) {
+    commit({ ...episode, phase: 'unavailable' });
+    if (error instanceof CourierError && ['profile-locked', 'profile-changed', 'approval-changed'].includes(error.code)) throw error;
+    return { state: 'approval-unavailable', notify: true };
+  }
+  commit({ ...episode, requestId: pending.requestId, requestHash: requestHash(pending.request), phase: 'requested' });
+  return { state: 'live', approvalUrl: pending.approvalUrl, notify: true };
 }
 
 /** A terminal owner-authority refusal never triggers an automatic approval retry. */
 export async function markOwnerRefused(): Promise<void> {
   clearLocalCaches();
-  await withProfileTransaction(async (profile, save) => {
+  withProfileLock(() => {
+    const profile = loadProfile();
     const grant = loadGrant();
     if (!grant) return;
     const old = loadOwnerEpisode();
-    profile.version = 4; save();
+    profile.version = 4; saveProfile(profile);
     writeSecure(episodeFile(), { ownerGrantCid: grant.delegationCid, expiresAt: grant.expiresAt, courierDid: profile.courierDid,
       intentHash: old?.intentHash ?? '', requestId: old?.requestId ?? null, requestHash: old?.requestHash ?? null, phase: 'refused' } satisfies OwnerEpisode);
   });
