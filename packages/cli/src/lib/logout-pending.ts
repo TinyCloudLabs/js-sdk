@@ -10,6 +10,7 @@ import { principalHashOf, readGateSnapshot, readLogoutGate } from "@tinycloud/re
 import { REPLICA_GATE_FILE } from "@tinycloud/sdk-services/kv/replication/contractConstants";
 import { ProfileManager } from "../config/profiles.js";
 import { ExitCode } from "../config/constants.js";
+import { resolveProfilePosture, type ProfileConfig } from "../config/types.js";
 import { CLIError } from "../output/errors.js";
 import { removeProfileReplicas } from "./profile-replicas.js";
 import { REPLICATION_DIAGNOSTIC_FILES } from "./replication-log.js";
@@ -130,8 +131,22 @@ export async function assertPendingRemoteLogoutSession(
 }
 
 
-/** Remove request keys before the durable signed-out fence, then attempt both credential unlinks. */
-export async function clearProfileCredentials(name: string, syncDirectory = false, legacyCleanup = false): Promise<void> {
+/**
+ * Whether a logout that erases no replica state keeps the profile key (TC-3434). A delegate-session (agent) profile's
+ * grants are bound to its key, so it keeps the key and a new grant can be imported for it. Every other profile, and
+ * any logout that erases replica state, deletes the key (replication CONTRACT.md, deny-first logout).
+ */
+export function logoutKeepsKey(profile: ProfileConfig): boolean {
+  return resolveProfilePosture(profile) === "delegate-session" && profile.legacyReplicaCleanup !== true;
+}
+
+/**
+ * Remove request keys before the durable signed-out fence, then attempt both credential unlinks; with `keepKey`, only
+ * the session goes and the profile key stays for the next sign-in.
+ */
+export async function clearProfileCredentials(
+  name: string, syncDirectory = false, legacyCleanup = false, keepKey = false,
+): Promise<void> {
   await ProfileManager.withLock(name, async () => {
     const profile = await ProfileManager.getProfile(name);
     const { namedKeys: _namedKeys, ...signedOutProfile } = profile;
@@ -140,7 +155,9 @@ export async function clearProfileCredentials(name: string, syncDirectory = fals
     await ProfileManager.setProfileDurable(name, { ...signedOutProfile, authSignedOut: true, ...(legacyCleanup ? { legacyReplicaCleanup: true } : {}) });
     let failed = false;
     let error: unknown;
-    try { await ProfileManager.removeKey(name); } catch (cause) { failed = true; error = cause; }
+    if (!keepKey) {
+      try { await ProfileManager.removeKey(name); } catch (cause) { failed = true; error = cause; }
+    }
     try { await ProfileManager.clearSession(name); } catch (cause) { if (!failed) error = cause; failed = true; }
     if (failed) throw error;
     if (syncDirectory) {
@@ -150,14 +167,15 @@ export async function clearProfileCredentials(name: string, syncDirectory = fals
   }, { requireProfile: true });
 }
 
-/** A crash after the durable signed-out flag but before unlink must not strand private keys. */
+/** A crash after the durable signed-out flag but before unlink must not strand the session, or a key logout drops. */
 async function finishSignedOutCredentialRemoval(name: string): Promise<void> {
   const profile = await ProfileManager.getProfile(name).catch((error: unknown) => {
     if (error instanceof CLIError && error.code === "PROFILE_NOT_FOUND") return null;
     throw error;
   });
   if (profile?.authSignedOut !== true) return;
-  for (const file of ["session.json", "key.json"]) {
+  const keepKey = logoutKeepsKey(profile);
+  for (const file of keepKey ? ["session.json"] : ["session.json", "key.json"]) {
     try {
       await lstat(join(profilePath(name), file));
     } catch (error) {
@@ -166,7 +184,7 @@ async function finishSignedOutCredentialRemoval(name: string): Promise<void> {
     }
     await ProfileManager.withLock(name, async () => {
       if ((await ProfileManager.getProfile(name)).authSignedOut === true) {
-        await clearProfileCredentials(name, true);
+        await clearProfileCredentials(name, true, false, keepKey);
       }
     }, { requireProfile: true });
     return;

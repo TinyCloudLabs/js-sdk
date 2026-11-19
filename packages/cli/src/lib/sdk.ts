@@ -1,8 +1,9 @@
-import { createProfileRegistryCacheStore, createProfileRegistrySequenceStore } from "@tinycloud/operations/state";
+import { createProfileRegistryCacheStore, createProfileRegistrySequenceStore, profilePath } from "@tinycloud/operations/state";
 import { TinyCloudNode, signedCompactUcanExpiry, type PortableDelegation } from "@tinycloud/node-sdk";
 import type { ProfileReplicaLogoutPending } from "@tinycloud/sdk-services/kv/replication";
 import { CLI_NAME } from "@tinycloud/operations/cli-name";
 import { ProfileManager } from "../config/profiles.js";
+import { syncAuthCredentialFiles } from "../config/storage.js";
 import { resolveProfilePosture, type CLIContext, type ProfileConfig } from "../config/types.js";
 import { CLIError, wrapError } from "../output/errors.js";
 import { DEFAULT_HOST, ExitCode, PROFILE_COMMIT_LOCK_TIMEOUT_MS } from "../config/constants.js";
@@ -368,36 +369,39 @@ export interface DelegatedSessionBootstrap {
   readonly node: TinyCloudNode;
   /**
    * Abandons the bootstrap after `cause` failed a later step, then rethrows
-   * `cause`. Under the profile lock, the session is removed and the
-   * profile's session DID and space put back only if the session and those
-   * two fields still hold exactly what the bootstrap wrote; other profile
-   * fields are left as they are. Otherwise another writer (a login, logout
-   * or profile update) replaced them meanwhile; its state is kept and the
-   * rethrown error says so.
+   * `cause`. Under the profile lock, the session it replaced (or none) and
+   * the profile's session DID, space and signed-out flag are put back only
+   * if the session and those fields still hold exactly what the bootstrap
+   * wrote; other profile fields are left as they are. Otherwise another
+   * writer (a login, logout or profile update) replaced them meanwhile; its
+   * state is kept and the rethrown error says so.
    */
   abandon(cause: unknown): Promise<never>;
 }
 
 /** The profile fields a bootstrap writes, and a rollback compares and restores. */
-const BOOTSTRAP_PROFILE_FIELDS = ["sessionDid", "spaceId"] as const;
+const BOOTSTRAP_PROFILE_FIELDS = ["sessionDid", "spaceId", "authSignedOut"] as const;
 
 /** What a bootstrap replaced and what it wrote, read and written under the profile lock. */
 interface BootstrapWrite {
   readonly previousProfile: ProfileConfig;
+  readonly previousSession: object | null;
   readonly profile: ProfileConfig;
   readonly session: Record<string, unknown>;
 }
 
 /**
- * Establish the first authenticated session for a fresh delegate-session
- * profile from a delegation targeted at that profile's generated key. The
- * profile, key and absent session are read, and the session and profile
- * written, in one profile-lock critical section; a session that appeared
- * since the caller checked is never replaced.
+ * Make a delegation targeted at a delegate-session profile's own key the
+ * profile's session. Without `replaceSession`, only a profile without a
+ * session gets one: a session that appeared since the caller checked is never
+ * replaced. With it, the delegation replaces the profile's session, live,
+ * expired or signed out (TC-3434). The profile, key and session are read,
+ * and the session and profile written, in one profile-lock critical section.
  */
 export async function bootstrapDelegatedSession(
   ctx: CLIContext,
   delegation: PortableDelegation,
+  options: { replaceSession?: boolean } = {},
 ): Promise<DelegatedSessionBootstrap> {
   const written = await ProfileManager.withLock(ctx.profile, async (): Promise<BootstrapWrite> => {
     const previousProfile = await ProfileManager.getProfile(ctx.profile);
@@ -417,7 +421,8 @@ export async function bootstrapDelegatedSession(
         ExitCode.PERMISSION_DENIED,
       );
     }
-    if (await ProfileManager.getSession(ctx.profile) !== null) {
+    const previousSession = await ProfileManager.getSession(ctx.profile);
+    if (previousSession !== null && options.replaceSession !== true) {
       throw new CLIError(
         "PROFILE_CHANGED_DURING_IMPORT",
         `Profile "${ctx.profile}" gained a session (another login or import) after this import checked it. Nothing was saved; run the import again.`,
@@ -428,7 +433,8 @@ export async function bootstrapDelegatedSession(
     // session every command refuses: report the delegation, write nothing.
     if (signedLifetimePassed(delegation)) throw delegationExpiredError();
 
-    const jwk = signerJwkForProfile(ctx.profile, undefined, await ProfileManager.getKey(ctx.profile));
+    // Logout keeps the key, so a signed-out profile signs in again with it.
+    const jwk = signerJwkForProfile(ctx.profile, undefined, await ProfileManager.getStoredKey(ctx.profile));
     const session = {
       delegationHeader: delegation.delegationHeader,
       delegationCid: delegation.cid,
@@ -437,15 +443,21 @@ export async function bootstrapDelegatedSession(
       verificationMethod: sessionDid,
     };
     // A delegated session never carries named-key authority.
-    const { namedKeys: _namedKeys, ...previousFields } = previousProfile;
+    const { namedKeys: _namedKeys, authSignedOut: _authSignedOut, ...previousFields } = previousProfile;
     const profile = { ...previousFields, sessionDid, spaceId: delegation.spaceId };
     try {
       await ProfileManager.setSession(ctx.profile, session);
-      await ProfileManager.setProfile(ctx.profile, profile);
+      if (previousProfile.authSignedOut === true) {
+        // As in a login, the signed-out flag is cleared only once the key and session are on disk.
+        await syncAuthCredentialFiles(profilePath(ctx.profile));
+        await ProfileManager.setProfileDurable(ctx.profile, profile);
+      } else {
+        await ProfileManager.setProfile(ctx.profile, profile);
+      }
     } catch (error) {
-      throw annotate(error, await restoreBeforeBootstrap(ctx.profile, previousProfile));
+      throw annotate(error, await restoreBeforeBootstrap(ctx.profile, previousProfile, previousSession));
     }
-    return { previousProfile, profile, session };
+    return { previousProfile, previousSession, profile, session };
   });
 
   const abandon = async (cause: unknown): Promise<never> => {
@@ -468,7 +480,7 @@ export async function bootstrapDelegatedSession(
       ) {
         return `Profile "${ctx.profile}" changed while the import was pending (another login, logout or profile update), so its newer state was kept and the provisional session was not rolled back.`;
       }
-      return restoreBeforeBootstrap(ctx.profile, written.previousProfile);
+      return restoreBeforeBootstrap(ctx.profile, written.previousProfile, written.previousSession);
     }, { timeoutMs: PROFILE_COMMIT_LOCK_TIMEOUT_MS }).catch((error: unknown) =>
       // The lock or a read failed: the import's error stays the one reported.
       `Rolling back the provisional session of profile "${ctx.profile}" could not run (${failureName(error)}); check \`${CLI_NAME} --profile ${ctx.profile} context\`.`);
@@ -485,19 +497,26 @@ export async function bootstrapDelegatedSession(
 }
 
 /**
- * Removes the bootstrap's session and puts back the session DID and space
- * the profile had before it, keeping any other profile field as it is now.
- * Both writes are attempted; returns a note naming any failure.
+ * Puts back the session the bootstrap replaced (or removes its session) and
+ * the session DID, space and signed-out flag the profile had before it,
+ * keeping any other profile field as it is now. Both writes are attempted;
+ * returns a note naming any failure.
  */
-async function restoreBeforeBootstrap(profileName: string, previousProfile: ProfileConfig): Promise<string | undefined> {
+async function restoreBeforeBootstrap(
+  profileName: string,
+  previousProfile: ProfileConfig,
+  previousSession: object | null,
+): Promise<string | undefined> {
   const failures: string[] = [];
   for (const write of [
-    () => ProfileManager.clearSession(profileName),
+    () => previousSession === null
+      ? ProfileManager.clearSession(profileName)
+      : ProfileManager.setSession(profileName, previousSession),
     () => ProfileManager.updateProfile(profileName, (current) => {
       const restored = { ...current };
       for (const field of BOOTSTRAP_PROFILE_FIELDS) {
         if (previousProfile[field] === undefined) delete restored[field];
-        else restored[field] = previousProfile[field];
+        else Object.assign(restored, { [field]: previousProfile[field] });
       }
       return restored;
     }),

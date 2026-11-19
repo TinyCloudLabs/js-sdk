@@ -701,7 +701,6 @@ describe("an expired or invalid stored session needs a new sign-in, not a retry"
         ["--profile", "older", "--json", "kv", "get", "KEY"],
         ["--profile", "older", "--json", "secrets", "get", "KEY"],
         ["--profile", "older", "--json", "secrets", "list"],
-        ["--profile", "older", "--json", "auth", "import", seeded.artifactPath],
       ]) {
         const result = await runBuiltCli(home, argv, expiry * 1000);
         expect(result.exitCode, JSON.stringify({ argv, result })).toBe(3);
@@ -711,6 +710,11 @@ describe("an expired or invalid stored session needs a new sign-in, not a retry"
         });
         expect(requests).toEqual([]);
       }
+      // Importing a grant for the profile's key replaces the session (TC-3434); this one has expired too.
+      const reimport = await runBuiltCli(home, ["--profile", "older", "--json", "auth", "import", seeded.artifactPath], expiry * 1000);
+      expect(reimport.exitCode, JSON.stringify(reimport)).toBe(1);
+      expect(reimport.error).toMatchObject({ code: "DELEGATION_EXPIRED" });
+      expect(requests).toEqual([]);
       const context = await runBuiltCli(home, ["--profile", "older", "--json", "context"], expiry * 1000);
       expect(context.exitCode).toBe(0);
       expect(JSON.parse(context.stdout)).toMatchObject({
@@ -914,6 +918,97 @@ describe("an expired or invalid stored session needs a new sign-in, not a retry"
     expect(requests).toEqual([]);
     expect(shareRequests).not.toContain("/invoke");
   });
+});
+
+describe("auth import makes a grant for the profile's key its session; logout keeps the key (TC-3434)", () => {
+  /** A delegate-session profile signed in until `sessionExpiry`, and a grant to the same key until `grantExpiry`. */
+  async function seedSessionAndLongerGrant(home: string, profileName: string, sessionExpiry: number, grantExpiry: number) {
+    const seeded = await seedImportedProfile(home, profileName, sessionExpiry);
+    await seedImportedSession(home, profileName, seeded);
+    const grant = await mintCompactDelegation({
+      audience: seeded.sessionDid.split("#", 1)[0]!,
+      expSecs: grantExpiry,
+      host: node.url.origin,
+    });
+    const artifactPath = join(home, "grant.json");
+    await writeFile(artifactPath, JSON.stringify(grant.delegation));
+    return { seeded, grant: grant.delegation, artifactPath };
+  }
+
+  /** After the first session's expiry, the profile signs in with the grant until the grant's expiry. */
+  async function expectGrantIsTheSession(home: string, profileName: string, grantCid: string, grantExpiry: number, nowMs: number) {
+    const session = await withTinyCloudStateRoot(home, async () =>
+      JSON.parse(await readFile(sessionPath(profileName), "utf8")) as { delegationCid: string });
+    expect(session.delegationCid).toBe(grantCid);
+    const status = await runBuiltCli(home, ["--profile", profileName, "--json", "auth", "status"], nowMs);
+    expect(status.exitCode).toBe(0);
+    expect(JSON.parse(status.stdout)).toMatchObject({
+      authenticated: true,
+      session: { state: "present", expiresAt: new Date(grantExpiry * 1000).toISOString() },
+    });
+    requests.length = 0;
+    const read = await runBuiltCli(home, ["--profile", profileName, "--json", "kv", "get", "KEY"], nowMs);
+    expect(read.exitCode, JSON.stringify(read)).not.toBe(3);
+    expect(requests).toContain("POST /invoke");
+  }
+
+  test.each([
+    ["an expired", 0],
+    ["a live", -60_000],
+  ] as const)("import replaces %s session with the grant", async (_label, importOffsetMs) => {
+    const home = await mkdtemp(join(tmpdir(), "tc-3434-import-"));
+    const sessionExpiry = Math.floor(Date.now() / 1000) + 3600;
+    const grantExpiry = sessionExpiry + 24 * 3600;
+    try {
+      const { grant, artifactPath } = await seedSessionAndLongerGrant(home, "agent", sessionExpiry, grantExpiry);
+      const imported = await runBuiltCli(
+        home,
+        ["--profile", "agent", "--json", "auth", "import", artifactPath],
+        sessionExpiry * 1000 + importOffsetMs,
+      );
+      expect(imported.exitCode, JSON.stringify(imported)).toBe(0);
+      expect(JSON.parse(imported.stdout)).toMatchObject({
+        imported: true,
+        activated: true,
+        delegationCid: grant.cid,
+        expiry: new Date(grantExpiry * 1000).toISOString(),
+      });
+      await expectGrantIsTheSession(home, "agent", grant.cid, grantExpiry, sessionExpiry * 1000);
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  }, 60_000);
+
+  test("logout keeps the profile key, so the grant imports again for the same key", async () => {
+    const home = await mkdtemp(join(tmpdir(), "tc-3434-logout-"));
+    const sessionExpiry = Math.floor(Date.now() / 1000) + 3600;
+    const grantExpiry = sessionExpiry + 24 * 3600;
+    try {
+      const { seeded, grant, artifactPath } = await seedSessionAndLongerGrant(home, "agent", sessionExpiry, grantExpiry);
+      const keyPath = await withTinyCloudStateRoot(home, async () => join(profilePath("agent"), "key.json"));
+      const keyBefore = await readFile(keyPath, "utf8");
+      const logout = await runBuiltCli(home, ["--profile", "agent", "--json", "auth", "logout"]);
+      expect(logout.exitCode, JSON.stringify(logout)).toBe(0);
+      expect(JSON.parse(logout.stdout)).toMatchObject({
+        keyKept: true,
+        message: "Signed out. The key is kept, so a new grant can be imported for it.",
+      });
+      expect(await readFile(keyPath, "utf8")).toBe(keyBefore);
+      expect(await withTinyCloudStateRoot(home, () => readFile(sessionPath("agent"), "utf8").catch(() => null))).toBeNull();
+      const signedOut = await runBuiltCli(home, ["--profile", "agent", "--json", "kv", "get", "KEY"]);
+      expect(signedOut.error).toMatchObject({ code: "AUTH_REQUIRED" });
+
+      const imported = await runBuiltCli(home, ["--profile", "agent", "--json", "auth", "import", artifactPath]);
+      expect(imported.exitCode, JSON.stringify(imported)).toBe(0);
+      expect(await readFile(keyPath, "utf8")).toBe(keyBefore);
+      const session = await withTinyCloudStateRoot(home, async () =>
+        JSON.parse(await readFile(sessionPath("agent"), "utf8")) as { jwk: object; verificationMethod: string });
+      expect(session).toMatchObject({ jwk: seeded.jwk, verificationMethod: seeded.sessionDid });
+      await expectGrantIsTheSession(home, "agent", grant.cid, grantExpiry, sessionExpiry * 1000);
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  }, 60_000);
 });
 
 describe("auth status and whoami report an expired session as signed out (TC-973)", () => {

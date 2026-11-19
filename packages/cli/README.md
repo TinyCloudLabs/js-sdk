@@ -689,6 +689,14 @@ equivalent yet (TC-1309). On macOS and Windows, `replica reset --purge` and
 delete through an unpinned path; leave that tree intact and retry on a supported
 platform.
 
+An agent (delegate-session) profile with no local replica state keeps its key on
+`auth logout`; only `session.json` is removed, and the output says "Signed out.
+The key is kept, so a new grant can be imported for it." (`keyKept: true`).
+`tinycloud auth import` of a grant addressed to that key then makes it the
+profile's session, replacing a live, expired or signed-out one. Every other
+logout deletes the key: "Signed out. The key was deleted; the next sign-in
+creates a new one." (`keyKept: false`).
+
 `auth logout` durably fences replica reads, removes both legacy replicas and the
 flag-owned `replication/` root, and shreds `session.json` and `key.json`. If
 erasure fails, the marker keeps reads denied and startup retries cleanup. An
@@ -724,7 +732,7 @@ record (for example, restored from an older copy) refuses logout; switch the
 default profile if needed, then run `tinycloud profile delete <name>` and sign in
 again.
 
-`auth logout`, `auth rotate`, and replica-enabled `auth login` that replaces the
+`auth logout` (when it deletes the key), `auth rotate`, and replica-enabled `auth login` that replaces the
 profile's share-history key check the sender share history first. If it records
 unexpired shares, or cannot be read, the command refuses with exit 5
 (`SHARE_HISTORY_UNEXPIRED` or `SHARE_HISTORY_UNAVAILABLE`) and changes nothing.
