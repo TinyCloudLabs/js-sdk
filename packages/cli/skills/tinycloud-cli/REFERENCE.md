@@ -327,6 +327,13 @@ equivalent yet (TC-1309).
 On macOS and Windows, `replica reset --purge` and `auth logout` with a legacy
 `replicas/` tree refuse local removal rather than delete through an unpinned
 path. The existing files are retained.
+An agent (delegate-session) profile with no replica gate, pending logout or
+replica root keeps its key on `auth logout` (`keyKept: true`, "Signed out. The
+key is kept, so a new grant can be imported for it. Grants already made for this
+key stay valid until they expire unless the owner revokes them."); `auth import` of a grant
+to that key then replaces its session, live, expired or signed out. Every other
+logout deletes the key (`keyKept: false`, "Signed out. The key was deleted; the
+next sign-in creates a new one.").
 `auth logout` durably denies local replica reads, removes legacy and flag-owned
 files, and shreds both restorable session and key. A pending marker keeps reads
 denied while startup retries erasure. A signed-out profile cannot implicitly

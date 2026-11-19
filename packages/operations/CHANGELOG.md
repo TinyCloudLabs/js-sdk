@@ -1,5 +1,43 @@
 # @tinycloud/operations
 
+## 0.9.1
+
+### Patch Changes
+
+- 0576031: The CLI, the hosted MCP server and Courier now use `https://node.tinycloud.xyz` as the default TinyCloud node, in place of `https://tee.node.tinycloud.xyz`. Profiles that already store a host keep it. To choose a node: for the CLI, pass `--host <url>`, set `TC_HOST` or create a profile with `tinycloud profile create <name> --host <url>`; for the MCP server, set `TC_HOST`; for Courier, pass `--host <url>` or set `COURIER_HOST`.
+
+  Details: TC-2923
+
+- df0de7e: The profile turn lock no longer fails with `Turn N of the turn lock ... is unreadable` when a turn number is published again while another process reads it. A paused process may publish a removed turn number again; a reader that found no owner record and then found the directory present now reads the record again instead of calling the turn damaged. A directory that is still present without an owner record on the second read is damaged, as before.
+
+  Details: TC-3208
+
+- ca8ae20: New hosted connections now find apps saved in the original `default/xyz.tinycloud.agent-data/` layout before making one with the same name. When `tinycloud_apps_context` names one of your own apps that isn't in the new layout, or `tinycloud_apps_write` creates an app, the connection asks the owner for a separate, read-only approval to read the original app list (OpenKey approves one space at a time). Once approved, the older app with that name is used and a duplicate is refused. Listing apps, published apps such as `healthlog`, and apps already in the new layout need no extra approval. If the owner declines, only the call that needed the list stops; retrying it shows the same request. Connections that already read the original list are unchanged.
+
+  Details: TC-3141
+
+- Updated dependencies [0490f71]
+- Updated dependencies [9f3ca26]
+- Updated dependencies [2395340]
+- Updated dependencies [634753d]
+- Updated dependencies [b758e71]
+- Updated dependencies [c7741ab]
+- Updated dependencies [9f3ca26]
+- Updated dependencies [1f961e4]
+- Updated dependencies [400cf7f]
+- Updated dependencies [7399b14]
+  - @tinycloud/sdk-services@3.13.0
+  - @tinycloud/node-sdk@3.13.0
+  - @tinycloud/sdk-core@3.13.0
+
+## 0.9.1-beta.11
+
+### Patch Changes
+
+- df0de7e: The profile turn lock no longer fails with `Turn N of the turn lock ... is unreadable` when a turn number is published again while another process reads it. A paused process may publish a removed turn number again; a reader that found no owner record and then found the directory present now reads the record again instead of calling the turn damaged. A directory that is still present without an owner record on the second read is damaged, as before.
+
+  Details: TC-3208
+
 ## 0.9.1-beta.10
 
 ### Patch Changes

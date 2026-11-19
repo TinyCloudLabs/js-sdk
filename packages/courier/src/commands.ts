@@ -573,7 +573,13 @@ export async function cmdRevoke(args: ParsedArgs) {
   await withProfileTransaction(async (profile, save) => {
     const peer = profile.peers[handle] ?? fail('unknown-peer', `No pairing with ${shown}. If you already revoked it, there's nothing left to do.`);
     const node = await courierNode(profile);
-    await revokePeer(node, profile, handle, save);
+    await revokePeer(node, profile, handle, () => {
+      try { save(); }
+      catch (error) {
+        // A concurrent revoke completed this same removal; never restore its peer or mask a recreated pairing.
+        if (!(error instanceof CourierError) || error.code !== 'peer-revoked' || loadProfile().peers[handle]) throw error;
+      }
+    });
     delete profile.peers[handle];
     save();
     clearLocalCaches();
