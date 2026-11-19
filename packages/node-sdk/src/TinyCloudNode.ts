@@ -7,6 +7,7 @@ import {
   createResourceRoutingFetch,
   routeResourceRequest,
   routingResourceOf,
+  isVaultResourceUri,
   verifyResourceDestination,
   NodeNotRespondingError,
   NodeIdentityMismatchError,
@@ -238,6 +239,7 @@ import {
   serviceError,
   type Result,
   endToEndNodeHost,
+  sessionTouchesVault,
 } from "@tinycloud/sdk-core";
 import {
   parsePermissionHint,
@@ -1875,7 +1877,7 @@ export class TinyCloudNode {
         assertCurrent();
         const activationSignal = AbortSignal.any([signal, graph.signal]);
         if (primary && primary.delegationCid === session.delegationCid) {
-          return this.activateSignedSession(primary, primary.siwe, activationSignal);
+          return this.activateSignedSession(primary, primary.siwe, activationSignal, true);
         }
         return this.activateResourceSession(session.delegationHeader, [spaceId], activationSignal);
       },
@@ -2312,7 +2314,7 @@ export class TinyCloudNode {
         }
       },
       {
-        resolveResource: (resource, access, dataRead) => this.routingDestinations(resource, access, undefined, dataRead),
+        resolveResource: (resource, access, dataRead, endToEnd) => this.routingDestinations(resource, access, undefined, dataRead, endToEnd),
         bindAudience: (authorization, nodeDid) => this.bindRoutedAudience(authorization, nodeDid, session),
         verifyDestination: (target) => verifyResourceDestination(target, globalThis.fetch.bind(globalThis)),
       },
@@ -2329,13 +2331,15 @@ export class TinyCloudNode {
     );
   }
 
-  private async routingDestinations(resource: string, access: ResourceAccess, noEntryHosts?: readonly string[], dataRead?: boolean): Promise<ResourceDestination[]> {
+  private async routingDestinations(resource: string, access: ResourceAccess, noEntryHosts?: readonly string[], dataRead?: boolean, endToEnd?: boolean): Promise<ResourceDestination[]> {
     const destinations = await this.registryDestinations(resource, access, noEntryHosts, dataRead);
-    // Encryption-network traffic carries key material and public keys, so it
-    // only uses the origin whose TLS terminates inside the node (TC-2923). The
+    // Encryption-network traffic carries key material and public keys, and
+    // vault traffic carries secret values and names, so both only use the
+    // origin whose TLS terminates inside the node (TC-2923, TC-2944). The
     // identity check that follows runs against that origin; nothing retries on
     // the other production name.
-    return access === "encryption"
+    // The secrets space is vault data at space level, whatever the caller says.
+    return access === "encryption" || endToEnd || isVaultResourceUri(resource)
       ? destinations.map((destination) => ({ ...destination, url: endToEndNodeHost(destination.url) }))
       : destinations;
   }
@@ -2438,15 +2442,15 @@ export class TinyCloudNode {
     return async (resources, send, options) => {
       graph.assertActive();
       return routeResourceRequest(resources, {
-        resolveResource: async (requestedResource, requestedAccess, dataRead) => {
+        resolveResource: async (requestedResource, requestedAccess, dataRead, endToEnd) => {
           graph.assertActive();
           const targets = placement && requestedResource === placement.parent.spaceId && requestedAccess !== "encryption"
             ? await (await import("@tinycloud/sdk-core/share-placement")).sharePlacementDestinations(placement.record, placement.parent, {
               registryUrl: this.config.tinycloudRegistryUrl ?? undefined, sequenceStore: this.config.registrySequenceStore,
               cacheStore: this.config.registryCacheStore, registryChainId: this.config.registryChainId,
               fetch: rawFetch as typeof fetch,
-            })
-            : await this.routingDestinations(requestedResource, requestedAccess, undefined, dataRead);
+            }).then((destinations) => endToEnd ? destinations.map((destination) => ({ ...destination, url: endToEndNodeHost(destination.url) })) : destinations)
+            : await this.routingDestinations(requestedResource, requestedAccess, undefined, dataRead, endToEnd);
           graph.assertActive();
           return targets;
         },
@@ -3858,7 +3862,8 @@ export class TinyCloudNode {
       if (!session) {
         throw new Error(`Missing bootstrap session for ${step.space}`);
       }
-      const destinations = await this.routingDestinations(step.spaceId, "host");
+      const destinations = await this.routingDestinations(step.spaceId, "host", undefined, undefined,
+        await sessionTouchesVault(session));
       let activated: SpaceHostResult | undefined;
       for (const destination of destinations) {
         try {
@@ -4594,7 +4599,9 @@ export class TinyCloudNode {
       throw new Error("Owned space hosting requires a TinyCloud host");
     }
 
-    const activation = await activateSessionWithHost(host, session.delegationHeader, signal);
+    const activation = await activateSessionWithHost(
+      await sessionTouchesVault(session) ? endToEndNodeHost(host) : host,
+      session.delegationHeader, signal);
     if (activation.success && !activation.skipped?.includes(spaceId)) {
       this.confirmedHostedSpaceIds.add(spaceId);
       return;
@@ -4619,7 +4626,8 @@ export class TinyCloudNode {
 
     if (signal?.aborted) throw signal.reason;
 
-    const retry = await activateSessionWithHost(host, session.delegationHeader, signal);
+    const retry = await activateSessionWithHost(
+      await sessionTouchesVault(session) ? endToEndNodeHost(host) : host, session.delegationHeader, signal);
     if (!retry.success || retry.skipped?.includes(spaceId)) {
       throw Object.assign(
         new Error(
@@ -4684,7 +4692,7 @@ export class TinyCloudNode {
     // hosted for this session.
     if (!this.auth.registryRecordPresent) {
       const activation = await activateSessionWithHost(
-        host,
+        await sessionTouchesVault(session) ? endToEndNodeHost(host) : host,
         session.delegationHeader,
       );
       if (!activation.success || activation.skipped?.includes(spaceId)) {
@@ -7753,8 +7761,11 @@ export class TinyCloudNode {
     resources: Iterable<string>,
     signal: AbortSignal = this._serviceGraph.signal,
     { routedNotFoundIsFault = false }: { routedNotFoundIsFault?: boolean } = {},
+    siwe?: string,
   ): Promise<SpaceHostResult> {
     const targets = new Map<string, { destination: ResourceDestination; spaces: string[] }>();
+    // A grant that names vault data activates only on end-to-end origins.
+    const endToEnd = await sessionTouchesVault({ siwe, delegationHeader });
     const routedSpaces: string[] = [];
     let unserved: NodeNotFoundError | undefined;
     let requestedResource: string | undefined;
@@ -7763,7 +7774,7 @@ export class TinyCloudNode {
       signal?.throwIfAborted();
       try {
         const encryption = resource.startsWith("urn:tinycloud:encryption:");
-        const destinations = await this.routingDestinations(resource, encryption ? "encryption" : "host");
+        const destinations = await this.routingDestinations(resource, encryption ? "encryption" : "host", undefined, undefined, endToEnd);
         if (!encryption && destinations.some(({ nodeDid }) => nodeDid !== undefined)) routedSpaces.push(resource);
         for (const destination of destinations) {
           let target = targets.get(destination.url);
@@ -7842,17 +7853,24 @@ export class TinyCloudNode {
     );
   }
 
+  /**
+   * Activate a signed grant. Only this instance's own session passes
+   * `ownSession`: it is audienced to its session key and is classified by the
+   * vault names it carries. A grant to anyone else is classified by what it
+   * covers, ancestors included.
+   */
   private activateSignedSession(
     session: Pick<TinyCloudSession, "delegationHeader" | "spaceId">,
     siwe: string,
     signal?: AbortSignal,
+    ownSession = false,
   ): Promise<SpaceHostResult> {
     const resources = this.parseRecapWithCaveats(siwe).map((entry) =>
       this.isEncryptionNetworkOperation(this.invocationServiceName(entry.service), entry.path, entry.space) ? entry.path.split("/")[0]!
         : entry.space.startsWith("tinycloud:") ? entry.space : session.spaceId,
     );
     return this.activateResourceSession(session.delegationHeader,
-      resources.length > 0 ? resources : [session.spaceId], signal);
+      resources.length > 0 ? resources : [session.spaceId], signal, {}, ownSession ? siwe : undefined);
   }
 
   /**
