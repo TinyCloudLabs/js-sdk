@@ -29,7 +29,7 @@ declare const signedInUserDid: string;
 declare const deviceGrant: string;
 
 const replica = await openReplica({
-  host: "https://node.tinycloud.xyz",
+  host: "https://tee.node.tinycloud.xyz",
   space: spaceId,
   prefix: "notes/",
   principal: signedInUserDid,
