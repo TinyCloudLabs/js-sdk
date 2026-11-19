@@ -67,7 +67,7 @@ export function registerOnboardCommand(program: Command): void {
         if (options.timeout !== undefined && typeof options.code === "string" && options.code.trim() !== "") {
           throw new CLIError(
             "INVALID_OPTIONS",
-            `--code and --timeout cannot be used together: running the command again would send the same code to the next approval step. Run \`${CLI_NAME} onboard --code <code>\` without --timeout.`,
+            "--timeout can't be used with --code.",
             ExitCode.USAGE_ERROR,
           );
         }
