@@ -604,6 +604,38 @@ export function isStorageFullError(error: { code?: string } | null | undefined):
   );
 }
 
+/** Shown when a write would make a database larger than the node allows for one database. */
+export const DATABASE_SIZE_LIMIT_MESSAGE =
+  "This database has reached its size limit, so this change was not saved. Reading still works. Delete data from this database, or move some of it to another database, to save again.";
+
+/** Shown when a database is already larger than the node will open. */
+export const DATABASE_TOO_LARGE_TO_OPEN_MESSAGE =
+  "This database is larger than TinyCloud can open, so it was not read or changed.";
+
+/**
+ * Classify the node's `507 sql_database_size_limit: ...` (SQL and DuckDB) as
+ * `DATABASE_SIZE_LIMIT`, not retryable. The node sends it for a write that
+ * would take the database past its size limit, and for a database already
+ * too large to open ("... larger than this node loads ..."). Returns
+ * `undefined` for any other response, including the node's
+ * `507 duckdb_disk_headroom` (the node is short of disk, not this database).
+ */
+export function databaseSizeLimitError(
+  service: string,
+  status: number,
+  meta: Record<string, unknown>,
+  errorText: string
+): ServiceError | undefined {
+  const body = errorText.trim();
+  if (status !== 507 || !/^sql_database_size_limit:/.test(body)) return undefined;
+  const message = body.includes("larger than this node loads")
+    ? DATABASE_TOO_LARGE_TO_OPEN_MESSAGE
+    : DATABASE_SIZE_LIMIT_MESSAGE;
+  return serviceError(ErrorCodes.DATABASE_SIZE_LIMIT, message, service, {
+    meta: { ...meta, retryable: false },
+  });
+}
+
 /**
  * Wrap an unknown error in a ServiceError.
  */
