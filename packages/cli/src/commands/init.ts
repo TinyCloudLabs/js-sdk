@@ -9,7 +9,8 @@ import { generateKey } from "../auth/local-key.js";
 import { refreshOpenKeySession } from "./auth.js";
 import { ensureSpaceSetup } from "../auth/space-setup.js";
 import { hasPendingSignIn } from "../auth/approval-request.js";
-import { APPROVAL_TIMEOUT_OPTION_DESCRIPTION, parseApprovalTimeout, spaceSetupTimeoutMs } from "../auth/approval-wait.js";
+import { parseApprovalTimeout, spaceSetupTimeoutMs } from "../auth/approval-wait.js";
+import { SIGN_IN_TIMEOUT_OPTION_DESCRIPTION } from "../auth/sign-in-timeout.js";
 
 /**
  * A new profile with a fresh session key and no sign-in, as `init --key-only`
@@ -47,7 +48,7 @@ export function registerInitCommand(program: Command): void {
     .option("--paste", "Use manual paste mode for authentication")
     .option("--no-popup", "Print the OpenKey URL without opening a browser")
     .option("--default-space <name>", "Default space used when --space is omitted (e.g. applications)")
-    .option("--timeout <duration>", `OpenKey sign-in only (not --paste or --key-only). ${APPROVAL_TIMEOUT_OPTION_DESCRIPTION}`)
+    .option("--timeout <duration>", `OpenKey sign-in only (not --paste or --key-only). ${SIGN_IN_TIMEOUT_OPTION_DESCRIPTION}`)
     .action(async (options, cmd) => {
       try {
         // Refused before anything is created or contacted. A sign-in is one approval: step 1 of 1.

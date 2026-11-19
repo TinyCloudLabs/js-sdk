@@ -56,6 +56,7 @@ function resolveOpenKeyHost(profile: ProfileConfig): string {
 }
 import { startAuthFlow } from "../auth/browser-auth.js";
 import { APPROVAL_TIMEOUT_OPTION_DESCRIPTION, parseApprovalTimeout, spaceSetupTimeoutMs, type ApprovalWait } from "../auth/approval-wait.js";
+import { SIGN_IN_TIMEOUT_OPTION_DESCRIPTION } from "../auth/sign-in-timeout.js";
 import { storedGrantsCovering } from "../auth/covering-grants.js";
 import { approvalCommandIntent, approvalRenewalOf, approvalResultNeedsAck, commitApprovalCommand, completeApprovalResult, pendingApprovalKey, recoverApprovalCommand, trackApprovalResult } from "../auth/approval-request.js";
 import {
@@ -645,7 +646,7 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
     .option("--keys <folder>", "Also let this sign-in create and use encryption keys in this folder (for example `qa`). The node must support named keys. With OpenKey, the first time on a profile also needs `--owner`.")
     .option("--replication-prefix <prefix>", "Add replication get+sync authority for a folder prefix ending in /, or root (repeatable)", (prefix: string, values: string[] = []) => [...values, prefix])
     .option("--replication-allow-secrets", "Allow replication of secret material (network-wide decrypt warning)")
-    .option("--timeout <duration>", `OpenKey sign-in only (not --device, --paste, --keys or replication). ${APPROVAL_TIMEOUT_OPTION_DESCRIPTION}`)
+    .option("--timeout <duration>", `OpenKey sign-in only (not --device, --paste, --keys or replication). ${SIGN_IN_TIMEOUT_OPTION_DESCRIPTION}`)
     .action(async (options, cmd) => {
       try {
         // Refused before anything is created or contacted. A sign-in is one approval: step 1 of 1.

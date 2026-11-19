@@ -237,3 +237,20 @@ describe("init --timeout", () => {
     expect(await profileExists("init-refused")).toBe(false);
   });
 });
+
+describe.each([
+  ["auth login", ["auth", "login", "--help"], "OpenKey sign-in only (not --device, --paste, --keys or replication)."],
+  ["init", ["init", "--help"], "OpenKey sign-in only (not --paste or --key-only)."],
+])("%s --help", (_name, args, prefix) => {
+  test("documents --timeout with the sign-in text, not the onboard text", async () => {
+    const result = await cli("help", args);
+    expect(result.exitCode).toBe(0);
+    // Help wraps long lines; compare the text with its whitespace collapsed.
+    const help = result.stdout.replace(/\s+/g, " ");
+    expect(help).toContain(`--timeout <duration> ${prefix} Wait at most this long for the owner's OpenKey approval`);
+    expect(help).toContain('Exits 8 with {"pending":{"step","of","approvalUrl","expiresAt"}} on stdout');
+    expect(help).toContain("That isn't a failure: the same command resumes the saved request.");
+    expect(help).toContain("it also waits for OpenKey to host the space");
+    expect(help).not.toMatch(/onboard|step 2/);
+  });
+});
