@@ -1,5 +1,28 @@
 # @tinycloud/cli
 
+## 1.8.0-beta.10
+
+### Minor Changes
+
+- c7741ab: New `tinycloud feed disconnect --agent <token>`: an owner removes a connected agent in one step. It reads the grant ID from the owner's feed registry, revokes the grant with the profile's own key (no OpenKey approval), then removes the registry row; a failed revoke leaves the row so it can be retried. Before, `delegation revoke <cid>` from the owner profile failed with TARGET_NOT_FOUND because the owner session cannot list the grants it issued and the CLI kept no record of a `feed connect` grant.
+
+  Details: TC-3150
+
+### Patch Changes
+
+- 92f9309: `tinycloud profile show` prints only its documented fields.
+
+  Details: TC-2652
+
+- 91f4a95: Internal changes for profiles; nothing in the CLI's commands changes.
+
+  Details: TC-2653
+
+- Updated dependencies [c7741ab]
+  - @tinycloud/sdk-core@3.13.0-beta.5
+  - @tinycloud/node-sdk@3.13.0-beta.5
+  - @tinycloud/operations@0.9.1-beta.6
+
 ## 1.8.0-beta.9
 
 ### Patch Changes
