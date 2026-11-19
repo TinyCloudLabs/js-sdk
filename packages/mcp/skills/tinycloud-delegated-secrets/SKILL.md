@@ -1,3 +1,8 @@
+---
+name: tinycloud-delegated-secrets
+description: Use the TinyCloud MCP tools to explore a user's TinyCloud spaces, KV and SQL data and to read their secrets with authority the owner approves, without ever asking for secret values or keys.
+---
+
 # TinyCloud delegated exploration and secrets
 
 Use the TinyCloud MCP tools as a resumable authority workflow. Never ask for
