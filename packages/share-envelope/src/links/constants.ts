@@ -55,3 +55,8 @@ export const DEFAULT_LINKS_API_ORIGIN = "https://api.tinycloud.xyz";
 /** Path of the full form, which carries the whole record in the fragment. */
 export const FULL_LINK_PATH = "/s/full";
 export const LINK_ID_PATTERN = /^[a-z2-7]{26}$/;
+
+/** What the CLI and Courier wait between approval-result polls. */
+export const APPROVAL_POLL_INTERVAL_MS = 2000;
+/** The longest one approval-result request may take (the request limit). */
+export const APPROVAL_REQUEST_TIMEOUT_MS = 10_000;
