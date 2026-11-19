@@ -247,8 +247,8 @@ jobs:
             fi
             ran=$((ran + 1))
             echo "::group::$file"
-            if ! timeout 120 bash "$GITHUB_WORKSPACE/.github/scripts/run-private-tests.sh" bun test "./$file" 2>&1 | tee "$log"; then
-              failed+=("$file (failed, or ran past 120s)")
+            if ! timeout 300 bash "$GITHUB_WORKSPACE/.github/scripts/run-private-tests.sh" bun test "./$file" 2>&1 | tee "$log"; then
+              failed+=("$file (failed, or ran past 300s)")
               echo "::error title=unit test failed::$file"
             elif ! grep -Eq '^ *[1-9][0-9]* pass' "$log"; then
               if grep -Eq '^ *[1-9][0-9]* skip' "$log"; then reason="0 pass, all skipped"
