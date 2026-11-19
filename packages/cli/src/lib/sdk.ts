@@ -566,7 +566,7 @@ export async function ensureAuthenticated(
   if (!session) {
     throw new CLIError(
       "AUTH_REQUIRED",
-      `Not authenticated. Run \`${CLI_NAME} auth login\` or \`${CLI_NAME} init\` first.`,
+      `This computer isn't signed in. \`${CLI_NAME} onboard\` asks the owner for approval and waits for it.`,
       ExitCode.AUTH_REQUIRED,
     );
   }
