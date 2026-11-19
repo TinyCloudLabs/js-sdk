@@ -189,6 +189,14 @@ retried with the same DID and resources. The agent receives read/write on
 response-write or schema authority. Display labels and tokens select resources;
 the signed grants determine access.
 
+To take an agent off the feed, run `tinycloud --profile owner feed disconnect --agent writer`
+with the profile that ran `connect`. It reads the grant's ID from the owner registry, revokes the
+grant with that profile's own key (no OpenKey approval and no `delegation revoke <cid>` lookup),
+and only then removes the registry row, so a failed revoke can be retried. If the node answers `404 Space not found`
+(it has no such delegation: never activated, or pruned), there is nothing left to revoke: the row
+is removed and the result says `"revoked": false, "nodeHadNoGrant": true`. Any other 404 (a proxy, an older node)
+is a failure and leaves the row. The token stays reserved for the same agent DID.
+
 Publish `card.json` from the agent profile:
 
 ```json
