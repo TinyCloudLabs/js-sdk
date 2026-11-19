@@ -115,19 +115,19 @@ describe("a full approval", () => {
     expect(h.stored()!.retainUntil).toBe(iso(E + 3_600_000));
   });
 
-  test("an ack that cannot be sent is exit 0 with a warning and the committed entry kept for the next run", async () => {
+  test("an ack that cannot be sent is exit 6 with a warning and the committed entry kept for the next run", async () => {
     const h = harness(entryIn("committed"), { ack: [{ kind: "network" }] });
     const result = await driveApproval(h.io, entryIn("committed").requestId);
-    expect(result).toMatchObject({ outcome: { kind: "completed", warning: "ack-pending" }, exitCode: 0 });
+    expect(result).toMatchObject({ outcome: { kind: "completed", warning: "ack-pending" }, exitCode: 6 });
     expect(h.stored()!.phase).toBe("committed");
   });
 });
 
 describe("terminal answers drop the entry and its keys", () => {
-  test("denied: removed, exit 11, no further call", async () => {
+  test("denied: removed, exit 3, no further call", async () => {
     const h = harness(entryIn("open", { staged: true }), { discover: [{ kind: "error", call: "discover", status: 410, code: "request_denied" }] });
     const result = await driveApproval(h.io, entryIn("open").requestId);
-    expect(result).toMatchObject({ outcome: { kind: "denied" }, exitCode: 11 });
+    expect(result).toMatchObject({ outcome: { kind: "denied" }, exitCode: 3 });
     expect(h.stored()).toBeUndefined();
     expect(h.log).toEqual(["call:discover", "remove"]);
   });

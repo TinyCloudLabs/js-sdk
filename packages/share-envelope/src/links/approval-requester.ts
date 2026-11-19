@@ -141,8 +141,11 @@ export function requesterState(entry: ApprovalEntry): LiveState {
 // ---------------------------------------------------------------------------------------------------------------
 // The exit table
 
-/** One exit number per outcome. Image: {0,3,5,6,7,8,11,12}; 9, 10 and 126..130 belong to other commands and are never used. */
-export const APPROVAL_EXIT: Readonly<Record<Outcome["kind"], 0 | 3 | 5 | 6 | 7 | 8 | 11 | 12>> = {
+/**
+ * One exit number per outcome. Image: {0,3,5,6,7,8,12}; 9, 10 and 126..130 belong to other commands and are never used. A declined
+ * request is 3, like an expired one; a `completed` run whose ack failed after the grant was saved is 6 (see `exitCodeOf`).
+ */
+export const APPROVAL_EXIT: Readonly<Record<Outcome["kind"], 0 | 3 | 5 | 6 | 7 | 8 | 12>> = {
   completed: 0,
   /** The caller removed the request itself; the number is only used if a caller prints it. */
   abandoned: 3,
@@ -153,11 +156,13 @@ export const APPROVAL_EXIT: Readonly<Record<Outcome["kind"], 0 | 3 | 5 | 6 | 7 |
   unexpected: 7,
   internal: 7,
   pending: 8,
-  denied: 11,
+  denied: 3,
   clock: 12,
 };
 
 export function exitCodeOf(outcome: Outcome): number {
+  // The grant is saved but OpenKey never confirmed the ack: network trouble (6), not a plain success.
+  if (outcome.kind === "completed" && (outcome.warning === "ack-pending" || outcome.warning === "ack-expired")) return 6;
   return APPROVAL_EXIT[outcome.kind];
 }
 

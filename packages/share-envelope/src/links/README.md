@@ -60,7 +60,7 @@ command entries). A kept-by-clock `hold` is a flag, not a phase: the next run re
 | discover 202 | continue | keep |
 | discover 200 | `discovered` | keep |
 | discover 410 `expired_request` | `lapsed` (3) | drop |
-| discover 410 `expired_request` + `status:"denied"` (or code `request_denied`) | `denied` (11) | drop |
+| discover 410 `expired_request` + `status:"denied"` (or code `request_denied`) | `denied` (3) | drop |
 | discover 400 `invalid_request` | `refused` (5), never an expiry | drop |
 | discover 404 `not_found` | `lapsed` (3) | drop |
 | discover 410 `expired_result`; fetch 404 / 410 / 409 `acknowledged` | `gone` (3) | drop |
@@ -68,21 +68,22 @@ command entries). A kept-by-clock `hold` is a flag, not a phase: the next run re
 | 401 `invalid_proof` on discover, clock > 45 s off the `Date` header, before `E + S` | `clock` (12) | keep, held |
 | 401 `invalid_proof` on fetch or ack, clock > 45 s off | `clock` (12) | keep, held, until `purgeAt` |
 | 401 `invalid_proof` on fetch or ack, clock sane or `Date` missing | `unexpected` (7): an approved result is never dropped by a 401 | keep until `purgeAt` |
-| a committed entry reaches `purgeAt` (the grant is saved, the ack never went through) | `completed` (0) with an `ack-expired` warning | drop, keys purged |
+| a committed entry reaches `purgeAt` (the grant is saved, the ack never went through) | `completed` with an `ack-expired` warning (6) | drop, keys purged |
 | 401 `invalid_proof` on discover after `E + S` | `lapsed` (3) | drop |
 | 401 `invalid_proof` on discover, clock sane or `Date` missing | `refused` (5) | drop |
 | anything else, 5 in a row | `unexpected` (7) | keep until `purgeAt` |
 | no answer until the deadline | resumed: `unreachable` (6), kept; created this run, or a 202 seen this run and `now < E`: `pending` (8) | keep |
 | ack 200 / 404 / 409 / 410 | `completed` (0) | drop, or keep key-free until `retainUntil` |
-| ack failure (network, other) | `completed` (0) with an `ack-pending` warning | keep (committed) |
+| ack failure (network, other) | `completed` with an `ack-pending` warning (6) | keep (committed) |
 
-`APPROVAL_EXIT`: completed 0, lapsed / gone / abandoned 3, refused 5, unreachable 6, unexpected / internal 7, pending 8, denied 11,
-clock 12. The CLI and Courier still print and exit with their own numbers until they adopt the machine; `collectApprovalResult`
-and `refuse` are unchanged until then.
+`APPROVAL_EXIT`: completed 0, lapsed / gone / abandoned / denied 3, refused 5, unreachable 6, unexpected / internal 7, pending 8,
+clock 12. `exitCodeOf` returns 6 for a `completed` outcome with an `ack-pending` or `ack-expired` warning: the grant is saved, but
+OpenKey never confirmed the ack. The CLI and Courier still print and exit with their own numbers until they adopt the machine;
+`collectApprovalResult` and `refuse` are unchanged until then.
 
 `unexpected` and `clock` outcomes carry `grantSaved: true` when the entry is `committed`: the caller's commit already succeeded and only
 the acknowledgement is outstanding (for example a 401 on the ack). An adapter must not report a failed sign-in for it. The entry is
-kept until `purgeAt`, then ends `completed` with an `ack-expired` warning (exit 0). The field is absent for every other outcome.
+kept until `purgeAt`, then ends `completed` with an `ack-expired` warning (exit 6). The field is absent for every other outcome.
 
 ### The file
 

@@ -62,7 +62,7 @@ const ROWS: readonly Row[] = [
   { name: "network", event: replyEvent({ kind: "network" }), expect: { open: sleeping, discovered: go("discovered", "sleep"), committed: stop("completed", 0) } },
   // discover
   { name: "discover 410 expired_request", event: replyEvent(err("discover", "expired_request", 410)), expect: { open: drop("lapsed", 3) } },
-  { name: "discover 410 request_denied", event: replyEvent(err("discover", "request_denied", 410)), expect: { open: drop("denied", 11) } },
+  { name: "discover 410 request_denied", event: replyEvent(err("discover", "request_denied", 410)), expect: { open: drop("denied", 3) } },
   { name: "discover 400 invalid_request", event: replyEvent(err("discover", "invalid_request")), expect: { open: drop("refused", 5) } },
   { name: "discover 404 not_found", event: replyEvent(err("discover", "not_found", 404)), expect: { open: drop("lapsed", 3) } },
   { name: "discover 410 expired_result", event: replyEvent(err("discover", "expired_result", 410)), expect: { open: drop("gone", 3) } },
@@ -231,14 +231,14 @@ describe("RULES is the one code table and matches the contract", () => {
   });
 });
 
-describe("denied is a terminal state: dropped, never reopened, exit 11", () => {
+describe("denied is a terminal state: dropped, never reopened, exit 3", () => {
   test("drops the entry and both private keys", () => {
     const entry = entryIn("open", { staged: true });
     const step = reduce(liveState(entry), replyEvent(err("discover", "request_denied", 410)));
     expect(step.state.entry).toBeUndefined();
     expect(step.effects[0]).toEqual({ type: "purge", requestId: entry.requestId, keys: ["relayPrivateKey", "stagedSigningKey"], entry: "remove" });
     expect(finishOf(step)).toEqual({ kind: "denied" });
-    expect(exitCodeOf({ kind: "denied" })).toBe(11);
+    expect(exitCodeOf({ kind: "denied" })).toBe(3);
   });
 
   test("later replies, ticks and even a new run cannot reopen it", () => {
@@ -414,15 +414,15 @@ describe("local expiry and purge time come from the signed header", () => {
 });
 
 describe("the exit table", () => {
-  test("one number per outcome, drawn from {0,3,5,6,7,8,11,12}, disjoint from the reserved codes", () => {
-    const allowed = new Set([0, 3, 5, 6, 7, 8, 11, 12]);
+  test("one number per outcome, drawn from {0,3,5,6,7,8,12}, disjoint from the reserved codes", () => {
+    const allowed = new Set([0, 3, 5, 6, 7, 8, 12]);
     const kinds = ["completed", "pending", "unreachable", "unexpected", "lapsed", "gone", "refused", "denied", "clock", "abandoned", "internal"] as const;
     expect(Object.keys(APPROVAL_EXIT).sort()).toEqual([...kinds].sort());
     for (const kind of kinds) {
       expect(allowed.has(APPROVAL_EXIT[kind])).toBe(true);
       expect([9, 10, 126, 127, 128, 129, 130]).not.toContain(APPROVAL_EXIT[kind]);
     }
-    expect(APPROVAL_EXIT).toMatchObject({ completed: 0, pending: 8, unreachable: 6, unexpected: 7, lapsed: 3, gone: 3, refused: 5, denied: 11, clock: 12 });
+    expect(APPROVAL_EXIT).toMatchObject({ completed: 0, pending: 8, unreachable: 6, unexpected: 7, lapsed: 3, gone: 3, refused: 5, denied: 3, clock: 12 });
   });
 });
 
@@ -585,11 +585,11 @@ describe("a 401 never drops an approved result: fetch and ack keep the entry, bo
 });
 
 describe("a committed entry that reaches its purge time completes with a warning: the grant is saved", () => {
-  test("outcome completed + ack-expired warning (exit 0), the entry and its relay key dropped the same way", () => {
+  test("outcome completed + ack-expired warning (exit 6), the entry and its relay key dropped the same way", () => {
     const entry = entryIn("committed");
     const step = reduce(liveState(entry), { type: "tick", now: purgeAt(entry) });
     expect(finishOf(step)).toEqual({ kind: "completed", warning: "ack-expired" });
-    expect(exitCodeOf(finishOf(step)!)).toBe(0);
+    expect(exitCodeOf(finishOf(step)!)).toBe(6);
     expect(step.state.entry).toBeUndefined();
     expect(step.effects[0]).toEqual({ type: "purge", requestId: entry.requestId, keys: ["relayPrivateKey"], entry: "remove" });
   });

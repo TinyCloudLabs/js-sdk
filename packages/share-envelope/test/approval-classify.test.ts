@@ -111,10 +111,10 @@ describe("end to end: wire answer -> classifyReply -> reduce", () => {
   };
   const outcomeOf = (step: Step) => { const last = step.effects[step.effects.length - 1]!; return last.type === "finish" ? last.outcome : undefined; };
 
-  test("410 + status denied -> denied, exit 11, entry and keys dropped", () => {
+  test("410 + status denied -> denied, exit 3, entry and keys dropped", () => {
     const step = run(410, { code: "expired_request", status: "denied", deniedAt: "2026-11-03T12:00:00.000Z" });
     expect(outcomeOf(step)).toEqual({ kind: "denied" });
-    expect(exitCodeOf(outcomeOf(step)!)).toBe(11);
+    expect(exitCodeOf(outcomeOf(step)!)).toBe(3);
     expect(step.state.entry).toBeUndefined();
     expect(step.effects[0]).toMatchObject({ type: "purge", keys: ["relayPrivateKey", "stagedSigningKey"] });
   });
