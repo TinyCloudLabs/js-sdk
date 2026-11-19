@@ -42,6 +42,9 @@ export function linkAbortSignal(
   return { signal: combined.signal, release: () => own.removeEventListener("abort", onOwn) };
 }
 
+/** Statuses a Response cannot carry a body for. */
+const NULL_BODY_STATUS = new Set([101, 103, 204, 205, 304]);
+
 /**
  * Call `release` when `response`'s body is done, so the long-lived signal stays linked for as long as the body can
  * still be read: aborting it cancels a body in flight. `release` runs when the body is read to the end, cancelled or
@@ -54,7 +57,8 @@ export function linkAbortSignal(
  * original's status, status text and headers; `url`, `redirected` and `type` are not carried over.
  */
 export function releaseWithBody<T extends FetchResponse>(response: T, release: () => void, idleMs = UNREAD_BODY_MS): T {
-  const body = response instanceof Response ? response.body : null;
+  // Browsers hand a 204 (or 205, 304) a body object even though a Response cannot be built over one: no body to hold.
+  const body = response instanceof Response && !NULL_BODY_STATUS.has(response.status) ? response.body : null;
   if (!body) {
     release();
     return response;
