@@ -41,17 +41,17 @@ jobs:
     steps:
       # The deploy key is not left in git config or ~/.ssh for install and
       # build steps; only the push step below uses it.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
           persist-credentials: false
 
-      - uses: oven-sh/setup-bun@v1
+      - uses: oven-sh/setup-bun@f4d14e03ff726c06358e5557344e1da148b56cf7 # v1
         with:
           bun-version: latest
           no-cache: true
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
         with:
           targets: wasm32-unknown-unknown
 
@@ -151,7 +151,7 @@ jobs:
 
       - name: Setup Node for npm publish
         if: steps.check.outputs.pending != '0'
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '20'
           registry-url: 'https://registry.npmjs.org'
@@ -270,7 +270,7 @@ jobs:
       # separate job so that only it holds contents: write.
       - name: Keep the publish log for beta-github-releases
         if: always() && steps.published.outputs.published == 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: beta-publish-log
           path: ${{ runner.temp }}/announce/changeset-publish.log
@@ -311,7 +311,7 @@ jobs:
       published: ${{ steps.published.outputs.published }}
       release-sha: ${{ steps.unfinished.outputs.sha }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
           ref: master
@@ -322,12 +322,12 @@ jobs:
       - name: Keep the release scripts
         run: cp -R .github/scripts "$RUNNER_TEMP/release-scripts"
 
-      - uses: oven-sh/setup-bun@v1
+      - uses: oven-sh/setup-bun@f4d14e03ff726c06358e5557344e1da148b56cf7 # v1
         with:
           bun-version: latest
           no-cache: true
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
         with:
           targets: wasm32-unknown-unknown
 
@@ -377,7 +377,7 @@ jobs:
 
       - name: Setup Node for npm publish
         if: steps.unfinished.outputs.sha != ''
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '20'
           registry-url: 'https://registry.npmjs.org'
@@ -447,7 +447,7 @@ jobs:
 
       - name: Keep the publish log for beta-github-releases
         if: always() && steps.published.outputs.published == 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: beta-publish-log
           path: ${{ runner.temp }}/announce/changeset-publish.log
@@ -473,16 +473,16 @@ jobs:
       # Checked out at the version commit the beta job published, so the
       # CHANGELOG sections match the published versions. That commit's copy of
       # the script is the one the beta job ran.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ needs.beta.outputs.release-sha || needs.beta-resume.outputs.release-sha }}
           persist-credentials: false
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '20'
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: beta-publish-log
           path: ${{ runner.temp }}/beta-publish
@@ -508,7 +508,7 @@ jobs:
     steps:
       # The deploy key is not left in git config or ~/.ssh for install and
       # build steps; only the push step below uses it.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
           ref: master
@@ -519,12 +519,12 @@ jobs:
       - name: Keep the GitHub release script
         run: cp .github/scripts/github-releases.mjs "$RUNNER_TEMP/github-releases.mjs"
 
-      - uses: oven-sh/setup-bun@v1
+      - uses: oven-sh/setup-bun@f4d14e03ff726c06358e5557344e1da148b56cf7 # v1
         with:
           bun-version: latest
           no-cache: true
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
         with:
           targets: wasm32-unknown-unknown
 
@@ -669,7 +669,7 @@ jobs:
           GIT_SSH_COMMAND: ssh -F /dev/null -i ${{ runner.temp }}/release-ssh/id -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=${{ runner.temp }}/release-ssh/known_hosts -o GlobalKnownHostsFile=/dev/null
 
       - name: Setup Node for npm publish
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '20'
           registry-url: 'https://registry.npmjs.org'
