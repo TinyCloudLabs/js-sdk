@@ -35,6 +35,7 @@ jobs:
       build: ${{ steps.pick.outputs.build }}
       deploy: ${{ steps.pick.outputs.deploy }}
       version: ${{ steps.pick.outputs.version }}
+      stable: ${{ steps.pick.outputs.stable }}
     steps:
       - name: Pick the image to deploy
         id: pick
@@ -71,6 +72,12 @@ jobs:
             fi
             echo "image=ghcr.io/tinycloudlabs/tinycloud-mcp:$PACKAGE_VERSION" >> "$GITHUB_OUTPUT"
             echo "version=$PACKAGE_VERSION" >> "$GITHUB_OUTPUT"
+            # :latest is what the self-hosting docs run, so only a stable x.y.z build may move it.
+            if [[ "$PACKAGE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "stable=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "stable=false" >> "$GITHUB_OUTPUT"
+            fi
             echo "build=true" >> "$GITHUB_OUTPUT"
           else
             echo "::error::Set package_version to build and deploy, or image_digest to redeploy an existing image"
@@ -180,7 +187,7 @@ jobs:
           build-args: TINYCLOUD_MCP_VERSION=${{ needs.resolve.outputs.version }}
           tags: |
             ghcr.io/tinycloudlabs/tinycloud-mcp:${{ needs.resolve.outputs.version }}
-            ghcr.io/tinycloudlabs/tinycloud-mcp:latest
+            ${{ needs.resolve.outputs.stable == 'true' && 'ghcr.io/tinycloudlabs/tinycloud-mcp:latest' || '' }}
   deploy:
     needs: [resolve, preflight, image]
     # A digest redeploy skips the image job; deploy after a successful build or that skip only.

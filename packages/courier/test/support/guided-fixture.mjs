@@ -7,6 +7,7 @@ import { NodeWasmBindings, PrivateKeySigner } from '@tinycloud/node-sdk';
 import { checkLinkRecord, linkIssuerPublicKey } from '@tinycloud/share-envelope/links';
 import { canonicalize } from '@tinycloud/share-envelope';
 import { AGENT_GRANT, COURIER_SPACE } from '../../dist/keys.js';
+import { courierRegistryFixtureEnv } from './registry-fixture.mjs';
 
 const wasm = new NodeWasmBindings();
 const bare = (did) => did.split('#')[0];
@@ -81,6 +82,17 @@ export async function createGuidedFixture(root, cli = new URL('../../dist/cli.js
       authorize(invocation);
       requests.push({ route: 'invoke', payload: invocation, headers: req.headers });
       const entries = Object.entries(invocation.att ?? {});
+      if (entries.length > 1 && entries.every(([, abilities]) => Object.keys(abilities).join() === 'tinycloud.kv/get')) {
+        // A batch read: one result per key, in request order, as the node answers it.
+        return send(res, 200, { results: entries.map(([resource]) => {
+          const at = resource.indexOf('/kv/');
+          const key = resource.slice(at + 4);
+          const row = values.get(`${resource.slice(0, at)}/${key}`);
+          return row
+            ? { key, ok: true, dataBase64: Buffer.from(row.bytes).toString('base64'), headers: { etag: row.etag, 'content-type': 'application/json' } }
+            : { key, ok: false, error: { code: 'KV_NOT_FOUND', message: 'Key not found' } };
+        }) });
+      }
       if (entries.length !== 1) throw new Error(`unsupported invocation payload ${JSON.stringify(invocation)}`);
       const [resource, actions] = entries[0];
       const action = Object.keys(actions)[0];
@@ -112,7 +124,7 @@ export async function createGuidedFixture(root, cli = new URL('../../dist/cli.js
   });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   const host = `https://127.0.0.1:${server.address().port}`;
-  const envFor = (home) => ({ ...process.env, HOME: home, COURIER_HOME: home, NODE_EXTRA_CA_CERTS: cert, COURIER_LINKS_API_ORIGIN: host, COURIER_LINK_ORIGIN: host });
+  const envFor = (home) => ({ ...courierRegistryFixtureEnv(home, host), NODE_EXTRA_CA_CERTS: cert, COURIER_LINKS_API_ORIGIN: host, COURIER_LINK_ORIGIN: host });
   async function home(name, ownerPrivateKey = randomBytes(32).toString('hex')) {
     const dir = path.join(root, name);
     fs.mkdirSync(dir, { mode: 0o700 });

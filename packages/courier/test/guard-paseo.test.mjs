@@ -21,6 +21,7 @@ test('the project guard replaces all hooks and settings except deny rules, and i
       permissions: { allow: ['Bash(ls:*)'], deny: ['Bash(rm:*)'] }, model: 'x', disableAllHooks: true,
       hooks: { PreToolUse: [{ matcher: 'Bash', hooks: [{ type: 'command', command: 'echo mine' }] }, { matcher: '*', hooks: [{ type: 'command', command: "COURIER_HOME='/old' '/old/node' '/old/cli.js' 'guard' || exit 2" }] }] },
     }), { mode: 0o640 });
+    fs.chmodSync(file, 0o640);
     installProjectGuard(cwd, home, guard);
     const merged = JSON.parse(fs.readFileSync(file, 'utf8'));
     assert.equal(merged.disableAllHooks, false);

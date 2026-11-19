@@ -43,12 +43,14 @@ import type { McpOperationInvocation } from "./tools.js";
 import { MCP_VERSION } from "./version.js";
 
 const REQUIRED_SCOPE = "tinycloud:mcp";
+const MCP_CORS_ALLOWED_HEADERS =
+  "Authorization, Content-Type, Accept, Mcp-Protocol-Version, Mcp-Session-Id, Last-Event-ID, Mcp-Method, Mcp-Name";
+const MCP_CORS_EXPOSED_HEADERS = "WWW-Authenticate, Mcp-Session-Id, Mcp-Protocol-Version";
 const LOCAL_CLI_PACKAGE = ["@tinycloud", "cli"].join("/");
 const LOCAL_MCP_PACKAGE = ["@tinycloud", "mcp"].join("/");
 
 export interface HostedMcpConfig extends RemoteStoreConfig {
   readonly oauthMetadata: OAuthMetadata;
-  readonly allowedOrigins?: readonly string[];
   /**
    * OpenKey token introspection client (`TC_MCP_INTROSPECTION_URL` and client
    * credentials). The hosted server always sets this; without it only the
@@ -62,34 +64,58 @@ export interface HostedMcpApp {
   readonly close: () => Promise<void>;
 }
 
+/**
+ * Path prefixes of the restricted personal-record addresses: the ChatGPT
+ * plugin's, and one for each assistant directory that lists TinyCloud, so a
+ * change one directory's review demands does not alter what another lists.
+ * Each is its own OAuth resource at `<prefix>/mcp` with its own approval route
+ * and tenant state. All register the same tools.
+ */
+const RESTRICTED_ADDRESS_PREFIXES = ["chatgpt", "claude", "grok", "muse"] as const;
+
+/**
+ * Addresses whose tools repeat their title as `annotations.title`. Claude's
+ * directory takes each tool's listing name from there and suggests adding it
+ * when it is missing. The other directories list the tools as they are.
+ */
+const ANNOTATION_TITLE_PREFIXES: ReadonlySet<string> = new Set(["claude"]);
+
 export function createHostedMcpApp(config: HostedMcpConfig): HostedMcpApp {
   if (config.nativeServiceCredential !== undefined &&
     Buffer.byteLength(config.nativeServiceCredential, "utf8") < 32) {
     throw new Error("TC_MCP_NATIVE_SERVICE_CREDENTIAL must contain at least 32 bytes.");
   }
   const resourceUrl = canonicalResourceUrl(config.publicUrl);
-  const pluginUrl = new URL("./chatgpt/mcp", resourceUrl);
   const statusFor = (resource: URL): TokenStatusChecker | undefined =>
     config.introspection === undefined
       ? undefined
       : createTokenStatusChecker({ ...config.introspection, resourceUrl: resource.toString() });
   const hosted = createHostedSurface(config, resourceUrl, "hosted", statusFor(resourceUrl));
-  const plugin = createHostedSurface({
-    ...config,
-    nativeServiceCredential: undefined,
-    stateDir: join(config.stateDir, "chatgpt"),
-    approvalPath: new URL("./connect", pluginUrl).pathname,
-  }, pluginUrl, "public", statusFor(pluginUrl));
-  const pluginPaths: Record<string, true> = {
-    [pluginUrl.pathname]: true,
-    [new URL("./connect", pluginUrl).pathname]: true,
-    [new URL("./connect/callback", pluginUrl).pathname]: true,
-    [new URL(getOAuthProtectedResourceMetadataUrl(pluginUrl)).pathname]: true,
-  };
+  const surfaces = [hosted];
+  const restrictedByPath = new Map<string, HostedMcpApp>();
+  for (const prefix of RESTRICTED_ADDRESS_PREFIXES) {
+    const restrictedUrl = new URL(`./${prefix}/mcp`, resourceUrl);
+    const connectUrl = new URL("./connect", restrictedUrl);
+    const restricted = createHostedSurface({
+      ...config,
+      nativeServiceCredential: undefined,
+      stateDir: join(config.stateDir, prefix),
+      approvalPath: connectUrl.pathname,
+    }, restrictedUrl, "public", statusFor(restrictedUrl), ANNOTATION_TITLE_PREFIXES.has(prefix));
+    surfaces.push(restricted);
+    for (const owned of [
+      restrictedUrl,
+      connectUrl,
+      new URL("./connect/callback", restrictedUrl),
+      new URL(getOAuthProtectedResourceMetadataUrl(restrictedUrl)),
+    ]) {
+      restrictedByPath.set(owned.pathname, restricted);
+    }
+  }
   return {
-    fetch: (request) => (pluginPaths[new URL(request.url).pathname] === true ? plugin : hosted).fetch(request),
+    fetch: (request) => (restrictedByPath.get(new URL(request.url).pathname) ?? hosted).fetch(request),
     close: async () => {
-      await Promise.all([hosted.close(), plugin.close()]);
+      await Promise.all(surfaces.map((surface) => surface.close()));
     },
   };
 }
@@ -99,6 +125,7 @@ function createHostedSurface(
   resourceUrl: URL,
   surface: "hosted" | "public",
   tokenStatus: TokenStatusChecker | undefined,
+  annotationTitles = false,
 ): HostedMcpApp {
   const connectPath = config.approvalPath ?? "/connect";
   const callbackPath = `${connectPath}/callback`;
@@ -139,8 +166,8 @@ function createHostedSurface(
         instructions: nativeOwner === undefined
           ? surface === "public"
             ? "Use TinyCloud only for the user's requested task. Call tinycloud_connect first. If an operation returns authority_required, present approval.url and wait for the user's approval before retrying. If approval is declined, stop that operation. For personal records, call tinycloud_apps_context first. Never request or store passwords, API keys, authentication codes, government identifiers, payment-card data, or protected health information."
-            : "Call tinycloud_connect first. If an operation returns authority_required, open approval.url, then retry that operation unchanged. For personal records such as weight, workouts, goals or todos, call tinycloud_apps_context first."
-          : "Use only the user's requested connector-transcript data. The signed TinyCloud grant authorizes read-only SQL and transcript KV reads.",
+            : "Call tinycloud_connect first. If an operation returns authority_required, present approval.url and wait for approval before retrying unchanged. For personal records such as weight, workouts, goals or todos, call tinycloud_apps_context first. Other app data can be discovered with account-space listing, KV cursors and SQL schema/query tools without a knowledge bundle. If the user wants reusable read access, explicitly select prefixes/databases with tinycloud_auth_read_scope; never silently broaden a key read. Use tinycloud_read for complete bounded KV/SQL delivery and replay its continuation with the original resource."
+          : "Use only the user's requested connector-transcript data. The signed TinyCloud grant authorizes read-only SQL and transcript KV reads. Use tinycloud_read for large values, retaining the original resource and returned digest-bound continuation.",
       },
     );
     registerTinyCloudTools(server, {
@@ -149,8 +176,9 @@ function createHostedSurface(
       explicitProfile: true,
       allowOwnerProfile: false,
       stateRoot,
+      annotationTitles,
       ...(nativeOwner === undefined ? {} : {
-        allowedTools: ["tinycloud_sql_query", "tinycloud_kv_get"] as const,
+        allowedTools: ["tinycloud_sql_query", "tinycloud_kv_get", "tinycloud_read"] as const,
       }),
       beforeOperation: nativeOwner === undefined
         ? () => store.validateTenant(subject, ownerDids)
@@ -160,7 +188,7 @@ function createHostedSurface(
           store.decorateAuthorityResult(subject, ownerDids, result, invocation),
       } : {}),
     }, validator);
-    if (nativeOwner === undefined) registerConnectTool(server, validator, store, identity, surface);
+    if (nativeOwner === undefined) registerConnectTool(server, validator, store, identity, surface, annotationTitles);
     return server;
   }, {
     legacy: "stateless",
@@ -324,7 +352,7 @@ function createHostedSurface(
               { service: "tinycloud.sql", space: "applications", path: "xyz.tinycloud.tinychat/connectors", actions: ["tinycloud.sql/read"] },
               { service: "tinycloud.kv", space: "applications", path: "xyz.tinycloud.tinychat/connectors/", actions: ["tinycloud.kv/get", "tinycloud.kv/list"] },
             ],
-            tools: ["tinycloud_sql_query", "tinycloud_kv_get"],
+            tools: ["tinycloud_sql_query", "tinycloud_kv_get", "tinycloud_read"],
             errors: {
               required: NATIVE_GRANT_REQUIRED,
               expired: NATIVE_GRANT_EXPIRED,
@@ -379,10 +407,12 @@ function createHostedSurface(
         try {
           const destination = await store.approvalRedirect(requiredState(url));
           return Response.redirect(destination, 302);
-        } catch {
+        } catch (error) {
+          const reason = error instanceof ApprovalRequestError ? error.detail : "unknown";
+          writeDiagnostic(`connect rejected: reason=${reason} path=${connectPath}`);
           if (request.headers.get("accept")?.includes("text/html")) {
             return new Response(
-              "<!doctype html><html lang=\"en\"><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>TinyCloud approval unavailable</title><main><h1>This approval link is unavailable</h1><p>It may have expired or already been used. No new approval was accepted through this link.</p><p>Return to the conversation that requested access. In ChatGPT, select @TinyCloud and ask it to continue your original request. If access is still needed, it can provide a fresh approval link.</p><p>If you declined access, no further approval is required. Never paste passwords, codes or approval links into support messages.</p></main></html>",
+              "<!doctype html><html lang=\"en\"><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>TinyCloud approval unavailable</title><main><h1>This approval link is unavailable</h1><p>It may have expired or already been used. Go back to the assistant that sent it and ask it to connect TinyCloud again.</p><p>If you declined access, no further approval is required. Never paste passwords, codes or approval links into support messages.</p></main></html>",
               {
                 status: 400,
                 headers: {
@@ -512,11 +542,9 @@ function createHostedSurface(
         });
       }
       if (url.pathname !== resourceUrl.pathname) return json({ error: "Not found" }, 404);
-      const originFailure = validateOrigin(request, config.allowedOrigins);
-      if (originFailure !== undefined) return originFailure;
+      if (request.method === "OPTIONS") return mcpCors(new Response(null, { status: 204 }), request);
       const auth = await authenticate(request);
-      if (auth instanceof Response) return auth;
-      return handler.fetch(request, { authInfo: auth });
+      return mcpCors(auth instanceof Response ? auth : await handler.fetch(request, { authInfo: auth }), request);
     },
     close: () => handler.close(),
   };
@@ -528,7 +556,9 @@ function registerConnectTool(
   store: RemoteTenantStore,
   identity: OAuthIdentity,
   surface: "hosted" | "public",
+  annotationTitles: boolean,
 ): void {
+  const title = "Connect TinyCloud";
   const inputSchema = fromJsonSchema({ type: "object", properties: {}, additionalProperties: false }, validator);
   const outputSchema = fromJsonSchema({
     type: "object",
@@ -544,11 +574,12 @@ function registerConnectTool(
   server.registerTool(
     "tinycloud_connect",
     {
-      title: "Connect TinyCloud",
+      title,
       description: "Check the hosted delegate connection and return a one-time OpenKey approval URL when setup is required.",
       inputSchema,
       outputSchema,
       annotations: {
+        ...(annotationTitles ? { title } : {}),
         readOnlyHint: false,
         idempotentHint: true,
         destructiveHint: false,
@@ -621,11 +652,29 @@ function requiredState(url: URL): string {
   return state;
 }
 
-function validateOrigin(request: Request, allowed: readonly string[] | undefined): Response | undefined {
-  const origin = request.headers.get("origin");
-  if (origin === null) return undefined;
-  const allowlist = allowed ?? [];
-  return allowlist.includes(origin) ? undefined : json({ error: "Origin is not allowed." }, 403);
+/**
+ * Any browser Origin may call the MCP endpoint: it is authenticated by the
+ * `Authorization: Bearer` header alone (no cookies or other ambient
+ * credentials), so the Origin carries no authority. The wildcard origin can
+ * never be combined with credentials, so `Access-Control-Allow-Credentials`
+ * is not set. The bearer challenge and the MCP session and protocol-version
+ * headers are exposed to scripts (a browser client cannot read any other
+ * response header), and a
+ * preflight allows a fixed list of the headers MCP clients send; the native
+ * service headers are not in it. A request without an Origin header (not a
+ * browser cross-origin call) gets no CORS headers. `Vary: Origin` is appended
+ * to every answer because the CORS headers depend on the request's Origin.
+ */
+function mcpCors(response: Response, request: Request): Response {
+  const headers = new Headers(response.headers);
+  headers.append("vary", "Origin");
+  if (request.headers.has("origin")) {
+    headers.set("access-control-allow-origin", "*");
+    headers.set("access-control-allow-methods", "GET, POST, DELETE, OPTIONS");
+    headers.set("access-control-expose-headers", MCP_CORS_EXPOSED_HEADERS);
+    if (request.method === "OPTIONS") headers.set("access-control-allow-headers", MCP_CORS_ALLOWED_HEADERS);
+  }
+  return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
 }
 
 function validateCallbackOrigin(request: Request, openkeyHost: string): Response | undefined {

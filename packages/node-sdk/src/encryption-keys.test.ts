@@ -1,3 +1,4 @@
+import "../../operations/test-support/test-bootstrap.mjs";
 /**
  * Wiring of the named-key client onto a real TinyCloudNode: the client must sign
  * through the node's raw invocation signer with the EXACT key URN as the single
@@ -10,6 +11,7 @@ import { createHash } from "node:crypto";
 import { expect, mock, test, type Mock } from "bun:test";
 
 import type { ISessionManager, IWasmBindings } from "@tinycloud/sdk-core";
+import { REGISTRY_NOT_FOUND_BODY } from "@tinycloud/sdk-core";
 import { canonicalizeEncryptionJson } from "@tinycloud/sdk-services";
 import type { InlineEncryptedEnvelope } from "@tinycloud/sdk-services";
 
@@ -62,6 +64,7 @@ interface Stubbed {
 function makeNode(): Stubbed {
   const node = new TinyCloudNode({
     host: HOST,
+    tinycloudRegistryUrl: HOST,
     signer: {
       getAddress: async () => ADDRESS,
       getChainId: async () => 1,
@@ -74,6 +77,7 @@ function makeNode(): Stubbed {
     _chainId: number;
     auth: unknown;
     signRawNetworkAuthorization: unknown;
+    encryptionDestination: unknown;
   };
   internals._address = ADDRESS;
   internals._chainId = 1;
@@ -86,12 +90,14 @@ function makeNode(): Stubbed {
       spaceId: `tinycloud:pkh:eip155:1:${ADDRESS}:default`,
     },
     nodeIdForHost: (host: string) => (host === HOST ? NODE_DID : undefined),
+    resolveResourceDestinations: async () => [{ url: HOST }],
   };
   const signRaw = mock(async () => ({
     authorization: "Bearer signed",
     invocationCid: "bafy-invocation",
   }));
   internals.signRawNetworkAuthorization = signRaw;
+  internals.encryptionDestination = async () => ({ url: HOST, nodeDid: NODE_DID });
   return { node, signRaw };
 }
 
@@ -169,6 +175,13 @@ test("network-admin and key-admin facts hash their sent bodies with the same rul
   const original = globalThis.fetch;
   const sent: string[] = [];
   globalThis.fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
+    const url = new URL(_input instanceof Request ? _input.url : _input);
+    if (url.origin === HOST && (init?.method ?? "GET") === "GET" && /^\/v[12]\/locations\/[^/]+$/.test(url.pathname)) {
+      expect(new Headers(init?.headers).has("authorization")).toBe(false);
+      return new Response(REGISTRY_NOT_FOUND_BODY, { status: 404, headers: { "Content-Type": "application/json" } });
+    }
+    if (url.origin === HOST && url.pathname === "/info") return Response.json({ nodeId: NODE_DID });
+    if (url.origin === HOST && url.pathname === "/.well-known/tinycloud/node-keys") return Response.json({ nodeDid: NODE_DID });
     sent.push(String(init?.body));
     return new Response(JSON.stringify({ descriptor: {} }), { status: 200 });
   }) as typeof fetch;
@@ -215,8 +228,8 @@ test("v1 envelopes decrypt through the node's existing root-key service, with no
   expect(signRaw).not.toHaveBeenCalled();
 });
 
-test("createNamedKeyClient resolves both signing hooks on an unstubbed TinyCloudNode", () => {
-  // A rename of either private hook on TinyCloudNode fails here, not in production.
+test("createNamedKeyClient resolves its node hooks on an unstubbed TinyCloudNode", () => {
+  // A rename of any private hook on TinyCloudNode fails here, not in production.
   const node = new TinyCloudNode({
     host: HOST,
     signer: {
@@ -229,6 +242,7 @@ test("createNamedKeyClient resolves both signing hooks on an unstubbed TinyCloud
   const hooks = node as unknown as Record<string, unknown>;
   expect(typeof hooks.signRawNetworkAuthorization).toBe("function");
   expect(typeof hooks.createEncryptionCrypto).toBe("function");
+  expect(typeof hooks.encryptionDestination).toBe("function");
   expect(() => createNamedKeyClient(node)).not.toThrow();
 });
 
@@ -248,7 +262,7 @@ test("TinyCloudNode.keys loads the named-key client when first used", async () =
 });
 
 test("a node missing a hook throws a typed error naming it", () => {
-  for (const hook of ["signRawNetworkAuthorization", "createEncryptionCrypto"]) {
+  for (const hook of ["signRawNetworkAuthorization", "createEncryptionCrypto", "encryptionDestination"]) {
     const { node } = makeNode();
     Object.defineProperty(node, hook, { value: undefined });
     let thrown: unknown;
@@ -259,5 +273,29 @@ test("a node missing a hook throws a typed error naming it", () => {
     }
     expect(thrown).toMatchObject({ name: "NamedKeyError", code: "NODE_HOOK_MISSING" });
     expect((thrown as Error).message).toContain(hook);
+  }
+});
+
+test("named-key calls go to the network's verified route and refuse an /info identity that differs from it", async () => {
+  const ROUTE = "https://route.test";
+  for (const [infoDid, expected] of [[NODE_DID, "ok"], ["did:key:z6MkOtherNode1111111111111111111111111111", "NODE_IDENTITY_MISMATCH"]] as const) {
+    const { node } = makeNode();
+    Object.defineProperty(node, "encryptionDestination", { value: async () => ({ url: ROUTE, nodeDid: NODE_DID }) });
+    const seen: Seen[] = [];
+    const client = createNamedKeyClient(node, {
+      fetch: (async (input: string | URL | Request, init?: RequestInit) => {
+        const url = String(input);
+        seen.push({ method: (init?.method ?? "GET").toUpperCase(), url });
+        if (url === `${ROUTE}/info`) return new Response(JSON.stringify({ nodeId: infoDid, features: ["encryption-named-keys-v1"] }));
+        return new Response(JSON.stringify({ networkId: NETWORK_ID, keyPath: PATH, alg: "x25519-aes256gcm/v1", keyVersion: 1, publicEncryptionKey: "AAAA", state: "active", kind: "deterministic" }));
+      }) as typeof fetch,
+    });
+    if (expected === "ok") {
+      await client.getPublicKey(PATH);
+      expect(seen.map((call) => new URL(call.url).origin)).toEqual([ROUTE, ROUTE]);
+    } else {
+      await expect(client.getPublicKey(PATH)).rejects.toMatchObject({ code: expected });
+      expect(seen.map((call) => call.url)).toEqual([`${ROUTE}/info`]);
+    }
   }
 });

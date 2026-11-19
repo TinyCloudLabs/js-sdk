@@ -1,3 +1,4 @@
+import type { SharePlacement } from "../share-placement";
 /**
  * Zod schemas for SharingService types.
  *
@@ -35,7 +36,7 @@ import type { ICapabilityKeyRegistry } from "../authorization/CapabilityKeyRegis
  * This is the primary validation point for external share link data.
  * The link is base64-decoded and JSON-parsed, then validated against this schema.
  */
-export const EncodedShareDataSchema = z.object({
+const LegacyEncodedShareDataSchema = z.object({
   /** Private key in JWK format (must include d parameter) */
   key: JWKSchema.refine(
     (jwk) => typeof jwk.d === "string" && jwk.d.length > 0,
@@ -47,6 +48,11 @@ export const EncodedShareDataSchema = z.object({
   delegation: DelegationSchema,
   /** Resource path this link grants access to */
   path: z.string().min(1, "path is required"),
+  /** Every resource of a share of several, `path` first (absent on a one-resource share) */
+  resources: z.array(z.object({
+    path: z.string().min(1),
+    actions: z.array(z.string().min(1)).min(1),
+  })).min(2).max(16).optional(),
   /** TinyCloud host URL */
   host: z.string().url("host must be a valid URL"),
   /** Space ID */
@@ -55,6 +61,10 @@ export const EncodedShareDataSchema = z.object({
   version: z.literal(1),
 });
 
+export const EncodedShareDataSchema = z.discriminatedUnion("version", [
+  LegacyEncodedShareDataSchema,
+  LegacyEncodedShareDataSchema.extend({ version: z.literal(2), placement: z.custom<SharePlacement>(value => value !== null && typeof value === "object") }),
+]);
 export type EncodedShareData = z.infer<typeof EncodedShareDataSchema>;
 
 // =============================================================================
@@ -224,9 +234,8 @@ export function validateEncodedShareData(
       ok: false,
       error: {
         code: DelegationErrorCodes.VALIDATION_ERROR,
-        message: `Invalid share data: ${result.error.message}`,
+        message: "Invalid share data",
         service: "delegation",
-        meta: { issues: result.error.issues },
       },
     };
   }

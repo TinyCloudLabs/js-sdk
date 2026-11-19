@@ -54,8 +54,8 @@ const crypto: NamedKeyClientConfig["crypto"] = {
 };
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status });
 
-/** A real `NamedKeyClient` against a stub node that answers /info, the key's public key and key creation. */
-function realKeys(options: { createStatus?: number; createBody?: string } = {}) {
+/** A real `NamedKeyClient` against a stub node that answers /info and the key's public key (unauthenticated GET). Nothing else is served. */
+function realKeys() {
   const requests: { method: string; url: string; body?: string }[] = [];
   const descriptor = (keyPath: string) => ({
     networkId: NETWORK, keyPath, alg: "x25519-aes256gcm/v1", keyVersion: 3, publicEncryptionKey: Buffer.from(new Uint8Array(32).fill(9)).toString("base64"),
@@ -66,10 +66,7 @@ function realKeys(options: { createStatus?: number; createBody?: string } = {}) 
     requests.push({ method: (init?.method ?? "GET").toUpperCase(), url, ...(typeof init?.body === "string" ? { body: init.body } : {}) });
     if (url === `${HOST}/info`) return json({ nodeId: nodeDid, features: ["encryption-named-keys-v1"] });
     const keyPath = decodeURIComponent(url.split("/keys/")[1] ?? (typeof init?.body === "string" ? (JSON.parse(init.body).keyPath as string) : ""));
-    if ((init?.method ?? "GET") === "POST") {
-      if (options.createStatus !== undefined && options.createStatus >= 400) return new Response(options.createBody ?? "unauthorized_action: key.create", { status: options.createStatus });
-      return json(descriptor(keyPath));
-    }
+    if ((init?.method ?? "GET") !== "GET") return new Response("not served", { status: 405 });
     return json(descriptor(keyPath));
   }) as typeof fetch;
   const config: NamedKeyClientConfig = {
@@ -141,13 +138,13 @@ const bad = (overrides: Record<string, unknown>, drop: string[] = []) => async (
 
 describe("every addressed target kind publishes a path-bound source (real named-key envelope, real publisher)", () => {
   for (const { kind, target } of TARGETS) {
-    it(`${kind}: the key is created and encrypted under share/<shareId>, the source carries the path and the raw-byte digest, and the only decrypt grant is that one key`, async () => {
+    it(`${kind}: the content is encrypted to share/<shareId>'s public key, the source carries the path and the raw-byte digest, and the only decrypt grant is that one key`, async () => {
       const { plan, encrypted, contentSource, requests } = await encryptAndBind();
       const auth = authority();
       const published = await publishAddressedShare(publishOptions(target, contentSource, auth.value));
 
-      // The key is created, then the content is encrypted to it, both at the share's own path.
-      expect(requests.find((request) => request.method === "POST")?.body).toContain(`"keyPath":"share/${SHARE_ID}"`);
+      // The content is encrypted to the share key's public key, read with one GET; the key is never created by the client.
+      expect(requests.filter((request) => request.url !== `${HOST}/info`).map((request) => request.method)).toEqual(["GET"]);
       expect(encrypted.envelope).toMatchObject({ v: 2, networkId: NETWORK, keyPath: `share/${SHARE_ID}`, keyVersion: 3 });
       // The digest is the SHA-256 of the DECODED wrapped-key bytes, not the canonical hash of the base64 string.
       const rawDigest = createHash("sha256").update(Buffer.from(encrypted.envelope.encryptedSymmetricKey, "base64")).digest("hex");
@@ -252,8 +249,6 @@ describe("plan: path, permissions and the checksummed network", () => {
     const plan = planPathBoundShare({ shareId: SHARE_ID, encryptionNetwork: NETWORK });
     expect(plan.keyPath).toBe(`share/${SHARE_ID}`);
     expect(pathBoundKeyPath(SHARE_ID)).toBe(plan.keyPath);
-    expect(plan.requiredPermissions).toEqual([{ service: "tinycloud.encryption", path: `${NETWORK}/share/${SHARE_ID}`, actions: ["tinycloud.encryption/key.create"] }]);
-    expect(plan.sessionPermissions).toEqual([{ service: "tinycloud.encryption", path: `${NETWORK}/share/`, actions: ["tinycloud.encryption/decrypt", "tinycloud.encryption/key.create"] }]);
     expect(plan.registrationPermissions).toEqual([{ service: "tinycloud.encryption", path: `${NETWORK}/share/`, actions: ["tinycloud.encryption/decrypt"] }]);
     expect(plan.encryptOptions({ metadata: { contentType: "text/plain" } })).toEqual({ networkId: NETWORK, metadata: { contentType: "text/plain" } });
   });
@@ -330,23 +325,18 @@ describe("owner input, share ids and plaintext handling (composer review)", () =
     expect(new TextDecoder().decode(encrypted.storedBytes)).not.toContain("secret plaintext");
   });
 
-  it("never requests a permission itself: a session that already holds key.create gets no second prompt", async () => {
+  it("encrypts with one unauthenticated public-key read of the share's key and never creates the key", async () => {
     const { keys, requests } = realKeys();
     const plan = planPathBoundShare({ shareId: SHARE_ID, encryptionNetwork: NETWORK });
     await encryptAddressedShareContent({ plan, keys, plaintext: new Uint8Array(3) });
-    expect(requests.filter((request) => request.url !== `${HOST}/info`).map((request) => request.method)).toEqual(["POST", "GET"]);
+    const keyRequests = requests.filter((request) => request.url !== `${HOST}/info`);
+    expect(keyRequests.map((request) => request.method)).toEqual(["GET"]);
+    expect(decodeURIComponent(keyRequests[0]!.url)).toContain(`share/${SHARE_ID}`);
+    expect(requests.some((request) => request.method === "POST")).toBe(false);
   });
 });
 
 describe("bind and encrypt refuse what the recipient or node would", () => {
-  it("a 403 on key creation also names the first-party-origin rule for OpenKey owners", async () => {
-    const { keys } = realKeys({ createStatus: 403, createBody: "app_key_grant_refused" });
-    const plan = planPathBoundShare({ shareId: SHARE_ID, encryptionNetwork: NETWORK });
-    const failure = await encryptAddressedShareContent({ plan, keys, plaintext: new Uint8Array(1) }).then(() => undefined, (error: unknown) => error as Error);
-    expect(failure).toMatchObject({ code: "key-not-authorized" });
-    expect(failure?.message).toContain("first-party TinyCloud origin");
-  });
-
   it("a v1 envelope (what encryptToNetwork with a keyPath returns) is refused: it is wrapped to the network, not the key", async () => {
     const { plan, encrypted } = await encryptAndBind();
     const v1 = { ...encrypted.envelope, v: 1 };
@@ -374,17 +364,6 @@ describe("bind and encrypt refuse what the recipient or node would", () => {
     }
   });
 
-  it("a created key whose receipt is not active (blocked) is refused before anything is encrypted", async () => {
-    const plan = planPathBoundShare({ shareId: SHARE_ID, encryptionNetwork: NETWORK });
-    let encrypts = 0;
-    const keys = {
-      createKey: async (path: string, options: { networkId: string }) => ({ networkId: options.networkId, keyPath: path, state: "blocked", keyVersion: 1 }),
-      encrypt: async () => { encrypts++; throw new Error("must not encrypt"); },
-    };
-    await expect(encryptAddressedShareContent({ plan, keys: keys as never, plaintext: new Uint8Array(1) })).rejects.toMatchObject({ code: "key-receipt-mismatch" });
-    expect(encrypts).toBe(0);
-  });
-
   it("bytes that are not the canonical envelope are refused: upload pathBoundStoredBytes(envelope), nothing else", async () => {
     const { plan, encrypted } = await encryptAndBind();
     const tampered = Uint8Array.from(encrypted.storedBytes);
@@ -392,29 +371,5 @@ describe("bind and encrypt refuse what the recipient or node would", () => {
     expect(() => bindPathBoundContentSource({ plan, envelope: encrypted.envelope, storedBytes: tampered, kvResource: `${SPACE}/kv/${PATH}`, selector: "exact" })).toThrow(expect.objectContaining({ code: "stored-bytes-mismatch" }));
   });
 
-  it("an owner session without key.create is reported as key-not-authorized, naming the capability and the key, and nothing is encrypted", async () => {
-    // The exact message a node answers when the owner session holds no key.create on the share's key (observed in production).
-    const nodeMessage = `Unauthorized Action: ${NETWORK}/share/${SHARE_ID} / tinycloud.encryption/key.create`;
-    const { keys, requests } = realKeys({ createStatus: 401, createBody: nodeMessage });
-    const plan = planPathBoundShare({ shareId: SHARE_ID, encryptionNetwork: NETWORK });
-    const failure = await encryptAddressedShareContent({ plan, keys, plaintext: new TextEncoder().encode("x") }).then(() => undefined, (error: unknown) => error as Error);
-    expect(failure).toMatchObject({ name: "AddressedContentSourceError", code: "key-not-authorized" });
-    expect(failure?.message).toContain("tinycloud.encryption/key.create");
-    expect(failure?.message).toContain(`${NETWORK}/share/${SHARE_ID}`);
-    expect(failure?.message).toContain("Unauthorized Action:");
-    expect(failure?.message).toContain("requestPermissions");
-    expect(failure?.message).not.toContain("OpenKey");
-    expect(requests.filter((request) => request.method === "GET" && request.url.includes("/keys/"))).toEqual([]);
-  });
 });
 
-describe("pathBoundSessionPermissions: the sign-in manifest entries need no share id", () => {
-  it("returns the prefix decrypt + key.create entry, identical to the plan's sessionPermissions, and refuses a lower-cased or non-default network", () => {
-    const { pathBoundSessionPermissions } = shareSdk;
-    const entries = pathBoundSessionPermissions({ encryptionNetwork: NETWORK });
-    expect(entries).toEqual([{ service: "tinycloud.encryption", path: `${NETWORK}/share/`, actions: ["tinycloud.encryption/decrypt", "tinycloud.encryption/key.create"] }]);
-    expect(entries).toEqual(planPathBoundShare({ shareId: SHARE_ID, encryptionNetwork: NETWORK }).sessionPermissions);
-    expect(() => pathBoundSessionPermissions({ encryptionNetwork: NETWORK.toLowerCase() })).toThrow(expect.objectContaining({ code: "network-not-checksummed" }));
-    expect(() => pathBoundSessionPermissions({ encryptionNetwork: NETWORK.replace(":default", ":other") })).toThrow(expect.objectContaining({ code: "network-invalid" }));
-  });
-});

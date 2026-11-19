@@ -1,4 +1,4 @@
-import { extractRecapAttenuations } from "@tinycloud/sdk-core";
+import { endToEndNodeHost, extractRecapAttenuations } from "@tinycloud/sdk-core";
 import {
   EncryptionResourceError,
   KEY_CREATE_ABILITY,
@@ -59,7 +59,7 @@ export function keyPathInPrefix(prefix: string, path: string): boolean {
 export async function assertNodeSupportsNamedKeys(host: string, fetchImpl: typeof fetch = fetch): Promise<void> {
   let info: { features?: unknown } | null = null;
   try {
-    const response = await fetchImpl(`${host}/info`);
+    const response = await fetchImpl(`${endToEndNodeHost(host)}/info`, { redirect: "error" });
     if (response.ok) info = (await response.json()) as { features?: unknown };
   } catch {
     info = null;

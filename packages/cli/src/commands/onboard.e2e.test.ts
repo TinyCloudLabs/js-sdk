@@ -1,3 +1,4 @@
+import "../../../operations/test-support/test-bootstrap.mjs";
 import { afterAll, beforeAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawn, type ChildProcess } from "node:child_process";
 import { createCipheriv, createECDH, createHash, createHmac, createPublicKey, randomBytes, verify } from "node:crypto";
@@ -10,13 +11,15 @@ import { NodeWasmBindings, PrivateKeySigner, type PermissionEntry } from "@tinyc
 import { activateSessionWithHost, principalDidEquals } from "@tinycloud/sdk-core";
 import { canonicalize } from "@tinycloud/share-envelope";
 import { checkLinkRecord, linkIssuerPublicKey, resolveApprovalRequest, type CheckedLinkRecord, type LinkRecord, type OpenKeyApprovalRequestV1 } from "@tinycloud/share-envelope/links";
-import { additionalDelegationsPath, profileConfigPath, profilePath, readJson, sessionPath, withTinyCloudStateRoot } from "@tinycloud/operations/state";
+import { additionalDelegationsPath, profileConfigPath, profilePath, readJson, sessionPath, withTinyCloudStateRoot, writeJsonAtomic } from "@tinycloud/operations/state";
+import { startUnregisteredLocationRegistry, type UnregisteredLocationRegistry } from "../../../node-sdk/src/test-support/unregistered-location-registry";
 
 // Real-node e2e for `tinycloud onboard`: an owned synthetic OpenKey transport
 // opens the CLI's signed immutable requests and returns real owner-signed,
 // encrypted results. The CLI verifies and durably saves authority before ACK.
 const NODE_BIN = process.env.TC_REPLICATION_E2E_NODE_BIN;
 const cliEntry = join(import.meta.dir, "../index.ts");
+const TEST_BOOTSTRAP = join(import.meta.dir, "../../../operations/test-support/test-bootstrap.mjs");
 const THIRTY_DAYS_S = 30 * 86400;
 setDefaultTimeout(240_000);
 
@@ -24,6 +27,10 @@ describe.skipIf(!NODE_BIN)("tinycloud onboard, against a real node", () => {
   let root: string;
   let host: string;
   let node: ChildProcess;
+  let nodeClosed: Promise<void> | undefined;
+  let registry: UnregisteredLocationRegistry;
+  const priorTcHome = process.env.TC_HOME;
+  const priorHome = process.env.HOME;
   let ownerSigner: PrivateKeySigner;
   const wasm = new NodeWasmBindings();
   const home = (name: string) => join(root, `home-${name}`);
@@ -179,10 +186,12 @@ describe.skipIf(!NODE_BIN)("tinycloud onboard, against a real node", () => {
     env.TC_AUTH_NO_POPUP = "1";
     env.TC_OPENKEY_API_HOST = approvalServer!.url.origin;
     env.TC_LINKS_API_ORIGIN = approvalServer!.url.origin;
-    env.TC_ONBOARD_ALLOWED_ORIGINS = JSON.stringify([host, approvalServer!.url.origin]);
+    env.TC_REGISTRY_URL = registry.url.origin;
+    env.TC_ONBOARD_ALLOWED_ORIGINS = JSON.stringify([host, approvalServer!.url.origin, registry.url.origin]);
     env.NODE_EXTRA_CA_CERTS = approvalCertificatePath;
     env.NODE_TLS_REJECT_UNAUTHORIZED = "1";
-    return { argv: [process.execPath, "--no-env-file", "--preload", networkGuardPath, cliEntry, "--host", host, ...args], env, cwd: root };
+    const inputArgs = args[0] === "init" && !args.includes("--name") ? [...args, "--name", "default"] : args;
+    return { argv: [process.execPath, "--no-env-file", "--preload", TEST_BOOTSTRAP, "--preload", networkGuardPath, cliEntry, "--host", host, ...inputArgs], env, cwd: root };
   }
 
   async function cli(name: string, args: string[]) {
@@ -194,7 +203,7 @@ describe.skipIf(!NODE_BIN)("tinycloud onboard, against a real node", () => {
       return { exitCode, stdout, stderr };
     } catch (error) {
       child.kill();
-      await child.exited;
+      await child.exited.catch(() => {});
       throw error;
     } finally { activeChildren.delete(child); }
   }
@@ -300,7 +309,7 @@ describe.skipIf(!NODE_BIN)("tinycloud onboard, against a real node", () => {
       return { exitCode: await child.exited, stdout: await stdoutText, stderr, offered };
     } catch (error) {
       child.kill();
-      await child.exited;
+      await child.exited.catch(() => {});
       throw error;
     } finally { activeChildren.delete(child); }
   }
@@ -320,6 +329,10 @@ describe.skipIf(!NODE_BIN)("tinycloud onboard, against a real node", () => {
     root = await mkdtemp(join(tmpdir(), "tc-onboard-e2e-"));
     await chmod(root, 0o700);
     for (const directory of ["tmp", "cache"]) await mkdir(join(root, directory), { mode: 0o700 });
+    await mkdir(home("parent"), { mode: 0o700 });
+    process.env.HOME = home("parent");
+    process.env.TC_HOME = home("parent");
+    registry = startUnregisteredLocationRegistry();
     approvalCertificatePath = join(root, "approval-cert.pem");
     const approvalKeyPath = join(root, "approval-key.pem");
     const certificate = Bun.spawn(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1",
@@ -360,6 +373,7 @@ globalThis.fetch = ((input: Parameters<typeof fetch>[0], init?: Parameters<typeo
       },
       stdio: ["ignore", "pipe", "pipe"],
     });
+    nodeClosed = new Promise<void>((resolve) => node.once("close", () => resolve()));
     const launched = Promise.withResolvers<void>();
     let output = "";
     const onData = (chunk: Buffer) => {
@@ -373,6 +387,11 @@ globalThis.fetch = ((input: Parameters<typeof fetch>[0], init?: Parameters<typeo
     // OpenKey hosts a new owner's spaces when they first approve; here the owner wallet hosts them.
     await mkdir(home("wallet"), { recursive: true, mode: 0o700 });
     expect((await cli("wallet", ["init", "--key-only"])).exitCode).toBe(0);
+    await withTinyCloudStateRoot(home("wallet"), async () => {
+      const path = profileConfigPath("default");
+      const profile = await readJson<Record<string, unknown>>(path);
+      await writeJsonAtomic(path, { ...profile, tinycloudRegistryUrl: registry.url.origin });
+    });
     expect((await cli("wallet", ["auth", "login", "--method", "local"])).exitCode).toBe(0);
     for (const space of ["applications", "account"]) {
       expect((await cli("wallet", ["auth", "request", "--cap", `tinycloud.kv:${space}::get,list,put,del`, "--grant", "--yes"])).exitCode).toBe(0);
@@ -388,6 +407,7 @@ globalThis.fetch = ((input: Parameters<typeof fetch>[0], init?: Parameters<typeo
   });
 
   afterAll(async () => {
+    let failure: unknown;
     try {
       const receiptPath = process.env.TC_ONBOARD_FIXTURE_RECEIPT;
       if (receiptPath) {
@@ -399,12 +419,34 @@ globalThis.fetch = ((input: Parameters<typeof fetch>[0], init?: Parameters<typeo
           resultRef: entry.resultRef, ackId: entry.ackId }));
         await writeFile(receiptPath, JSON.stringify({ approvals, ackEvidence, ackChecks }, null, 2), { mode: 0o600, flag: "wx" });
       }
-    } finally {
-      approvalServer?.stop(true);
-      for (const child of activeChildren) child.kill("SIGTERM");
-      node?.kill("SIGTERM");
-      await rm(root, { recursive: true, force: true });
+    } catch (error) {
+      failure = error;
     }
+    try {
+      const children = await Promise.allSettled([
+        ...[...activeChildren].map(async (child) => {
+          child.kill("SIGTERM");
+          await child.exited;
+        }),
+        (async () => {
+          if (node?.exitCode === null && node.signalCode === null) node.kill("SIGTERM");
+          await nodeClosed;
+        })(),
+      ]);
+      const servers = await Promise.allSettled([approvalServer?.stop(true), registry?.stop(true)]);
+      for (const result of [...children, ...servers]) {
+        if (result.status === "rejected" && failure === undefined) failure = result.reason;
+      }
+    } finally {
+      if (priorTcHome === undefined) delete process.env.TC_HOME; else process.env.TC_HOME = priorTcHome;
+      if (priorHome === undefined) delete process.env.HOME; else process.env.HOME = priorHome;
+      try {
+        if (root) await rm(root, { recursive: true, force: true });
+      } catch (error) {
+        if (failure === undefined) failure = error;
+      }
+    }
+    if (failure !== undefined) throw failure;
   });
 
   test("a fresh home: two approvals, each for one space and 30 days; the grant does exactly what it names", async () => {
@@ -413,6 +455,7 @@ globalThis.fetch = ((input: Parameters<typeof fetch>[0], init?: Parameters<typeo
     expect(first.exitCode).not.toBe(0);
     expect(first.offered.map((entry) => spaceOf(entry.request!))).toEqual(["applications", "account"]);
     const approval1 = first.offered[0]!;
+    expect(approval1.request).not.toHaveProperty("reason");
     assertThirtyDays(approval1);
     expect(new Set(approval1.request!.permissions.map((permission) => permission.space))).toEqual(new Set(["applications"]));
     expect(authority(approval1.request!.permissions.map(({ space: _, ...permission }) => permission))).toEqual(authority([

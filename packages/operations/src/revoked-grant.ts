@@ -15,6 +15,30 @@ const REVOKED_GRANT_BODY =
   /\b401 - (?:Invalid invocation: )?delegation-(?:revoked: [A-Za-z0-9]+|ancestor-revoked: ancestor=[A-Za-z0-9]+ invoked=[A-Za-z0-9]+)\s*$/;
 /** The KV service's own typed codes for the same two bodies. */
 const REVOKED_GRANT_CODES: ReadonlySet<unknown> = new Set(["AUTH_DELEGATION_REVOKED", "AUTH_DELEGATION_ANCESTOR_REVOKED"]);
+/** The codes a node puts beside the text of a revocation refusal since 1.25.17 (TC-2381). */
+const NODE_REVOCATION_CODES: ReadonlySet<unknown> = new Set(["delegation_revoked", "parent_revoked", "ancestor_revoked"]);
+const BODY_SEPARATOR = "401 - ";
+
+/**
+ * The refusal text of a node's 401 body. A node since 1.25.17 answers a revoked chain with
+ * `{"code": "<revocation code>", "error": "<text>"}`; an older node answers the text alone. Only that exact
+ * envelope is opened. Every other body, JSON or not, is returned unchanged and is matched as before.
+ */
+export function nodeRefusalText(body: string): string {
+  const trimmed = body.trim();
+  if (!trimmed.startsWith("{")) return body;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(trimmed);
+  } catch {
+    return body;
+  }
+  return typeof parsed === "object" && parsed !== null &&
+    "code" in parsed && NODE_REVOCATION_CODES.has(parsed.code) &&
+    "error" in parsed && typeof parsed.error === "string"
+    ? parsed.error
+    : body;
+}
 
 export const REVOKED_GRANT_MESSAGE =
   `This grant was revoked. Ask the owner for a new grant (\`${CLI_NAME} auth request ...\`).`;
@@ -32,7 +56,13 @@ export function isRevokedGrantRefusal(error: unknown): boolean {
     seen.add(node);
     const { code, message, cause } = node as { code?: unknown; message?: unknown; cause?: unknown };
     if (REVOKED_GRANT_CODES.has(code)) return true;
-    if (typeof message === "string" && REVOKED_GRANT_BODY.test(message)) return true;
+    if (typeof message === "string") {
+      // The node's body follows the SDK's first separator. A body that is not the revocation envelope stays as it is.
+      const start = message.indexOf(BODY_SEPARATOR);
+      const end = start + BODY_SEPARATOR.length;
+      const readable = start < 0 ? message : message.slice(0, end) + nodeRefusalText(message.slice(end));
+      if (REVOKED_GRANT_BODY.test(readable)) return true;
+    }
     node = cause;
   }
   return false;

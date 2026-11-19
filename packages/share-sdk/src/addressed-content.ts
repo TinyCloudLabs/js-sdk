@@ -9,9 +9,9 @@ import { canonicalize, fromBase64Url, type UnifiedContentSource } from "@tinyclo
  * opens only that one key, never the network. This module is the single place that derives the path, validates the
  * network, serializes the stored envelope and computes the digests, so no consumer hand-writes any of them.
  *
- * Call sequence: `planPathBoundShare` (before anything is written) -> the caller holds the plan's `requiredPermissions`
- * -> `encryptAddressedShareContent` (or the caller's own `keys.createKey` + `keys.encrypt`) -> upload `storedBytes` ->
- * `bindPathBoundContentSource` -> `publishAddressedShare`.
+ * Call sequence: `planPathBoundShare` (before anything is written) -> `encryptAddressedShareContent` (or the caller's own
+ * `keys.encrypt`, which encrypts to the key's public key) -> upload `storedBytes` -> `bindPathBoundContentSource` ->
+ * `publishAddressedShare`. The node records the share's key when the policy is registered; nothing creates it beforehand.
  */
 
 export type AddressedContentSourceErrorCode =
@@ -21,8 +21,6 @@ export type AddressedContentSourceErrorCode =
   | "key-path-required"
   | "key-path-mismatch"
   | "digest-invalid"
-  | "key-not-authorized"
-  | "key-receipt-mismatch"
   | "envelope-invalid"
   | "stored-bytes-mismatch";
 
@@ -56,7 +54,7 @@ export interface PathBoundPermissionEntry {
 
 // ONE share-id grammar, used by the plan, the key helper, the size bound and the publisher: the INTERSECTION of the node's key-path segment grammar
 // (key_id.rs valid_segment: first byte a lowercase letter or digit, then lowercase letters, digits, `.`, `_`, `-`; at most 64 bytes) and the
-// publisher's own id alphabet (no `.`). 16 is this SDK's minimum length. An id outside it is refused BEFORE a key is created.
+// publisher's own id alphabet (no `.`). 16 is this SDK's minimum length. An id outside it is refused before anything is encrypted.
 const SHARE_ID = /^[a-z0-9][a-z0-9_-]{15,63}$/;
 const NETWORK = /^urn:tinycloud:encryption:(.+):default$/;
 const OWNER_PKH = /^did:pkh:eip155:([1-9][0-9]*):(0x[0-9a-fA-F]{40})$/;
@@ -177,30 +175,19 @@ export interface PathBoundSharePlan {
   readonly keyPath: string;
   /** `<network>/share/<shareId>`: the one decrypt resource the share grants. */
   readonly keyResource: string;
-  /**
-   * ROUTE A, per share at runtime: `key.create` on exactly this share's key, requested with `requestPermissions` before the key is created
-   * (one extra consent per share). For apps that cannot use the sign-in route (for example apps whose sign-in goes through the OpenKey widget
-   * `authorizeTinyCloud` route, which refuses decrypt and key.create outside `apps/`).
-   */
-  readonly requiredPermissions: PathBoundPermissionEntry[];
-  /**
-   * ROUTE B, once at sign-in (manifest entries): `key.create` and `decrypt` on the default network's `<network>/share/` prefix, so every share's
-   * key can be created without a further prompt. Put these in the `permissions` of the manifest the owner signs in with.
-   */
-  readonly sessionPermissions: PathBoundPermissionEntry[];
-  /** The owner session must hold these for the node to register the policy: decrypt under `<network>/share/` (also part of `sessionPermissions`). */
+  /** The owner session must hold these for the node to register the policy: decrypt under `<network>/share/`. */
   readonly registrationPermissions: PathBoundPermissionEntry[];
   /** Options for `keys.encrypt(plan.keyPath, plaintext, plan.encryptOptions({ metadata }))`. */
   encryptOptions(extra?: { readonly metadata?: Readonly<Record<string, string>> }): { networkId: string; metadata?: Record<string, string> };
 }
 
 /**
- * The manifest entries (route B, sign-in) that let one session create every share's key: `decrypt` and `key.create` on the default network's
- * `<network>/share/` prefix. Needs no share id, so an app builds its manifest before any share exists. Put the result in `manifest.permissions`.
+ * The manifest entries that let one session register every share's policy: `decrypt` on the default network's `<network>/share/` prefix.
+ * Needs no share id, so an app builds its sign-in manifest before any share exists. Put the result in `manifest.permissions`.
  */
 export function pathBoundSessionPermissions(input: { readonly encryptionNetwork: string }): PathBoundPermissionEntry[] {
   const encryptionNetwork = assertNetwork(input.encryptionNetwork);
-  return [{ service: "tinycloud.encryption", path: `${encryptionNetwork}/share/`, actions: ["tinycloud.encryption/decrypt", "tinycloud.encryption/key.create"] }];
+  return [{ service: "tinycloud.encryption", path: `${encryptionNetwork}/share/`, actions: ["tinycloud.encryption/decrypt"] }];
 }
 
 /** Validate the share id and network and derive the key path and the permissions the share needs. Writes and signs nothing. */
@@ -213,9 +200,7 @@ export function planPathBoundShare(input: { readonly shareId: string; readonly e
     encryptionNetwork,
     keyPath,
     keyResource,
-    requiredPermissions: [{ service: "tinycloud.encryption", path: keyResource, actions: ["tinycloud.encryption/key.create"] }],
-    sessionPermissions: pathBoundSessionPermissions({ encryptionNetwork }),
-    registrationPermissions: [{ service: "tinycloud.encryption", path: `${encryptionNetwork}/share/`, actions: ["tinycloud.encryption/decrypt"] }],
+    registrationPermissions: pathBoundSessionPermissions({ encryptionNetwork }),
     encryptOptions: (extra) => ({ networkId: encryptionNetwork, ...(extra?.metadata === undefined ? {} : { metadata: { ...extra.metadata } }) }),
   };
 }
@@ -250,7 +235,7 @@ function assertEnvelope(plan: PathBoundSharePlan, envelope: PathBoundEnvelope): 
     throw new AddressedContentSourceError("envelope-invalid", "envelope key hash does not match its wrapped key");
   }
   // Mirror what the recipient checks before it opens the content (recipient.ts parseV3InlineEncryptedEnvelope), so a share it would refuse is
-  // refused here, before the key's slot is spent on a share nobody can open.
+  // refused here, before it is uploaded or registered.
   const record = envelope as unknown as Record<string, unknown>;
   if (Object.keys(record).some((key) => !ENVELOPE_FIELDS.includes(key)) || record.alg !== ENVELOPE_ALG) {
     throw new AddressedContentSourceError("envelope-invalid", "envelope has a field or algorithm the recipient does not accept");
@@ -300,7 +285,6 @@ export function bindPathBoundContentSource(input: {
 
 /** The part of a named-key client (`NamedKeyClient`, web `tcw.keys`, node `node.keys`) this module calls. */
 export interface AddressedShareKeyClient {
-  createKey(path: string, options: { networkId: string }): Promise<{ readonly networkId: string; readonly keyPath: string; readonly state?: string; readonly keyVersion?: number }>;
   encrypt(path: string, plaintext: Uint8Array, options: { networkId: string; metadata?: Record<string, string> }): Promise<PathBoundEnvelope>;
 }
 
@@ -311,15 +295,9 @@ export interface EncryptedAddressedContent {
   readonly byteLength: number;
 }
 
-function isUnauthorized(error: unknown): boolean {
-  const value = error as { readonly status?: unknown; readonly code?: unknown } | null;
-  return value !== null && typeof value === "object" && (value.status === 401 || value.status === 403 || value.code === "PERMISSION_DENIED" || value.code === "AUTH_UNAUTHORIZED");
-}
-
 /**
- * Create the share's named key and encrypt the content under it. Built from the same steps a consumer may run itself
- * (`keys.createKey`, `keys.encrypt`, then `bindPathBoundContentSource`). The key-create capability in
- * `plan.requiredPermissions` must already be held; an unauthorized answer is reported as `key-not-authorized` naming it.
+ * Encrypt the content under the share's named key. `keys.encrypt` wraps to the key's public key, which the node serves without
+ * authentication; the key needs no record yet (the node records it when the share policy is registered).
  */
 export async function encryptAddressedShareContent(input: {
   readonly plan: PathBoundSharePlan;
@@ -330,28 +308,8 @@ export async function encryptAddressedShareContent(input: {
   const { plan, keys } = input;
   // Read before encrypting: the caller owns the buffer and may zero it (`fill(0)`) as soon as this returns; it is never retained or transferred.
   const byteLength = input.plaintext.byteLength;
-  let receipt;
-  try {
-    receipt = await keys.createKey(plan.keyPath, { networkId: plan.encryptionNetwork });
-  } catch (error) {
-    if (isUnauthorized(error)) {
-      const status = (error as { readonly status?: unknown }).status;
-      throw new AddressedContentSourceError(
-        "key-not-authorized",
-        `the owner session does not hold tinycloud.encryption/key.create on ${plan.keyResource} (the node answers "Unauthorized Action: ${plan.keyResource} / tinycloud.encryption/key.create"); hold it either at sign-in (put plan.sessionPermissions in the manifest: key.create on ${plan.encryptionNetwork}/share/) or per share (requestPermissions(plan.requiredPermissions)) before creating the key` +
-          (status === 403 ? "; if the owner signs in through OpenKey, the request must come from a first-party TinyCloud origin" : ""),
-      );
-    }
-    throw error;
-  }
-  if (receipt.networkId !== plan.encryptionNetwork || receipt.keyPath !== plan.keyPath || (receipt.state !== undefined && receipt.state !== "active")) {
-    throw new AddressedContentSourceError("key-receipt-mismatch", "the created key does not match this share");
-  }
   const envelope = await keys.encrypt(plan.keyPath, input.plaintext, plan.encryptOptions(input.metadata === undefined ? undefined : { metadata: input.metadata }));
   assertEnvelope(plan, envelope);
-  if (receipt.keyVersion !== undefined && envelope.keyVersion !== receipt.keyVersion) {
-    throw new AddressedContentSourceError("key-receipt-mismatch", "the envelope key version does not match the created key");
-  }
   const storedBytes = pathBoundStoredBytes(envelope);
   return { envelope, storedBytes, byteLength };
 }

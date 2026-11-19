@@ -69,6 +69,7 @@ const HOUR = 3600_000;
 const hits = { delegate: 0 };
 const node = Bun.serve({ port: 0, fetch(request) {
   const path = new URL(request.url).pathname;
+  if (/^\/v[12]\/locations\//.test(path)) return Response.json({ error: "location record not found" }, { status: 404 });
   if (path === "/info") return Response.json({ protocol: 1, version: "1.0.0", features: ["encryption-named-keys-v1"] });
   if (path === "/delegate" && request.method === "POST") { hits.delegate++; return Response.json({ activated: [], skipped: [] }); }
   return new Response(`Unexpected node request: ${path}`, { status: 404 });
@@ -86,7 +87,7 @@ beforeEach(async () => {
   hits.delegate = 0;
   await ProfileManager.ensureConfigDir();
   await ProfileManager.setProfile("owner", {
-    name: "owner", host, chainId: 1, spaceName: "default", did: "did:key:prior", ownerDid,
+    name: "owner", host, tinycloudRegistryUrl: host, chainId: 1, spaceName: "default", did: "did:key:prior", ownerDid,
     posture: "owner-openkey", authMethod: "openkey", createdAt: "2026-10-01T00:00:00.000Z",
   });
   await ProfileManager.clearSession("owner");
@@ -231,5 +232,21 @@ describe("without --expiry the default 30 day request is the ceiling", () => {
       setSystemTime();
     }
     expect(await ProfileManager.getSession("owner")).not.toBeNull();
+  });
+});
+
+// TC-2276 (PR B): only the PLAIN paste link opts in and skips the pre-consent "would shorten the live session" check.
+// A prepared login with --paste uses the prepared handoff, which never sends the opt-in, so it keeps that check.
+describe("prepared login with --paste", () => {
+  test("still refuses before approval when --expiry would shorten the live session", async () => {
+    pickedLifetimeMs = 30 * 24 * HOUR;
+    await refreshOpenKeySession("owner", host, {
+      expectedOwner: ownerDid, replication: { prefixes: ["notes/"] }, expiry: "30d", replaceSession: true, noPopup: true,
+    });
+    created.length = 0;
+    await expect(refreshOpenKeySession("owner", host, {
+      expectedOwner: ownerDid, replication: { prefixes: ["notes/"] }, expiry: "7d", paste: true, noPopup: true,
+    })).rejects.toMatchObject({ code: "SESSION_IN_USE" });
+    expect(created).toHaveLength(0);
   });
 });

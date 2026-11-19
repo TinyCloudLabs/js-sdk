@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 
 import {
   canonicalizeCapabilities,
+  delegationWithinRequest,
   evaluateAuthority,
   evaluateOperationAuthority,
   permissionIdentity,
@@ -186,4 +187,46 @@ test("operation authority treats PKH checksum casing as equivalent but preserves
     [{ ...keyGet, space: did }],
     resolve,
   ).missing).toEqual([]);
+});
+
+test("request-bound raw encryption treats its service marker as a namespace, not an owned space", () => {
+  const owner = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+  const raw = {
+    service: "tinycloud.encryption",
+    path: `urn:tinycloud:encryption:did:pkh:eip155:1:${owner}:default`,
+    actions: ["tinycloud.encryption/decrypt"],
+  };
+  const requested = [Object.freeze({ ...raw, space: "encryption" })];
+  const resolve = operationSpaceResolver({}, `tinycloud:pkh:eip155:1:${owner}:secrets`);
+
+  expect(delegationWithinRequest(requested, [raw], resolve)).toBe(true);
+  expect(evaluateOperationAuthority([raw], requested, resolve).satisfied).toBe(true);
+});
+
+test("raw encryption marker equivalence never drops a network, explicit space, or different service boundary", () => {
+  const owner = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+  const foreign = "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+  const raw = {
+    service: "tinycloud.encryption",
+    path: `urn:tinycloud:encryption:did:pkh:eip155:1:${owner}:default`,
+    actions: ["tinycloud.encryption/decrypt"],
+  };
+  const requested = [{ ...raw, space: "encryption" }];
+  const resolve = operationSpaceResolver({}, `tinycloud:pkh:eip155:1:${owner}:secrets`);
+  for (const offered of [
+    { ...raw, path: `urn:tinycloud:encryption:did:pkh:eip155:1:${foreign}:default` },
+    { ...raw, path: `${raw.path.slice(0, -"default".length)}other` },
+    { ...raw, space: `tinycloud:pkh:eip155:1:${owner}:secrets` },
+    { ...raw, service: "tinycloud.kv", actions: ["tinycloud.kv/get"] },
+  ]) {
+    expect(delegationWithinRequest(requested, [offered], resolve)).toBe(false);
+  }
+  expect(delegationWithinRequest(
+    [{ ...raw, space: "ENCRYPTION" }], [raw], resolve,
+  )).toBe(false);
+  expect(delegationWithinRequest(
+    [{ ...raw, path: "vault/encryption/", space: "encryption" }],
+    [{ ...raw, path: "vault/encryption/" }],
+    resolve,
+  )).toBe(false);
 });

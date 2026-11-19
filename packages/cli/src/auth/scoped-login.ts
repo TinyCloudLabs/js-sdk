@@ -1,6 +1,6 @@
-import { EXPIRY } from "@tinycloud/sdk-core";
+import { EXPIRY, technicalExpiryRefusal } from "@tinycloud/sdk-core";
 import { NodeWasmBindings, signedCompactUcanExpiry, type PermissionEntry } from "@tinycloud/node-sdk";
-import { isLocalOwnerProfile, ownerSessionLacksProof } from "@tinycloud/operations/profile";
+import { isLocalOwnerProfile, liveStoredLease, ownerSessionLacksProof } from "@tinycloud/operations/profile";
 import { CLI_NAME } from "@tinycloud/operations/cli-name";
 import { CLIError } from "../output/errors.js";
 import { ExitCode } from "../config/constants.js";
@@ -8,11 +8,12 @@ import type { ProfileConfig } from "../config/types.js";
 import { parseDuration } from "../lib/duration.js";
 import { normalizePkhIdentifier } from "../lib/space.js";
 import { ENCRYPTION_MANIFEST_SPACE } from "../../../sdk-core/src/manifest.js";
-import { isRawEncryptionPermission, isVerifiedRawEncryptionPermission } from "../lib/raw-encryption.js";
+import { isDeviceDefaultDecrypt, isRawEncryptionPermission, isVerifiedRawEncryptionPermission } from "../lib/raw-encryption.js";
 import { canonicalNetworkUrn, canonicalOwnerDid, rawEncryptionOwnerMatches } from "../lib/owner-did.js";
 import { assertNoCaveatLimits } from "../lib/caveat-refusal.js";
 import { markClockDependent } from "./refusal.js";
 import { keyAbilitiesFor, parseKeysPrefix, partialKeysGrantError, type ProfileNamedKeys } from "../lib/named-keys.js";
+import { SHARE_PUBLISHING_MANIFEST_REF } from "../share/publishing-manifest.js";
 
 /** OpenKey signs a scoped delegation only when it carries this read on the session space. */
 const CAPABILITIES_READ = "tinycloud.capabilities/read";
@@ -31,6 +32,15 @@ export const SIGNED_RECAP = "signed-recap";
  */
 export interface RequestedExpiry {
   readonly durationMs: number;
+}
+
+/**
+ * Lifetime a non-device `auth login --manifest` requests when `--expiry` is omitted: one hour, the shortest practical
+ * session. `builtin:share-publishing` asks for seven days instead, because every Share link it publishes ends when
+ * the publishing session ends and a published link's own default is seven days.
+ */
+export function defaultManifestLoginExpiry(manifest: string): string {
+  return manifest === SHARE_PUBLISHING_MANIFEST_REF ? "7d" : "1h";
 }
 
 /** Parse an OpenKey login `--expiry`: `30m`/`7d`/`1w` or raw milliseconds. */
@@ -92,6 +102,9 @@ export function sdkMaxExpiryRefusal(error: unknown, defaultRequest = false): CLI
   );
 }
 
+/** A signed expiry the user chose must be more than this far from now (matches the SDK's changed-expiry check). */
+const MIN_SIGNED_REMAINING_MS = 60_000;
+
 /** OpenKey's minimum delegation lifetime; it raises anything shorter. */
 const OPENKEY_MIN_LIFETIME_SECONDS = 60;
 
@@ -119,9 +132,10 @@ export function pinnedOwner(profile: ProfileConfig | null | undefined): string |
 
 /**
  * Session fields that state authority. They are set only from a verified
- * proof, never copied from an OpenKey callback.
+ * proof, never copied from an OpenKey callback. `renewal` is the owner's
+ * renewal lease, saved only after the approval result's lease verified.
  */
-const TRUST_FIELDS = ["ownerDid", "permissions", "permissionsSource", "expiresAt", "expiry", "expirationTime"];
+const TRUST_FIELDS = ["ownerDid", "permissions", "permissionsSource", "expiresAt", "expiry", "expirationTime", "renewal"];
 
 /** A callback-supplied session with every authority claim removed. */
 export function withoutTrustFields(session: Record<string, unknown>): Record<string, unknown> {
@@ -169,12 +183,15 @@ export function sessionExpiresAt(session: Record<string, unknown> | null): strin
   return null;
 }
 
-export type StoredSessionState = "missing" | "expired" | "present" | "unknown-expiry" | "unverified";
+export type StoredSessionState = "missing" | "expired" | "present" | "renewed" | "unknown-expiry" | "unverified";
 
 /**
  * A stored session's state and expiry, judged the way commands restore it: a
  * signed SIWE `Expiration Time` wins over unsigned expiry metadata, otherwise
- * {@link sessionExpiresAt}. Local metadata only; never contacts the node.
+ * {@link sessionExpiresAt}. Past that, a session saved with an owner renewal
+ * lease is `renewed` until the lease's signed end, and that end is reported.
+ * Local metadata only; never contacts the node, so a stopped lease still shows
+ * as renewed until a command restores it.
  */
 export function storedSessionState(session: Record<string, unknown> | null, profile: Pick<ProfileConfig, "posture" | "authMethod"> | null): { state: StoredSessionState; expiresAt: string | null } {
   if (session === null) return { state: "missing", expiresAt: null };
@@ -184,12 +201,16 @@ export function storedSessionState(session: Record<string, unknown> | null, prof
     ? new Date(siweExpiry).toISOString()
     : sessionExpiresAt(session);
   if (expiresAt === null) return { state: "unknown-expiry", expiresAt };
-  return { state: Date.parse(expiresAt) <= Date.now() ? "expired" : "present", expiresAt };
+  if (Date.parse(expiresAt) > Date.now()) return { state: "present", expiresAt };
+  const lease = liveStoredLease(session);
+  return lease !== undefined
+    ? { state: "renewed", expiresAt: new Date(lease.expiresAt).toISOString() }
+    : { state: "expired", expiresAt };
 }
 
-/** Whether commands still use a session in this state: unexpired, or with no recorded expiry to check. */
+/** Whether commands still use a session in this state: unexpired, renewed, or with no recorded expiry to check. */
 export function sessionStateIsUsable(state: StoredSessionState): boolean {
-  return state === "present" || state === "unknown-expiry";
+  return state === "present" || state === "renewed" || state === "unknown-expiry";
 }
 
 /** Bind a logical space name (e.g. `default`) to the owner's space URI. */
@@ -220,6 +241,10 @@ export function isRawCidRevocationPermission(permission: PermissionEntry): boole
     permission.actions.includes("tinycloud.delegation/revoke");
 }
 function actionTuples(permission: PermissionEntry, ownerDid: string): string[] {
+  // A device request's default decrypt entry is what OpenKey signs as the owner's own default network.
+  if (isDeviceDefaultDecrypt({ ...permission, space: permission.space ?? "" })) {
+    return [JSON.stringify([permission.service, ENCRYPTION_MANIFEST_SPACE, normalizePkhIdentifier(`urn:tinycloud:encryption:${ownerDid}:default`), permission.actions[0]])];
+  }
   const service = permission.service.startsWith("tinycloud.") ? permission.service : `tinycloud.${permission.service}`;
   // Only a top-level network entry is a raw grant. A legacy OpenKey signed
   // decrypt nested under the owner space must remain a distinct resource.
@@ -420,9 +445,16 @@ export interface SignedSessionExpectations {
   /**
    * The longest lifetime the signed request allows: the request's `grantLifetimeSeconds`, which is the requested
    * `--expiry`. A signed expiry beyond it (+ skew) is refused. The user may sign a SHORTER lifetime (the SDK accepts a
-   * changed expiry, see `expiryChangeable`); a longer one is still refused here until TC-2274 lets OpenKey grant more.
+   * changed expiry, see `expiryChangeable`); a longer one is refused here unless `expiryChangeable` is set.
    */
   expiry?: RequestedExpiry;
+  /**
+   * Set only for a request whose link carried the `expiryChangeable` opt-in (the plain paste link). OpenKey then lets
+   * the user pick any lifetime, so there is no `expiry` ceiling: the signed expiry only has to be more than 60 seconds
+   * away and one a signed message can carry (before 10000-01-01). Signed approval requests, device login and prepared
+   * logins never send the opt-in and keep the `expiry` ceiling.
+   */
+  expiryChangeable?: boolean;
   /** Grant escalation stores a portable delegation, not a login session. */
   purpose?: "grant";
   /** Agent grant: the approval must cover every requested action, or no grant is stored. */
@@ -496,7 +528,17 @@ export function verifySignedSession(
   if (signedExpiry <= Date.now()) {
     throw new CLIError("AUTH_EXPIRED", `The approved session has expired. ${notStored}`, ExitCode.AUTH_REQUIRED);
   }
-  if (expected.expiry !== undefined && signedExpiry > expiryLimit(expected.expiry)) {
+  if (expected.expiryChangeable === true) {
+    // The link told OpenKey the user may choose any lifetime, so `--expiry` is only a proposal. Whatever the owner signed
+    // is accepted as long as it is more than 60 seconds away: there is no upper bound beyond what a signed message can carry.
+    if (signedExpiry <= Date.now() + MIN_SIGNED_REMAINING_MS) {
+      throw new CLIError("OPENKEY_EXPIRY_TOO_SHORT", `The signed session lasts 60 seconds or less, too short to use. Choose a longer lifetime in OpenKey. ${notStored}`, ExitCode.PERMISSION_DENIED);
+    }
+    const technical = technicalExpiryRefusal(signedExpiry, "siwe");
+    if (technical !== null) {
+      throw new CLIError("OPENKEY_EXPIRY_UNREPRESENTABLE", `The signed session's ${technical}. ${notStored}`, ExitCode.PERMISSION_DENIED);
+    }
+  } else if (expected.expiry !== undefined && signedExpiry > expiryLimit(expected.expiry)) {
     const exceeded = new CLIError("OPENKEY_EXPIRY_EXCEEDED", `The signed session outlives the requested --expiry. ${notStored}`, ExitCode.PERMISSION_DENIED);
     // Counted from the signed Issued At the lifetime fits: only the local clock makes it look too long. Not a refusal to clean up after.
     if (!outlivesRequestFromIssuedAt(data.siwe as string, signedExpiry, expected.expiry)) markClockDependent(exceeded);

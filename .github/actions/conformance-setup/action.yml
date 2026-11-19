@@ -41,6 +41,8 @@ runs:
         key: cargo-${{ runner.os }}-${{ steps.rust-version.outputs.version }}-${{ github.workflow }}-conformance-${{ hashFiles('Cargo.lock') }}
         restore-keys: |
           cargo-${{ runner.os }}-${{ steps.rust-version.outputs.version }}-${{ github.workflow }}-conformance-
+    - name: Install wasm-pack
+      uses: ./.github/actions/install-wasm-pack
     - run: bun install --frozen-lockfile
       shell: bash
     - name: Build SDK runtime prerequisites

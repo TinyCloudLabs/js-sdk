@@ -19,11 +19,13 @@ import type {
 } from "./types";
 
 export interface EncryptToNetworkOptions {
+  /** Write TCW2 key wraps. Defaults to the service setting, otherwise false. */
+  keyWrapV2?: boolean;
   /** Exact named-key path to bind into the returned envelope. */
   keyPath?: string;
   /** Optional associated authenticated data (bytes). */
   aad?: Uint8Array;
-  /** Ciphersuite override. Defaults to the network's alg. */
+  /** Ciphersuite override; must match the selected key-wrap writer. */
   alg?: string;
   /** Key version override. Defaults to the network's current key version. */
   keyVersion?: number;
@@ -76,6 +78,10 @@ export interface IEncryptionService extends IService {
    *
    * The capability proof must root at the network owner DID embedded
    * in the envelope's networkId.
+   *
+   * Unresponsive decrypt transports use DECRYPTION_DEPENDENCY_UNAVAILABLE.
+   * HTTP failure, identity, registry and caller-cancellation classifications
+   * remain distinct; a failed request never returns partial plaintext.
    */
   decryptEnvelope(
     envelope: InlineEncryptedEnvelope,

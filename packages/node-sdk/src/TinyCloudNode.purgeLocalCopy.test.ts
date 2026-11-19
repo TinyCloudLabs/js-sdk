@@ -3,22 +3,25 @@
  * `replication.purgeLocalCopy()` retries a failed erase, and `replica.purge.failed` reports one that
  * stayed failed. Runs the real IndexedDB lifecycle over fake-indexeddb.
  */
-import { mkdtempSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { IDBKeyRange as fakeIDBKeyRange, indexedDB as fakeIndexedDB } from "fake-indexeddb";
 
-// Never touch a real home: every tool home is a temp dir, asserted before any write.
-const TEST_HOME = mkdtempSync("/var/tmp/tc1888.");
-process.env.HOME = TEST_HOME;
-process.env.BUN_INSTALL_CACHE_DIR = TEST_HOME;
-if (!process.env.HOME.startsWith("/var/tmp/tc1888.")) throw new Error("test home is not a temp dir");
+import { assertPrivateTestEnvironment } from "../../operations/test-support/private-home.mjs";
 
-import { pkhDid, type ReplicaPurgeFailedEvent } from "@tinycloud/sdk-core";
+assertPrivateTestEnvironment();
+const TEST_HOME = process.env.HOME;
+
+import { pkhDid, type ReplicaPurgeFailedEvent, type ISessionStorage } from "@tinycloud/sdk-core";
 import { registerReplicationLoaders } from "./core";
 import { NodeWasmBindings } from "./NodeWasmBindings";
 import { PrivateKeySigner } from "./signers/PrivateKeySigner";
 import { TinyCloudNode } from "./TinyCloudNode";
 import { PROOF_PRIVATE_KEY, signedRestorableSession } from "./test-support/signed-restorable-session";
+import { MemorySessionStorage } from "./storage/MemorySessionStorage";
+import {
+  startUnregisteredLocationRegistry,
+  type UnregisteredLocationRegistry,
+} from "./test-support/unregistered-location-registry";
 import type { ReplicationModuleLoaders } from "./replication/module-registry";
 import { assertValidReplicationConfig } from "./replication/config";
 import { ledgerFor } from "../../replica/src/kv-storage/ledger";
@@ -27,7 +30,8 @@ import { KV_DATABASE } from "../../replica/src/kv-storage/schema";
 import { injectDenyFailure } from "../../replica/src/kv-storage/testing";
 import { requestAsPromise } from "../../replica/src/browser/idb";
 
-const RESTORE_HOST = "http://127.0.0.1:1";
+let locationRegistry: UnregisteredLocationRegistry;
+let RESTORE_HOST: string;
 const OTHER_PRIVATE_KEY = "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d";
 const tombstoneKey = "tinycloud-replica:deny-tombstone";
 const markerKey = "tinycloud-replica:logout-pending";
@@ -58,6 +62,8 @@ function loaders(): ReplicationModuleLoaders {
 
 beforeEach(() => {
   expect(process.env.HOME).toBe(TEST_HOME);
+  locationRegistry = startUnregisteredLocationRegistry();
+  RESTORE_HOST = locationRegistry.url.origin;
   registerReplicationLoaders({
     ...loaders(),
     runtime: async () => ({ ReplicationRuntime: StubRuntime }) as never,
@@ -66,6 +72,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  locationRegistry.stop(true);
   registerReplicationLoaders(loaders());
 });
 
@@ -115,6 +122,7 @@ async function withBrowserOrigin<T>(run: (
 async function restoredNode(
   lifecycle: ReturnType<typeof createIndexedDbLifecycle>,
   signerKey = PROOF_PRIVATE_KEY,
+  sessionStorage?: ISessionStorage,
 ) {
   const proof = await signedRestorableSession();
   const principal = pkhDid(proof.address, proof.chainId);
@@ -122,9 +130,11 @@ async function restoredNode(
     consentAnchor: { source: "siwe", at: Date.parse(proof.siwe.match(/Issued At: (.+)/)![1]!) },
   });
   const node = new TinyCloudNode({
+    tinycloudRegistryUrl: locationRegistry.url.origin,
     host: RESTORE_HOST,
     signer: new PrivateKeySigner(signerKey),
     wasmBindings: new NodeWasmBindings(),
+    sessionStorage,
     replication: {
       enabled: true,
       prefixes: ["notes/"],
@@ -134,7 +144,7 @@ async function restoredNode(
   const failures: ReplicaPurgeFailedEvent[] = [];
   node.on("replica.purge.failed", (event) => failures.push(event));
   await node.restoreSession({ ...proof, replicaStamp: stamp });
-  return { node, principal, failures };
+  return { node, principal, failures, proof };
 }
 
 describe("signOut erases the local copy before it resolves", () => {
@@ -216,6 +226,43 @@ describe("signOut erases the local copy before it resolves", () => {
       expect(await databaseListed()).toBe(false);
       expect(await inspectReplicaKeyPresence()).toEqual({ gateHmac: false, accountKey: false });
       expect(entries.has(markerKey)).toBe(false);
+    });
+  });
+
+  test("auth-clear rejection does not discard the replica recovery marker or abandon erase", async () => {
+    await withBrowserOrigin(async (lifecycle, entries) => {
+      const backing = new MemorySessionStorage();
+      const failure = new Error("synthetic auth clear failure");
+      const storage: ISessionStorage = {
+        save: (address, data) => backing.save(address, data),
+        load: (address) => backing.load(address),
+        clear: async () => { throw failure; },
+        exists: (address) => backing.exists(address),
+        isAvailable: () => true,
+      };
+      const { node, proof } = await restoredNode(lifecycle, PROOF_PRIVATE_KEY, storage);
+      await storage.save(proof.address, {
+        address: proof.address, chainId: proof.chainId, sessionKey: JSON.stringify(proof.jwk),
+        siwe: proof.siwe, signature: proof.signature, expiresAt: proof.expiresAt,
+        createdAt: new Date().toISOString(), version: "1.0",
+      });
+      const clearTx = injectDenyFailure("deny_tx");
+      const clearDelete = injectDenyFailure("delete_database", { once: false });
+      try {
+        const signingOut = node.signOut();
+        const cleanup = (node as unknown as { signOutInFlight: Promise<void> }).signOutInFlight;
+        expect(await signingOut.then(() => false, (error) => error === failure)).toBe(true);
+        await cleanup;
+        expect(entries.has(markerKey)).toBe(true);
+        expect(await databaseListed()).toBe(true);
+        expect((await node.replication!.status())[0]).toMatchObject({ gate: "logout_pending" });
+      } finally {
+        clearTx();
+        clearDelete();
+      }
+      expect(await node.replication!.purgeLocalCopy()).toEqual({ ok: true });
+      expect(entries.has(markerKey)).toBe(false);
+      expect(await databaseListed()).toBe(false);
     });
   });
 

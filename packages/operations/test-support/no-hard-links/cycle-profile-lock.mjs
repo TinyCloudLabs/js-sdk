@@ -1,3 +1,4 @@
+import "../test-bootstrap.mjs";
 // Takes the profile lock of the built @tinycloud/operations (as the CLI runs
 // it, under Node) `iterations` times, recording overlapping holders. Run with
 // no-hard-links.cjs preloaded. Exit 3: timed out without holding the lock.

@@ -1,3 +1,4 @@
+import { approvalNextLine } from "./next-line.js";
 import { ExitCode } from "../config/constants.js";
 import { CLIError, type ApprovalPending } from "../output/errors.js";
 
@@ -42,6 +43,8 @@ export interface ApprovalWait {
   readonly sleep?: (ms: number) => Promise<void>;
   /** Test seam: the grace after the deadline for collecting an approval the owner already gave. */
   readonly graceMs?: number;
+  /** Test seam: the request limit of the first status check (10 s). */
+  readonly requestTimeoutMs?: number;
 }
 
 /** The longest one request waits for OpenKey. */
@@ -76,15 +79,24 @@ export function approvalRequestTimeoutMs(wait: ApprovalWait | undefined, approve
   return Math.min(REQUEST_TIMEOUT_MS, Math.max(MIN_REQUEST_TIMEOUT_MS, left));
 }
 
-/** Exit 8 with `{"pending":{...}}` on stdout. It is the approval only; OpenKey being unavailable has its own errors. */
-export function approvalPendingError(pending: ApprovalPending): CLIError {
+/**
+ * The first status check of each approval gets the FULL request limit, whatever the deadline: with `--timeout 1s` a request
+ * that OpenKey answers in 1.5 s must still finish, or an approval the owner already gave reads as pending. Only once a
+ * check has produced an answer does the deadline decide whether to ask again or to exit 8.
+ */
+export function firstCheckTimeoutMs(wait: ApprovalWait): number {
+  return wait.requestTimeoutMs ?? REQUEST_TIMEOUT_MS;
+}
+
+/** Exit 8 with `{"pending":{...}}` on stdout. It is the approval only; OpenKey being unavailable has its own errors. `created`: the link is new in this run. */
+export function approvalPendingError(pending: ApprovalPending, created = false): CLIError {
   return new CLIError(
     "APPROVAL_PENDING",
-    `Still waiting for the owner to approve in OpenKey. Run the same command again to keep waiting; the link stays valid until ${pending.expiresAt}.`,
+    `Still waiting for the owner to approve in OpenKey. Run the same command again to keep waiting; the link stays valid until ${pending.expiresAt}.\n${approvalNextLine(created)}`,
     ExitCode.PENDING,
     { pending },
   );
 }
 
 export const APPROVAL_TIMEOUT_OPTION_DESCRIPTION =
-  `Wait at most this long for the owner's OpenKey approval (Ns or Nm, more than 0, at most 9m; for example 60s). Exits 8 with {"pending":{"step","of","approvalUrl","expiresAt"}} on stdout as soon as a new approval link exists, and again if the wait ends while the approval is still pending: that is not a failure, so send the owner the link and run the same command again. A link that expired ends as exit 3 and its saved request is dropped once OpenKey says it is expired (or 11 minutes after its expiry); until then the next run asks OpenKey once more, so exit 3 can repeat once before a new request is made. An approval already given is still collected after the timeout, for at most 30 s more (plus up to 3 s, and in onboard the next link). On a new account onboard also waits for OpenKey to host the space, for the time left of timeout + 30 s grace (at least 15 s; about 90 s in all for 60s, at worst a little under 2 minutes); if it is not ready, exit 1 SPACE_SETUP_PENDING: wait a minute and run it again (the re-run continues with step 2; if a storage command later says Space not found, wait and retry). Without it the command waits until the approval is answered.`;
+  `Wait at most this long for the owner's OpenKey approval (Ns or Nm, more than 0, at most 9m; for example 60s). Exits 8 with {"pending":{"step","of","approvalUrl","expiresAt"}} on stdout as soon as a new approval link exists, and again if the wait ends while the approval is still pending: that is not a failure, so send the owner the link and run the same command again. A link that expired ends as exit 3 and its saved request is dropped once OpenKey says it is expired (or 11 minutes after its expiry); until then the next run asks OpenKey once more, so exit 3 can repeat once before a new request is made. An approval already given is still collected after the timeout, for at most 30 s more (plus up to 3 s, and in onboard the next link). A resumed approval completes one status check of OpenKey whatever the --timeout, even a very short one (a new link exits 8 at once, with no check): the command can take up to about 10 s longer than the timeout; if OpenKey does not answer that check at all, the command exits 6 instead of reporting the approval as pending. On a new account onboard also waits for OpenKey to host the space, for the time left of timeout + 30 s grace (at least 15 s; about 90 s in all for 60s, at worst a little under 2 minutes); if it is not ready, exit 1 SPACE_SETUP_PENDING: wait a minute and run it again (the re-run continues with step 2; if a storage command later says Space not found, wait and retry). Without it the command waits until the approval is answered.`;
