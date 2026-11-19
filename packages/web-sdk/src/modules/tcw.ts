@@ -2040,6 +2040,8 @@ export class TinyCloudWeb {
   /**
    * Receive and retrieve data from a native TinyCloud bearer delegation.
    * Static method — no sign-in required. Verifies the parent with browser WASM and routes through the owner's registry.
+   * An owner the registry has no record of at all is routed to the host recorded in the link (as before 3.12);
+   * a registered owner keeps the registry's hosts, and an unavailable registry still refuses.
    */
   public static async receiveShare<T = unknown>(
     link: string,
@@ -2050,10 +2052,19 @@ export class TinyCloudWeb {
     await wasmBindings.ensureInitialized();
 
     try {
+      // The link's recorded host is only a hint: the node routes to it for an owner the registry has no record of, and
+      // never over a registered owner's hosts or when the registry is unavailable. Nothing else is ever a fallback.
+      let linkHost: string | undefined;
+      try {
+        linkHost = new TinyCloudNode({ wasmBindings, autoDiscoverLocalNode: false }).sharing.decodeLink(link).host;
+      } catch {
+        // receive() below reports a malformed link.
+      }
       const node = new TinyCloudNode({
         wasmBindings,
         registrySequenceStore: createLocalStorageRegistrySequenceStore(),
         registryCacheStore: createLocalStorageRegistryCacheStore(),
+        ...(linkHost === undefined ? {} : { host: linkHost }),
         newUserHost: null,
         autoDiscoverLocalNode: false,
       });
@@ -2067,7 +2078,7 @@ export class TinyCloudWeb {
       const share = received.data;
 
       // receive() has verified the parent CID, signature, space and embedded key.
-      // Its recorded host is never promoted to routing authority.
+      // Its recorded host is routing authority only for an owner with no registry record (see above).
       let registeredHost: string | undefined;
       const delegateResponse = await (share.resourceTransport ?? node.resourceTransport)(
         [{ resource: share.spaceId, access: "read" }],
