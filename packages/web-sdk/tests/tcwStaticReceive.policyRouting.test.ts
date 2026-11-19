@@ -46,7 +46,11 @@ function browserStorage() {
   Object.defineProperty(globalThis, "localStorage", { configurable: true, value: storage });
   Object.defineProperty(globalThis, "navigator", {
     configurable: true,
-    value: { locks: { request: async (_name: string, action: () => Promise<unknown>) => action() } },
+    value: { locks: { request: async (
+      _name: string,
+      optionsOrAction: object | (() => Promise<unknown>),
+      action?: () => Promise<unknown>,
+    ) => typeof optionsOrAction === "function" ? optionsOrAction() : action!() } },
   });
   return storage;
 }

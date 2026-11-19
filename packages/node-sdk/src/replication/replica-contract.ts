@@ -1,3 +1,4 @@
+import type { FetchFunction } from "@tinycloud/sdk-services";
 import type { ReplicaConsentAnchor } from "@tinycloud/sdk-services/kv/replication";
 
 /**
@@ -499,7 +500,7 @@ export interface ReplicaRuntime {
     grant: ParsedUcanGrant,
     input: { deviceDid: string; space: string; prefix: string; now: number },
   ): void;
-  kvSyncTransport(kv: KVSyncClient): ReplicaTransport;
+  kvSyncTransport(kv: KVSyncClient, options?: { host?: string; fetch?: FetchFunction }): ReplicaTransport;
 }
 
 /** JSON-safe identity of a source-unknown path approved before logout. */

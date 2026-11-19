@@ -1,3 +1,4 @@
+import { usingResponse } from "@tinycloud/sdk-services/internal/response-body";
 /**
  * SpaceService - Global singleton for managing spaces (owned and delegated).
  *
@@ -548,42 +549,42 @@ export class SpaceService implements ISpaceService {
     try {
       const headers = this.invoke(this.session, "space", "", "tinycloud.space/list");
 
-      const response = await this.fetchFn(`${this.host}/invoke`, {
+      return await usingResponse(() => this.fetchFn(`${this.host}/invoke`, {
         method: "POST",
         headers,
         redirect: "error",
+      }), async (response) => {
+        if (!response.ok) {
+          return err(await serviceHttpError(
+            response, SpaceErrorCodes.NETWORK_ERROR, "Failed to list owned spaces", SERVICE_NAME,
+          ));
+        }
+
+        const rawData = await response.json();
+
+        // Validate server response
+        const validationResult = validateServerOwnedSpacesResponse(rawData);
+        if (!validationResult.ok) {
+          return err(
+            serviceError(
+              SpaceErrorCodes.NETWORK_ERROR,
+              validationResult.error.message,
+              SERVICE_NAME,
+              { meta: validationResult.error.meta }
+            )
+          );
+        }
+
+        const spaces: SpaceInfo[] = validationResult.data.map((item) => ({
+          id: item.id,
+          name: item.name ?? this.extractNameFromId(item.id),
+          owner: item.owner,
+          type: "owned" as SpaceOwnership,
+          permissions: ["*"], // Full permissions for owned spaces
+        }));
+
+        return ok(spaces);
       });
-
-      if (!response.ok) {
-        return err(await serviceHttpError(
-          response, SpaceErrorCodes.NETWORK_ERROR, "Failed to list owned spaces", SERVICE_NAME,
-        ));
-      }
-
-      const rawData = await response.json();
-
-      // Validate server response
-      const validationResult = validateServerOwnedSpacesResponse(rawData);
-      if (!validationResult.ok) {
-        return err(
-          serviceError(
-            SpaceErrorCodes.NETWORK_ERROR,
-            validationResult.error.message,
-            SERVICE_NAME,
-            { meta: validationResult.error.meta }
-          )
-        );
-      }
-
-      const spaces: SpaceInfo[] = validationResult.data.map((item) => ({
-        id: item.id,
-        name: item.name ?? this.extractNameFromId(item.id),
-        owner: item.owner,
-        type: "owned" as SpaceOwnership,
-        permissions: ["*"], // Full permissions for owned spaces
-      }));
-
-      return ok(spaces);
     } catch (error) {
       return err(
         serviceError(
@@ -706,53 +707,53 @@ export class SpaceService implements ISpaceService {
     try {
       const headers = this.invoke(this.session, "space", name, "tinycloud.space/create");
 
-      const response = await this.fetchFn(`${this.host}/invoke`, {
+      return await usingResponse(() => this.fetchFn(`${this.host}/invoke`, {
         method: "POST",
         headers,
         body: JSON.stringify({ name }),
         redirect: "error",
-      });
+      }), async (response) => {
+        if (!response.ok) {
+          if (response.status === 409) {
+            return err(await serviceHttpError(
+              response, SpaceErrorCodes.ALREADY_EXISTS, `Space "${name}" already exists`, SERVICE_NAME,
+            ));
+          }
 
-      if (!response.ok) {
-        if (response.status === 409) {
           return err(await serviceHttpError(
-            response, SpaceErrorCodes.ALREADY_EXISTS, `Space "${name}" already exists`, SERVICE_NAME,
+            response, SpaceErrorCodes.CREATION_FAILED, "Failed to create space", SERVICE_NAME,
           ));
         }
 
-        return err(await serviceHttpError(
-          response, SpaceErrorCodes.CREATION_FAILED, "Failed to create space", SERVICE_NAME,
-        ));
-      }
+        const rawData = await response.json();
 
-      const rawData = await response.json();
+        // Validate server response
+        const validationResult = validateServerCreateSpaceResponse(rawData);
+        if (!validationResult.ok) {
+          return err(
+            serviceError(
+              SpaceErrorCodes.CREATION_FAILED,
+              validationResult.error.message,
+              SERVICE_NAME,
+              { meta: validationResult.error.meta }
+            )
+          );
+        }
 
-      // Validate server response
-      const validationResult = validateServerCreateSpaceResponse(rawData);
-      if (!validationResult.ok) {
-        return err(
-          serviceError(
-            SpaceErrorCodes.CREATION_FAILED,
-            validationResult.error.message,
-            SERVICE_NAME,
-            { meta: validationResult.error.meta }
-          )
-        );
-      }
+        const spaceInfo: SpaceInfo = {
+          id: validationResult.data.id,
+          name: validationResult.data.name || name,
+          owner: validationResult.data.owner || this.userDid || "",
+          type: "owned",
+          permissions: ["*"],
+        };
 
-      const spaceInfo: SpaceInfo = {
-        id: validationResult.data.id,
-        name: validationResult.data.name || name,
-        owner: validationResult.data.owner || this.userDid || "",
-        type: "owned",
-        permissions: ["*"],
-      };
+        // Cache the info
+        this.infoCache.set(spaceInfo.id, { info: spaceInfo, cachedAt: Date.now() });
+        this.notifySpaceRegistered(spaceInfo);
 
-      // Cache the info
-      this.infoCache.set(spaceInfo.id, { info: spaceInfo, cachedAt: Date.now() });
-      this.notifySpaceRegistered(spaceInfo);
-
-      return ok(spaceInfo);
+        return ok(spaceInfo);
+      });
     } catch (error) {
       return err(
         serviceError(
@@ -882,54 +883,54 @@ export class SpaceService implements ISpaceService {
     try {
       const headers = this.invoke(this.session, "space", spaceId, "tinycloud.space/info");
 
-      const response = await this.fetchFn(`${this.host}/invoke`, {
+      return await usingResponse(() => this.fetchFn(`${this.host}/invoke`, {
         method: "POST",
         headers,
         body: JSON.stringify({ spaceId }),
         redirect: "error",
-      });
+      }), async (response) => {
+        if (!response.ok) {
+          if (response.status === 404) {
+            return err(await serviceHttpError(
+              response, SpaceErrorCodes.NOT_FOUND, `Space not found: ${spaceId}`, SERVICE_NAME,
+            ));
+          }
 
-      if (!response.ok) {
-        if (response.status === 404) {
           return err(await serviceHttpError(
-            response, SpaceErrorCodes.NOT_FOUND, `Space not found: ${spaceId}`, SERVICE_NAME,
+            response, SpaceErrorCodes.NETWORK_ERROR, "Failed to get space info", SERVICE_NAME,
           ));
         }
 
-        return err(await serviceHttpError(
-          response, SpaceErrorCodes.NETWORK_ERROR, "Failed to get space info", SERVICE_NAME,
-        ));
-      }
+        const rawData = await response.json();
 
-      const rawData = await response.json();
+        // Validate server response
+        const validationResult = validateServerSpaceInfoResponse(rawData);
+        if (!validationResult.ok) {
+          return err(
+            serviceError(
+              SpaceErrorCodes.NETWORK_ERROR,
+              validationResult.error.message,
+              SERVICE_NAME,
+              { meta: validationResult.error.meta }
+            )
+          );
+        }
 
-      // Validate server response
-      const validationResult = validateServerSpaceInfoResponse(rawData);
-      if (!validationResult.ok) {
-        return err(
-          serviceError(
-            SpaceErrorCodes.NETWORK_ERROR,
-            validationResult.error.message,
-            SERVICE_NAME,
-            { meta: validationResult.error.meta }
-          )
-        );
-      }
+        const data = validationResult.data;
+        const spaceInfo: SpaceInfo = {
+          id: data.id,
+          name: data.name ?? this.extractNameFromId(data.id),
+          owner: data.owner,
+          type: data.type ?? (ownerDidEquals(data.owner, this.userDid) ? "owned" : "delegated"),
+          permissions: data.permissions,
+          expiresAt: data.expiresAt ? new Date(data.expiresAt) : undefined,
+        };
 
-      const data = validationResult.data;
-      const spaceInfo: SpaceInfo = {
-        id: data.id,
-        name: data.name ?? this.extractNameFromId(data.id),
-        owner: data.owner,
-        type: data.type ?? (ownerDidEquals(data.owner, this.userDid) ? "owned" : "delegated"),
-        permissions: data.permissions,
-        expiresAt: data.expiresAt ? new Date(data.expiresAt) : undefined,
-      };
+        // Cache the info
+        this.infoCache.set(spaceId, { info: spaceInfo, cachedAt: Date.now() });
 
-      // Cache the info
-      this.infoCache.set(spaceId, { info: spaceInfo, cachedAt: Date.now() });
-
-      return ok(spaceInfo);
+        return ok(spaceInfo);
+      });
     } catch (error) {
       return err(
         serviceError(
@@ -1027,36 +1028,36 @@ export class SpaceService implements ISpaceService {
             facts
           );
 
-          const response = await self.fetchFn(`${self.host}/invoke`, {
+          return await usingResponse(() => self.fetchFn(`${self.host}/invoke`, {
             method: "POST",
             headers,
             redirect: "error",
+          }), async (response) => {
+            if (!response.ok) {
+              return err(await serviceHttpError(
+                response, SpaceErrorCodes.NETWORK_ERROR, "Failed to list delegations", SERVICE_NAME,
+              ));
+            }
+
+            // Server returns { [cid: string]: DelegationInfo } - validate and transform to Delegation[]
+            const rawData = await response.json();
+
+            // Validate server response
+            const validationResult = validateServerDelegationsResponse(rawData);
+            if (!validationResult.ok) {
+              return err(
+                serviceError(
+                  SpaceErrorCodes.NETWORK_ERROR,
+                  validationResult.error.message,
+                  SERVICE_NAME,
+                  { meta: validationResult.error.meta }
+                )
+              );
+            }
+
+            const delegations = transformServerDelegations(validationResult.data, spaceId);
+            return ok(delegations);
           });
-
-          if (!response.ok) {
-            return err(await serviceHttpError(
-              response, SpaceErrorCodes.NETWORK_ERROR, "Failed to list delegations", SERVICE_NAME,
-            ));
-          }
-
-          // Server returns { [cid: string]: DelegationInfo } - validate and transform to Delegation[]
-          const rawData = await response.json();
-
-          // Validate server response
-          const validationResult = validateServerDelegationsResponse(rawData);
-          if (!validationResult.ok) {
-            return err(
-              serviceError(
-                SpaceErrorCodes.NETWORK_ERROR,
-                validationResult.error.message,
-                SERVICE_NAME,
-                { meta: validationResult.error.meta }
-              )
-            );
-          }
-
-          const delegations = transformServerDelegations(validationResult.data, spaceId);
-          return ok(delegations);
         } catch (error) {
           return err(
             serviceError(
@@ -1090,36 +1091,36 @@ export class SpaceService implements ISpaceService {
             facts
           );
 
-          const response = await self.fetchFn(`${self.host}/invoke`, {
+          return await usingResponse(() => self.fetchFn(`${self.host}/invoke`, {
             method: "POST",
             headers,
             redirect: "error",
+          }), async (response) => {
+            if (!response.ok) {
+              return err(await serviceHttpError(
+                response, SpaceErrorCodes.NETWORK_ERROR, "Failed to list received delegations", SERVICE_NAME,
+              ));
+            }
+
+            // Server returns { [cid: string]: DelegationInfo } - validate and transform to Delegation[]
+            const rawData = await response.json();
+
+            // Validate server response
+            const validationResult = validateServerDelegationsResponse(rawData);
+            if (!validationResult.ok) {
+              return err(
+                serviceError(
+                  SpaceErrorCodes.NETWORK_ERROR,
+                  validationResult.error.message,
+                  SERVICE_NAME,
+                  { meta: validationResult.error.meta }
+                )
+              );
+            }
+
+            const delegations = transformServerDelegations(validationResult.data, spaceId);
+            return ok(delegations);
           });
-
-          if (!response.ok) {
-            return err(await serviceHttpError(
-              response, SpaceErrorCodes.NETWORK_ERROR, "Failed to list received delegations", SERVICE_NAME,
-            ));
-          }
-
-          // Server returns { [cid: string]: DelegationInfo } - validate and transform to Delegation[]
-          const rawData = await response.json();
-
-          // Validate server response
-          const validationResult = validateServerDelegationsResponse(rawData);
-          if (!validationResult.ok) {
-            return err(
-              serviceError(
-                SpaceErrorCodes.NETWORK_ERROR,
-                validationResult.error.message,
-                SERVICE_NAME,
-                { meta: validationResult.error.meta }
-              )
-            );
-          }
-
-          const delegations = transformServerDelegations(validationResult.data, spaceId);
-          return ok(delegations);
         } catch (error) {
           return err(
             serviceError(
@@ -1169,17 +1170,16 @@ export class SpaceService implements ISpaceService {
               redirect: "error",
             });
           };
-          const response = self.resourceTransport
-            ? await self.resourceTransport([{ resource: spaceId, access: "write" }], (target) => send(target.fetch, target.url, target))
-            : await send(self.fetchFn, self.host);
-
-          if (!response.ok) {
-            return err(await serviceHttpError(
-              response, SpaceErrorCodes.NETWORK_ERROR, "Failed to revoke delegation", SERVICE_NAME,
-            ));
-          }
-
-          return ok(undefined);
+          return await usingResponse(() => self.resourceTransport
+            ? self.resourceTransport([{ resource: spaceId, access: "write" }], (target) => send(target.fetch, target.url, target))
+            : send(self.fetchFn, self.host), async (response) => {
+            if (!response.ok) {
+              return err(await serviceHttpError(
+                response, SpaceErrorCodes.NETWORK_ERROR, "Failed to revoke delegation", SERVICE_NAME,
+              ));
+            }
+            return ok(undefined);
+          });
         } catch (error) {
           if (routingFailure(error)) return err(wrapError(SERVICE_NAME, error));
           return err(

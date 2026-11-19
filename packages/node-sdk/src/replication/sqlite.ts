@@ -1446,6 +1446,7 @@ class SqliteReplicaHandle implements KVReplicaHandle {
           invokeAny: wasm.invokeAny,
           fetch,
           hosts: [spec.identity.host],
+          priority: "background",
         });
         const kv = new KVService({});
         kv.initialize(context);
@@ -1457,7 +1458,7 @@ class SqliteReplicaHandle implements KVReplicaHandle {
           verificationMethod: device.did,
           jwk: device.jwk,
         });
-        return kvSyncTransport(kv);
+        return kvSyncTransport(kv, { host: spec.identity.host, fetch: context.fetch });
       };
     })();
     return this.#transportFactory;

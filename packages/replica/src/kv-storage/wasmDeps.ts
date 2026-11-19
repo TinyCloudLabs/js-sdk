@@ -28,6 +28,7 @@ export const wasmWorkerDeps: Pick<KvWorkerDeps, "createDevice" | "transportFor">
       invokeAny: tinycloud.invokeAny,
       fetch: globalThis.fetch.bind(globalThis),
       hosts: [spec.identity.host],
+      priority: "background",
     });
     const kv = new KVService({});
     kv.initialize(context);
@@ -39,6 +40,6 @@ export const wasmWorkerDeps: Pick<KvWorkerDeps, "createDevice" | "transportFor">
       verificationMethod: device.did,
       jwk: device.jwk,
     });
-    return kvSyncTransport(kv, { host: spec.identity.host });
+    return kvSyncTransport(kv, { host: spec.identity.host, fetch: context.fetch });
   },
 };

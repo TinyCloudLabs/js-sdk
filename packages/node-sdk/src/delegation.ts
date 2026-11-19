@@ -7,7 +7,7 @@ import {
   PermissionEntry,
   principalDidEquals,
 } from "@tinycloud/sdk-core";
-import { routingFailure } from "@tinycloud/sdk-services";
+import { routingFailure, type RequestPriority } from "@tinycloud/sdk-services";
 
 /**
  * A portable delegation that can be transported between users.
@@ -122,7 +122,7 @@ export interface RuntimeDelegationActivator {
   readonly did?: string;
   readonly isSessionOnly?: boolean;
   computeDelegationCid(authorization: string): string;
-  useRuntimeDelegation(delegation: PortableDelegation): Promise<void>;
+  useRuntimeDelegation(delegation: PortableDelegation, priority?: RequestPriority): Promise<void>;
   useDelegation?(delegation: PortableDelegation): Promise<unknown>;
   getRuntimePermissionDelegations(): PortableDelegation[];
   /** Called only with the verified effective authority of an installed delegation. */
@@ -680,6 +680,7 @@ export async function activateValidatedRuntimeDelegation(
   delegation: PortableDelegation,
   options: {
     host: string;
+    priority?: RequestPriority;
     authorize?: (effectivePermissions: readonly PermissionEntry[]) => boolean;
   },
 ): Promise<ValidatedRuntimeDelegation> {
@@ -792,8 +793,10 @@ export async function activateValidatedRuntimeDelegation(
       typeof node.useDelegation === "function"
     ) {
       await node.useDelegation(installedCandidate);
-    } else {
+    } else if (options.priority === undefined) {
       await node.useRuntimeDelegation(installedCandidate);
+    } else {
+      await node.useRuntimeDelegation(installedCandidate, options.priority);
     }
   } catch (error) {
     if (routingFailure(error)) throw error;

@@ -1,9 +1,12 @@
+import { usingResponse } from "@tinycloud/sdk-services/internal/response-body";
 /**
  * Shared space utilities for TinyCloud.
  *
  * These functions are platform-agnostic and can be used by both
  * web-sdk and node-sdk for space hosting and session activation.
  */
+
+import type { FetchFunction } from "@tinycloud/sdk-services";
 
 /**
  * Result of a space hosting or session activation attempt.
@@ -66,7 +69,8 @@ export async function fetchPeerId(
 export async function submitHostDelegation(
   host: string,
   headers: Record<string, string>,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  fetch: FetchFunction = globalThis.fetch.bind(globalThis),
 ): Promise<SpaceHostResult> {
   const res = await fetch(`${host}/delegate`, {
     method: "POST",
@@ -162,9 +166,10 @@ function activationFlightKey(
 export async function activateSessionWithHost(
   host: string,
   delegationHeader: { Authorization: string },
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  fetch?: FetchFunction,
 ): Promise<SpaceHostResult> {
-  if (signal) return postSessionActivation(host, delegationHeader, signal);
+  if (signal || fetch) return postSessionActivation(host, delegationHeader, signal, fetch);
   const key = activationFlightKey(host, delegationHeader as Record<string, string>);
 
   const existing = inFlightActivations.get(key);
@@ -226,39 +231,40 @@ function startActivationFlight(
 async function postSessionActivation(
   host: string,
   delegationHeader: { Authorization: string },
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  fetch: FetchFunction = globalThis.fetch.bind(globalThis),
 ): Promise<SpaceHostResult> {
-  const res = await fetch(`${host}/delegate`, {
+  return await usingResponse(() => fetch(`${host}/delegate`, {
     method: "POST",
     headers: delegationHeader,
     redirect: "error",
     signal,
-  });
-
-  if (res.ok) {
-    try {
-      const body = await res.json() as { cid?: string; activated?: string[]; skipped?: string[] };
-      return {
-        success: true,
-        status: res.status,
-        activated: body.activated ?? [],
-        skipped: body.skipped ?? [],
-        commitEventCid: body.cid,
-      };
-    } catch {
-      // Fallback for older servers that return plain text CID
-      return {
-        success: true,
-        status: res.status,
-        activated: [],
-        skipped: [],
-      };
+  }), async (res) => {
+    if (res.ok) {
+      try {
+        const body = await res.json() as { cid?: string; activated?: string[]; skipped?: string[] };
+        return {
+          success: true,
+          status: res.status,
+          activated: body.activated ?? [],
+          skipped: body.skipped ?? [],
+          commitEventCid: body.cid,
+        };
+      } catch {
+        // Fallback for older servers that return plain text CID
+        return {
+          success: true,
+          status: res.status,
+          activated: [],
+          skipped: [],
+        };
+      }
     }
-  }
 
-  return {
-    success: false,
-    status: res.status,
-    error: await res.text().catch(() => res.statusText),
-  };
+    return {
+      success: false,
+      status: res.status,
+      error: await res.text().catch(() => res.statusText),
+    };
+  });
 }

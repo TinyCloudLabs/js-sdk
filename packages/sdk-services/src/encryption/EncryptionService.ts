@@ -207,7 +207,9 @@ export class EncryptionService
     capabilityProof: DecryptCapabilityProof,
     options?: DecryptEnvelopeOptions,
   ): Promise<Result<Uint8Array, EncryptionError>> {
+    const request = this.createRequestSignal();
     try {
+      request.signal.throwIfAborted();
       this.assertActive();
       const validated = validateEnvelope(this.crypto, envelope, this._config.requireKeyWrapV2 ?? false);
       if (!validated.ok) return validated;
@@ -228,6 +230,8 @@ export class EncryptionService
         descriptor = options.descriptor;
       } else {
         const discovered = await this.discoverNetwork(envelope.networkId);
+        request.signal.throwIfAborted();
+        this.assertActive();
         if (!discovered.ok) return encErr(decryptionError(discovered.error));
         descriptor = discovered.data;
       }
@@ -239,6 +243,8 @@ export class EncryptionService
           ? await this._config.resolveTargetNode(envelope.networkId)
           :
         options?.targetNode ?? descriptor.members[0]?.nodeId;
+      request.signal.throwIfAborted();
+      this.assertActive();
       if (targetNode === undefined) {
         return encErr(
           encryptionError({
@@ -297,6 +303,7 @@ export class EncryptionService
         facts,
         proof: capabilityProof,
       });
+      request.signal.throwIfAborted();
       this.assertActive();
       if (!built.ok) {
         if (built.error.code !== "TRANSPORT_ERROR") return built;
@@ -315,8 +322,9 @@ export class EncryptionService
           networkId: envelope.networkId,
           authorization: built.data.authorization,
           canonicalBody: built.data.canonicalBody,
-          signal: this.abortSignal,
+          signal: request.signal,
         });
+        request.signal.throwIfAborted();
         this.assertActive();
       } catch (error) {
         const routing = routingFailure(error);
@@ -373,6 +381,8 @@ export class EncryptionService
       );
       return encOk(plaintext);
     } catch (error) {
+      // An abort (caller, timeout or sign-out) is a transport outcome, not a failed decryption.
+      if (request.signal.aborted) return encErr(encryptionError({ code: "TRANSPORT_ERROR", cause: toError(error) }));
       const routing = routingFailure(error);
       if (routing) return encErr(decryptionError(routing));
       return encErr(
@@ -381,6 +391,8 @@ export class EncryptionService
           message: "Local decryption failed",
         }),
       );
+    } finally {
+      request.dispose();
     }
   }
 
