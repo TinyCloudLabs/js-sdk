@@ -1,10 +1,12 @@
 import { z } from "zod";
-import { ResourceNotRoutedError, routingResourceOf, type FetchFunction, type FetchResponse, type ResourceAccess, type ResourceTransport } from "@tinycloud/sdk-services";
+import { ResourceNotRoutedError, isVaultResourceUri, namesVaultResourceUri, routingResourceOf, type FetchFunction, type FetchResponse, type ResourceAccess, type ResourceTransport } from "@tinycloud/sdk-services";
 import type { DelegatedResource } from "./types";
 import { createCompactPolicyDescendant, parseSignedCompactUcanAttenuation } from "../policy/unified";
 import { httpResponseError } from "../http-error";
 import { parseSignedSiweCacao } from "./cacao";
 import { principalDid } from "../identity";
+import { endToEndNodeHost } from "../tinycloud-node";
+import { extractRecapAttenuations } from "../authorization/openkey-protocol";
 
 export function spaceIdsEqual(left: string, right: string): boolean {
   const normalizeOwnerAddress = (space: string): string => {
@@ -45,6 +47,44 @@ export async function verifiedDelegationRouting(authorization: string, cid: stri
   }
   if (resources.length === 0) throw new ResourceNotRoutedError("delegation");
   return { audienceDid, resources };
+}
+
+/**
+ * Whether a signed grant names or reaches vault data (a vault name, the `kv`
+ * root, a space root), so its activation or import may only use the node's
+ * end-to-end origin. Unreadable grants count as vault grants.
+ * Routing only: this checks neither signature validity nor authority.
+ */
+export async function delegationTouchesVault(authorization: string): Promise<boolean> {
+  try {
+    const attenuation = authorization.includes(".")
+      ? parseSignedCompactUcanAttenuation(authorization).payload.att
+      : (await parseSignedSiweCacao(authorization)).attenuation;
+    const entries = Object.entries(attenuation);
+    return entries.length === 0 || entries.some(([uri, abilities]) => isVaultResourceUri(uri, abilities));
+  } catch {
+    return true;
+  }
+}
+
+/**
+ * Session form of {@link delegationTouchesVault}: a SIWE session's recap is
+ * the attenuation its delegation carries (a SIWE without one names nothing).
+ * A session's own grant is audienced to its session key, so the node cannot
+ * use it; it is classified by the vault names it carries, not by a broad `kv`
+ * root. Without a SIWE, read the delegation as a grant. An unreadable recap
+ * counts as vault.
+ */
+export async function sessionTouchesVault(session: {
+  readonly siwe?: string;
+  readonly delegationHeader: { readonly Authorization: string };
+}): Promise<boolean> {
+  if (!session.siwe) return delegationTouchesVault(session.delegationHeader.Authorization);
+  try {
+    return Object.keys(extractRecapAttenuations(session.siwe)).some(namesVaultResourceUri);
+  } catch {
+    return true;
+  }
 }
 
 /** Transport form shared by addressed-share recipients and normal agents. */
@@ -132,6 +172,7 @@ export async function importPortableDelegation(
 ): Promise<PortableDelegationImportReceipt> {
   const parsed = parsePortableDelegation(delegation);
   const responses: FetchResponse[] = [];
+  const endToEnd = await delegationTouchesVault(parsed.delegationHeader.Authorization);
   if (resourceTransport) {
     const verified = await verifiedDelegationRouting(parsed.delegationHeader.Authorization, parsed.cid);
     await resourceTransport(verified.resources, async (target) => {
@@ -141,9 +182,10 @@ export async function importPortableDelegation(
       });
       responses.push(response);
       return response;
-    }, { independentResources: true });
+    }, { independentResources: true, endToEnd });
   } else {
-    responses.push(await fetchFn(`${host.replace(/\/+$/, "")}/delegate`, {
+    const target = endToEnd ? endToEndNodeHost(host) : host;
+    responses.push(await fetchFn(`${target.replace(/\/+$/, "")}/delegate`, {
       method: "POST",
       headers: { Authorization: parsed.delegationHeader.Authorization },
       redirect: "error",

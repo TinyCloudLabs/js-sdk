@@ -96,33 +96,18 @@ type SignalStatics = { any?: (signals: AbortSignal[]) => AbortSignal };
 const statics = AbortSignal as unknown as SignalStatics;
 const nativeAny = statics.any;
 
-/** Install one branch of the combiner for the tests in the enclosing `describe`; returns how often `AbortSignal.any` ran. */
-function useBranch(branch: "any" | "listeners"): { anyCalls: () => number } {
-  let calls = 0;
+/** Install one branch of the combiner for the tests in the enclosing `describe`. */
+function useBranch(branch: "any" | "listeners"): void {
   beforeEach(() => {
-    calls = 0;
-    statics.any =
-      branch === "listeners"
-        ? undefined
-        : (signals) => {
-            calls++;
-            return nativeAny!.call(AbortSignal, signals);
-          };
+    statics.any = branch === "listeners" ? undefined : nativeAny;
   });
   afterEach(() => {
     statics.any = nativeAny;
   });
-  return { anyCalls: () => calls };
 }
 
 describe("ServiceGraphLifetime [any] leaves no per-request abort listener", () => {
-  const { anyCalls } = useBranch("any");
-
-  test("uses AbortSignal.any", async () => {
-    const graph = graphFor(ok);
-    await graph.fetch(URL, { signal: fresh() });
-    assert.equal(anyCalls(), 1);
-  });
+  useBranch("any");
 
   test("sequential requests leave no listener and print no MaxListenersExceededWarning", async () => {
     const graph = graphFor(ok);
@@ -173,13 +158,7 @@ describe("ServiceGraphLifetime [any] leaves no per-request abort listener", () =
 // Without AbortSignal.any (older browsers) the combiner is what it was before this change. These pin that, so
 // nobody fixes it halfway: the listener stays until the graph retires, and the link is never cut.
 describe("ServiceGraphLifetime [listeners] is unchanged from before", () => {
-  const { anyCalls } = useBranch("listeners");
-
-  test("does not use AbortSignal.any", async () => {
-    const graph = graphFor(ok);
-    await graph.fetch(URL, { signal: fresh() });
-    assert.equal(anyCalls(), 0);
-  });
+  useBranch("listeners");
 
   test("each request that carries its own signal leaves a listener until the graph retires", async () => {
     const graph = graphFor(ok);

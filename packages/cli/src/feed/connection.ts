@@ -1,3 +1,4 @@
+import type { PermissionEntry } from "@tinycloud/node-sdk";
 import type { FeedDatabase, FeedSource } from "@tinycloud/sdk-services/feed";
 import type { Result } from "@tinycloud/sdk-services";
 import { CLIError, cliErrorFromService } from "../output/errors.js";
@@ -72,4 +73,13 @@ export async function connectFeedAgent<TGrant extends object>(
     throw new Error("The owner feed registry did not confirm the activated grant provenance");
   }
   return grant;
+}
+
+/** The one bundled grant `feed connect` gives an agent: its own output and response databases, and the response hook. Nothing else in the owner's space. */
+export function feedAgentPermissions(space: string, resources: { outputResource: string; responseResource: string }): PermissionEntry[] {
+  return [
+    { service: "tinycloud.sql", space, path: resources.outputResource, actions: ["tinycloud.sql/read", "tinycloud.sql/write"] },
+    { service: "tinycloud.sql", space, path: resources.responseResource, actions: ["tinycloud.sql/read"] },
+    { service: "tinycloud.hooks", space, path: `sql/${resources.responseResource}`, actions: ["tinycloud.hooks/subscribe"] },
+  ];
 }

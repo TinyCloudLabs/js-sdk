@@ -83,7 +83,7 @@ describe("personal apps approvals", () => {
       expect(await definition("read").authority(context, { keys: [record] })).toEqual([kvScope(SPACE, root)]);
     });
   });
-  test("a first record in a new app needs one approval with app and two without; a later new app needs one", async () => {
+  test("a first record in a new app needs two approvals with app and three without, the last for the original app list; a later new app needs one", async () => {
     for (const named of [true, false]) await fixture(async (kv, context) => {
       let grants: AppsPermission[] = [];
       const requests: AppsPermission[][] = [];
@@ -104,8 +104,9 @@ describe("personal apps approvals", () => {
       await approved("context", named ? { app: "books" } : {});
       await approved("write", { ops: createBooks });
       expect(kv.values.has(record)).toBe(true);
-      expect(requests).toHaveLength(named ? 1 : 2);
-      expect(requests.flat().every((scope) => scope.space === SPACE)).toBe(true);
+      expect(requests).toHaveLength(named ? 2 : 3);
+      expect(requests.at(-1)).toEqual([kvScope(DEFAULT_SPACE, `${OLDER_ROOT}catalog/`, ALL.slice(0, 2))]);
+      expect(requests.slice(0, -1).flat().every((scope) => scope.space === SPACE)).toBe(true);
       const before = requests.length;
       await approved("context", { app: "films" });
       await approved("write", { ops: createBooks.map((op) => ({ ...op, key: (op.key as string & { replaceAll(search: string, replacement: string): string }).replaceAll("books", "films"), value: { ...op.value, ...("app" in op.value ? { app: "films" } : {}), ...("id" in op.value ? { id: `${ID}films` } : {}) } })) });
@@ -122,13 +123,13 @@ describe("personal apps approvals", () => {
       expect(kv.lists).toEqual([]);
     });
   });
-  test("each call asks only for the scopes of the apps it names, all in the applications space", async () => {
+  test("each call asks only for the scopes of the apps it names, all in the applications space; a create then asks for the original app list", async () => {
     await fixture(async (_kv, context) => {
       const booksRoot = kvScope(SPACE, root);
       expect(await definition("context").authority(context, {})).toEqual([discoveryGrant]);
       const create = { ops: createBooks } as never;
       expect(await definition("write").authority(context, create)).toEqual([booksRoot, entryGrant]);
-      expect(await definition("write").authority(withGrants(context, [booksRoot, entryGrant]), create)).toEqual([booksRoot, entryGrant]);
+      expect(await definition("write").authority(withGrants(context, [booksRoot, entryGrant]), create)).toEqual([kvScope(DEFAULT_SPACE, `${OLDER_ROOT}catalog/`, ALL.slice(0, 2))]);
       expect(await definition("write").authority(context, { ops: [{ op: "put", key: record, etag: `"blake3-${"a".repeat(64)}"`, value: { data: {} } }] } as never)).toEqual([booksRoot]);
       const mixed = { keys: [record], prefixes: [`${DISCOVERY}books/`] } as never;
       expect(await definition("read").authority(context, mixed)).toEqual([discoveryGrant, booksRoot]);
@@ -182,9 +183,9 @@ describe("personal apps approvals", () => {
       const legacy = [kvScope(SPACE, DISCOVERY, ALL.slice(0, 3)), kvScope(SPACE, `${ID}qa/`)];
       expect(evaluateOperationAuthority(legacy, plan).satisfied).toBe(true);
       expect(allows(legacy, `${DISCOVERY}other/entry`, "tinycloud.kv/put")).toBe(true);
-      const active = withGrants(context, plan);
-      const requested = await definition("write").authority(active, { ops: [targets[0]] }) as AppsPermission[];
-      expect(evaluateOperationAuthority(plan, requested).satisfied).toBe(true);
+      const withList = [...plan, kvScope(DEFAULT_SPACE, `${OLDER_ROOT}catalog/`, ALL.slice(0, 2))];
+      const requested = await definition("write").authority(withGrants(context, withList), { ops: [targets[0]] }) as AppsPermission[];
+      expect(evaluateOperationAuthority(withList, requested).satisfied).toBe(true);
     });
   });
 });
