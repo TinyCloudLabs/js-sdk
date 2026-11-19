@@ -46,6 +46,7 @@
     "revoke-issued-space-not-found",
     "runtime-permissions-one-approval",
     "share-links-no-delegation-actions",
+    "share-size-limit-95-mib",
     "tc-2652-profile-show-output",
     "tc-2653-profile-loading",
     "tc-2749-bounded-courier-messages",

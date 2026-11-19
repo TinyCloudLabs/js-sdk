@@ -1,5 +1,19 @@
 # @tinycloud/cli
 
+## 1.8.0-beta.16
+
+### Patch Changes
+
+- 313b056: Shares can be up to 95 MiB, the most the TinyCloud node accepts in one upload (99,614,720 bytes). A larger file stops before uploading with "Shared files can be up to 95 MiB. Use a smaller file or split it." When several files together pass the limit, the message reads "These files add up to more than 95 MiB. Share fewer at once or use smaller files." `--max-bytes` accepts 1 byte to 95 MiB, and a file over a smaller `--max-bytes` gets its own message naming that limit.
+
+  Details: TC-3252
+
+- Updated dependencies [313b056]
+  - @tinycloud/share-sdk@1.6.0-beta.1
+  - @tinycloud/node-sdk@3.13.0-beta.9
+  - @tinycloud/sdk-core@3.13.0-beta.9
+  - @tinycloud/operations@0.9.1-beta.10
+
 ## 1.8.0-beta.15
 
 ### Minor Changes
