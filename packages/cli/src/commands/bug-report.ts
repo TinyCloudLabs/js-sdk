@@ -12,7 +12,7 @@ import { BUG_REPORT_REVIEW_DIR_NAME, clearDiagnosticLogs, readDiagnosticLogs, re
 
 const MAX_BODY_BYTES = 256 * 1024;
 const MAX_CONTENT_BYTES = 128 * 1024;
-const ATTACHMENT_URL = "https://bugs.tinycloud.xyz/reports";
+const ATTACHMENT_URL = "https://feedback.tinycloud.xyz/reports";
 const REVIEW_HASH_PATTERN = /^[0-9a-f]{32}$/;
 
 type BugReportDependencies = {

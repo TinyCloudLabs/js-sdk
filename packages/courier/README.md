@@ -302,6 +302,12 @@ share an id), a run id and its pid.
   in which the other watcher wrote nothing. Meanwhile the other watcher, which
   belongs to the same agent, keeps that agent's messages watched. `--once`
   still exits with `state-conflict` (exit 1).
+- A state write that fails without a 412 (lost reply, timeout,
+  `outcome_unknown`) may still have been applied, so the watcher reads the
+  state back before its next write: its own body or no change carries on;
+  anything else is a `state-conflict` as above. The conflict shows at the
+  watcher's next own write (a message, a notice retry, the hourly or daily
+  prune), which can be long after the other process wrote.
 
 Wakes are at-least-once: a crash between a wake and the state write wakes that
 thread again on restart (the new watcher takes the dead one's claim).
