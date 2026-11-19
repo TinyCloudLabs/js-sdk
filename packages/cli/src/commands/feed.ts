@@ -23,7 +23,7 @@ import { disconnectFeedAgent } from "../feed/disconnect.js";
 import { revokeIssuedDelegation } from "./delegation.js";
 import { exportFeedRawSnapshot } from "../feed/export.js";
 import { importFeedPreparedBundle } from "../feed/import.js";
-import { CARD_MD_RESOURCE, DEFAULT_CARD_MD, cardMdChangedText, cardMdOrDefaultForPublish, copyCardMdToAgent, rememberCardMdVersion } from "../feed/card-md.js";
+import { CARD_MD_RESOURCE, DEFAULT_CARD_MD, cardMdChangedText, cardMdOrDefaultForPublish, copyCardMdToAgent, markDefault, rememberCardMdVersion } from "../feed/card-md.js";
 
 const FEED_PREFIX = "xyz.tinycloud.tinychat/feed";
 const REGISTRY = "xyz.tinycloud.tinychat/home_feed";
@@ -197,7 +197,8 @@ row is removed only after the revoke succeeds; the token stays reserved for the 
     .action(async (options, command) => {
       try {
         const { responses, profile } = await context(command);
-        const cardMd = value(await readFeedCardMd(responses)) ?? DEFAULT_CARD_MD;
+        const stored = value(await readFeedCardMd(responses));
+        const cardMd = stored === null ? DEFAULT_CARD_MD : markDefault(stored);
         await rememberCardMdVersion(await ProfileManager.ensureProfileDir(profile.profile), options.agent, cardMd.version);
         outputJson(cardMd);
       } catch (error) { return handleError(error); }

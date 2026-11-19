@@ -42,6 +42,11 @@ export interface PublishCardMd {
   changed?: ShownCardMd;
 }
 
+/** The copy of the bundled default that `feed connect` writes into an agent's database carries the default's version: it reads back as the default. */
+export function markDefault(card: FeedCardMd): ShownCardMd {
+  return card.version === CARD_MD_DEFAULT_VERSION ? { text: card.text, version: card.version, default: true } : card;
+}
+
 async function showOnce(card: ShownCardMd, directory: string, agent: string): Promise<PublishCardMd> {
   const cardMd = card.default === true ? { version: card.version, default: true as const } : { version: card.version };
   if (await seenCardMdVersion(directory, agent) === card.version) return { cardMd };
@@ -55,11 +60,11 @@ async function showOnce(card: ShownCardMd, directory: string, agent: string): Pr
  * the last-shown version only means the text may be shown again next time.
  */
 export async function cardMdForPublish(db: FeedReadDatabase, directory: string, agent: string): Promise<PublishCardMd> {
-  let card: FeedCardMd;
+  let card: ShownCardMd;
   try {
     const read = await readFeedCardMd(db);
     if (!read.ok || read.data === null) return {};
-    card = read.data;
+    card = markDefault(read.data);
   } catch {
     return {};
   }
@@ -76,7 +81,7 @@ export async function cardMdOrDefaultForPublish(db: FeedReadDatabase, directory:
   try {
     const read = await readFeedCardMd(db);
     if (!read.ok) return {};
-    card = read.data ?? DEFAULT_CARD_MD;
+    card = read.data === null ? DEFAULT_CARD_MD : markDefault(read.data);
   } catch {
     return {};
   }
@@ -102,17 +107,24 @@ const CARD_MD_UPSERT = `INSERT INTO card_md (id, text, version, updated_at) VALU
   ON CONFLICT(id) DO UPDATE SET text = excluded.text, version = excluded.version, updated_at = excluded.updated_at
   WHERE card_md.version <> excluded.version`;
 
+// The default never replaces a row the agent's database already has: an owner's copy that got there first wins.
+const CARD_MD_INSERT_DEFAULT = `INSERT INTO card_md (id, text, version, updated_at) VALUES (1, ?, ?, ?) ON CONFLICT(id) DO NOTHING`;
+
 /**
  * Copies the owner's card.md into a newly connected agent's response database, so the agent has it before the Feed
- * next opens. Returns whether it copied. An owner with no card.md copies nothing (the agent reads the default),
- * and a failure never stops the connection: the Feed's next copy covers it.
+ * next opens. An owner with no card.md gets the bundled default copied instead, so an agent connected while the Feed is
+ * closed still has a card.md; its version is the default's, which the agent reads back as `default`. Returns whether it
+ * wrote. A card.md that cannot be read copies nothing (the default would claim the owner has none), and a failure never
+ * stops the connection: the Feed's next copy covers it.
  */
 export async function copyCardMdToAgent(master: FeedReadDatabase, agentResponses: FeedDatabase): Promise<boolean> {
   try {
     const read = await readFeedCardMd(master);
-    if (!read.ok || read.data === null) return false;
-    const { text, version, updatedAt } = read.data;
-    const written = await agentResponses.batch([{ sql: CARD_MD_SCHEMA }, { sql: CARD_MD_UPSERT, params: [text, version, updatedAt] }]);
+    if (!read.ok) return false;
+    const statement = read.data === null
+      ? { sql: CARD_MD_INSERT_DEFAULT, params: [DEFAULT_CARD_MD.text, DEFAULT_CARD_MD.version, new Date().toISOString()] }
+      : { sql: CARD_MD_UPSERT, params: [read.data.text, read.data.version, read.data.updatedAt] };
+    const written = await agentResponses.batch([{ sql: CARD_MD_SCHEMA }, statement]);
     return written.ok;
   } catch {
     return false;
