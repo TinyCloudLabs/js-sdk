@@ -257,6 +257,7 @@ describe("OpenKey device authorization", () => {
       [{ service: "tinycloud.kv", space: "secrets", path: "vault/secrets/KEY", actions: ["tinycloud.kv/delete"] }],
       [{ service: "tinycloud.kv", space: "secrets", path: "vault/secrets/scoped/team/KEY", actions: ["tinycloud.kv/get"] }],
       [{ service: "tinycloud.kv", space: "secrets", path: "vault/secrets/key", actions: ["tinycloud.kv/get"] }],
+      [{ service: "tinycloud.kv", space: "secrets", path: `vault/secrets/K${"A".repeat(64)}`, actions: ["tinycloud.kv/get"] }],
     ];
     for (const permissions of forbidden) {
       const openkey = openKeyRelayStub(() => response({}), { start: response({ error: "invalid_scope" }, 400) });

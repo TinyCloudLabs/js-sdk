@@ -40,11 +40,12 @@ const DEVICE_SECRET_ACTIONS: ReadonlySet<string> = new Set(["tinycloud.kv/get", 
 
 /**
  * One named secret OpenKey's device flow admits in a secrets space: KV get/put/list on exactly
- * `vault/secrets/<NAME>` (one secret name, no prefix, no scope, no limits). A whole-space request is not one.
+ * `vault/secrets/<NAME>` (one secret name of at most 64 characters, no prefix, no scope, no limits). A whole-space
+ * request is not one.
  */
 export function isDeviceNamedSecret(entry: Pick<PermissionEntry, "service" | "space" | "path" | "actions" | "caveats">): boolean {
   const name = entry.path.startsWith("vault/secrets/") ? entry.path.slice("vault/secrets/".length) : undefined;
-  return entry.service === "tinycloud.kv" && name !== undefined && SECRET_NAME_RE.test(name) &&
+  return entry.service === "tinycloud.kv" && name !== undefined && name.length <= 64 && SECRET_NAME_RE.test(name) &&
     entry.actions.length > 0 && entry.actions.every((action) => DEVICE_SECRET_ACTIONS.has(action)) &&
     !entry.caveats?.length;
 }
