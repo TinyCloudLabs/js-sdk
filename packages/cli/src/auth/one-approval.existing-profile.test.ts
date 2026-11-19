@@ -47,7 +47,7 @@ test("existing-profile onboarding stores both spaces in one 1/1 approval and res
     ...flow, noPopup: true, approvalWait: { deadlineMs: now + 1000, now: () => now + 1001, step: 1, of: 1 },
     onApprovalRequest: ({ approvalUrl }) => { urls.push(approvalUrl); },
   });
-  const run = () => ensureDelegationAuthority({ ctx, profile, node, requested, expiryOption: "30d", reason: "Existing onboarding fixture", yes: true, exactApproval: true, openKeyAcquisition: acquire });
+  const run = () => ensureDelegationAuthority({ ctx, profile, node, requested, expiryOption: "30d", reason: "Existing onboarding fixture", exactApproval: true, openKeyAcquisition: acquire });
   const pendingPath = join(profilePath(ctx.profile), "approval-pending.json");
   type Stored = { requestId: string; bodyCid: string; ackId: string; request: { permissions: Array<{ space: string }> } };
   try {
