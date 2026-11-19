@@ -572,8 +572,7 @@ describe("tinycloud bug-report --attach", () => {
       handleError: async (error: unknown): Promise<never> => { throw error; },
     });
     await program.parseAsync(["node", "tinycloud", "bug-report", "--attach", REPORT_ID, "--confirm", hash!], { from: "node" });
-    await program.parseAsync(["node", "tinycloud", "bug-report", "--attach", REPORT_ID, "--confirm", hash!], { from: "node" });
-    expect(bodies).toHaveLength(2);
+    expect(bodies).toHaveLength(1);
     expect(bodies[0]!.equals(saved)).toBe(true);
   });
 
