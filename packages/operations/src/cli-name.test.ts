@@ -37,12 +37,12 @@ describe("cliNameFor", () => {
 
   test("under npx the name is the npx command, pinned to the version that is running", () => {
     const bin = npxLayout("1.8.0");
-    expect(cliNameFor(bin, { npm_command: "exec" })).toBe("npx -y @tinycloud/cli@1.8.0");
+    expect(cliNameFor(bin, { npm_command: "exec" })).toBe('npx --prefix "$HOME" -y -p @tinycloud/cli@1.8.0 tinycloud');
   });
 
   test("a prerelease version is kept whole", () => {
     const bin = npxLayout("1.8.0-beta.9");
-    expect(cliNameFor(bin, { npm_command: "exec" })).toBe("npx -y @tinycloud/cli@1.8.0-beta.9");
+    expect(cliNameFor(bin, { npm_command: "exec" })).toBe('npx --prefix "$HOME" -y -p @tinycloud/cli@1.8.0-beta.9 tinycloud');
   });
 
   test("when the CLI's version cannot be read, the name is the bin's, as for any other host process", () => {
@@ -61,7 +61,7 @@ describe("cliNameFor", () => {
     const pkg = join(root, ".npm", "_npx", "abc123", "node_modules", "@tinycloud", "cli");
     mkdirSync(join(pkg, "bin"), { recursive: true });
     writeFileSync(join(pkg, "package.json"), JSON.stringify({ name: "@tinycloud/cli", version: "1.6.6" }));
-    expect(cliNameFor(join(pkg, "bin", "tinycloud"), { npm_command: "exec" })).toBe("npx -y @tinycloud/cli@1.6.6");
+    expect(cliNameFor(join(pkg, "bin", "tinycloud"), { npm_command: "exec" })).toBe('npx --prefix "$HOME" -y -p @tinycloud/cli@1.6.6 tinycloud');
   });
 
   test("a package.json that is not the CLI's is not used for the pin", () => {
