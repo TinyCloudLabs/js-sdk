@@ -487,6 +487,7 @@ export type Ledger = {
   tc3285SecretTypesRoot?: LogoutRatchet;
   tc3286ShareNoDelegationActionsRoot?: LogoutRatchet;
   tc2944VaultPathClassifierRoot?: LogoutRatchet;
+  tc3448OnBehalfPromptRoot?: LogoutRatchet;
   tc2773LazyRestoreReplicaWorker?: Omit<WorkerRatchet, "worker"> & { replicaWorker: { delta: number; ceiling: number } };
 };
 
@@ -1128,6 +1129,7 @@ export function ancestryPins(root: Ledger, hasGatedOnly: boolean): Array<{ row: 
   if (root.tc3285SecretTypesRoot !== undefined) pins.push({ row: "tc3285SecretTypesRoot", pin: root.tc3285SecretTypesRoot.sourceCommits.at(-1)! });
   if (root.tc3286ShareNoDelegationActionsRoot !== undefined) pins.push({ row: "tc3286ShareNoDelegationActionsRoot", pin: root.tc3286ShareNoDelegationActionsRoot.sourceCommits.at(-1)! });
   if (root.tc2944VaultPathClassifierRoot !== undefined) pins.push({ row: "tc2944VaultPathClassifierRoot", pin: root.tc2944VaultPathClassifierRoot.sourceCommits.at(-1)! });
+  if (root.tc3448OnBehalfPromptRoot !== undefined) pins.push({ row: "tc3448OnBehalfPromptRoot", pin: root.tc3448OnBehalfPromptRoot.sourceCommits.at(-1)! });
   if (hasGatedOnly) pins.push({ row: "gatedOnlyRatchet", pin: approvedGatedOnlyRatchet.sourceCommit });
   return pins;
 }
@@ -1239,6 +1241,7 @@ export function rootCeilings(root: Ledger): Array<{ row: string; ceiling: GzipSi
     ["tc3285SecretTypesRoot", root.tc3285SecretTypesRoot?.root.ceiling],
     ["tc3286ShareNoDelegationActionsRoot", root.tc3286ShareNoDelegationActionsRoot?.root.ceiling],
     ["tc2944VaultPathClassifierRoot", root.tc2944VaultPathClassifierRoot?.root.ceiling],
+    ["tc3448OnBehalfPromptRoot", root.tc3448OnBehalfPromptRoot?.root.ceiling],
   ];
   return rows.flatMap(([row, ceiling]) => ceiling === undefined ? [] : [{ row, ceiling }]);
 }
@@ -3673,6 +3676,26 @@ export const approvedTc2944VaultPathClassifierRoot: LogoutRatchet = {
   "reason": "The vault routing classifier (sdk-services resourceRouting, sdk-core delegation classification, node-sdk activation routing) reads which resources a request or grant names or covers by their ancestors, so a request or grant that reaches vault data goes to the dedicated vault address; sdk-services, sdk-core and node-sdk are bundled into the web-sdk root. Canonical Node 22/Bun 1.3.14 CI on #1069 (f5259377, master e7e5d47b merged in) measured index.mjs 1529625 and index.cjs 1462613 gzip -9 bytes: +686 and +273 over the TC-3286 ceilings 1528939 and 1462340 (+722 and +361 over the merge base). No other ceiling moves. Details: TC-2944"
 };
 
+/** The exact TC-3448 on-behalf permission prompt root allowance from canonical CI. */
+export const approvedTc3448OnBehalfPromptRoot: LogoutRatchet = {
+  "label": "permission prompt names the app a request is for (TC-3448)",
+  "ruling": "size-ruling: TC-3448 row tc3448OnBehalfPromptRoot raises the web-sdk root ceilings by CI's measured delta for the on-behalf modal (Monica's strings + gating)",
+  "base": "c2f4cc7692286a9c84ac709bf22a5f148493c6cb",
+  "sourceCommits": ["8bfd1d1b8b996ecec278ef151c3ac0dab7c8e684"],
+  "canonicalCI": {
+    "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44558524675",
+    "jobs": [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44558524675/job/135681081190",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44558524675/job/135681081827"
+    ]
+  },
+  "root": {
+    "delta": { "index.mjs": 47, "index.cjs": 56 },
+    "ceiling": { "index.mjs": 1529672, "index.cjs": 1462669 }
+  },
+  "reason": "The web-sdk permission prompt can name the app a request is for and hide the 30-day option (PermissionRequestModal, requestPermissionsCore). Canonical Node 22/Bun 1.3.14 CI on #1095 (8bfd1d1b, master c2f4cc76) measured index.mjs 1529672 and index.cjs 1462669 gzip -9 bytes: +47 and +56 over the TC-2944 ceilings 1529625 and 1462613. No other ceiling moves. Details: TC-3448"
+};
+
 export const approvedLedgerRows: Record<string, unknown> = {
   phase2Ratchet: approvedPhase2,
   fixRequiredRatchet: approvedFixRequiredRatchet,
@@ -3781,6 +3804,7 @@ export const approvedLedgerRows: Record<string, unknown> = {
   tc3285SecretTypesRoot: approvedTc3285SecretTypesRoot,
   tc3286ShareNoDelegationActionsRoot: approvedTc3286ShareNoDelegationActionsRoot,
   tc2944VaultPathClassifierRoot: approvedTc2944VaultPathClassifierRoot,
+  tc3448OnBehalfPromptRoot: approvedTc3448OnBehalfPromptRoot,
 };
 
 /** Only a git merge-base ledger may retain the pre-correction toolchain. */
@@ -4279,6 +4303,11 @@ export function validateLedger(value: Ledger, historicalBase = false): void {
       (!value.tc3286ShareNoDelegationActionsRoot ||
         JSON.stringify(value.tc2944VaultPathClassifierRoot) !== JSON.stringify(approvedTc2944VaultPathClassifierRoot))) {
     throw new Error("Only the exact TC-2944 root admission is approved.");
+  }
+  if (value.tc3448OnBehalfPromptRoot !== undefined &&
+      (!value.tc2944VaultPathClassifierRoot ||
+        JSON.stringify(value.tc3448OnBehalfPromptRoot) !== JSON.stringify(approvedTc3448OnBehalfPromptRoot))) {
+    throw new Error("Only the exact TC-3448 root admission is approved.");
   }
 }
 
@@ -5220,5 +5249,13 @@ export function validateTc2944VaultPathClassifierRootTransition(base?: LogoutRat
   if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc2944VaultPathClassifierRoot) ||
       base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
     throw new Error("The TC-2944 root admission may be introduced once and cannot change later.");
+  }
+}
+
+/** The exact TC-3448 on-behalf permission prompt root admission is introduced once and immutable. */
+export function validateTc3448OnBehalfPromptRootTransition(base?: LogoutRatchet, current?: LogoutRatchet): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc3448OnBehalfPromptRoot) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The TC-3448 root admission may be introduced once and cannot change later.");
   }
 }
