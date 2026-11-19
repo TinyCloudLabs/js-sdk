@@ -8,7 +8,7 @@ import { CourierError, errInfo } from '../errors.js';
 import { k } from '../keys.js';
 import { courierNode } from '../node.js';
 import { loadProfile, profileDir, type Profile, type StoredPeer } from '../profile.js';
-import { getJson, listAll } from '../store.js';
+import { isTooLarge, listAll, readJsonMany, type JsonReadOutcome } from '../store.js';
 import { hiddenTextProblem, textVerdict, type TextVerdict } from '../text.js';
 import { jsonLineLog, type WatchLog } from '../wake.js';
 import { FLAG_TABLE, type Flag } from './flags.js';
@@ -77,7 +77,7 @@ export interface IntakeRecord {
   };
 }
 
-type DoneOutcome = 'init' | 'mismatch' | 'bad-id' | 'overflow';
+type DoneOutcome = 'init' | 'mismatch' | 'bad-id' | 'overflow' | 'too-large';
 
 export interface CycleInput {
   kv: KV;
@@ -322,6 +322,14 @@ async function intakePeer(input: CycleInput, peer: StoredPeer): Promise<number> 
   let written = 0;
   let future = 0;
   let overflowed = false;
+  // Every message the loop below can reach is read in one batch per 100; it still checks each one on its own.
+  const reachable = picked.filter(c => {
+    if (presentIn(input, peer.handle, `${c.msgId}.json`)) return false;
+    try { return decodeTime(c.msgId) <= input.now() + MAX_SKEW_MS; } catch { return false; }
+  });
+  let outcomes = new Map<string, JsonReadOutcome<unknown>>();
+  let batchError: unknown;
+  try { outcomes = await readJsonMany<unknown>(input.kv, reachable.map(c => c.key)); } catch (error) { batchError = error; }
   try {
     for (const c of picked) {
       try {
@@ -340,7 +348,16 @@ async function intakePeer(input: CycleInput, peer: StoredPeer): Promise<number> 
           continue;
         }
 
-        const got = await getJson<unknown>(input.kv, c.key);
+        const outcome = outcomes.get(c.key);
+        if (!outcome) throw batchError ?? new CourierError('kv', `${c.key} was not read`);
+        if ('error' in outcome && isTooLarge(outcome.error)) {
+          // Logged where every intake error is, by id only, then marked done: reading it again gives the same answer.
+          input.log('intake-error', { peer: peer.handle, threadId: c.threadId, msgId: c.msgId, code: 'too-large' });
+          markDone(input, peer.handle, c.msgId, 'too-large');
+          continue;
+        }
+        if ('error' in outcome) throw outcome.error;
+        const got = outcome.got;
         if (!got || !isRecord(got.value) || got.value.messageId !== c.msgId || got.value.contextId !== c.threadId) {
           input.log('intake-skip', { peer: peer.handle, code: 'mismatch' });
           markDone(input, peer.handle, c.msgId, 'mismatch');
@@ -570,6 +587,9 @@ export async function initFromNow(input: InitInput, force: boolean): Promise<Map
   return marked;
 }
 
+/** An idle intake (nothing new queued) doubles its sleep up to this, or the explicit `--interval` if longer. */
+const IDLE_MAX_MS = 300_000;
+
 function intervalSeconds(raw: string | undefined): number {
   if (raw === undefined) return 60;
   const n = /^\d+$/.test(raw) ? Number(raw) : NaN;
@@ -631,6 +651,7 @@ export async function cmdIntake(args: ParsedArgs, deps: IntakeLoopDeps = default
     const state = readState(path.join(stateDir, STATE_FILE));
     let peers = loadPeers(peersFile, peersOwner);
     log('intake-start', { once, intervalSeconds: intervalMs / 1000 });
+    let sleepMs = intervalMs;
     for (;;) {
       try {
         const profile = deps.loadProfile();
@@ -649,12 +670,15 @@ export async function cmdIntake(args: ParsedArgs, deps: IntakeLoopDeps = default
           log,
         });
         log('intake-cycle', { queued });
+        // New activity polls at the interval again; an idle or failing cycle backs off.
+        sleepMs = queued > 0 ? intervalMs : Math.min(sleepMs * 2, Math.max(IDLE_MAX_MS, intervalMs));
       } catch (error) {
         log('intake-error', { code: errInfo(error).code ?? 'error' });
+        sleepMs = Math.min(sleepMs * 2, Math.max(IDLE_MAX_MS, intervalMs));
         if (once) throw error;
       }
       if (once) return;
-      await deps.sleep(intervalMs);
+      await deps.sleep(sleepMs);
     }
   } finally {
     release();

@@ -29,7 +29,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { startUnregisteredLocationRegistry, type UnregisteredLocationRegistry } from "../../node-sdk/src/test-support/unregistered-location-registry";
+import { startBrowserLocationRegistry, type BrowserLocationRegistry } from "../../node-sdk/src/test-support/browser-location-registry";
 
 const NODE_BIN = process.env.TC_REPLICA_E2E_NODE_BIN ?? process.env.TC_NODE_BIN;
 const STRICT = process.env.TC858_ACCEPTANCE_STRICT === "1";
@@ -121,7 +121,7 @@ describe.skipIf(NODE_BIN === undefined)("TC-858 browser replication acceptance (
   let origin = "";
   let browser: Browser | undefined;
   let owner: TinyCloudNode | undefined;
-  let registry: UnregisteredLocationRegistry;
+  let registry: BrowserLocationRegistry;
 
   async function startNode(port: number): Promise<void> {
     const child = spawn(NODE_BIN!, [], {
@@ -255,7 +255,7 @@ describe.skipIf(NODE_BIN === undefined)("TC-858 browser replication acceptance (
   beforeAll(async () => {
     if (!STRICT) return;
     dataDir = await mkdtemp(join(tmpdir(), "tc858-acceptance-node-"));
-    registry = startUnregisteredLocationRegistry();
+    registry = startBrowserLocationRegistry();
     const nodePort = await freePort();
     host = `http://127.0.0.1:${nodePort}`;
     await startNode(nodePort);
@@ -283,6 +283,9 @@ describe.skipIf(NODE_BIN === undefined)("TC-858 browser replication acceptance (
     await ownerB.signIn();
     const putB = await ownerB.kv.put("notes/b-only", new TextEncoder().encode("belongs to B"));
     if (!putB.ok) throw new Error(`account B seed failed: ${JSON.stringify(putB.error)}`);
+    const nodeDid = (await owner.activeNodeIdentity()).nodeDid;
+    await registry.register(WALLET_KEY, host, nodeDid);
+    await registry.register(ACCOUNT_B_KEY, host, nodeDid);
     browser = await chromium.launch();
   }, 120_000);
 

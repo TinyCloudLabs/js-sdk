@@ -1212,8 +1212,9 @@ describe("TinyCloudNode.signIn — manifest-driven recap", () => {
     const node = makeNodeWithSigner(wasm, {
       manifest,
       signer,
-      autoBootstrapAccount: false,
+      autoBootstrapAccount: true,
     }, { realRegistrySync: true });
+    Reflect.set(node, "bootstrapAccountIfNeeded", async () => false);
     const accountSpaceId = wasm.makeSpaceId(await signer.getAddress(), await signer.getChainId(), "account");
     const ensureOwnedSpaceHostedById = mock(async () => {});
     const kvPaths: string[] = [];

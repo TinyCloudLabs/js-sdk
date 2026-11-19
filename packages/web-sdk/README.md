@@ -514,7 +514,7 @@ const tcw = new TinyCloudWeb({ retryPolicy: { maxAttempts: 1 } });
 TinyCloud is built on these fundamental principles:
 
 - **Sovereignty** - Built so that each user controls their data outright. Requests to access or compute on that data must be explicitly permissioned.
-- **Privacy** - Data is stored, streamed, and computed upon in ways that minimize leakage with encryption strategies that ensure users do not need to trust an external party.
+- **Privacy** - Access is scoped by the capabilities you approve. Ordinary data is not end-to-end encrypted: the node that hosts a space can read it in order to serve it. Use the data vault to encrypt values before they are stored. See [Security and trust](https://docs.tinycloud.xyz/concepts/security-and-trust).
 - **Interoperability** - Embracing artifact-based formats like Markdown, JSON Canvas, CSV, and SQLite so that data remains portable and future-proof.
 - **Open Innovation** - We view AI's rapid growth as an opportunity to endow individuals with new capabilities—before these capabilities are seized exclusively by large institutions.
 
@@ -559,3 +559,13 @@ Join the TinyCloud community:
 
 - [Twitter](https://twitter.com/TinyCloudLabs)
 - [Telegram](https://t.me/+pplkv1XbbU01MDVh)
+
+### Account setup and sign-in options
+
+The web SDK includes implicit account bootstrap permissions only at the approved first-party page origins. Other origins, including generic localhost and server-rendered contexts, request the application's manifest rows without implicit account or capabilities-read rows. Explicit manifest permissions are preserved.
+
+`autoBootstrapAccount: false` disables account bootstrap and its implicit sign-in permissions, including in the node SDK. `includeAccountRegistryPermissions: false` omits the implicit account registry bundle. Setting either option to `true` does not enable first-party bootstrap at another origin. The policy uses the actual page origin, independently of a configured SIWE domain.
+
+A third-party sign-in with no registered account route returns `ACCOUNT_SETUP_REQUIRED` with `setupUrl: "https://home.tinycloud.xyz/"` before signing. Complete setup there and retry. Registry availability errors retain their existing behavior. Setup status for accounts that already have a registry record is unchanged.
+
+Details: TC-2931

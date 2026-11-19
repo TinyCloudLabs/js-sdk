@@ -1,3 +1,4 @@
+import { signedBrowserSession } from "./fixtures/signed-browser-session";
 /*
  * TinyCloudWeb: the panel's permission request and the grant it leaves behind. A request stores only the panel's own
  * grant; a restore after a reload activates the stored grant again (verified from its signed bytes), never fails
@@ -14,7 +15,8 @@ import type { TinyCloudWeb as TinyCloudWebType } from "../src/modules/tcw";
 
 const { TinyCloudWeb } = require("../src/modules/tcw") as { TinyCloudWeb: typeof TinyCloudWebType };
 
-const ADDRESS = "0x96F7fB7ed32640d9D3a982f67CD6c09fc53EBEF1";
+const SIGNED_PERSISTED = await signedBrowserSession(undefined, "1".padStart(64, "0"));
+const ADDRESS = SIGNED_PERSISTED.address;
 const APPLICATIONS = `tinycloud:pkh:eip155:1:${ADDRESS}:applications`;
 const SESSION_DID = "did:key:z6MkSession";
 const HOST = "https://node.test.local";
@@ -49,12 +51,12 @@ function session(): PersistedSessionData {
   return {
     address: ADDRESS,
     chainId: 1,
-    sessionKey: JSON.stringify({ kty: "OKP", crv: "Ed25519", d: "private" }),
-    siwe: "siwe",
-    signature: "signature",
+    sessionKey: SIGNED_PERSISTED.sessionKey,
+    siwe: SIGNED_PERSISTED.siwe,
+    signature: SIGNED_PERSISTED.signature,
     tinycloudSession: {
-      delegationHeader: { Authorization: "Bearer persisted" },
-      delegationCid: "bafy-persisted",
+      delegationHeader: { Authorization: SIGNED_PERSISTED.tinycloudSession!.delegationHeader.Authorization },
+      delegationCid: SIGNED_PERSISTED.tinycloudSession!.delegationCid,
       spaceId: `tinycloud:pkh:eip155:1:${ADDRESS}:default`,
       verificationMethod: `${SESSION_DID}#z6MkSession`,
     },

@@ -80,6 +80,8 @@ export type NamedKeyErrorCode =
   | "KEY_KIND_MISMATCH"
   | "DECRYPT_FAILED"
   | "NODE_ERROR"
+  /** The node's `/info` DID differs from the identity-checked destination's DID. */
+  | "NODE_IDENTITY_MISMATCH"
   /** The node rejected `receiverPublicKey` (400, invocation not consumed). */
   | "RECEIVER_KEY_INVALID"
   /** The node object lacks an invocation hook the node-sdk wiring needs. */
@@ -251,7 +253,14 @@ export interface NamedKeyClientConfig {
   captureOperation?: () => NamedKeyClientConfig;
   /** Reject work whose captured authority is no longer active. */
   assertActive?: () => void;
+  /** Node origin used when `resolveNode` is not set. */
   host: string;
+  /**
+   * Resolve the identity-checked node for one network. When set, every call
+   * for that network goes to the returned origin instead of `host`, and that
+   * origin's `/info` must report the returned DID.
+   */
+  resolveNode?: (networkId: string) => Promise<{ url: string; nodeDid: string }>;
   crypto: EncryptionCrypto;
   /** Write TCW2 wraps; disabled by default. */
   keyWrapV2?: boolean;
@@ -443,8 +452,8 @@ const REQUIRED_ENVELOPE_STRINGS = [
 ] as const;
 
 export class NamedKeyClient {
-  /** One `/info` read per client: the node DID once the feature is confirmed. */
-  private nodeInfo: { pending?: Promise<string> } = {};
+  /** One `/info` read per destination (origin and expected DID): the node DID once the feature is confirmed. */
+  private nodeInfo = new Map<string, Promise<string>>();
 
   constructor(private readonly config: NamedKeyClientConfig) {}
 
@@ -480,32 +489,38 @@ export class NamedKeyClient {
   }
 
   /**
-   * Require the named-keys feature and return the node DID. The first call
-   * reads `/info`; a positive answer is cached for the life of this client, so
-   * later calls make no `/info` request. A node without the feature is NOT
-   * cached: the typed `NAMED_KEYS_UNSUPPORTED` error is thrown and the next
-   * call re-reads (so a retry sees an upgraded node). No key request is made
-   * before the gate passes.
+   * Resolve the network's node and require the named-keys feature there,
+   * returning its origin and DID. The first call per destination reads
+   * `/info`; a positive answer is cached for that destination, so later calls
+   * make no `/info` request. A node without the feature is NOT cached: the
+   * typed `NAMED_KEYS_UNSUPPORTED` error is thrown and the next call re-reads
+   * (so a retry sees an upgraded node). No key request is made before the
+   * gate passes.
    */
-  private requireNode(): Promise<string> {
-    if (this.nodeInfo.pending === undefined) {
-      const pending = this.readNodeInfo();
-      this.nodeInfo.pending = pending;
-      pending.catch(() => {
-        if (this.nodeInfo.pending === pending) this.nodeInfo.pending = undefined;
+  private async requireNode(networkId: string): Promise<{ url: string; nodeDid: string }> {
+    const route = this.config.resolveNode === undefined ? undefined : await this.config.resolveNode(networkId);
+    const url = route?.url ?? this.config.host;
+    const cacheKey = `${url} ${route?.nodeDid ?? ""}`;
+    let pending = this.nodeInfo.get(cacheKey);
+    if (pending === undefined) {
+      const read = this.readNodeInfo(url, route?.nodeDid);
+      pending = read;
+      this.nodeInfo.set(cacheKey, read);
+      read.catch(() => {
+        if (this.nodeInfo.get(cacheKey) === read) this.nodeInfo.delete(cacheKey);
       });
     }
-    return this.nodeInfo.pending;
+    return { url, nodeDid: await pending };
   }
 
-  /** Clear the cached `/info` answer; the next call reads it again. */
+  /** Clear the cached `/info` answers; the next call reads them again. */
   refreshNodeInfo(): void {
-    this.nodeInfo.pending = undefined;
+    this.nodeInfo.clear();
   }
 
-  private async readNodeInfo(): Promise<string> {
+  private async readNodeInfo(url: string, expectedDid: string | undefined): Promise<string> {
     return await usingResponse(
-      () => this.config.fetch(`${this.config.host}/info`),
+      () => this.config.fetch(`${url}/info`),
       async (response) => {
         if (!response.ok) {
           throw mapNodeKeyError(response.status, await safeText(response), "failed to read node info");
@@ -520,17 +535,20 @@ export class NamedKeyClient {
         if (typeof info.nodeId !== "string" || info.nodeId.length === 0) {
           throw invalidResponse("/info response (nodeId missing)");
         }
+        if (expectedDid !== undefined && info.nodeId !== expectedDid) {
+          throw new NamedKeyError("NODE_IDENTITY_MISMATCH", "the node's /info identity does not match its verified identity");
+        }
         return info.nodeId;
       }
     );
   }
 
-  private keysUrl(networkId: string, path: string): string {
+  private keysUrl(origin: string, networkId: string, path: string): string {
     // The network id is validated by `keyUrn` (strict grammar) before any URL is
     // built; every character it can hold (`A-Za-z0-9._:-`) is an RFC 3986 pchar
     // and the node refuses `%`, so it goes into the path raw. keyPath segments
     // are raw too: the grammar excludes `%`.
-    return `${this.config.host}/encryption/networks/${networkId}/keys/${path}`;
+    return `${origin}/encryption/networks/${networkId}/keys/${path}`;
   }
 
   /** Public GET: the key's public key. Derive-only (no 404) outside `apps/`; under `apps/` the node answers 404. */
@@ -539,9 +557,9 @@ export class NamedKeyClient {
     if (operation) return operation.getPublicKey(path, options);
     const networkId = this.networkFor(options);
     this.keyUrn(networkId, path);
-    await this.active(this.requireNode());
+    const node = await this.active(this.requireNode(networkId));
     return await usingResponse(
-      () => this.config.fetch(this.keysUrl(networkId, path), { method: "GET" }),
+      () => this.config.fetch(this.keysUrl(node.url, networkId, path), { method: "GET" }),
       async (response) => {
         this.config.assertActive?.();
         if (!response.ok) {
@@ -588,7 +606,7 @@ export class NamedKeyClient {
     if (DESCRIBE_ABILITIES[ability] !== true) {
       throw new NamedKeyError("INVALID_KEY_TARGET", `${safeEcho(ability)} cannot describe a key`, { input: ability });
     }
-    const targetNode = await this.active(this.requireNode());
+    const { url, nodeDid: targetNode } = await this.active(this.requireNode(networkId));
     const signed = await this.active(this.config.signInvocation({
       targetNode,
       resource: keyResource,
@@ -596,7 +614,7 @@ export class NamedKeyClient {
       facts: buildKeyDescribeFacts({ targetNode, keyResource }),
     }));
     return await usingResponse(
-      () => this.config.fetch(this.keysUrl(networkId, path), {
+      () => this.config.fetch(this.keysUrl(url, networkId, path), {
         method: "GET",
         headers: { Authorization: signed.authorization },
       }),
@@ -625,7 +643,7 @@ export class NamedKeyClient {
     const keyResource = this.keyUrn(networkId, path);
     const body: Json =
       route === "keys" ? { keyPath: path, deletable: isAppKeyPath(path) } : { keyPath: path };
-    const targetNode = await this.active(this.requireNode());
+    const { url, nodeDid: targetNode } = await this.active(this.requireNode(networkId));
     const signed = await this.active(this.config.signInvocation({
       targetNode,
       resource: keyResource,
@@ -640,7 +658,7 @@ export class NamedKeyClient {
     }));
     return await usingResponse(
       () => this.config.fetch(
-        `${this.config.host}/encryption/networks/${networkId}/${route}`,
+        `${url}/encryption/networks/${networkId}/${route}`,
         {
           method: "POST",
           headers: {
@@ -851,7 +869,7 @@ export class NamedKeyClient {
   private async decryptKey(envelope: NamedKeyEnvelope): Promise<Uint8Array> {
     const { crypto } = this.config;
     const keyResource = this.keyUrn(envelope.networkId, envelope.keyPath);
-    const targetNode = await this.active(this.requireNode());
+    const { url, nodeDid: targetNode } = await this.active(this.requireNode(envelope.networkId));
 
     const receiverKey = generateRandomReceiverKey({ crypto });
     const receiverPublicKey = base64Encode(receiverKey.publicKey);
@@ -887,7 +905,7 @@ export class NamedKeyClient {
       facts: facts as unknown as Record<string, unknown>,
     }));
     return await usingResponse(
-      () => this.config.fetch(`${this.config.host}/invoke`, {
+      () => this.config.fetch(`${url}/invoke`, {
         method: "POST",
         headers: {
           Authorization: signed.authorization,

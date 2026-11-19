@@ -35,8 +35,9 @@ import { join, resolve } from "node:path";
 // kvSyncTransport. Run42498701097 at11f3b8a7 measured777149 (+24) in both lanes;
 // Naomi8e3df7f3 admits only that exact worker size; tc2481OfflineReplicaTransport records it.
 // host SIWE expiry (TC-2691): final pinned source-WASM bytes; Naomi approved zero headroom.
-// TC-2771: run 43055513537 measured 778382; residual security fixes in run 43065938868 measure 778555 (+173), Naomi, zero headroom.
-export const MAX_WORKER_GZIP_BYTES = 778_555;
+// TC-2872: canonical Replica e2e run 43392230112 measured 780,742 B on SQLite and Postgres, +3,518 B over the prior ceiling; Naomi approved the exact ticket-scoped size.
+// TC-2931: canonical run 43430771640 measures 780,903 B (+161); exact named admission, no headroom. Details: TC-2931
+export const MAX_WORKER_GZIP_BYTES = 780_903;
 // TC-1827 follow-up: `replica.worker.js` (the @tinycloud/replica/browser worker) is unhashed and had no ceiling. It
 // measured 770,093 in GitHub run 39949887460 (head f2e2f9fc, merge base dc615834); requested by Naomi, 2026-10-23; the
 // ledger's tc1827ReplicaWorkerRatchet row records it. Zero additional headroom.
@@ -52,8 +53,9 @@ export const MAX_WORKER_GZIP_BYTES = 778_555;
 // preserves every root, initial, activation and gated ceiling.
 // host SIWE expiry (TC-2691): final pinned source-WASM bytes; Naomi approved zero headroom.
 // TC-2773: canonical run 42939305043 measures 771106 (+34), approved by Naomi with zero headroom.
-// TC-2771: run 43055513537 measured 772302; residual security fixes in run 43065938868 measure 772512 (+210), Naomi, zero headroom.
-export const MAX_REPLICA_WORKER_GZIP_BYTES = 772_512;
+// TC-2872: canonical Replica e2e run 43392230112 measured 774,411 B, +3,305 B over the prior ceiling; Naomi approved the exact ticket-scoped size.
+// TC-2931: the same canonical run measures 774,561 B (+150); exact named admission, no headroom. Details: TC-2931
+export const MAX_REPLICA_WORKER_GZIP_BYTES = 774_561;
 const canonicalName = /^kv-storage\.worker\.([0-9a-f]{64})\.js$/;
 const replicaWorkerName = "replica.worker.js";
 

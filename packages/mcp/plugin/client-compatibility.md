@@ -15,7 +15,14 @@ client registration, token exchange, personal-data access or submission was perf
   evidence are in [`review-evidence.json`](review-evidence.json). Do not replace the
   broad custom endpoint with the public candidate for other clients without checking
   the required tool set and OAuth audience.
-- Both HTTP surfaces are implemented in [`../src/http.ts`](../src/http.ts) in
+- The Claude, Grok and Muse directory listings each get their own restricted
+  address: `https://mcp.tinycloud.xyz/claude/mcp`, `/grok/mcp` and `/muse/mcp`.
+  Each serves the same five tools as `/chatgpt/mcp` under its own OAuth audience,
+  protected-resource metadata, approval route and tenant state, so a change one
+  directory's review demands does not alter what another lists. None is live
+  until OpenKey issues tokens for its audience, accepts its approval callback and
+  the connector's token-status client is registered for it.
+- Every HTTP surface is implemented in [`../src/http.ts`](../src/http.ts) in
   `TinyCloudLabs/js-sdk`, not TinyChat. TinyChat is a consumer; its
   [TC-2196 PR #609](https://github.com/TinyCloudLabs/tinychat/pull/609) is separate.
 - Local `tinycloud-mcp` stdio runs in the client's process environment and uses a

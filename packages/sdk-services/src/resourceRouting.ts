@@ -6,7 +6,7 @@ export type ResourceAccess = "read" | "write" | "host" | "encryption";
 export interface ResourceDestination { readonly url: string; readonly nodeDid?: string }
 export interface ResourceNodeInfo { readonly nodeId: string; readonly features?: unknown }
 export interface ResourceRoutingConfig {
-  resolveResource(resource: string, access: ResourceAccess): Promise<readonly ResourceDestination[]>;
+  resolveResource(resource: string, access: ResourceAccess, dataRead?: boolean): Promise<readonly ResourceDestination[]>;
   bindAudience(authorization: string, nodeDid: string): Promise<string>;
   /** Defaults to the raw transport's public node identity checks. */
   verifyDestination?(target: ResourceDestination): Promise<void | ResourceNodeInfo>;
@@ -29,6 +29,8 @@ export interface ResourceTransportOptions {
   readonly independentResources?: boolean;
   /** Captured, verified share-session key for its own locally created invocations. */
   readonly invocationSession?: ServiceSession;
+  /** Signed data invocations only: a read may reuse a cached registry absence. */
+  readonly dataRead?: boolean;
 }
 export type ResourceTransport = (
   resources: readonly { resource: string; access: ResourceAccess }[],
@@ -203,7 +205,7 @@ export async function routeResourceRequest(
   options?: ResourceTransportOptions,
 ): Promise<FetchResponse> {
   if (resources.length === 0) throw new ResourceNotRoutedError("empty request");
-  const routes = await Promise.all(resources.map(({ resource, access }) => routing.resolveResource(resource, access)));
+  const routes = await Promise.all(resources.map(({ resource, access }) => routing.resolveResource(resource, access, options?.dataRead)));
   if (routes.some((route) => route.length === 0)) throw new ResourceNotRoutedError(resources[routes.findIndex((route) => route.length === 0)].resource);
   const write = options?.independentResources === true || resources.some(({ access }) => access === "write" || access === "host");
   let targets: readonly ResourceDestination[];
@@ -318,7 +320,7 @@ export function createResourceTransportInvocationFetch(transport: ResourceTransp
         );
         return await rememberReply(replies, response, state);
       } finally { if (state) state.pending--; }
-    }, { invocationSession: session }));
+    }, { invocationSession: session, dataRead: true }));
   }, { [routesRequests]: true });
 }
 
@@ -357,7 +359,7 @@ export function createResourceRoutingFetch(fetchFn: FetchFunction, routing: Reso
           throw new NodeNotRespondingError([target.url], error);
         } finally { if (state) state.pending--; }
       };
-      return routeResourceRequest(resources, routing, send);
+      return routeResourceRequest(resources, routing, send, { dataRead: true });
     });
   }, { [routesRequests]: true });
 }

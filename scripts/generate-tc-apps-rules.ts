@@ -30,7 +30,7 @@ function between(text: string, start: string, end: string): string {
 const skill = await source("SKILL.md");
 const sql = await source("SQL.md");
 const tinyApps = await source("TINY-APPS.md");
-// The pinned routing table: which domain belongs to which first-party tiny app.
+// Use the pinned domain table, with hosted legacy-first routing defined in preamble.ts.
 const catalogTable = between(tinyApps, "| Domain (match the owner's words) |", "A domain is owned by a catalog app");
 // The procedure in preamble.ts is written for exactly these two apps: fail loudly when the pinned table drifts from it.
 const tableRows = catalogTable.split("\n").filter((line) => line.startsWith("|")).length - 2;
@@ -57,6 +57,10 @@ for (const [sourceLabel, hostedLabel] of [
 const cliByRule = "- `by`: your client: `claude-code`, `codex` or `opencode`.";
 anchor(organization, cliByRule);
 organization = organization.replace(cliByRule, "- `by`: server-owned attribution on stored/read-back records; omit it from every MCP write value.");
+// Keep the pinned new-layout key examples without implying legacy apps must use those paths.
+const newLayoutKeys = "Pick the app first: `<APP>` is its name, `<ID>` is `xyz.tinycloud.tinyapps.<APP>`, and every key of that app starts with `<ID>/`.";
+anchor(organization, newLayoutKeys);
+organization = organization.replace(newLayoutKeys, "For a new-layout app, `<APP>` is its name, `<ID>` is `xyz.tinycloud.tinyapps.<APP>`, and its keys follow the table below. Legacy apps instead use the default-space catalog and record paths given in the hosted instructions above, with the same record shapes and kind rules; they have no discovery entry.");
 const readSection = between(skill, "## 5. Read\n", "## 6. Write\n");
 const answers = readSection.slice(anchor(readSection, "To answer a question:\n")).trim();
 const copySection = between(skill, "## 7. The fast copy (SQL index)\n", "## 8. Errors\n");

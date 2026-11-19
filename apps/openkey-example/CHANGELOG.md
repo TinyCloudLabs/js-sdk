@@ -1,5 +1,200 @@
 # tinycloud-openkey-example-app
 
+## 0.0.50-beta.3
+
+### Patch Changes
+
+- Updated dependencies [400cf7f]
+  - @tinycloud/web-sdk@3.13.0-beta.3
+
+## 0.0.50-beta.2
+
+### Patch Changes
+
+- @tinycloud/web-sdk@3.13.0-beta.2
+
+## 0.0.50-beta.1
+
+### Patch Changes
+
+- Updated dependencies [2395340]
+  - @tinycloud/web-sdk@3.13.0-beta.1
+
+## 0.0.50-beta.0
+
+### Patch Changes
+
+- Updated dependencies [634753d]
+  - @tinycloud/web-sdk@3.13.0-beta.0
+
+## 0.0.49
+
+### Patch Changes
+
+- Updated dependencies [f859fb3]
+- Updated dependencies [2139b24]
+- Updated dependencies [b669909]
+- Updated dependencies [2a8edc2]
+- Updated dependencies [649bb18]
+- Updated dependencies [5817c2b]
+- Updated dependencies [55d52f7]
+- Updated dependencies [adfe9b5]
+- Updated dependencies [e50dd6c]
+- Updated dependencies [b32f52e]
+- Updated dependencies [66a03e0]
+- Updated dependencies [593f051]
+- Updated dependencies [c070c4b]
+- Updated dependencies [5f271e5]
+- Updated dependencies [693676e]
+- Updated dependencies [766d27a]
+- Updated dependencies [d4366f9]
+- Updated dependencies [728b25c]
+- Updated dependencies [0080686]
+- Updated dependencies [f4220cf]
+- Updated dependencies [ce16ef6]
+- Updated dependencies [6010858]
+- Updated dependencies [b00ad0b]
+- Updated dependencies [163f986]
+- Updated dependencies [c2fde3d]
+- Updated dependencies [711903b]
+- Updated dependencies [9ff4cf2]
+- Updated dependencies [2c9c7cc]
+  - @tinycloud/web-sdk@3.12.0
+
+## 0.0.49-beta.38
+
+### Patch Changes
+
+- Updated dependencies [711903b]
+  - @tinycloud/web-sdk@3.12.0-beta.38
+
+## 0.0.49-beta.37
+
+### Patch Changes
+
+- Updated dependencies [c2fde3d]
+  - @tinycloud/web-sdk@3.12.0-beta.37
+
+## 0.0.49-beta.36
+
+### Patch Changes
+
+- @tinycloud/web-sdk@3.12.0-beta.36
+
+## 0.0.49-beta.35
+
+### Patch Changes
+
+- Updated dependencies [6010858]
+  - @tinycloud/web-sdk@3.12.0-beta.35
+
+## 0.0.49-beta.34
+
+### Patch Changes
+
+- Updated dependencies [163f986]
+  - @tinycloud/web-sdk@3.12.0-beta.34
+
+## 0.0.49-beta.33
+
+### Patch Changes
+
+- Updated dependencies [b00ad0b]
+  - @tinycloud/web-sdk@3.12.0-beta.33
+
+## 0.0.49-beta.32
+
+### Patch Changes
+
+- Updated dependencies [2c9c7cc]
+  - @tinycloud/web-sdk@3.12.0-beta.32
+
+## 0.0.49-beta.31
+
+### Patch Changes
+
+- Updated dependencies [728b25c]
+  - @tinycloud/web-sdk@3.12.0-beta.31
+
+## 0.0.49-beta.30
+
+### Patch Changes
+
+- @tinycloud/web-sdk@3.12.0-beta.30
+
+## 0.0.49-beta.29
+
+### Patch Changes
+
+- Updated dependencies [b669909]
+  - @tinycloud/web-sdk@3.12.0-beta.29
+
+## 0.0.49-beta.28
+
+### Patch Changes
+
+- Updated dependencies [0080686]
+  - @tinycloud/web-sdk@3.12.0-beta.28
+
+## 0.0.49-beta.27
+
+### Patch Changes
+
+- Updated dependencies [f4220cf]
+  - @tinycloud/web-sdk@3.12.0-beta.27
+
+## 0.0.49-beta.26
+
+### Patch Changes
+
+- Updated dependencies [2a8edc2]
+  - @tinycloud/web-sdk@3.12.0-beta.26
+
+## 0.0.49-beta.25
+
+### Patch Changes
+
+- Updated dependencies [ce16ef6]
+  - @tinycloud/web-sdk@3.12.0-beta.25
+
+## 0.0.49-beta.24
+
+### Patch Changes
+
+- @tinycloud/web-sdk@3.12.0-beta.24
+
+## 0.0.49-beta.23
+
+### Patch Changes
+
+- @tinycloud/web-sdk@3.12.0-beta.23
+
+## 0.0.49-beta.22
+
+### Patch Changes
+
+- Updated dependencies [d4366f9]
+  - @tinycloud/web-sdk@3.12.0-beta.22
+
+## 0.0.49-beta.21
+
+### Patch Changes
+
+- Updated dependencies [766d27a]
+  - @tinycloud/web-sdk@3.12.0-beta.21
+
+## 0.0.49-beta.20
+
+### Patch Changes
+
+- @tinycloud/web-sdk@3.12.0-beta.20
+
+## 0.0.49-beta.19
+
+### Patch Changes
+
+- @tinycloud/web-sdk@3.12.0-beta.19
+
 ## 0.0.49-beta.18
 
 ### Patch Changes

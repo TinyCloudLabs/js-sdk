@@ -259,6 +259,14 @@ const issuedDelegationsExternal = (type, ext) => (data, callback) => {
   callback();
 };
 const lazyLoaderExternals = (type, ext) => ({ context, request }, callback) => {
+  if (request === "../registry-verdict-cache-entry" && context === path.resolve(__dirname, "src/modules")) {
+    callback(null, `${type} ./registry-verdict-cache.${ext}`);
+    return;
+  }
+  if (request === "@tinycloud/sdk-core/share-placement" && context === path.resolve(__dirname, "../node-sdk/dist")) {
+    callback(null, `${type} ./share-placement.${ext}`);
+    return;
+  }
   if (request === "./encryption-keys.js" && context === path.resolve(__dirname, "../node-sdk/dist")) {
     callback(null, `${type} ./encryption-keys.${ext}`);
     return;
@@ -270,6 +278,10 @@ const lazyLoaderExternals = (type, ext) => ({ context, request }, callback) => {
   }
   if (isIssuedDelegationsRequest({ context, request })) {
     callback(null, `${type} ./delegations-issued.${ext}`);
+    return;
+  }
+  if (request === "@tinycloud/sdk-core/delegations/renewal" && context === path.resolve(__dirname, "../node-sdk/dist")) {
+    callback(null, `${type} ./delegations-renewal.${ext}`);
     return;
   }
   const entry = LAZY_ENTRIES.find((e) => e.request === request && context === path.resolve(__dirname, e.dir));
@@ -317,12 +329,26 @@ const lazyEntries = {
   modals: "./src/notifications/modals-entry.ts",
   "encryption-keys": "./src/encryption-keys-entry.ts",
   "space-hosting": "./src/space-hosting-entry.ts",
+  "registry-verdict-cache": "./src/registry-verdict-cache-entry.ts",
   "delegations-issued": "./src/delegations-issued-entry.ts",
+  "delegations-renewal": "./src/delegations-renewal-entry.ts",
 };
 const notChunkLimit = (plugin) => !(plugin instanceof webpack.optimize.LimitChunkCountPlugin);
 
+// CACAO verification uses viem's deferred secp256k1 import. Keep that primitive
+// inside the already-lazy entry: a second webpack chunk creates a computed import
+// whose downstream context includes declaration files in dist/.
+const lazyModule = {
+  ...baseConfig.module,
+  rules: [...rules, {
+    test: /[\\/]viem[\\/]_esm[\\/]utils[\\/]signature[\\/]recoverPublicKey\.js$/,
+    parser: { dynamicImportMode: "eager" },
+  }],
+};
+
 const lazyEsmConfig = {
   ...esmConfig,
+  module: lazyModule,
   entry: lazyEntries,
   externals: lazyExternals("module", "mjs"),
   plugins: esmConfig.plugins.filter(notChunkLimit),
@@ -331,11 +357,30 @@ const lazyEsmConfig = {
 
 const lazyCjsConfig = {
   ...cjsConfig,
+  module: lazyModule,
   entry: lazyEntries,
   externals: lazyExternals("commonjs", "cjs"),
   plugins: cjsConfig.plugins.filter(notChunkLimit),
   output: { ...cjsConfig.output, filename: "[name].cjs" },
 };
+
+const sharePlacementConfig = (config, type, ext) => ({
+  ...config,
+  module: lazyModule,
+  entry: "./src/share-placement-entry.ts",
+  externals: ({ context, request }, callback) => {
+    if (request === "./index" && context === path.resolve(__dirname, "src")) {
+      callback(null, `${type} ./index.${ext}`);
+      return;
+    }
+    callback();
+  },
+  plugins: [...config.plugins, new webpack.NormalModuleReplacementPlugin(
+    /^@tinycloud\/sdk-core$/,
+    path.resolve(__dirname, "src/share-placement-core-bridge.ts")
+  )],
+  output: { ...config.output, filename: `share-placement.${ext}` },
+});
 
 // Headless subpath (`@tinycloud/web-sdk/credentials`). Built from the base
 // configs only: no replica externals or plugins, so index/replica are unchanged.
@@ -373,4 +418,6 @@ module.exports = [
   lazyCjsConfig,
   credentialsEsmConfig,
   credentialsCjsConfig,
+  sharePlacementConfig(esmConfig, "module", "mjs"),
+  sharePlacementConfig(cjsConfig, "commonjs", "cjs"),
 ];
