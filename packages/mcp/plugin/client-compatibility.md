@@ -22,6 +22,17 @@ client registration, token exchange, personal-data access or submission was perf
   directory's review demands does not alter what another lists. None is live
   until OpenKey issues tokens for its audience, accepts its approval callback and
   the connector's token-status client is registered for it.
+- `https://mcp.tinycloud.xyz/perplexity/mcp`, `/mistral/mcp` and `/copilot/mcp`
+  are three more
+  such addresses with the same five tools. `https://mcp.tinycloud.xyz/gemini/mcp`
+  is the address for Google's Connected Apps registry and lists eleven typed
+  tools of its own instead ([`../src/gemini-tools.ts`](../src/gemini-tools.ts)):
+  Google's published policy does not allow instructions in a tool result,
+  model-written SQL or a batch tool, does not read structured content, and
+  locks the listed tools when a version is published. Nothing was connected to
+  Gemini, Perplexity or Microsoft 365 Copilot and nothing was submitted (a
+  Mistral custom connector was tried against `/chatgpt/mcp` only); the same
+  OpenKey and token-status steps apply before any of the four answers a request.
 - Every HTTP surface is implemented in [`../src/http.ts`](../src/http.ts) in
   `TinyCloudLabs/js-sdk`, not TinyChat. TinyChat is a consumer; its
   [TC-2196 PR #609](https://github.com/TinyCloudLabs/tinychat/pull/609) is separate.

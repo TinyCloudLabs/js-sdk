@@ -2,6 +2,8 @@ import { appRoot, newApp, parseKey, TC_APPS_DISCOVERY_ROOT, TC_APPS_ID_PREFIX, T
 import { HEALTHLOG_DATABASE, HEALTHLOG_LINK, RECIPES_LINK } from "./tc-apps/preamble.js";
 
 export { TC_APPS_DISCOVERY_ROOT, TC_APPS_LEGACY_DATABASE, TC_APPS_LEGACY_ROOT, type Layout } from "./tc-apps/layout.js";
+/** The personal-record key layout, for a projection that builds keys itself instead of asking the model to. */
+export { appId, catalogKey, catalogPrefix, discoveryKey, newApp, parseKey, recordPrefix, type KeyParts } from "./tc-apps/layout.js";
 export const TC_APPS_RECORDS_ACTIONS = ["tinycloud.kv/get", "tinycloud.kv/list", "tinycloud.kv/put", "tinycloud.kv/del"] as const;
 export const TC_APPS_DISCOVERY_ENTRY_ACTIONS = ["tinycloud.kv/get", "tinycloud.kv/put"] as const;
 export const TC_APPS_CATALOG_READ_ACTIONS = ["tinycloud.kv/get", "tinycloud.kv/list"] as const;

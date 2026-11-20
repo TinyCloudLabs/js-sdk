@@ -259,7 +259,7 @@ test("each assistant's address serves the plugin's tools under its own audience,
     resourcePath: "/chatgpt/mcp",
   });
   const pluginTools = (await client.listTools()).tools;
-  for (const prefix of ["claude", "grok", "muse"]) {
+  for (const prefix of ["claude", "grok", "muse", "perplexity", "mistral", "copilot"]) {
     const path = `/${prefix}/mcp`;
     const assistant = await createClient("openkey-user-1", ownerDids, { path });
     // Claude's address repeats each title in the annotations; see the next test. Nothing else may differ.
@@ -286,6 +286,33 @@ test("each assistant's address serves the plugin's tools under its own audience,
     expect(await readdir(join(stateDir, prefix, "tenants"))).toHaveLength(1);
   }
   expect(await readdir(join(stateDir, "chatgpt", "tenants"))).toHaveLength(1);
+  // Nor does a token for one new address open another new one.
+  for (const [target, audience] of [
+    ["/mistral/mcp", "https://mcp.test/perplexity/mcp"],
+    ["/perplexity/mcp", "https://mcp.test/mistral/mcp"],
+    ["/gemini/mcp", "https://mcp.test/copilot/mcp"],
+    ["/copilot/mcp", "https://mcp.test/gemini/mcp"],
+    ["/copilot/mcp", "https://mcp.test/mistral/mcp"],
+    ["/gemini/mcp", "https://mcp.test/perplexity/mcp"],
+  ]) {
+    await expect(createClient("openkey-user-1", ownerDids, { path: target!, audience }), `${audience} at ${target}`).rejects.toThrow();
+  }
+}, 60_000);
+
+test("/mistral/mcp and /perplexity/mcp name offline_access as a hint and still accept a token without it", async () => {
+  const ownerDids = ["did:pkh:eip155:1:0x1111111111111111111111111111111111111111"];
+  const { app, createClient } = await startHostedMcp({ nodeHost: "https://node.tinycloud.test", ownerDids });
+  for (const prefix of ["mistral", "perplexity"]) {
+    const path = `/${prefix}/mcp`;
+    const unauthenticated = await hostedFetch(app, `https://mcp.test${path}`, { method: "POST" });
+    expect(unauthenticated.status).toBe(401);
+    expect(unauthenticated.headers.get("www-authenticate")).toContain('scope="tinycloud:mcp offline_access"');
+    // The test token's scope is "openid tinycloud:mcp": no offline_access. It is accepted, lists tools and runs one.
+    const assistant = await createClient("openkey-user-1", ownerDids, { path });
+    expect((await assistant.listTools()).tools).toHaveLength(5);
+    expect(record((await assistant.callTool({ name: "tinycloud_connect", arguments: {} })).structuredContent))
+      .toMatchObject({ connected: false, approvalUrl: expect.stringContaining(`/${prefix}/connect?state=`) });
+  }
 }, 60_000);
 
 test("only /claude/mcp repeats each tool's title as annotations.title, and its tools differ in nothing else", async () => {
@@ -305,11 +332,363 @@ test("only /claude/mcp repeats each tool's title as annotations.title, and its t
   ]);
   for (const tool of claude) expect(tool.annotations?.title, tool.name).toBe(tool.title);
   const listed = async (path: string) => (await (await createClient("openkey-user-1", ownerDids, { path })).listTools()).tools;
-  for (const path of ["/mcp", "/chatgpt/mcp", "/grok/mcp", "/muse/mcp"]) {
+  for (const path of ["/mcp", "/chatgpt/mcp", "/grok/mcp", "/muse/mcp", "/perplexity/mcp", "/mistral/mcp", "/copilot/mcp", "/gemini/mcp"]) {
     for (const tool of await listed(path)) expect(tool.annotations, `${path} ${tool.name}`).not.toHaveProperty("title");
   }
   expect(claude.map(withoutAnnotationTitle)).toEqual(await listed("/chatgpt/mcp"));
 }, 60_000);
+
+test("/gemini/mcp serves its published tools and keeps records through typed calls, with no rules and no structured content in any result", async () => {
+  // This loopback fixture is outside MCP's package build graph.
+  const hermeticModule = await import(new URL(
+    "./test-support/hermetic-node.mjs", import.meta.url,
+  ).href) as { createHermeticEncryptedNode(): Promise<HermeticNode> };
+  const hermetic = await hermeticModule.createHermeticEncryptedNode();
+  resources.push(async () => hermetic.stop());
+  hermetic.provisionKvSpace(await ownerSpace(hermetic.ownerPrivateKey, "applications"));
+  hermetic.provisionKvSpace(await ownerSpace(hermetic.ownerPrivateKey, "default"));
+  // The loopback node stores and lists values but has no conditional writes or deletes; the records live in a
+  // store that has both, one per space, so every outcome below is the operations' own.
+  const stores = new Map<string, ConditionalKv>();
+  const kvForSpace = spyOn(TinyCloudNode.prototype, "kvForSpace").mockImplementation(((space: string) => {
+    if (!stores.has(space)) stores.set(space, new ConditionalKv());
+    return stores.get(space)!;
+  }) as unknown as TinyCloudNode["kvForSpace"]);
+  resources.push(async () => { kvForSpace.mockRestore(); });
+  const ownerDids = [hermetic.ownerDid];
+  const { app, client, createClient, stateDir } = await startHostedMcp({
+    nodeHost: hermetic.host, ownerDids, resourcePath: "/gemini/mcp",
+  });
+  // What a client lists is the published snapshot, byte for byte.
+  const published = JSON.parse(await readFile(new URL("./gemini-tools.snapshot.json", import.meta.url), "utf8")) as {
+    instructions: string; tools: unknown[];
+  };
+  expect(client.getInstructions()).toBe(published.instructions);
+  expect((await client.listTools()).tools as unknown[]).toEqual(published.tools);
+  for (const [target, audience] of [
+    ["/gemini/mcp", "https://mcp.test/chatgpt/mcp"],
+    ["/gemini/mcp", "https://mcp.test/mcp"],
+    ["/chatgpt/mcp", "https://mcp.test/gemini/mcp"],
+  ]) {
+    await expect(createClient("openkey-user-1", ownerDids, { path: target!, audience })).rejects.toThrow();
+  }
+  for (const name of ["tinycloud_apps_context", "tinycloud_apps_write", "tinycloud_apps_query", "tinycloud_sql_query", "tinycloud_kv_get"]) {
+    const refusal = await client.callTool({ name, arguments: {} })
+      .then((value) => JSON.stringify(value), (error: unknown) => String(error));
+    expect(refusal).toMatch(/not found|Unknown tool/i);
+  }
+
+  const replies: string[] = [];
+  const call = async (name: string, args: Record<string, unknown> = {}) => {
+    const result = await client.callTool({ name, arguments: args });
+    // Google does not read structured content: the whole answer is one JSON text part.
+    expect(result.structuredContent, name).toBeUndefined();
+    const content = result.content as { type: string; text: string }[];
+    expect(content.map((part) => part.type), name).toEqual(["text"]);
+    replies.push(content[0]!.text);
+    return record(JSON.parse(content[0]!.text));
+  };
+  const pending = await call("tinycloud_connect");
+  expect(pending).toMatchObject({ status: "approval_required", connected: false });
+  expect(new URL(String(pending.approval_url)).pathname).toBe("/gemini/connect");
+  const [tenantId] = await readdir(join(stateDir, "gemini", "tenants"));
+  const tenantStateRoot = join(stateDir, "gemini", "tenants", tenantId!);
+  const bootstrap = await openKeyApprovalBody({
+    redirect: await openKeyRedirect(app, String(pending.approval_url)), tenantStateRoot, privateKey: hermetic.ownerPrivateKey,
+  });
+  await activateOnNode(hermetic.host, bootstrap);
+  expect(await postCallback(app, String(pending.approval_url), bootstrap)).toEqual({ status: 200, body: { success: true } });
+  expect(await call("tinycloud_connect")).toEqual({ status: "ok", connected: true });
+
+  let approvals = 0;
+  // A call that needs approval answers with the link; the same call is repeated after each approval.
+  const approved = async (name: string, args: Record<string, unknown> = {}) => {
+    for (let round = 0; round < 4; round++) {
+      const reply = await call(name, args);
+      if (reply.status !== "approval_required") return reply;
+      approvals++;
+      expect(String(reply.grants), name).toContain("Lets the TinyCloud connector");
+      expect(reply.next_step, name).toBe("The user opens approval_url and approves on OpenKey. Then call this tool again with the same arguments.");
+      const url = String(reply.approval_url);
+      const body = await openKeyApprovalBody({
+        redirect: await openKeyRedirect(app, url), tenantStateRoot, privateKey: hermetic.ownerPrivateKey,
+      });
+      expect(await postCallback(app, url, body)).toEqual({ status: 200, body: { success: true } });
+    }
+    throw new Error(`${name} kept asking for approval.`);
+  };
+
+  expect(await approved("tinycloud_list_apps")).toEqual({ status: "ok", now: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}\+00:00$/), timezone: null, apps: [] });
+  expect(approvals).toBe(1);
+  expect(await approved("tinycloud_get_app", { app: "todos" })).toMatchObject({ status: "error", code: "NOT_FOUND", apps: [] });
+  expect(await approved("tinycloud_create_app", { app: "todos", title: "Todos", about: "Things to do." }))
+    .toMatchObject({ status: "ok", app: "todos", title: "Todos" });
+  expect(await approved("tinycloud_create_app", { app: "todos", title: "Todos", about: "Things to do." }))
+    .toMatchObject({ status: "error", code: "EXISTS" });
+  const fields = [{ name: "title", description: "text: what to do" }, { name: "due", description: "date: when it is due" }];
+  expect(await approved("tinycloud_create_kind", { app: "todos", kind: "todo", about: "One thing to do.", type: "item", fields }))
+    .toEqual({ status: "ok", app: "todos", kind: "todo", type: "item", states: ["open", "done"], fields: { title: "text: what to do", due: "date: when it is due" } });
+  expect(await approved("tinycloud_list_apps")).toMatchObject({ apps: [{ app: "todos", title: "Todos" }] });
+  expect(await approved("tinycloud_create_kind", { app: "todos", kind: "todo", about: "Again.", type: "item", fields }))
+    .toMatchObject({ status: "error", code: "EXISTS" });
+
+  const todo = { app: "todos", kind: "todo", name: "Renew passport", data: { title: "Renew passport", due: "2026-12-31" } };
+  expect(await approved("tinycloud_create_record", todo)).toMatchObject({ status: "error", code: "TIMEZONE_REQUIRED" });
+  expect(await approved("tinycloud_set_timezone", { timezone: "Mars/Olympus" })).toMatchObject({ status: "error", code: "INVALID" });
+  expect(await approved("tinycloud_set_timezone", { timezone: "Europe/Berlin" })).toMatchObject({ status: "ok", timezone: "Europe/Berlin" });
+  const created = await approved("tinycloud_create_record", todo);
+  expect(created).toEqual({
+    status: "ok",
+    key: expect.stringMatching(/^xyz\.tinycloud\.tinyapps\.todos\/todo\/open\/\d{4}-\d{2}-\d{2}-renew-passport$/),
+    etag: expect.stringMatching(/^"blake3-[0-9a-f]{64}"$/),
+    at: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}\+0[12]:00$/),
+    data: todo.data,
+  });
+  // A second item of the same name on the same day gets its own id; nothing is refused or overwritten.
+  const twin = await approved("tinycloud_create_record", todo);
+  expect(twin).toMatchObject({ status: "ok", key: `${String(created.key)}-2`, data: todo.data });
+  expect(await approved("tinycloud_delete_record", { key: twin.key, etag: twin.etag })).toEqual({ status: "ok", deleted: twin.key });
+  expect(await approved("tinycloud_create_record", { ...todo, name: undefined })).toMatchObject({ status: "error", code: "INVALID" });
+
+  expect(await approved("tinycloud_get_app", { app: "todos" })).toEqual({
+    status: "ok", app: "todos", title: "Todos", about: "Things to do.",
+    kinds: [{ kind: "todo", about: "One thing to do.", type: "item", states: ["open", "done"], fields: { title: "text: what to do", due: "date: when it is due" } }],
+  });
+  expect(await approved("tinycloud_list_records", { app: "todos", kind: "todo" })).toEqual({
+    status: "ok", app: "todos", kind: "todo", total: 1, counts: { open: 1 }, returned: 1, truncated: false,
+    records: [{ key: created.key, etag: created.etag, at: created.at, data: todo.data }],
+  });
+  expect(await approved("tinycloud_list_records", { app: "todos", kind: "note" })).toMatchObject({ status: "error", code: "NOT_FOUND" });
+
+  const stale = `"blake3-${"0".repeat(64)}"`;
+  expect(await approved("tinycloud_update_record", { key: created.key, etag: stale, data: { due: "2027-01-15" } }))
+    .toMatchObject({ status: "error", code: "CHANGED", current: { key: created.key, etag: created.etag, data: todo.data } });
+  const updated = await approved("tinycloud_update_record", { key: created.key, etag: created.etag, data: { due: "2027-01-15", urgent: true } });
+  // A field the kind does not list is saved and named as data; the operations' warning sentences are not passed on.
+  expect(updated).toEqual({
+    status: "ok", key: created.key, etag: expect.any(String), at: created.at,
+    data: { title: "Renew passport", due: "2027-01-15", urgent: true }, fields_not_in_kind: ["urgent"],
+  });
+  expect(updated.etag).not.toBe(created.etag);
+  expect(await approved("tinycloud_move_record", { key: created.key, etag: updated.etag, state: "archived" }))
+    .toMatchObject({ status: "error", code: "INVALID", message: "archived is not a state of this kind. Its states are open, done." });
+  const moved = await approved("tinycloud_move_record", { key: created.key, etag: updated.etag, state: "done" });
+  expect(moved).toMatchObject({
+    status: "ok", state: "done", key: String(created.key).replace("/open/", "/done/"),
+    data: { title: "Renew passport", done: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/) },
+  });
+  expect(await approved("tinycloud_list_records", { app: "todos", kind: "todo", folder: "open" })).toMatchObject({ total: 0, records: [] });
+  expect(await approved("tinycloud_list_records", { app: "todos", kind: "todo", folder: "done" }))
+    .toMatchObject({ total: 1, counts: { done: 1 }, records: [{ key: moved.key, etag: moved.etag }] });
+  // The same item again after the first was finished: the id is taken in "done", so it gets -2 and can be finished too.
+  const again = await approved("tinycloud_create_record", todo);
+  expect(again).toMatchObject({ status: "ok", key: `${String(created.key)}-2` });
+  const againDone = await approved("tinycloud_move_record", { key: again.key, etag: again.etag, state: "done" });
+  expect(againDone).toMatchObject({ status: "ok", state: "done", key: `${String(moved.key)}-2` });
+  expect(await approved("tinycloud_delete_record", { key: againDone.key, etag: againDone.etag })).toEqual({ status: "ok", deleted: againDone.key });
+  // A stale etag, and one mistyped (its quotes lost), both get the current record back and delete nothing.
+  for (const etag of [stale, String(moved.etag).replaceAll('"', "")]) {
+    expect(await approved("tinycloud_delete_record", { key: moved.key, etag }))
+      .toMatchObject({ status: "error", code: "CHANGED", current: { key: moved.key, etag: moved.etag } });
+  }
+  expect(await approved("tinycloud_delete_record", { key: moved.key, etag: moved.etag })).toEqual({ status: "ok", deleted: moved.key });
+  expect(await approved("tinycloud_delete_record", { key: moved.key, etag: moved.etag })).toMatchObject({ status: "error", code: "NOT_FOUND" });
+  expect(await approved("tinycloud_list_records", { app: "todos", kind: "todo" })).toMatchObject({ total: 0, counts: {}, records: [] });
+
+  // A daily log holds one record per date; a timed log takes a date and a time, and any script in its name.
+  await approved("tinycloud_create_kind", { app: "todos", kind: "mood", about: "How the day went.", type: "daily_log", fields: [{ name: "score", description: "integer: 1 to 5" }] });
+  const day = await approved("tinycloud_create_record", { app: "todos", kind: "mood", date: "2026-11-03", data: { score: 4 } });
+  expect(day).toMatchObject({ status: "ok", key: "xyz.tinycloud.tinyapps.todos/mood/2026-11/2026-11-03", at: "2026-11-03", data: { score: 4 } });
+  expect(await approved("tinycloud_create_record", { app: "todos", kind: "mood", date: "2026-11-03", data: { score: 2 } }))
+    .toMatchObject({ status: "error", code: "EXISTS", current: { key: day.key, etag: day.etag, data: { score: 4 } } });
+  expect(await approved("tinycloud_create_record", { app: "todos", kind: "mood", date: "2026-02-31", data: { score: 2 } }))
+    .toMatchObject({ status: "error", code: "INVALID" });
+  await approved("tinycloud_create_kind", { app: "todos", kind: "note", about: "A thought.", type: "timed_log", fields: [{ name: "text", description: "text: the note" }] });
+  const timed = await approved("tinycloud_create_record", { app: "todos", kind: "note", name: "Ідея", date: "2026-11-03", time: "09:30", data: { text: "Спробувати" } });
+  expect(timed).toMatchObject({
+    status: "ok", at: "2026-11-03T09:30+01:00", data: { text: "Спробувати" },
+    key: expect.stringMatching(/^xyz\.tinycloud\.tinyapps\.todos\/note\/2026-11\/2026-11-03T0930-n-[0-9a-f]{10}$/),
+  });
+  expect(await approved("tinycloud_create_kind", { app: "todos", kind: "run", about: "A run.", type: "timed_log", states: ["open"], fields }))
+    .toMatchObject({ status: "error", code: "INVALID" });
+
+  // Pages: next_cursor continues after the last record returned, so every record can be reached.
+  for (const time of ["10:00", "11:00"]) {
+    await approved("tinycloud_create_record", { app: "todos", kind: "note", name: "More", date: "2026-11-03", time, data: { text: time } });
+  }
+  const first = await approved("tinycloud_list_records", { app: "todos", kind: "note", limit: 2 });
+  expect(first).toMatchObject({ total: 3, returned: 2, truncated: true, records: [{ data: { text: "11:00" } }, { data: { text: "10:00" } }] });
+  expect(first.next_cursor).toBe(`*|${(first.records as { key: string }[])[1]!.key}`);
+  const second = await approved("tinycloud_list_records", { app: "todos", kind: "note", limit: 2, cursor: first.next_cursor });
+  expect(second).toMatchObject({ total: 3, returned: 1, truncated: false, records: [{ key: timed.key }] });
+  expect(second).not.toHaveProperty("next_cursor");
+  expect(await approved("tinycloud_list_records", { app: "todos", kind: "mood", cursor: first.next_cursor }))
+    .toMatchObject({ status: "error", code: "INVALID" });
+  // An exact page boundary: the page holds everything that is left, so there is no cursor.
+  expect(await approved("tinycloud_list_records", { app: "todos", kind: "note", limit: 3 })).toMatchObject({ returned: 3, truncated: false });
+  expect(await approved("tinycloud_list_records", { app: "todos", kind: "note", limit: 1, cursor: first.next_cursor }))
+    .toMatchObject({ returned: 1, truncated: false });
+  // A cursor belongs to its listing's folder scope, in both directions; a bare key is not a cursor.
+  const month = await approved("tinycloud_list_records", { app: "todos", kind: "note", folder: "2026-11", limit: 1 });
+  expect(String(month.next_cursor)).toMatch(/^2026-11\|xyz\.tinycloud\.tinyapps\.todos\/note\/2026-11\//);
+  for (const args of [
+    { cursor: month.next_cursor },
+    { folder: "2026-11", cursor: first.next_cursor },
+    { folder: "2026-10", cursor: String(month.next_cursor).replace(/^2026-11/, "2026-10") },
+    { cursor: String(first.next_cursor).slice(2) },
+  ]) {
+    expect(await approved("tinycloud_list_records", { app: "todos", kind: "note", ...args }), JSON.stringify(args))
+      .toMatchObject({ status: "error", code: "INVALID" });
+  }
+  // The record a cursor names may be gone by the next call: the page still starts after its place.
+  const middle = (first.records as { key: string; etag: string }[])[1]!;
+  expect(await approved("tinycloud_delete_record", { key: middle.key, etag: middle.etag })).toEqual({ status: "ok", deleted: middle.key });
+  expect(await approved("tinycloud_list_records", { app: "todos", kind: "note", cursor: first.next_cursor }))
+    .toMatchObject({ total: 2, returned: 1, truncated: false, records: [{ key: timed.key }] });
+
+  // The store refuses: a list (the node failing, then the space not set up) and a write (storage full). Each is
+  // answered with this address's fixed sentence, not with the operations' message for the five-tool addresses.
+  for (const [code, message, retryable] of [
+    ["KV_BACKEND_DOWN", "TinyCloud could not complete this request.", true],
+    ["SPACE_NOT_HOSTED", "The user's TinyCloud storage space is not set up yet. It is created shortly after the first approval.", false],
+  ] as const) {
+    for (const store of stores.values()) store.failList = code;
+    expect(await approved("tinycloud_list_records", { app: "todos", kind: "note" }))
+      .toEqual({ status: "error", code: "NODE_ERROR", message, ...(retryable ? { retryable: true } : {}) });
+  }
+  for (const store of stores.values()) {
+    store.failList = undefined;
+    store.failPut = (key) => key.includes("/note/") ? "STORAGE_QUOTA_EXCEEDED" : undefined;
+  }
+  expect(await approved("tinycloud_create_record", { app: "todos", kind: "note", name: "Full", data: { text: "x" } }))
+    .toEqual({ status: "error", code: "STORAGE_QUOTA_EXCEEDED", message: "The user's TinyCloud storage is full, so nothing was saved." });
+
+  // A first kind is stored but the app-list entry is refused: a refusal, not a success with a remark. Repeating lists the app.
+  expect(await approved("tinycloud_create_app", { app: "books", title: "Books", about: "Reading." })).toMatchObject({ status: "ok" });
+  for (const store of stores.values()) store.failPut = (key) => key === "xyz.tinycloud.tinyapps.catalog/books/entry" ? "NODE_ERROR" : undefined;
+  const book = { app: "books", kind: "book", about: "A book.", type: "item", fields: [{ name: "title", description: "text: the title" }] };
+  expect(await approved("tinycloud_create_kind", book)).toEqual({
+    status: "error", code: "PARTIAL",
+    message: "The kind was created, but the app could not be added to the user's app list (NODE_ERROR), so the app is not listed yet. Repeating this call adds it.",
+  });
+  expect(await approved("tinycloud_list_apps")).toMatchObject({ apps: [{ app: "todos" }] });
+  for (const store of stores.values()) store.failPut = undefined;
+  expect(await approved("tinycloud_create_kind", book)).toMatchObject({ status: "error", code: "EXISTS" });
+  expect(await approved("tinycloud_list_apps")).toMatchObject({ apps: [{ app: "books", title: "Books" }, { app: "todos" }] });
+
+  // A refusal whose reason the operations word for the five-tool addresses is answered in this address's own words.
+  for (const store of stores.values()) {
+    await store.put("xyz.tinycloud.tinyapps.notes/manifest.json", new TextEncoder().encode("{}"), {});
+  }
+  expect(await approved("tinycloud_create_app", { app: "notes", title: "Notes", about: "Notes." }))
+    .toEqual({ status: "error", code: "INVALID", message: "The app id notes cannot be used. Choose another app id." });
+
+  // What this address does not reach.
+  expect(await call("tinycloud_get_app", { app: "healthlog" })).toMatchObject({ status: "error", code: "APP_UNAVAILABLE" });
+  expect(await call("tinycloud_create_app", { app: "catalog", title: "Catalog", about: "Reserved." })).toMatchObject({ status: "error", code: "INVALID" });
+  expect(await call("tinycloud_update_record", { key: "xyz.tinycloud.secrets/private-key", etag: stale, data: { a: 1 } }))
+    .toMatchObject({ status: "error", code: "INVALID" });
+  expect(await call("tinycloud_delete_record", { key: "xyz.tinycloud.tinyapps.todos/catalog/todo", etag: stale }))
+    .toMatchObject({ status: "error", code: "INVALID" });
+
+  // No answer carried the record-handling rules that the other addresses return from tinycloud_apps_context, and no
+  // text reached a result that this address did not write itself: every sentence is one of the fixed ones below.
+  const sentences = [
+    /^The user has no app with the id [a-z0-9-]+\. Their apps are listed by tinycloud_list_apps\.$/,
+    /^An app with the id [a-z0-9-]+ was already created and has no kind yet\. Add one with tinycloud_create_kind\.$/,
+    /^The app [a-z0-9-]+ has no kind [a-z0-9-]+\. Its kinds are listed by tinycloud_get_app\.$/,
+    /^That (kind|record) already exists\.$/,
+    /^That record does not exist\. It may have been moved or deleted\.$/,
+    /^The record changed since it was read, so nothing was written\. Use the current values and etag\.$/,
+    /^No timezone is saved for this user\. Ask the user for their timezone and save it with tinycloud_set_timezone, then repeat this call\.$/,
+    /^timezone is not an IANA timezone name such as Europe\/Berlin\.$/,
+    /^name is required for a record of a item kind\.$/,
+    /^archived is not a state of this kind\. Its states are open, done\.$/,
+    /^A record for that date already exists\. Change it with tinycloud_update_record, using this key and etag\.$/,
+    /^date is not a calendar date\.$/,
+    /^states applies to kinds of type item only\.$/,
+    /^cursor is not the next_cursor of a listing of this app, kind and folder\.$/,
+    /^TinyCloud could not complete this request\.$/,
+    /^The user's TinyCloud storage space is not set up yet\. It is created shortly after the first approval\.$/,
+    /^The user's TinyCloud storage is full, so nothing was saved\.$/,
+    /^The kind was created, but the app could not be added to the user's app list \(NODE_ERROR\), so the app is not listed yet\. Repeating this call adds it\.$/,
+    /^The app id notes cannot be used\. Choose another app id\.$/,
+    /^Health Log is not available through this connector\. Its page is https:\/\/share\.tinycloud\.xyz\/apps\/run#[a-z.]+\.$/,
+    /^catalog is a reserved name\. Choose another app id\.$/,
+    /^key is not a record key\. Use a key returned by tinycloud_list_records or tinycloud_create_record\.$/,
+  ];
+  const approvalStep = "The user opens approval_url and approves on OpenKey. Then call this tool again with the same arguments.";
+  for (const text of replies) {
+    expect(text).not.toContain("Personal apps through the TinyCloud connector");
+    expect(text).not.toContain("\"rules\"");
+    expect(text).not.toContain("\"warnings\"");
+    expect(text.length).toBeLessThan(3000);
+    const reply = record(JSON.parse(text));
+    if (reply.status === "ok") {
+      // A success is data only: no sentence for the model.
+      for (const field of ["message", "next_step", "warning", "warnings", "grants"]) expect(reply, text).not.toHaveProperty(field);
+    } else if (reply.status === "approval_required") {
+      expect(reply.next_step).toBe(approvalStep);
+      expect(String(reply.grants)).toMatch(/^(Connects this assistant to the user's TinyCloud account\.|Lets the TinyCloud connector [^.]+\([a-z0-9./-]+\) in your TinyCloud (applications|default) space, for 30 days\.( |$))+$/);
+      expect(reply).not.toHaveProperty("message");
+    } else {
+      expect(reply.status).toBe("error");
+      expect(reply).not.toHaveProperty("next_step");
+      expect(sentences.some((sentence) => sentence.test(String(reply.message))), String(reply.message)).toBe(true);
+    }
+  }
+  expect(approvals).toBe(GEMINI_FLOW_APPROVALS);
+}, 120_000);
+
+/** A key-value space with the node's conditional writes and deletes, which the loopback node leaves out. */
+class ConditionalKv {
+  readonly #values = new Map<string, { text: string; etag: string }>();
+  /** A node error code to answer a list or a put of this key with, for the refusals a healthy store never gives. */
+  failList?: string;
+  failPut?: (key: string) => string | undefined;
+  async list({ prefix }: { prefix: string }) {
+    if (this.failList !== undefined) return { ok: false as const, error: { code: this.failList } };
+    return { ok: true as const, data: { keys: [...this.#values.keys()].filter((key) => key.startsWith(prefix)).sort() } };
+  }
+  async batchGet(keys: string[]) {
+    return { ok: true as const, data: { results: keys.map((key) => {
+      const entry = this.#values.get(key);
+      return { key, result: entry === undefined
+        ? { ok: false as const, error: { code: "KV_NOT_FOUND" } }
+        : { ok: true as const, data: { data: entry.text, headers: { etag: entry.etag } } } };
+    }) } };
+  }
+  async put(key: string, bytes: Uint8Array, options: { ifMatch?: string; ifNoneMatch?: "*" }) {
+    const refused = this.failPut?.(key);
+    if (refused !== undefined) return { ok: false as const, error: { code: refused } };
+    const current = this.#values.get(key);
+    if ((options.ifNoneMatch !== undefined && current !== undefined) ||
+      (options.ifMatch !== undefined && current?.etag !== options.ifMatch)) {
+      return { ok: false as const, error: { code: "KV_PRECONDITION_FAILED" } };
+    }
+    const text = new TextDecoder().decode(bytes);
+    const etag = `"blake3-${createHash("sha256").update(text).digest("hex")}"`;
+    this.#values.set(key, { text, etag });
+    return { ok: true as const, data: { data: undefined, headers: { etag } } };
+  }
+  async delete(key: string, options: { ifMatch?: string }) {
+    const current = this.#values.get(key);
+    if (current === undefined) return { ok: false as const, error: { code: "KV_NOT_FOUND" } };
+    if (options.ifMatch !== undefined && options.ifMatch !== current.etag) {
+      return { ok: false as const, error: { code: "KV_PRECONDITION_FAILED" } };
+    }
+    this.#values.delete(key);
+    return { ok: true as const, data: { data: undefined, headers: {} } };
+  }
+}
+
+/**
+ * The approvals the flow above asks a new account for, as the operations plan them on every address: the app
+ * list; reading the named app's folder; the older layout's app list, asked once when a named app is not in the
+ * new one; writing the app's folder with its entry in the app list; and the same for the second and the third app
+ * the flow names.
+ */
+const GEMINI_FLOW_APPROVALS = 6;
 
 /** A listed tool as it would be without the title Claude's address adds to its annotations. */
 function withoutAnnotationTitle<T extends { annotations?: { title?: string } }>(tool: T): T {
