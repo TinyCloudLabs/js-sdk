@@ -1461,6 +1461,14 @@ export class KVService extends BaseService implements IKVService {
       const errorText = await response.text();
       const message = `Failed to list keys: ${response.status} - ${errorText}`;
       const retryError = nodeRetryError("kv", message, response, errorText);
+      if (response.status === 404 && /space not found/i.test(errorText)) {
+        return err(serviceError(
+          ErrorCodes.SPACE_NOT_HOSTED,
+          message,
+          "kv",
+          { meta: { status: response.status, statusText: response.statusText } }
+        ));
+      }
       if (retryError) return err(retryError);
       return err(serviceError(
         ErrorCodes.NETWORK_ERROR,
