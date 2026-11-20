@@ -230,7 +230,7 @@ describe("signed portable OpenKey grants", () => {
   test("an agent approval that unchecks an ability is refused and stores no grant", async () => {
     await expect(escalate(await signedProof({ raw: false, capabilitiesRead: true }), ownerDid, undefined, true)).rejects.toMatchObject({
       code: "OPENKEY_APPROVAL_NARROWER",
-      message: expect.stringContaining("Approve all of it"),
+      message: expect.stringContaining("The approval was narrower than the request, so no grant was stored."),
     });
     expect(activated).toEqual([]);
     expect(await loadAdditionalDelegations(profileName)).toEqual([]);
@@ -323,7 +323,7 @@ describe("signed portable OpenKey grants", () => {
       [{ ...requested[0]!, space: differentlyCasedName }, requested[1]!], host, verification))
       .toThrow(expect.objectContaining({
         code: "OPENKEY_SCOPE_MISMATCH",
-        message: expect.stringContaining("No grant was stored."),
+        message: expect.stringContaining("OpenKey approved a different space than the one requested, so no grant was stored."),
       }));
   });
 
@@ -377,6 +377,8 @@ describe("signed portable OpenKey grants", () => {
       "--cap", "tinycloud.kv:secrets:vault/secrets/KEY:get"], { from: "node" });
     expect(openKeyReasons).toEqual([undefined]);
     expect(JSON.stringify(openKeyReasons)).not.toContain("vault/secrets/KEY");
+    expect(openKeyReasons.filter((reason): reason is string => reason !== undefined).join("\n"))
+      .not.toMatch(/tinycloud\.[a-z0-9_-]+:/i);
   });
 
   test("auth grant omits generated reason containing requested capability", async () => {

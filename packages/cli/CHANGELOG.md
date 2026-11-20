@@ -1,5 +1,150 @@
 # @tinycloud/cli
 
+## 1.9.0-beta.0
+
+### Minor Changes
+
+- `tinycloud onboard` asks for the whole task in one OpenKey approval. `--with apps` (the default), `--with feed` (the Feed only, without the general apps grant) or `--with apps,feed` chooses the task. `onboard --json` still lists `granted` as `{ space, asks }`, now in sorted space order (`account` before `applications`), and each entry carries the approval's text. If the owner approves fewer spaces than requested, the CLI names the missing space and saves nothing. Onboarding, Share publishing, `tinycloud secrets` and revoking access now send OpenKey a short line saying what the request is for; OpenKey still lists the permissions separately. Device sign-in stays limited to one space.
+
+  `@tinycloud/node-sdk` accepts a signed session grant that spans several of its owner's spaces and keeps each resource's own space in portable grants. A manifest sign-in now picks its primary space among the manifest's own requested spaces: `applications` when requested, otherwise the first in sorted space-id order (previously the first non-`account` space in request order).
+
+  Details: TC-2490
+
+- 228c94d: `tinycloud onboard --with feed` now asks only for what the Feed needs: its two databases and their answer notifications, with no read-only `account` listing. The approval says so ("Set up TinyCloud on this computer: use your Feed, for 7 days."), and onboarding no longer waits for the account space. Any selection that includes the Feed (`--with feed` or `--with apps,feed`) lasts 7 days by default instead of 30; `--with apps,feed` keeps the read-only `account` listing, and `--with apps` is unchanged. A new `--expiry <number><m|h|d|w>` option sets the approval's lifetime for any selection, at most 30 days (the longest an OpenKey approval lasts); a longer or malformed value is refused before anything is created.
+
+  Details: TC-3293
+
+### Patch Changes
+
+- Updated dependencies
+  - @tinycloud/node-sdk@3.14.0-beta.1
+  - @tinycloud/operations@0.9.2-beta.0
+
+## 1.8.0
+
+### Minor Changes
+
+- 15d2e66: `auth request --grant --fresh` asks the owner for a new approval even when the current grants already cover the request, which otherwise answers `changed: false` and asks nothing. The old grant is kept (not removed, not revoked) and its CID is listed beside the new one (`existingDelegationCids`). It works with `--timeout`, and needs `--grant` and an OpenKey owner profile (usage error, exit 2, otherwise).
+
+  Details: TC-3153
+
+- b26bdd8: `tinycloud auth request ... --grant --timeout 60s` bounds the wait for the owner's OpenKey approval, like `onboard --timeout` and `auth grant --timeout`: it prints the approval link and exits 8 with `{"pending":{"step","of","approvalUrl","expiresAt"}}` on stdout, and running the same command again resumes the same saved request (same link, no new request) and collects the approval. A grant over several spaces is one approval per space (`step` N of M) and activates nothing until the last is approved. `--timeout` without `--grant`, or with `--paste` or `--device`, is a usage error (exit 2). Without `--timeout` nothing changes.
+
+  A saved approval request that is past its own expiry no longer has its link printed again, including within OpenKey's 10-minute result retention: the command asks OpenKey first, collects an approval given before the expiry, ends as exit 3 on an expired one (the next run makes a new link), and shows the old link only if OpenKey still reports the request open. While it asks, stderr says `Checking the saved request with OpenKey...` (no link), and a `--timeout` that ends before OpenKey could be asked exits 3, never with a pending link.
+
+  Details: TC-3125
+
+- 0490f71: `feed card-md` prints the owner's card.md (`{text, version, updatedAt}`). When the owner hasn't set one, it prints the default (`{text, version, default: true}`). `feed publish` adds `cardMd: {version}` to its JSON, with `default: true` while it is the default, and `feed publish` and `feed watch` print the text once on stderr when its version differs from the last one this profile saw for that agent. `feed connect` copies the owner's card.md into the new agent's response database, or the default when the owner hasn't set one. An agent connected before card.md existed reads it with the same grant, without reconnecting. `@tinycloud/sdk-services` adds `readFeedCardMd` and an optional `onWake` callback on `listenFeedResponses`, run at the start of every drain.
+
+  Details: TC-3345
+
+- c7741ab: New `tinycloud feed disconnect --agent <token>`: an owner removes a connected agent in one step. It reads the grant ID from the owner's feed registry, revokes the grant with the profile's own key (no OpenKey approval), then removes the registry row; a failed revoke leaves the row so it can be retried. Before, `delegation revoke <cid>` from the owner profile failed with TARGET_NOT_FOUND because the owner session cannot list the grants it issued and the CLI kept no record of a `feed connect` grant.
+
+  Details: TC-3150
+
+- 0576031: The CLI, the hosted MCP server and Courier now use `https://node.tinycloud.xyz` as the default TinyCloud node, in place of `https://tee.node.tinycloud.xyz`. Profiles that already store a host keep it. To choose a node: for the CLI, pass `--host <url>`, set `TC_HOST` or create a profile with `tinycloud profile create <name> --host <url>`; for the MCP server, set `TC_HOST`; for Courier, pass `--host <url>` or set `COURIER_HOST`.
+
+  Details: TC-2923
+
+- 400cf7f: A secret can carry an optional type: `secret` (the default), `totp`, `username` or `password`. `secrets.put(name, value, { type })` stores the type inside the encrypted secret. The new `secrets.getEntry(name)` returns `{ value, type, createdAt, updatedAt }`; a secret with no stored type, or with a type the client doesn't know, reads as `secret`.
+
+  `secrets.get` is unchanged, and older clients still read typed secrets, since they only need `value`. Storing `secret`, or no type, writes the same payload as before.
+
+  `@tinycloud/sdk-services/secrets/totp` (not exported from the package root) adds `parseTotpSeed` (an `otpauth://totp/` link or a bare base32 seed), `generateTotp` (RFC 6238, SHA1/SHA256/SHA512) and `totpSecondsRemaining`.
+
+  `tinycloud secrets put --type <secret|totp|username|password>` sets the type. For `totp`, the value must be a valid seed: an `otpauth://totp/` link or a bare base32 seed.
+
+  Details: TC-3285
+
+### Patch Changes
+
+- 01b7932: `auth import` of a delegation addressed to an agent (delegate-session) profile's own key now makes it the profile's session, replacing a live, expired or signed-out one, so `auth status` reports the new expiry and commands work until it passes. `auth logout` on such a profile with no local replica state clears the session but keeps the key, so a new grant can be imported for it; other logouts still delete the key. Logout output says which: `keyKept` and a `message` ("Signed out. The key is kept, so a new grant can be imported for it. Grants already made for this key stay valid until they expire unless the owner revokes them." or "Signed out. The key was deleted; the next sign-in creates a new one.").
+
+  Details: TC-3434
+
+- 73bee36: An `auth request --grant` (or any approval run without `--timeout`) that is run again after its saved OpenKey request has long expired now makes a new request and prints the new link in the same run. Before, it printed the old, dead link, exited 3, and only the run after that made a new link. A request that expired within the last 11 minutes is still checked with OpenKey first, and runs with `--timeout` are unchanged. The printed link now says when it stops being valid.
+
+  Details: TC-3153
+
+- bde424e: `auth retry` now says what to do when it finds nothing: `auth retry --last` re-checks the permission requests that `auth request` stores without `--grant`, so it never finds a stopped `auth request ... --grant`; the `REQUEST_NOT_FOUND` error says to run the same command again (same flags, same profile), which resumes the saved approval request.
+
+  Details: TC-3153
+
+- 57e16d4: Accept a verified owner-signed whole-request grant when it covers every requested permission, including when the signed grant contains additional owner-approved permissions. Legacy scoped manifest logins retain their narrowed-approval behavior.
+
+  Details: TC-599
+
+- d94bfbf: The `tinycloud-cli` skill now says that `--to did:` and `--to domain:` create addressed shares. It no longer says that sharing to a domain or DID is unavailable. `--to email:` is still refused with `UNAVAILABLE`, and the skill now points the owner to share.tinycloud.xyz for one email address. The publish examples that used `--to email:` now use `--to domain:`.
+
+  Details: TC-2929
+
+- c58e7e7: CLI bug-report uploads now use `feedback.tinycloud.xyz`.
+
+  Details: TC-2515
+
+- a3562f4: `tinycloud onboard`, run again with a session that still works, now checks that the node hosts the session's space before it goes on. If the space isn't hosted, it waits as it does after an approval (up to 150 seconds or the `--timeout` share), then ends with exit 1 `SPACE_SETUP_PENDING` instead of failing later with "Space not found". A hosted space costs one read and no wait.
+
+  Details: TC-2380
+
+- b096c5a: `tinycloud delegation revoke <cid>` from an owner profile can now revoke a grant that profile's own key issued, such as one made with `feed connect`. When the node lists the CID as issued by this profile's key, the CLI revokes it with that key, with no owner approval. A CID the node doesn't list as issued by this key is still refused, and a network or node failure is reported as an error.
+
+  Details: TC-3150
+
+- 313b056: Shares can be up to 95 MiB, the most the TinyCloud node accepts in one upload (99,614,720 bytes). A larger file stops before uploading with "Shared files can be up to 95 MiB. Use a smaller file or split it." When several files together pass the limit, the message reads "These files add up to more than 95 MiB. Share fewer at once or use smaller files." `--max-bytes` accepts 1 byte to 95 MiB, and a file over a smaller `--max-bytes` gets its own message naming that limit.
+
+  Details: TC-3252
+
+- 92f9309: `tinycloud profile show` prints only its documented fields.
+
+  Details: TC-2652
+
+- 91f4a95: Internal changes for profiles; nothing in the CLI's commands changes.
+
+  Details: TC-2653
+
+- Updated dependencies [0490f71]
+- Updated dependencies [9f3ca26]
+- Updated dependencies [2395340]
+- Updated dependencies [0576031]
+- Updated dependencies [634753d]
+- Updated dependencies [b758e71]
+- Updated dependencies [df0de7e]
+- Updated dependencies [c7741ab]
+- Updated dependencies [9f3ca26]
+- Updated dependencies [1f961e4]
+- Updated dependencies [313b056]
+- Updated dependencies [ca8ae20]
+- Updated dependencies [400cf7f]
+- Updated dependencies [7399b14]
+  - @tinycloud/sdk-services@3.13.0
+  - @tinycloud/node-sdk@3.13.0
+  - @tinycloud/sdk-core@3.13.0
+  - @tinycloud/share-sdk@1.6.0
+  - @tinycloud/operations@0.9.1
+
+## 1.8.0-beta.17
+
+### Patch Changes
+
+- 01b7932: `auth import` of a delegation addressed to an agent (delegate-session) profile's own key now makes it the profile's session, replacing a live, expired or signed-out one, so `auth status` reports the new expiry and commands work until it passes. `auth logout` on such a profile with no local replica state clears the session but keeps the key, so a new grant can be imported for it; other logouts still delete the key. Logout output says which: `keyKept` and a `message` ("Signed out. The key is kept, so a new grant can be imported for it. Grants already made for this key stay valid until they expire unless the owner revokes them." or "Signed out. The key was deleted; the next sign-in creates a new one.").
+
+  Details: TC-3434
+
+- 57e16d4: Accept a verified owner-signed whole-request grant when it covers every requested permission, including when the signed grant contains additional owner-approved permissions. Legacy scoped manifest logins retain their narrowed-approval behavior.
+
+  Details: TC-599
+
+- d94bfbf: The `tinycloud-cli` skill now says that `--to did:` and `--to domain:` create addressed shares. It no longer says that sharing to a domain or DID is unavailable. `--to email:` is still refused with `UNAVAILABLE`, and the skill now points the owner to share.tinycloud.xyz for one email address. The publish examples that used `--to email:` now use `--to domain:`.
+
+  Details: TC-2929
+
+- c58e7e7: CLI bug-report uploads now use `feedback.tinycloud.xyz`.
+
+  Details: TC-2515
+
+- Updated dependencies [df0de7e]
+  - @tinycloud/operations@0.9.1-beta.11
+
 ## 1.8.0-beta.16
 
 ### Patch Changes

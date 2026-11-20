@@ -1,5 +1,50 @@
 # @tinycloud/mcp
 
+## 0.11.1-beta.0
+
+### Patch Changes
+
+- Updated dependencies
+  - @tinycloud/node-sdk@3.14.0-beta.1
+  - @tinycloud/operations@0.9.2-beta.0
+
+## 0.11.0
+
+### Minor Changes
+
+- 0e8e37a: The hosted HTTP server publishes more agent discovery. `/.well-known/api-catalog` is an RFC 9727 linkset for `/mcp` (server card, documentation, `/healthz`), and the landing page links it with `rel="api-catalog"`. `/.well-known/agent-skills/index.json` lists the shipped `tinycloud-delegated-secrets` skill, served at `/.well-known/agent-skills/tinycloud-delegated-secrets/SKILL.md` with its SHA-256 digest; the skill now starts with `name` and `description` frontmatter. `/.well-known/agent-card.json` redirects to TinyCloud's A2A discovery agent card on tinycloud.xyz, because this server does not speak A2A. The landing page loads `/webmcp.js`, which registers one read-only WebMCP tool, `get_tinycloud_mcp_connection`, returning the endpoint, OAuth discovery, documentation and local stdio alternative the page shows; its CSP now allows same-origin scripts. `robots.txt` declares the same Content Signals as tinycloud.xyz.
+
+  Details: TC-3336
+
+- 0576031: The CLI, the hosted MCP server and Courier now use `https://node.tinycloud.xyz` as the default TinyCloud node, in place of `https://tee.node.tinycloud.xyz`. Profiles that already store a host keep it. To choose a node: for the CLI, pass `--host <url>`, set `TC_HOST` or create a profile with `tinycloud profile create <name> --host <url>`; for the MCP server, set `TC_HOST`; for Courier, pass `--host <url>` or set `COURIER_HOST`.
+
+  Details: TC-2923
+
+### Patch Changes
+
+- Updated dependencies [9f3ca26]
+- Updated dependencies [2395340]
+- Updated dependencies [0576031]
+- Updated dependencies [634753d]
+- Updated dependencies [b758e71]
+- Updated dependencies [df0de7e]
+- Updated dependencies [c7741ab]
+- Updated dependencies [9f3ca26]
+- Updated dependencies [1f961e4]
+- Updated dependencies [ca8ae20]
+- Updated dependencies [400cf7f]
+- Updated dependencies [7399b14]
+  - @tinycloud/node-sdk@3.13.0
+  - @tinycloud/sdk-core@3.13.0
+  - @tinycloud/operations@0.9.1
+
+## 0.11.0-beta.11
+
+### Patch Changes
+
+- Updated dependencies [df0de7e]
+  - @tinycloud/operations@0.9.1-beta.11
+
 ## 0.11.0-beta.10
 
 ### Patch Changes
