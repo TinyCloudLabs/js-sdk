@@ -29,7 +29,7 @@ test("TC-3448 records the exact canonical CI root bytes of #1095 within the 800-
     const delta = row.root.delta[format];
     expect(row.root.ceiling[format] - predecessor.root.ceiling[format]).toBe(delta);
     expect(delta).toBeLessThanOrEqual(800);
-    expect(rootCeilingFor({ ...ledger, tc2490OneApprovalRoot: undefined }, format)).toEqual({ row: "tc3448OnBehalfPromptRoot", ceiling: row.root.ceiling[format] });
+    expect(rootCeilingFor({ ...ledger, tc2490OneApprovalRoot: undefined, tc3549KeptApprovalsRoot: undefined }, format)).toEqual({ row: "tc3448OnBehalfPromptRoot", ceiling: row.root.ceiling[format] });
   }
 
   expect(ancestryPins(ledger, false)).toContainEqual({
