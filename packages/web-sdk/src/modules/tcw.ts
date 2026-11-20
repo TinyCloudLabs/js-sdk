@@ -1594,7 +1594,7 @@ export class TinyCloudWeb {
    */
   hasPermissions(entries: PermissionEntry[], options?: { readonly onBehalfOf?: string }): boolean {
     const node = this._node;
-    if (node === undefined) return false;
+    if (!node) return false;
     const asker = options?.onBehalfOf;
     return asker === undefined ? node.hasRuntimePermissions(entries) : node.hasRuntimePermissions(entries, { grantCids: this.grantCidsAskedBy(node, asker) });
   }
