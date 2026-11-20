@@ -518,12 +518,63 @@ test("/gemini/mcp serves its published tools and keeps records through typed cal
   }
   const first = await approved("tinycloud_list_records", { app: "todos", kind: "note", limit: 2 });
   expect(first).toMatchObject({ total: 3, returned: 2, truncated: true, records: [{ data: { text: "11:00" } }, { data: { text: "10:00" } }] });
-  expect(first.next_cursor).toBe((first.records as { key: string }[])[1]!.key);
+  expect(first.next_cursor).toBe(`*|${(first.records as { key: string }[])[1]!.key}`);
   const second = await approved("tinycloud_list_records", { app: "todos", kind: "note", limit: 2, cursor: first.next_cursor });
   expect(second).toMatchObject({ total: 3, returned: 1, truncated: false, records: [{ key: timed.key }] });
   expect(second).not.toHaveProperty("next_cursor");
   expect(await approved("tinycloud_list_records", { app: "todos", kind: "mood", cursor: first.next_cursor }))
     .toMatchObject({ status: "error", code: "INVALID" });
+  // An exact page boundary: the page holds everything that is left, so there is no cursor.
+  expect(await approved("tinycloud_list_records", { app: "todos", kind: "note", limit: 3 })).toMatchObject({ returned: 3, truncated: false });
+  expect(await approved("tinycloud_list_records", { app: "todos", kind: "note", limit: 1, cursor: first.next_cursor }))
+    .toMatchObject({ returned: 1, truncated: false });
+  // A cursor belongs to its listing's folder scope, in both directions; a bare key is not a cursor.
+  const month = await approved("tinycloud_list_records", { app: "todos", kind: "note", folder: "2026-11", limit: 1 });
+  expect(String(month.next_cursor)).toMatch(/^2026-11\|xyz\.tinycloud\.tinyapps\.todos\/note\/2026-11\//);
+  for (const args of [
+    { cursor: month.next_cursor },
+    { folder: "2026-11", cursor: first.next_cursor },
+    { folder: "2026-10", cursor: String(month.next_cursor).replace(/^2026-11/, "2026-10") },
+    { cursor: String(first.next_cursor).slice(2) },
+  ]) {
+    expect(await approved("tinycloud_list_records", { app: "todos", kind: "note", ...args }), JSON.stringify(args))
+      .toMatchObject({ status: "error", code: "INVALID" });
+  }
+  // The record a cursor names may be gone by the next call: the page still starts after its place.
+  const middle = (first.records as { key: string; etag: string }[])[1]!;
+  expect(await approved("tinycloud_delete_record", { key: middle.key, etag: middle.etag })).toEqual({ status: "ok", deleted: middle.key });
+  expect(await approved("tinycloud_list_records", { app: "todos", kind: "note", cursor: first.next_cursor }))
+    .toMatchObject({ total: 2, returned: 1, truncated: false, records: [{ key: timed.key }] });
+
+  // The store refuses: a list (the node failing, then the space not set up) and a write (storage full). Each is
+  // answered with this address's fixed sentence, not with the operations' message for the five-tool addresses.
+  for (const [code, message, retryable] of [
+    ["KV_BACKEND_DOWN", "TinyCloud could not complete this request.", true],
+    ["SPACE_NOT_HOSTED", "The user's TinyCloud storage space is not set up yet. It is created shortly after the first approval.", false],
+  ] as const) {
+    for (const store of stores.values()) store.failList = code;
+    expect(await approved("tinycloud_list_records", { app: "todos", kind: "note" }))
+      .toEqual({ status: "error", code: "NODE_ERROR", message, ...(retryable ? { retryable: true } : {}) });
+  }
+  for (const store of stores.values()) {
+    store.failList = undefined;
+    store.failPut = (key) => key.includes("/note/") ? "STORAGE_QUOTA_EXCEEDED" : undefined;
+  }
+  expect(await approved("tinycloud_create_record", { app: "todos", kind: "note", name: "Full", data: { text: "x" } }))
+    .toEqual({ status: "error", code: "STORAGE_QUOTA_EXCEEDED", message: "The user's TinyCloud storage is full, so nothing was saved." });
+
+  // A first kind is stored but the app-list entry is refused: a refusal, not a success with a remark. Repeating lists the app.
+  expect(await approved("tinycloud_create_app", { app: "books", title: "Books", about: "Reading." })).toMatchObject({ status: "ok" });
+  for (const store of stores.values()) store.failPut = (key) => key === "xyz.tinycloud.tinyapps.catalog/books/entry" ? "NODE_ERROR" : undefined;
+  const book = { app: "books", kind: "book", about: "A book.", type: "item", fields: [{ name: "title", description: "text: the title" }] };
+  expect(await approved("tinycloud_create_kind", book)).toEqual({
+    status: "error", code: "PARTIAL",
+    message: "The kind was created, but the app could not be added to the user's app list (NODE_ERROR), so the app is not listed yet. Repeating this call adds it.",
+  });
+  expect(await approved("tinycloud_list_apps")).toMatchObject({ apps: [{ app: "todos" }] });
+  for (const store of stores.values()) store.failPut = undefined;
+  expect(await approved("tinycloud_create_kind", book)).toMatchObject({ status: "error", code: "EXISTS" });
+  expect(await approved("tinycloud_list_apps")).toMatchObject({ apps: [{ app: "books", title: "Books" }, { app: "todos" }] });
 
   // A refusal whose reason the operations word for the five-tool addresses is answered in this address's own words.
   for (const store of stores.values()) {
@@ -556,7 +607,11 @@ test("/gemini/mcp serves its published tools and keeps records through typed cal
     /^A record for that date already exists\. Change it with tinycloud_update_record, using this key and etag\.$/,
     /^date is not a calendar date\.$/,
     /^states applies to kinds of type item only\.$/,
-    /^cursor is not the next_cursor of a listing of this app and kind\.$/,
+    /^cursor is not the next_cursor of a listing of this app, kind and folder\.$/,
+    /^TinyCloud could not complete this request\.$/,
+    /^The user's TinyCloud storage space is not set up yet\. It is created shortly after the first approval\.$/,
+    /^The user's TinyCloud storage is full, so nothing was saved\.$/,
+    /^The kind was created, but the app could not be added to the user's app list \(NODE_ERROR\), so the app is not listed yet\. Repeating this call adds it\.$/,
     /^The app id notes cannot be used\. Choose another app id\.$/,
     /^Health Log is not available through this connector\. Its page is https:\/\/share\.tinycloud\.xyz\/apps\/run#[a-z.]+\.$/,
     /^catalog is a reserved name\. Choose another app id\.$/,
@@ -571,7 +626,7 @@ test("/gemini/mcp serves its published tools and keeps records through typed cal
     const reply = record(JSON.parse(text));
     if (reply.status === "ok") {
       // A success is data only: no sentence for the model.
-      for (const field of ["message", "next_step", "warning", "grants"]) expect(reply, text).not.toHaveProperty(field);
+      for (const field of ["message", "next_step", "warning", "warnings", "grants"]) expect(reply, text).not.toHaveProperty(field);
     } else if (reply.status === "approval_required") {
       expect(reply.next_step).toBe(approvalStep);
       expect(String(reply.grants)).toMatch(/^(Connects this assistant to the user's TinyCloud account\.|Lets the TinyCloud connector [^.]+\([a-z0-9./-]+\) in your TinyCloud (applications|default) space, for 30 days\.( |$))+$/);
@@ -588,7 +643,11 @@ test("/gemini/mcp serves its published tools and keeps records through typed cal
 /** A key-value space with the node's conditional writes and deletes, which the loopback node leaves out. */
 class ConditionalKv {
   readonly #values = new Map<string, { text: string; etag: string }>();
+  /** A node error code to answer a list or a put of this key with, for the refusals a healthy store never gives. */
+  failList?: string;
+  failPut?: (key: string) => string | undefined;
   async list({ prefix }: { prefix: string }) {
+    if (this.failList !== undefined) return { ok: false as const, error: { code: this.failList } };
     return { ok: true as const, data: { keys: [...this.#values.keys()].filter((key) => key.startsWith(prefix)).sort() } };
   }
   async batchGet(keys: string[]) {
@@ -600,6 +659,8 @@ class ConditionalKv {
     }) } };
   }
   async put(key: string, bytes: Uint8Array, options: { ifMatch?: string; ifNoneMatch?: "*" }) {
+    const refused = this.failPut?.(key);
+    if (refused !== undefined) return { ok: false as const, error: { code: refused } };
     const current = this.#values.get(key);
     if ((options.ifNoneMatch !== undefined && current !== undefined) ||
       (options.ifMatch !== undefined && current?.etag !== options.ifMatch)) {
@@ -624,9 +685,10 @@ class ConditionalKv {
 /**
  * The approvals the flow above asks a new account for, as the operations plan them on every address: the app
  * list; reading the named app's folder; the older layout's app list, asked once when a named app is not in the
- * new one; writing the app's folder with its entry in the app list; and the same for the second app the flow names.
+ * new one; writing the app's folder with its entry in the app list; and the same for the second and the third app
+ * the flow names.
  */
-const GEMINI_FLOW_APPROVALS = 5;
+const GEMINI_FLOW_APPROVALS = 6;
 
 /** A listed tool as it would be without the title Claude's address adds to its annotations. */
 function withoutAnnotationTitle<T extends { annotations?: { title?: string } }>(tool: T): T {

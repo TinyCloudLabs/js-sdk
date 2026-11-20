@@ -327,17 +327,12 @@ function notOk(result: Record<string, unknown>): Reply {
       code,
       message: details.reason === "space_not_hosted"
         ? "The user's TinyCloud storage space is not set up yet. It is created shortly after the first approval."
-        : ERROR_MESSAGES[code] ?? "TinyCloud could not complete this request.",
+        : "TinyCloud could not complete this request.",
       ...(result.error.retryable === true ? { retryable: true } : {}),
     };
   }
   return { status: "error", code: "SETUP_REQUIRED", message: "TinyCloud is not set up for this account yet." };
 }
-
-const ERROR_MESSAGES: Readonly<Record<string, string>> = {
-  INPUT_INVALID: "TinyCloud did not accept these arguments.",
-  STORAGE_QUOTA_EXCEEDED: "The user's TinyCloud storage is full, so nothing was saved.",
-};
 
 async function output(call: Call, operationId: Operation, input: unknown): Promise<Record<string, unknown>> {
   const result = await call(operationId, input);
@@ -433,6 +428,8 @@ function refuseOutcome(outcome: Outcome, what: string, invalid = `TinyCloud did 
     case "INVALID":
     case "CATALOG_CHANGE":
       return refuse("INVALID", invalid);
+    case "STORAGE_QUOTA_EXCEEDED":
+      return refuse("STORAGE_QUOTA_EXCEEDED", "The user's TinyCloud storage is full, so nothing was saved.");
     default:
       return refuse(outcome.outcome, `TinyCloud could not save this ${what}. Try again shortly.`);
   }
@@ -514,9 +511,14 @@ const handlers: { readonly [Name in Exclude<GeminiToolName, "tinycloud_connect">
   async tinycloud_list_records(call, input: { app: string; kind: string; folder?: string; limit?: number; cursor?: string }) {
     const { app, folder } = input;
     const kind = kindId(input.kind);
-    const after = input.cursor === undefined ? undefined : parseKey(input.cursor);
-    if (input.cursor !== undefined && (after?.area !== "record" || after.app !== app || after.kind !== kind)) {
-      refuse("INVALID", "cursor is not the next_cursor of a listing of this app and kind.");
+    // A cursor is "<folder scope>|<key of the last record returned>". The scope is the listing's folder, or * for
+    // all folders, so a cursor is refused on a listing of another scope instead of silently skipping records.
+    const scope = folder ?? "*";
+    const separator = input.cursor?.indexOf("|") ?? -1;
+    const after = input.cursor === undefined ? undefined : parseKey(input.cursor.slice(separator + 1));
+    if (input.cursor !== undefined && (separator < 0 || input.cursor.slice(0, separator) !== scope ||
+      after?.area !== "record" || after.app !== app || after.kind !== kind || (folder !== undefined && after.folder !== folder))) {
+      refuse("INVALID", "cursor is not the next_cursor of a listing of this app, kind and folder.");
     }
     const { layout } = await listedApp(call, app, "read");
     const prefix = recordPrefix(app, kind, layout);
@@ -542,7 +544,7 @@ const handlers: { readonly [Name in Exclude<GeminiToolName, "tinycloud_connect">
       const truncated = page.length < remaining.length;
       return {
         status: "ok", app, kind, total: found.length, counts, returned: records.length, truncated,
-        ...(truncated ? { next_cursor: page[page.length - 1]!.key } : {}),
+        ...(truncated ? { next_cursor: `${scope}|${page[page.length - 1]!.key}` } : {}),
         records,
       };
     };
@@ -604,13 +606,14 @@ const handlers: { readonly [Name in Exclude<GeminiToolName, "tinycloud_connect">
     }
     const [created, listed] = await write(call, ops);
     if (created?.outcome !== "ok") refuseOutcome(created ?? { key: kind, outcome: "INTERNAL_ERROR" }, "kind");
+    if (listed !== undefined && listed.outcome !== "ok" && listed.outcome !== "EXISTS") {
+      // As for a move that stopped half-way: the kind is stored, the app is not listed. A repeated call lists it.
+      refuse("PARTIAL", `The kind was created, but the app could not be added to the user's app list (${listed.outcome}), so the app is not listed yet. Repeating this call adds it.`);
+    }
     return {
       status: "ok", app, kind, type,
       ...(kindStates === undefined ? {} : { states: kindStates }),
       fields,
-      ...(listed === undefined || listed.outcome === "ok" || listed.outcome === "EXISTS" ? {} : {
-        warning: `The kind was created, but the app could not be added to the user's app list (${listed.outcome}).`,
-      }),
     };
   },
 
