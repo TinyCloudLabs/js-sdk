@@ -159,6 +159,7 @@ export {
   type DelegateToOptions,
   type DelegateToResult,
   type RuntimePermissionGrantOptions,
+  type RuntimePermissionCheckOptions,
   type EnsureEncryptionNetworkOptions,
   type SecretReadInput,
   type SecretPermissionHint,

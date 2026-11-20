@@ -1122,6 +1122,17 @@ export interface DelegateToResult {
 }
 
 /**
+ * Narrows which installed runtime grants a permission check counts.
+ */
+export interface RuntimePermissionCheckOptions {
+  /**
+   * Count only installed runtime grants with these cids. The session's own permissions are always counted. A cid that
+   * names no installed grant counts for nothing.
+   */
+  grantCids?: readonly string[];
+}
+
+/**
  * Options for runtime permission escalation.
  */
 export interface RuntimePermissionGrantOptions {
@@ -1133,6 +1144,11 @@ export interface RuntimePermissionGrantOptions {
    * session's address.
    */
   signMessage?: (siwe: string) => Promise<string>;
+  /**
+   * Reuse an installed runtime grant that already covers the request. Default `true`. `false` always signs a new
+   * grant for permissions the session itself does not cover.
+   */
+  reuseExisting?: boolean;
 }
 
 export interface EnsureEncryptionNetworkOptions {
@@ -7599,9 +7615,10 @@ export class TinyCloudNode {
 
   /**
    * Check whether the current session or an approved runtime delegation covers
-   * every requested permission.
+   * every requested permission. `options.grantCids` narrows which runtime
+   * delegations count; the session's own permissions always do.
    */
-  hasRuntimePermissions(permissions: PermissionEntry[]): boolean {
+  hasRuntimePermissions(permissions: PermissionEntry[], options?: RuntimePermissionCheckOptions): boolean {
     const session = this.currentTinyCloudSession();
     if (!session || !Array.isArray(permissions) || permissions.length === 0) {
       return false;
@@ -7612,7 +7629,7 @@ export class TinyCloudNode {
       return true;
     }
 
-    return this.findRuntimeGrantsForPermissionEntries(expanded, session).length > 0;
+    return this.findRuntimeGrantsForPermissionEntries(expanded, session, options?.grantCids).length > 0;
   }
 
   /**
@@ -7622,6 +7639,7 @@ export class TinyCloudNode {
    */
   getRuntimePermissionDelegations(
     permissions?: PermissionEntry[],
+    options?: RuntimePermissionCheckOptions,
   ): PortableDelegation[] {
     this.pruneExpiredRuntimePermissionGrants();
     if (permissions === undefined) {
@@ -7638,7 +7656,7 @@ export class TinyCloudNode {
       return [];
     }
     const expanded = expandPermissionEntriesCore(permissions);
-    return this.findRuntimeGrantsForPermissionEntries(expanded, session).map(
+    return this.findRuntimeGrantsForPermissionEntries(expanded, session, options?.grantCids).map(
       (grant) => grant.delegation,
     );
   }
@@ -7973,9 +7991,11 @@ export class TinyCloudNode {
       return [];
     }
 
-    const existingGrants = this.findRuntimeGrantsForPermissionEntries(expanded, session);
-    if (existingGrants.length > 0) {
-      return existingGrants.map((grant) => grant.delegation);
+    if (options?.reuseExisting !== false) {
+      const existingGrants = this.findRuntimeGrantsForPermissionEntries(expanded, session);
+      if (existingGrants.length > 0) {
+        return existingGrants.map((grant) => grant.delegation);
+      }
     }
 
     // Not a static import on purpose: web-sdk's root size budget has no room for the signing half, so bundlers ship it as its own file.
@@ -9258,6 +9278,7 @@ export class TinyCloudNode {
   private findRuntimeGrantsForPermissionEntries(
     entries: PermissionEntry[],
     session: TinyCloudSession,
+    grantCids?: readonly string[],
   ): RuntimePermissionGrant[] {
     const grants: RuntimePermissionGrant[] = [];
     const operations = this.permissionEntriesToOperations(entries, session);
@@ -9271,7 +9292,7 @@ export class TinyCloudNode {
       // is not an installed runtime delegation, so excluding it keeps the
       // `getRuntimePermissionDelegations` contract (base-session manifest
       // permissions are not represented here) airtight.
-      const grant = this.findGrantForOperation(operation, { excludePrimary: true });
+      const grant = this.findGrantForOperation(operation, { excludePrimary: true, ...(grantCids === undefined ? {} : { grantCids }) });
       if (!grant) {
         return [];
       }
@@ -9504,7 +9525,7 @@ export class TinyCloudNode {
 
   private findGrantForOperations(
     operations: RuntimePermissionOperation[],
-    options?: { excludePrimary?: boolean },
+    options?: { excludePrimary?: boolean; grantCids?: readonly string[] },
   ): RuntimePermissionGrant | undefined {
     if (operations.length === 0) {
       return undefined;
@@ -9512,6 +9533,9 @@ export class TinyCloudNode {
     this.pruneExpiredRuntimePermissionGrants();
     const covering = this.runtimePermissionGrants.filter((grant) => {
       if (options?.excludePrimary && grant.provenance === "primary") {
+        return false;
+      }
+      if (options?.grantCids !== undefined && !options.grantCids.includes(grant.delegation.cid)) {
         return false;
       }
       return operations.every((operation) =>
@@ -9533,7 +9557,7 @@ export class TinyCloudNode {
 
   private findGrantForOperation(
     operation: RuntimePermissionOperation,
-    options?: { excludePrimary?: boolean },
+    options?: { excludePrimary?: boolean; grantCids?: readonly string[] },
   ): RuntimePermissionGrant | undefined {
     return this.findGrantForOperations([operation], options);
   }
