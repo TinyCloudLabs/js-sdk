@@ -3727,19 +3727,19 @@ export const approvedTc3549KeptApprovalsRoot: LogoutRatchet = {
   "label": "ordinary runtime permission approvals stay approved across a page reload (TC-3549)",
   "ruling": "size-ruling: TC-3549 (2026-11-20) row tc3549KeptApprovalsRoot index.mjs 1530795 (+937), index.cjs 1463641 (+792) gzip bytes over the tc2490 ceilings, CI's canonical figure. Details: TC-3549",
   "base": "f7428c208ad970dac3f626788e26f7654888b7e9",
-  "sourceCommits": ["3a82a453f3981cf7847c2c08b9a864218324f709"],
+  "sourceCommits": ["c19c84a1977189b20b7f464996c3b595c4b83952"],
   "canonicalCI": {
-    "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44675134152",
+    "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44677358264",
     "jobs": [
-      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44675134152/job/136085053431",
-      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44675134152/job/136085053419"
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44677358264/job/136092358324",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44677358264/job/136092358546"
     ]
   },
   "root": {
     "delta": { "index.mjs": 937, "index.cjs": 792 },
     "ceiling": { "index.mjs": 1530795, "index.cjs": 1463641 }
   },
-  "reason": "TinyCloudWeb keeps an approved, ordinary runtime permission grant with the session so it is active again after a page reload, for the app it was approved for, and TinyCloudNode takes a grant filter and a reuseExisting option; node-sdk is bundled into the web-sdk root. Canonical Node 22/Bun 1.3.14 CI on #1102 (3a82a453, master f7428c20) measured index.mjs 1530795 and index.cjs 1463641 gzip -9 bytes: +937 and +792 over the TC-2490 ceilings 1529858 and 1462849. No other ceiling moves. Details: TC-3549"
+  "reason": "TinyCloudWeb keeps an approved, ordinary runtime permission grant with the session so it is active again after a page reload, for the app it was approved for, and TinyCloudNode takes a grant filter and a reuseExisting option; node-sdk is bundled into the web-sdk root. Canonical Node 22/Bun 1.3.14 CI on #1102 (c19c84a1, master f7428c20) measured index.mjs 1530795 and index.cjs 1463641 gzip -9 bytes: +937 and +792 over the TC-2490 ceilings 1529858 and 1462849. No other ceiling moves. Details: TC-3549"
 };
 
 export const approvedLedgerRows: Record<string, unknown> = {

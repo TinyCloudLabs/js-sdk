@@ -15,13 +15,13 @@ test("TC-3549 records the exact canonical CI root bytes of #1102 within the rule
   expect(row).toEqual(approvedTc3549KeptApprovalsRoot);
   expect(row.base).toBe("f7428c208ad970dac3f626788e26f7654888b7e9");
   expect(row.canonicalCI).toEqual({
-    run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44675134152",
+    run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44677358264",
     jobs: [
-      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44675134152/job/136085053431",
-      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44675134152/job/136085053419",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44677358264/job/136092358324",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44677358264/job/136092358546",
     ],
   });
-  expect(row.sourceCommits).toEqual(["3a82a453f3981cf7847c2c08b9a864218324f709"]);
+  expect(row.sourceCommits).toEqual(["c19c84a1977189b20b7f464996c3b595c4b83952"]);
   expect(row.root.ceiling).toEqual({ "index.mjs": 1530795, "index.cjs": 1463641 });
   expect(row.root.delta).toEqual({ "index.mjs": 937, "index.cjs": 792 });
   expect(row.ruling).toContain("size-ruling: TC-3549 (2026-11-20)");
