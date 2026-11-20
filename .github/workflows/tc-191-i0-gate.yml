@@ -146,7 +146,6 @@ jobs:
       NODE_BINARY: node
       CLI_NODE_BINARY: node
       EXPECTED_NODE_MAJOR: "20"
-      NODE_OPTIONS: --max-old-space-size=6144
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -204,6 +203,8 @@ jobs:
         env:
           NPM_CONFIG_OFFLINE: "true"
           NPM_CONFIG_REGISTRY: "http://127.0.0.1:9"
+          # The serial packed-entrypoints step had no heap override.
+          NODE_OPTIONS: ${{ matrix.shard != 'entrypoints' && '--max-old-space-size=6144' || '' }}
         run: python3 .github/scripts/i0-shards.py run "${{ matrix.shard }}"
       - name: Upload runner-observed test files
         uses: actions/upload-artifact@v4

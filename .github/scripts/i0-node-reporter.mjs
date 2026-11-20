@@ -3,9 +3,11 @@
 export default async function* executedFiles(events) {
   const files = new Set();
   for await (const { type, data } of events) {
-    if ((type === "test:pass" || type === "test:fail") && data.file && !files.has(data.file)) {
-      files.add(data.file);
-      yield `${JSON.stringify({ file: data.file })}\n`;
+    const skipped = Boolean(data.skip || data.todo);
+    const key = `${data.file}:${skipped}`;
+    if ((type === "test:pass" || type === "test:fail") && data.file && !files.has(key)) {
+      files.add(key);
+      yield `${JSON.stringify({ file: data.file, skipped })}\n`;
     }
   }
 }

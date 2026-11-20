@@ -29,11 +29,18 @@ Every test command retains a disposable private HOME. npm is offline with a
 loopback registry during tests, so local packing cannot use the npm registry.
 The suites use fake/local boundaries; they do not call OpenKey or public TinyCloud
 nodes. The existing two live-node-only Courier skips are unchanged.
+Their exact paths, `packages/courier/test/interim-local.test.mjs` and
+`packages/courier/test/revoke-issued-local.test.mjs`, are pinned as skip-only:
+they must produce skipped-event evidence and no actually-run testcases. Missing
+files, new skip-only files, or a formerly skip-only file starting to run fail the
+gate until that exception is explicitly reviewed. Coverage prints them as
+`SKIPPED`, never `EXECUTED`.
 
 The file groups and full I0 discovery live in `.github/scripts/i0-shards.py`;
 Courier's original `*.test.mjs` and `*.test.ts` globs are discovered on every run.
-Each shard uploads a list derived from Bun JUnit testcases or Node test-result
-events, plus successful non-test script checks. `I0 shard coverage` rejects missing,
+Each shard uploads a list derived from non-skipped Bun JUnit testcases or Node
+test-result events, plus successful non-test script checks. Mixed run/skip files
+still count as executed. `I0 shard coverage` rejects missing,
 extra, or duplicate files and missing shard reports. The unchanged
 `I0 compatibility and MCP contract` check requires the build, all four shards, and
 coverage verification to succeed, including when a dependency fails or cancels.

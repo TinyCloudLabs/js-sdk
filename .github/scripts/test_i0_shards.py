@@ -2,6 +2,7 @@ import importlib.util
 import json
 from pathlib import Path
 import tempfile
+import subprocess
 import unittest
 
 spec = importlib.util.spec_from_file_location("i0_shards", Path(__file__).with_name("i0-shards.py"))
@@ -52,8 +53,63 @@ class ShardCoverageTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             report = root / "node.jsonl"
-            report.write_text("\n".join(json.dumps({"file": str(root / name)}) for name in ["a.test.mjs", "a.test.mjs", "b.test.mjs"]))
+            report.write_text("\n".join(json.dumps({"file": str(root / name), "skipped": False}) for name in ["a.test.mjs", "a.test.mjs", "b.test.mjs"]))
             self.assertEqual(i0.node_executed_files(report, root), ["a.test.mjs", "b.test.mjs"])
+
+    def test_skip_only_bun_file_cannot_satisfy_execution_coverage(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            report = root / "bun.xml"
+            report.write_text(f'''<testsuites>
+              <testsuite name="skip-only.test.ts" tests="1" skipped="1" assertions="0">
+              <testcase name="not run" file="{root}/skip-only.test.ts"><skipped/></testcase></testsuite>
+              <testsuite name="mixed.test.ts" tests="2" skipped="1">
+              <testcase name="not run" file="{root}/mixed.test.ts"><skipped/></testcase>
+              <testcase name="ran" file="{root}/mixed.test.ts"/></testsuite>
+            </testsuites>''')
+            self.assertEqual(i0.bun_executed_files(report, root), ["mixed.test.ts"])
+
+    def test_bun_relative_files_are_resolved_from_producer_cwd(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            report = root / "bun.xml"
+            report.write_text('''<testsuites><testsuite name="test/actual.test.ts">
+              <testcase name="ran" file="test/actual.test.ts"/></testsuite></testsuites>''')
+            self.assertEqual(
+                i0.bun_executed_files(report, root, root / "packages/courier"),
+                ["packages/courier/test/actual.test.ts"],
+            )
+
+    def test_known_skip_only_files_require_skipped_evidence_and_never_execution(self):
+        expected = {"one": ["active.test.ts", "known.test.mjs"]}
+        known = ["known.test.mjs"]
+        i0.validate_coverage(expected, {"one": ["active.test.ts"]}, {"one": known}, known)
+        for actual, skipped in [
+            (["active.test.ts"], []),
+            (["active.test.ts", "known.test.mjs"], []),
+            (["active.test.ts", "known.test.mjs"], known),
+        ]:
+            with self.subTest(actual=actual, skipped=skipped), self.assertRaises(ValueError):
+                i0.validate_coverage(expected, {"one": actual}, {"one": skipped}, known)
+        with self.assertRaises(ValueError):
+            i0.validate_coverage({"one": ["active.test.ts"]}, {"one": ["active.test.ts"]}, {"one": []}, known)
+        with self.assertRaises(ValueError):
+            i0.validate_coverage(expected, {"one": []}, {"one": ["active.test.ts", *known]}, known)
+
+    def test_real_node_report_distinguishes_skip_only_and_mixed_files(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "skip-only.test.mjs").write_text("import {test} from 'node:test'; test.skip('not run', () => {});")
+            (root / "mixed.test.mjs").write_text("import {test} from 'node:test'; test.skip('not run', () => {}); test('ran', () => {});")
+            report = root / "node.jsonl"
+            subprocess.run([
+                "node", "--test",
+                f"--test-reporter={Path(__file__).with_name('i0-node-reporter.mjs').resolve()}",
+                f"--test-reporter-destination={report}",
+                str(root / "skip-only.test.mjs"), str(root / "mixed.test.mjs"),
+            ], check=True, capture_output=True)
+            self.assertEqual(i0.node_executed_files(report, root), ["mixed.test.mjs"])
+            self.assertEqual(i0.node_skipped_files(report, root), ["mixed.test.mjs", "skip-only.test.mjs"])
 
 
 if __name__ == "__main__":
