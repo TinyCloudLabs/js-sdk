@@ -39,7 +39,11 @@ gate until that exception is explicitly reviewed. Coverage prints them as
 The file groups and full I0 discovery live in `.github/scripts/i0-shards.py`;
 Courier's original `*.test.mjs` and `*.test.ts` globs are discovered on every run.
 Each shard uploads a list derived from non-skipped Bun JUnit testcases or Node
-test-result events, plus successful non-test script checks. Mixed run/skip files
+test-result events correlated with the runtime's completed file wrapper, plus
+successful non-test script checks. Courier runs one Node file per invocation at
+Node's original default parallelism (`availableParallelism() - 1`); helper-defined
+tests are attributed to the real test file, and empty files fail coverage.
+Mixed run/skip files
 still count as executed. `I0 shard coverage` rejects missing,
 extra, or duplicate files and missing shard reports. The unchanged
 `I0 compatibility and MCP contract` check requires the build, all four shards, and

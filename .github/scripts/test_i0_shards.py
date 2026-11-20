@@ -96,20 +96,26 @@ class ShardCoverageTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             i0.validate_coverage(expected, {"one": []}, {"one": ["active.test.ts", *known]}, known)
 
-    def test_real_node_report_distinguishes_skip_only_and_mixed_files(self):
+    def test_real_node_report_attributes_helper_tests_and_rejects_empty_files(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             (root / "skip-only.test.mjs").write_text("import {test} from 'node:test'; test.skip('not run', () => {});")
             (root / "mixed.test.mjs").write_text("import {test} from 'node:test'; test.skip('not run', () => {}); test('ran', () => {});")
-            report = root / "node.jsonl"
-            subprocess.run([
-                "node", "--test",
-                f"--test-reporter={Path(__file__).with_name('i0-node-reporter.mjs').resolve()}",
-                f"--test-reporter-destination={report}",
-                str(root / "skip-only.test.mjs"), str(root / "mixed.test.mjs"),
-            ], check=True, capture_output=True)
-            self.assertEqual(i0.node_executed_files(report, root), ["mixed.test.mjs"])
-            self.assertEqual(i0.node_skipped_files(report, root), ["mixed.test.mjs", "skip-only.test.mjs"])
+            (root / "helper.mjs").write_text("import {test} from 'node:test'; export function scenario() { test('helper-defined', () => {}); }")
+            (root / "caller.test.mjs").write_text("import {scenario} from './helper.mjs'; scenario();")
+            (root / "empty.test.mjs").write_text("// no tests")
+            executed, skipped = [], []
+            for file in ["skip-only.test.mjs", "mixed.test.mjs", "caller.test.mjs", "empty.test.mjs"]:
+                report = root / f"{file}.jsonl"
+                subprocess.run([
+                    "node", "--test",
+                    f"--test-reporter={Path(__file__).with_name('i0-node-reporter.mjs').resolve()}",
+                    f"--test-reporter-destination={report}", str(root / file),
+                ], check=True, capture_output=True)
+                executed.extend(i0.node_executed_files(report, root))
+                skipped.extend(i0.node_skipped_files(report, root))
+            self.assertEqual(sorted(executed), ["caller.test.mjs", "mixed.test.mjs"])
+            self.assertEqual(sorted(skipped), ["mixed.test.mjs", "skip-only.test.mjs"])
 
 
 if __name__ == "__main__":

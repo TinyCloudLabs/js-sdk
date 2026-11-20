@@ -222,6 +222,9 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20.19.4
       - name: Test coverage verifier
         run: python3 -m unittest discover -s .github/scripts -p test_i0_shards.py
       - uses: actions/download-artifact@v4

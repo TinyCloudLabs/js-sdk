@@ -3,6 +3,7 @@
 import json
 from pathlib import Path
 import subprocess
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import sys
 import xml.etree.ElementTree as ET
 
@@ -119,14 +120,31 @@ def run_shard(shard, output):
         # Preserve the package test script's compiler check, Node setup/timeout,
         # and Bun pass. Expand its two globs so new Courier files join the gate.
         run(["bun", "run", "build"], courier)
-        report = output / "node.jsonl"
-        run(["node", "--import", "./test/setup-home.mjs", "--test", "--test-timeout=120000",
-             "--test-reporter=tap", "--test-reporter-destination=stdout",
-             f"--test-reporter={ROOT / '.github/scripts/i0-node-reporter.mjs'}",
-             f"--test-reporter-destination={report}",
-             *["./" + str((ROOT / file).relative_to(courier)) for file in expected if file.endswith(".mjs")]], courier)
-        executed.extend(node_executed_files(report, ROOT))
-        skipped.extend(sorted(set(node_skipped_files(report, ROOT)) - set(executed)))
+        # Node's default multi-file concurrency is availableParallelism()-1.
+        # One file per invocation lets the reporter correlate helper-defined
+        # test results with the runtime file wrapper without echoing argv.
+        parallelism = int(subprocess.check_output(
+            ["node", "-p", "Math.max(1, require('node:os').availableParallelism() - 1)"], text=True))
+
+        def run_node_file(file):
+            report = output / f"{Path(file).name}.jsonl"
+            command = ["node", "--import", "./test/setup-home.mjs", "--test", "--test-timeout=120000",
+                       "--test-reporter=tap", "--test-reporter-destination=stdout",
+                       f"--test-reporter={ROOT / '.github/scripts/i0-node-reporter.mjs'}",
+                       f"--test-reporter-destination={report}", "./" + str((ROOT / file).relative_to(courier))]
+            result = subprocess.run(
+                ["bash", str(ROOT / ".github/scripts/run-private-tests.sh"), *command],
+                cwd=courier, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+            return file, report, result
+
+        with ThreadPoolExecutor(max_workers=parallelism) as executor:
+            futures = [executor.submit(run_node_file, file) for file in expected if file.endswith(".mjs")]
+            for future in as_completed(futures):
+                file, report, result = future.result()
+                print(f"::group::{file}\n{result.stdout}\n::endgroup::", flush=True)
+                result.check_returncode()
+                executed.extend(node_executed_files(report, ROOT))
+                skipped.extend(sorted(set(node_skipped_files(report, ROOT)) - set(executed)))
         bun_tests([file for file in expected if file.endswith(".ts")], courier)
     else:
         # Keep one private HOME/process per focused Bun suite (global mocks must
