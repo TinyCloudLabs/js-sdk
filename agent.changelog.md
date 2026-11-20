@@ -6,8 +6,9 @@ entry when `agent.dev.md` or related agent workflow expectations change.
 ## 2026-11-20
 
 - CI: cancel superseded Dependabot PR runs; restrict Workspace, Web SDK tests
-  and Operations/MCP cancellation to PRs. Non-PR runs use unique concurrency
-  groups so neither running nor pending main, tag or manual runs are canceled.
+  and Operations/MCP cancellation to PRs. All PR workflows that also handle
+  non-PR events now isolate those events by run ID, so neither running nor
+  pending main, merge-group, tag or manual runs are canceled by PR concurrency.
 
 ## 2026-11-17
 
