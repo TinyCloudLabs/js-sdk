@@ -3,6 +3,12 @@
 Track changes to agent-facing development guidance for the TinyCloud JavaScript SDK. Add a concise
 entry when `agent.dev.md` or related agent workflow expectations change.
 
+## 2026-11-20
+
+- CI: cancel superseded Dependabot PR runs; restrict Workspace, Web SDK tests
+  and Operations/MCP cancellation to PRs. Non-PR runs use unique concurrency
+  groups so neither running nor pending main, tag or manual runs are canceled.
+
 ## 2026-11-17
 
 - TC-2416: the restricted addresses no longer offer or accept a catalog app in
