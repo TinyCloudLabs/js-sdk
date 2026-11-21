@@ -1,15 +1,26 @@
-import { NodeWasmBindings, type PermissionEntry } from "@tinycloud/node-sdk";
-import { SiweMessage } from "@tinycloud/sdk-core";
-import { ExitCode } from "../config/constants.js";
-import { normalizePkhIdentifier } from "../lib/space.js";
-import { CLIError } from "../output/errors.js";
+// Namespace-shaped so modules that bundle this one stay compatible with lightweight node-sdk test doubles.
+import * as nodeSdk from "@tinycloud/node-sdk";
+import type { PermissionEntry } from "@tinycloud/node-sdk";
+import { SiweMessage } from "siwe";
+
+import { OperationInvocationError, operationError } from "./errors.js";
 
 const KEY_ACTIONS = ["tinycloud.encryption/key.create", "tinycloud.encryption/decrypt"];
 const FUTURE_ISSUE_MS = 5 * 60_000;
 const DAY_MS = 86_400_000;
 
+/** Every refusal of an invitation approval result: it is the owner's signed answer, and it is never used. */
 function refuse(message: string): never {
-  throw new CLIError("APPROVAL_RESULT_INVALID", message, ExitCode.PERMISSION_DENIED);
+  throw new OperationInvocationError(operationError("APPROVAL_RESULT_INVALID", message));
+}
+
+
+/** Lower-cases the address of a did:pkh / space identifier, for comparison keys only, never for stored values. */
+function normalizePkhIdentifier(identifier: string): string {
+  return identifier.replace(
+    /(eip155:\d+:)(0x[0-9a-fA-F]{40})(?=[:#]|$)/,
+    (_match, prefix: string, address: string) => prefix + address.toLowerCase(),
+  );
 }
 
 /** An approval SIWE parsed once, strictly: every fact below comes from this one parse, and `raw` is exactly the signed text. */
@@ -88,6 +99,8 @@ export interface VerifiedInvitationGrant {
   issuedAt: string;
   expiresAt: string;
   permissions: PermissionEntry[];
+  /** The verified delegation's own signed fields: exactly what is installed, nothing the result says outside them. */
+  signed: { delegationCid: string; spaceId: string; verificationMethod: string; address: string; chainId: number; authorization: string; siwe: string; signature: string };
 }
 
 /**
@@ -114,7 +127,7 @@ export function verifyInvitationGrant(
     refuse("The invitation approval was not issued to this profile's key; no invitation was sent.");
   }
   assertApprovalRequestBinding(parsed, expected.request);
-  const bindings = new NodeWasmBindings();
+  const bindings = new nodeSdk.NodeWasmBindings();
   if (typeof bindings.validateSessionGrant !== "function") refuse("Invitation approval could not be verified; no invitation was sent.");
   let proof: { verifiedRecap?: Array<{ service: string; space: string; path: string; actions: string[]; caveats?: unknown[] }>; expiresAt?: string };
   try {
@@ -136,5 +149,10 @@ export function verifyInvitationGrant(
   });
   const issuedAt = parsed.issuedAt;
   const shareId = invitationKeyFromGrant(permissions, { ownerDid, issuedAt, expiresAt: proof.expiresAt, acceptanceExpiresAt: expected.acceptanceExpiresAt, now: expected.now });
-  return { shareId, ownerDid, issuedAt, expiresAt: proof.expiresAt, permissions };
+  return {
+    shareId, ownerDid, issuedAt, expiresAt: proof.expiresAt, permissions,
+    signed: { delegationCid, spaceId, verificationMethod, address, chainId: data.chainId as number, authorization: header.Authorization, siwe, signature },
+  };
 }
+
+export { normalizePkhIdentifier };

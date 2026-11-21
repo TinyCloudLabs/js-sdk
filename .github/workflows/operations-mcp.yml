@@ -94,6 +94,12 @@ jobs:
           bash "$GITHUB_WORKSPACE/.github/scripts/run-private-tests.sh" bun test packages/cli/src/share/native-receive.test.ts
           bash "$GITHUB_WORKSPACE/.github/scripts/run-private-tests.sh" bun test packages/cli/src/commands/share-folder.test.ts
           bash "$GITHUB_WORKSPACE/.github/scripts/run-private-tests.sh" bun test packages/cli/src/share/html-folder.test.ts
+          bash "$GITHUB_WORKSPACE/.github/scripts/run-private-tests.sh" bun test packages/operations/src/operations/share-email.test.ts
+          bash "$GITHUB_WORKSPACE/.github/scripts/run-private-tests.sh" bun test packages/operations/src/invitation-approval.test.ts
+          bash "$GITHUB_WORKSPACE/.github/scripts/run-private-tests.sh" bun test packages/operations/src/invitation-key-grant.test.ts
+          bash "$GITHUB_WORKSPACE/.github/scripts/run-private-tests.sh" bun test packages/operations/src/share-history.test.ts
+          bash "$GITHUB_WORKSPACE/.github/scripts/run-private-tests.sh" bun test packages/cli/src/share/share-history-compat.test.ts
+          bash "$GITHUB_WORKSPACE/.github/scripts/run-private-tests.sh" bun test packages/cli/src/share/invite-approval.test.ts
       - name: Run production private-key secrets regression in isolation
         run: bash "$GITHUB_WORKSPACE/.github/scripts/run-private-tests.sh" bun test packages/cli/src/commands/secrets-private-key-production.test.ts
       - name: Run MCP CLI regression in isolation

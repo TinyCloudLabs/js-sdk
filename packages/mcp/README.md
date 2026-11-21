@@ -398,7 +398,7 @@ to select another profile.
 Hosted mode adds to the local data tools
 `tinycloud_connect`, `tinycloud_apps_context`, `tinycloud_apps_read`,
 `tinycloud_apps_write` and `tinycloud_apps_query`, and omits
-`tinycloud_secrets_status` and `tinycloud_auth_import` (local/stdio only):
+`tinycloud_secrets_status`, `tinycloud_share_email` and `tinycloud_auth_import` (local/stdio only):
 
 - Local and authorization state: `tinycloud_status`,
   `tinycloud_auth_status`, `tinycloud_auth_capabilities`
@@ -419,6 +419,18 @@ Hosted mode adds to the local data tools
   `tinycloud_sql_execute`
 - Delegated secrets: `tinycloud_secrets_get`, `tinycloud_secrets_status`
   (the status tool is local/stdio only)
+- Share with one email address: `tinycloud_share_email` (local/stdio only)
+
+`tinycloud_share_email` encrypts a text file (`content`, `filename`) and shares it
+with one email address (`recipient`; `expiresInSeconds` is optional, 120 seconds to
+30 days, default 7 days). Only the person who proves that address through the
+OpenCredentials issuer can open it, and TinyCloud emails them the invitation. The link
+is never returned. When the session cannot decrypt, the first call returns
+`authority_required` with an OpenKey approval link for one key for this invitation (it
+lasts at most a day); after the owner approves, call the tool again with the same input.
+If the invitation cannot be delivered the share is revoked: `delivery: "failed"`
+with `revoked: true`, or `revoked: false` and the `shareId` for the owner to stop it.
+The permission it needs lets the agent save, read and delete files under the owner's `shares/` folder, so it can change or delete the owner's other shares and see their encrypted copies, but it can't open them. Run the server on a dedicated publisher profile signed in with OpenKey: a delegate-session (agent) profile, one made by importing an owner's grant, is not supported (the CLI's `share publish --to` fails on it with `AUTH_REQUIRED`). Every share is recorded in the owner's share history: `tinycloud share list` shows it and `tinycloud share revoke <id>` ends it. Domain and DID recipients are not supported.
 
 `tinycloud_secrets_status` is read-only and never signs in. It uses only the
 profile's stored session and reports, without reading any value, whether each

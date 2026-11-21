@@ -79,6 +79,7 @@ test("official v2 client enforces operation schemas and owner opt-in over stdio"
       ["tinycloud_sql_execute", false, true, false, true],
       ["tinycloud_secrets_get", false, false, true, true],
       ["tinycloud_secrets_status", true, false, true, true],
+      ["tinycloud_share_email", false, false, false, true],
     ]);
 
     const status = await client.callTool({ name: "tinycloud_status", arguments: {} });
