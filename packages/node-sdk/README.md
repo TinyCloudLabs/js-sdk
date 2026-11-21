@@ -47,6 +47,10 @@ Details: TC-2481
 
 `signOut(): Promise<void>` coordinates the session-storage and replica lifecycles. Storage failures reject the call; replica recovery markers remain until local-copy erase is confirmed. A resolved sign-out alone does not certify that the replica was purged.
 
+Sign-out also asks each TinyCloud node the session used to stop accepting its session key and the keys created while setting up the account (`POST /session/retire`). `signOut()` does not wait for those calls. `nodeSignOutStatus()` resolves when they finish and lists the nodes that confirmed (`confirmed`), had nothing to record (`nothingToRecord`) and didn't confirm (`notConfirmed`, each with a reason: `unreachable`, `refused`, `unsupported` or `failed`). It resolves `undefined` before this instance has ended a session. A node counts as done only when it confirms it recorded this. A node that can't be reached or doesn't support it keeps accepting those keys until the latest grant they hold ends, which can be after the session expires if the session was renewed or holds a longer delegation. In a browser, only the first request to each node uses `keepalive`, so a page that unloads right after sign-out may lose the retries.
+
+Only the instance that set up the account holds its setup keys. After a reload (or `restoreSession()`), sign-out can't send them, and they expire on their own (7 days by default). Access given to apps and agents before signing out stays until it is removed.
+
 Custom and native adapters retain the existing `ISessionStorage` contract. Their completion acknowledges their own storage operation, not deletion of a separate identity provider's credentials or a cross-process atomic operation. Provider sign-out and native boot handling remain the provider's responsibility.
 
 ## Signed SIWE metadata

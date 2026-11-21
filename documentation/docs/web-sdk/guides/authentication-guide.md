@@ -126,6 +126,19 @@ await tc.signOut();
 console.log('Signed in:', tc.isSignedIn()); // false
 ```
 
+Sign-out finishes on this device without waiting for the TinyCloud nodes. It also asks each node the session used to stop accepting its session key and the keys created while setting up the account; `nodeSignOutStatus()` reports which did:
+
+```typescript
+const status = await tc.nodeSignOutStatus();
+if (status && status.nothingToRecord.length === 0 && status.notConfirmed.length === 0) {
+  // Every node the session used confirmed it stopped accepting the key.
+}
+```
+
+Each `notConfirmed` entry names the node and a reason (`unreachable`, `refused`, `unsupported` or `failed`). A node counts as done only when it confirms it recorded this. A node that can't be reached or doesn't support it keeps accepting those keys until the latest grant they hold ends, which can be after the session expires if the session was renewed or holds a longer delegation. Only the first request to each node uses `keepalive`, so retries can be lost if the page unloads right after sign-out.
+
+Only the instance that set up the account holds its setup keys. After a reload, sign-out can't send them, and they expire on their own (7 days by default). Access the user gave apps and agents before signing out stays until they remove it in Settings.
+
 ## Custom Authorization
 
 You can customize the authorization process with additional configuration:

@@ -101,6 +101,7 @@ import {
 } from "./strategies";
 import { MemorySessionStorage } from "../storage/MemorySessionStorage";
 import { clearPersistedSessionIfOwn } from "../storage/clearPersistedSessionIfOwn";
+import { SessionHosts } from "../sessionRetire";
 import type { OpenKeyBridgeInput, NodeUserAuthorizationAuthorizeFn, OpenKeySignInIdentity } from "./openKeyBridge";
 
 export type OpenKeyAuthorizeInput = OpenKeyBridgeInput;
@@ -384,6 +385,12 @@ export interface NodeUserAuthorizationConfig {
    * `undefined` when replication is off, so the persisted session carries no stamp.
    */
   establishReplicaStamp?: (session: TinyCloudSession) => Promise<PersistedSessionData["replicaStamp"]>;
+  /**
+   * Every host the current session's delegation is posted to, shared with
+   * TinyCloudNode, which empties it when the session ends. Persisted with the
+   * session so sign-out can retire the key on each host (TC-3443).
+   */
+  sessionHosts?: SessionHosts;
 }
 
 export interface CreateBootstrapSessionOptions {
@@ -496,6 +503,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
    * admin invocations) reuse this instead of re-fetching `/info`.
    */
   private _nodeInfoIdentity?: { host: string; nodeId: string };
+  private readonly sessionHosts: SessionHosts;
   private _lastActivationSkippedSpaceIds: string[] = [];
   /**
    * Spaces the sign-in activation reported hosted. Only the first POST of a
@@ -546,6 +554,8 @@ export class NodeUserAuthorization implements IUserAuthorization {
     this.tinycloudHosts = config.tinycloudHosts;
     this.registryNoEntryHosts = config.registryNoEntryHosts ?? config.tinycloudHosts ?? [];
     this.tinycloudRegistryUrl = config.tinycloudRegistryUrl;
+    this.sessionHosts = config.sessionHosts ?? new SessionHosts();
+    this.sessionHosts.onAdd = () => this.saveSessionHosts();
     this.tinycloudFallbackHosts = config.tinycloudFallbackHosts;
     this.newUserHost = config.newUserHost;
     this.registryChainId = config.registryChainId;
@@ -701,6 +711,66 @@ export class NodeUserAuthorization implements IUserAuthorization {
       }
       if (failure) throw failure.error;
     }).finally(() => { this.pendingPersistence.delete(data); });
+  }
+
+  /**
+   * Add the current session's hosts to its saved session, if that is this
+   * session. Best effort: a failed save leaves the hosts in memory for this
+   * sign-out.
+   */
+  private saveSessionHosts(): void {
+    const address = this._address;
+    const signature = this._tinyCloudSession?.signature;
+    if (address === undefined || signature === undefined) return;
+    const generation = this.sessionGeneration;
+    void this.enqueuePersistence(async () => {
+      if (generation !== this.sessionGeneration) return;
+      const stored = await this.sessionStorage.load(address);
+      if (stored?.signature !== signature) return;
+      const activatedHosts = [...new Set([...stored.activatedHosts ?? [], ...this.sessionHosts.list()])];
+      if (activatedHosts.length === stored.activatedHosts?.length) return;
+      await this.sessionStorage.save(address, { ...stored, activatedHosts });
+      // A sign-out that started meanwhile already cleared the record; don't leave it restored.
+      if (generation !== this.sessionGeneration) await clearPersistedSessionIfOwn(this.sessionStorage, address, signature);
+    }).catch(() => undefined);
+  }
+
+  /**
+   * @internal The registry's current nodes for every space the session's
+   * ReCap names, and the encryption node when it names an encryption network,
+   * from the record this sign-in or restore resolved. Empty when the account
+   * is not registered or the record was not resolved.
+   */
+  registeredSessionHosts(): { url: string; nodeDid: string }[] {
+    return this._tinyCloudSession ? [...this.registeredSessionTargets(this._tinyCloudSession).values()] : [];
+  }
+
+  /** The registry nodes {@link ensureSpaceExists} activates `session` on beyond its primary space's hosts. */
+  private registeredSessionTargets(session: TinyCloudSession): Map<string, { url: string; nodeDid: string }> {
+    const targets = new Map<string, { url: string; nodeDid: string }>();
+    if (this.registryVerdict?.status !== "registered" || !this.registryVerdict.record) return targets;
+    const record = this.registryVerdict.record;
+    const resources = Object.keys(extractRecapAttenuations(session.siwe ?? ""));
+    for (const space of record.spaces) {
+      const registeredSpace = parseSpaceUri(space.space);
+      if (!resources.some((resource) => {
+        const fullSpace = resource.split("/")[0];
+        const requestedSpace = parseSpaceUri(fullSpace);
+        return fullSpace === space.space || (registeredSpace !== null && requestedSpace !== null &&
+          registeredSpace.owner === requestedSpace.owner && registeredSpace.name === requestedSpace.name);
+      })) continue;
+      for (const membership of space.nodes) {
+        const node = record.nodes.find((candidate) => candidate.did === membership.did)!;
+        targets.set(node.url, { url: node.url, nodeDid: node.did });
+      }
+    }
+    if (record.encryptionNode && resources.some((resource) => resource.startsWith("urn:tinycloud:encryption:"))) {
+      const node = record.nodes.find((candidate) => candidate.did === record.encryptionNode)!;
+      // Encryption traffic uses the node's TEE-terminated origin (TC-2923), like TinyCloudNode routing.
+      const url = endToEndNodeHost(node.url);
+      targets.set(url, { url, nodeDid: node.did });
+    }
+    return targets;
   }
 
   /** @internal Atomically adopt the state staged by TinyCloudNode.restoreSession. */
@@ -1449,6 +1519,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
         try {
           await verifyResourceDestination(destination, globalThis.fetch.bind(globalThis));
           checkCurrent();
+          this.sessionHosts.add(destination.url);
           const result = await activateSessionWithHost(destination.url, this._tinyCloudSession.delegationHeader, signal);
           checkCurrent();
           results.push(result.skipped?.includes(spaceId) ? { ...result, success: false, status: 403, error: "The session does not activate the requested space" } : result);
@@ -1571,29 +1642,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
     const primary = await this.resolveResourceDestinations(primarySpaceId, "read");
     this.tinycloudHosts = primary.map(({ url }) => url);
     const targets = new Map(primary.map((destination) => [destination.url, destination]));
-    if (this.registryVerdict?.status === "registered" && this.registryVerdict.record) {
-      const record = this.registryVerdict.record;
-      const resources = Object.keys(extractRecapAttenuations(this._tinyCloudSession.siwe ?? ""));
-      for (const space of record.spaces) {
-        const registeredSpace = parseSpaceUri(space.space);
-        if (!resources.some((resource) => {
-          const fullSpace = resource.split("/")[0];
-          const requestedSpace = parseSpaceUri(fullSpace);
-          return fullSpace === space.space || (registeredSpace !== null && requestedSpace !== null &&
-            registeredSpace.owner === requestedSpace.owner && registeredSpace.name === requestedSpace.name);
-        })) continue;
-        for (const membership of space.nodes) {
-          const node = record.nodes.find((candidate) => candidate.did === membership.did)!;
-          targets.set(node.url, { url: node.url, nodeDid: node.did });
-        }
-      }
-      if (record.encryptionNode && resources.some((resource) => resource.startsWith("urn:tinycloud:encryption:"))) {
-        const node = record.nodes.find((candidate) => candidate.did === record.encryptionNode)!;
-        // Encryption traffic uses the node's TEE-terminated origin (TC-2923), like TinyCloudNode routing.
-        const url = endToEndNodeHost(node.url);
-        targets.set(url, { url, nodeDid: node.did });
-      }
-    }
+    for (const [url, destination] of this.registeredSessionTargets(this._tinyCloudSession)) targets.set(url, destination);
     let result: SpaceHostResult | undefined;
     // A session that names vault data activates only on end-to-end origins.
     const endToEnd = await sessionTouchesVault(this._tinyCloudSession);
@@ -1606,6 +1655,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
       await verifyResourceDestination(destination, globalThis.fetch.bind(globalThis));
       let activated: SpaceHostResult;
       try {
+        this.sessionHosts.add(destination.url);
         activated = await activateSessionWithHost(destination.url, this._tinyCloudSession.delegationHeader);
       } catch (error) {
         throw new NodeNotRespondingError([destination.url], error);
@@ -1670,10 +1720,11 @@ export class NodeUserAuthorization implements IUserAuthorization {
       onHosted: () => {
         this._spaceHosting = "hosted";
       },
-      activate: async (context) => activateSessionWithHost(
-        await sessionTouchesVault(session) ? endToEndNodeHost(context.host) : context.host,
-        session.delegationHeader,
-      ),
+      activate: async (context) => {
+        const host = await sessionTouchesVault(session) ? endToEndNodeHost(context.host) : context.host;
+        this.sessionHosts.add(host);
+        return activateSessionWithHost(host, session.delegationHeader);
+      },
       signal,
     });
   }
@@ -1840,6 +1891,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
       createdAt,
       version: "1.0",
       tinycloudHosts: this.tinycloudHosts,
+      ...(this.sessionHosts.list().length > 0 ? { activatedHosts: this.sessionHosts.list() } : {}),
       ...(this._spaceHosting !== "unknown" ? { spaceHosting: this._spaceHosting } : {}),
       ...(replicaStamp ? { replicaStamp } : {}),
     };
