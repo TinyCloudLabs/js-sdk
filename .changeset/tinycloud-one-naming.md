@@ -4,6 +4,8 @@
 "@tinycloud/web-sdk": patch
 ---
 
-User-facing text names the product TinyCloud One. `AccountSetupRequiredError` (and its `setupUrl`) now points at https://tinycloud.one/ instead of https://home.tinycloud.xyz/. The CLI README heading "Home feed" is now "TinyCloud One feed" (anchor `#tinycloud-one-feed`), and `tinycloud feed --help` and the README say "TinyCloud One" where they said "Home". The CLI auth skill's example says "a TinyCloud One agent's `applications` session". The web SDK README documents the new setup link.
+User-facing text in the CLI and SDK names the product TinyCloud One. `AccountSetupRequiredError` sends people to https://tinycloud.one/ to finish setting up their account. The CLI README's feed section is titled "TinyCloud One feed" (anchor `#tinycloud-one-feed`), and `tinycloud feed --help` and the CLI auth skill say TinyCloud One.
+
+Upgrading: `AccountSetupRequiredError.setupUrl` is "https://tinycloud.one/". Code that compared it with "https://home.tinycloud.xyz/" needs the new value.
 
 Details: TC-3659
