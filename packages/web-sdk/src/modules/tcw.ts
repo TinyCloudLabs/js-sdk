@@ -79,6 +79,9 @@ import {
   ACCOUNT_MANIFEST_PERMISSIONS,
   isFirstPartyOrigin,
   composeManifestRequest,
+  manifestUsesOwnerPlaceholder,
+  pkhDid,
+  resolveManifestOwner,
   createLocalStorageLocalNodeIdentityStore,
   createLocalStorageRegistrySequenceStore,
   createLocalStorageRegistryCacheStore,
@@ -1238,13 +1241,19 @@ export class TinyCloudWeb {
     }
   }
 
-  private configuredManifestPermissions(node: TinyCloudNode): ResourceCapability[] {
+  private configuredManifestPermissions(
+    node: TinyCloudNode,
+    restored: { readonly address: string; readonly chainId: number },
+  ): ResourceCapability[] {
     if (this._capabilityRequest !== undefined) {
       return this._capabilityRequest.resources;
     }
     if (this._manifest !== undefined) {
+      const manifests = Array.isArray(this._manifest) ? this._manifest : [this._manifest];
+      // A manifest path holding `{owner}` resolves to the restored session's owner, as sign-in resolved it.
+      const ownerDid = manifests.some(manifestUsesOwnerPlaceholder) ? pkhDid(restored.address, restored.chainId) : undefined;
       return composeManifestRequest(
-        Array.isArray(this._manifest) ? this._manifest : [this._manifest],
+        ownerDid === undefined ? manifests : manifests.map((manifest) => resolveManifestOwner(manifest, ownerDid)),
         {
           ...this.bootstrapSignInPolicy(),
         },
@@ -1290,7 +1299,7 @@ export class TinyCloudWeb {
     assertCurrent();
     const node = await this.ensureNode();
     if (restored.status === "restored" && restored.session) {
-      const permissions = this.configuredManifestPermissions(node);
+      const permissions = this.configuredManifestPermissions(node, restored.session);
       if (permissions.length === 0 || node.hasRuntimePermissions(permissions)) {
         await this.restoredNetworkWork?.hosting;
         assertCurrent();
@@ -1394,7 +1403,7 @@ export class TinyCloudWeb {
       if (restored.status === "restored" && restored.session) {
         const restoredNode = await this.ensureNode();
         assertNotSignedOut();
-        const permissions = this.configuredManifestPermissions(restoredNode);
+        const permissions = this.configuredManifestPermissions(restoredNode, restored.session);
         if (permissions.length === 0 || restoredNode.hasRuntimePermissions(permissions)) {
           await this.restoredNetworkWork?.hosting;
           assertNotSignedOut();

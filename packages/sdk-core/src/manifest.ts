@@ -256,6 +256,68 @@ export class ManifestValidationError extends Error {
   }
 }
 
+/**
+ * The token an app writes in `permissions[].path` of a manifest it publishes at
+ * `/.well-known/openkey-manifest.json` where the path carries the signed-in
+ * owner, for example `urn:tinycloud:encryption:{owner}:default`. The digest OpenKey
+ * checks covers the manifest with the token in place; the SDK replaces it with the
+ * owner's `did:pkh:eip155:<chain>:<EIP-55 address>` only when it composes the request.
+ */
+export const MANIFEST_OWNER_PLACEHOLDER = "{owner}";
+
+/** Where the token sits when it is in a place that is not a path (a string value or an object key), else undefined. */
+function ownerTokenPlace(value: unknown): string | undefined {
+  if (typeof value === "string") {
+    return value.includes(MANIFEST_OWNER_PLACEHOLDER) ? "a string value" : undefined;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const found = ownerTokenPlace(item);
+      if (found !== undefined) return found;
+    }
+    return undefined;
+  }
+  if (value !== null && typeof value === "object") {
+    for (const [key, item] of Object.entries(value)) {
+      if (key.includes(MANIFEST_OWNER_PLACEHOLDER)) return "an object key";
+      const found = ownerTokenPlace(item);
+      if (found !== undefined) return found;
+    }
+  }
+  return undefined;
+}
+
+/** True when a `permissions[].path` of the manifest holds {@link MANIFEST_OWNER_PLACEHOLDER}. */
+export function manifestUsesOwnerPlaceholder(manifest: Manifest): boolean {
+  return (manifest.permissions ?? []).some((entry) => entry.path.includes(MANIFEST_OWNER_PLACEHOLDER));
+}
+
+/**
+ * The manifest with {@link MANIFEST_OWNER_PLACEHOLDER} replaced by `ownerDid` in every
+ * `permissions[].path`. A manifest without the token comes back as the same object.
+ * The token anywhere else (another value, an object key, an additional delegate's
+ * permissions) throws: OpenKey refuses such a manifest too, so the sign-in fails here, early.
+ */
+export function resolveManifestOwner(manifest: Manifest, ownerDid: string): Manifest {
+  const { permissions, ...rest } = manifest;
+  const elsewhere = ownerTokenPlace(rest);
+  if (elsewhere !== undefined) {
+    throw new ManifestValidationError(`${MANIFEST_OWNER_PLACEHOLDER} is only allowed in permissions[].path, found in ${elsewhere}`);
+  }
+  if (permissions === undefined) return manifest;
+  for (const entry of permissions) {
+    const found = ownerTokenPlace({ ...entry, path: "" });
+    if (found !== undefined) {
+      throw new ManifestValidationError(`${MANIFEST_OWNER_PLACEHOLDER} is only allowed in permissions[].path, found in ${found}`);
+    }
+  }
+  if (!manifestUsesOwnerPlaceholder(manifest)) return manifest;
+  return {
+    ...manifest,
+    permissions: permissions.map((entry) => ({ ...entry, path: entry.path.split(MANIFEST_OWNER_PLACEHOLDER).join(ownerDid) })),
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------

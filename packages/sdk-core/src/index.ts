@@ -954,6 +954,9 @@ export {
   // Functions
   applyPrefix,
   composeManifestRequest,
+  resolveManifestOwner,
+  manifestUsesOwnerPlaceholder,
+  MANIFEST_OWNER_PLACEHOLDER,
   expandActionShortNames,
   expandPermissionEntries,
   expandDelegationPermissionEntries,
