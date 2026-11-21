@@ -426,3 +426,46 @@ test("TC-3547 (Naomi 14:20:13Z): the publish path writes ZERO account-registry K
   expect(published).toBe("published");
   expect(kvWrites).toEqual([]);
 });
+
+test("TC-3547 F2 (Bobbie 14:26:51Z): TinyChat closes its consent on sign-out and resolves onConsent to false; SDK must not write the dismissed flag", async () => {
+  // This is the exact sequence TinyChat #881 implements: when a sign-out observer fires
+  // while the registry-publish consent modal is open, TinyChat closes the modal and
+  // resolves the pending Promise<boolean> to `false`. The SDK must detect the session
+  // change via assertCurrent BEFORE touching localStorage, so the false answer from the
+  // old session never becomes a persistent "Not now" for the (possibly-new) current account.
+  const owner = makeWalletOwner();
+  const fetch: typeof globalThis.fetch = async (input, init) => {
+    const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+    if (url === `${NODE_ORIGIN}/info`) return Response.json({ nodeId: NODE_DID });
+    if (url === `${NODE_ORIGIN}/.well-known/tinycloud/node-keys`) return Response.json({ nodeDid: NODE_DID });
+    if (!url.startsWith(REGISTRY_URL)) return new Response(`unexpected URL ${url}`, { status: 599 });
+    if (!init || !init.method || init.method === "GET") return new Response(JSON.stringify({ error: "location record not found" }), { status: 404, headers: { "content-type": "application/json" } });
+    return new Response(`refused: test should not reach PUT`, { status: 599 });
+  };
+  const { node } = makeFakeNode({ subject: owner.subject, space: owner.space, accountSpaceId: ACCOUNT_SPACE });
+  const dismissedStorage = memoryDismissedStorage();
+  // The consent Promise is open until the sign-out observer fires. The test models TinyChat's
+  // close-and-resolve-false behaviour explicitly.
+  const { promise: consentPromise, resolve: resolveConsent } = Promise.withResolvers<boolean>();
+  // signOutGeneration flips when "sign-out fires"; assertCurrent throws once it has flipped.
+  let signOutGeneration = 0;
+  const originalGeneration = signOutGeneration;
+  const outcomePromise = ensureOwnerRegistryRecord({
+    node, subject: owner.subject, registryUrl: REGISTRY_URL, fetch, dismissedStorage,
+    onConsent: () => consentPromise,
+    assertCurrent: () => {
+      if (signOutGeneration !== originalGeneration) throw new Error("sign-out observed during registry publish");
+    },
+    resolveSigner: async () => makeSigner(owner.subject, owner.account),
+    onError: () => {},
+  });
+  // Simulate sign-out while the modal is open, then TinyChat's close-and-resolve.
+  signOutGeneration = 1;
+  resolveConsent(false);
+  const outcome = await outcomePromise;
+  expect(outcome).toBe("unavailable");
+  // The critical assertion: NO localStorage write landed. The false answer came AFTER sign-out,
+  // so persisting it would write the dismissed flag into (what would be) the new session's
+  // owner-keyed slot and suppress a legitimate future prompt.
+  expect(dismissedStorage.raw.size).toBe(0);
+});
