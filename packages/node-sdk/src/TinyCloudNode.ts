@@ -4408,8 +4408,7 @@ export class TinyCloudNode {
   /**
    * Whether the current primary session's recap covers the account index
    * writes (`tinycloud.sql` write and schema on the owned account space's
-   * `account` database). A session with no parseable recap keeps today's
-   * behavior and attempts them.
+   * `account` database). A session with no parseable recap attempts them.
    */
   private canWriteAccountIndex(): boolean {
     const session = this.currentTinyCloudSession();
