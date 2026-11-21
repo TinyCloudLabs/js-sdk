@@ -1,5 +1,48 @@
 # @tinycloud/courier
 
+## 0.7.1-beta.0
+
+### Patch Changes
+
+- Updated dependencies
+  - @tinycloud/node-sdk@3.14.0-beta.1
+
+## 0.7.0
+
+### Minor Changes
+
+- 0576031: The CLI, the hosted MCP server and Courier now use `https://node.tinycloud.xyz` as the default TinyCloud node, in place of `https://tee.node.tinycloud.xyz`. Profiles that already store a host keep it. To choose a node: for the CLI, pass `--host <url>`, set `TC_HOST` or create a profile with `tinycloud profile create <name> --host <url>`; for the MCP server, set `TC_HOST`; for Courier, pass `--host <url>` or set `COURIER_HOST`.
+
+  Details: TC-2923
+
+- b228ca4: Read exact messages with `read <thread> --peer <peer> --message <id>` (repeat up to 20 ids), without downloading the thread archive. Each side reports found, missing or incomplete outcomes; message reads use a 64 KiB per-value limit and a shared 10-second data-read deadline. Receipt-update warnings use fixed text.
+
+  Details: TC-2749
+
+### Patch Changes
+
+- 08fec32: Courier holds `profile.json.lock` only while it reads or saves the profile, not during network operations, and saves are safe when several Courier commands run at once. When a running process holds the lock, the error names its pid. `watch` logs a profile lock timeout and retries.
+
+  Details: TC-3431
+
+- 7caf1da: `courier watch` now reads its state back after a state write whose outcome is unknown (a timeout, a dropped connection or `outcome_unknown`). If the stored state is unchanged or is its own write, it keeps running. A write by any other process is still a `state-conflict`: the watcher stands by (`--once` exits).
+
+  Details: TC-2802
+
+- Updated dependencies [9f3ca26]
+- Updated dependencies [2395340]
+- Updated dependencies [634753d]
+- Updated dependencies [b758e71]
+- Updated dependencies [c7741ab]
+- Updated dependencies [9f3ca26]
+- Updated dependencies [1f961e4]
+- Updated dependencies [313b056]
+- Updated dependencies [400cf7f]
+- Updated dependencies [7399b14]
+  - @tinycloud/node-sdk@3.13.0
+  - @tinycloud/sdk-core@3.13.0
+  - @tinycloud/share-sdk@1.6.0
+
 ## 0.7.0-beta.12
 
 ### Patch Changes

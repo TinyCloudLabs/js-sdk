@@ -16511,6 +16511,7 @@ function withoutRequestedKeyRow(signed, keys, signerDid) {
 }
 function verifyScopedLogin(data, key, sessionDid, requested, expected = {}) {
   const notStored = expected.purpose === "grant" ? "No grant was stored." : "No scoped session was saved.";
+  const soNotStored = expected.purpose === "grant" ? "so no grant was stored." : "so no session was saved.";
   let signed;
   try {
     signed = verifySignedSession(data, key, sessionDid, expected);
@@ -16526,10 +16527,15 @@ function verifyScopedLogin(data, key, sessionDid, requested, expected = {}) {
     throw error;
   }
   const spaceId = data.spaceId;
-  for (const permission2 of requested) {
-    if (isRawEncryptionPermission(permission2) || isRawCidRevocationPermission(permission2)) continue;
-    if (normalizePkhIdentifier(ownerSpaceId(permission2.space ?? "", signed.ownerDid)) !== normalizePkhIdentifier(spaceId)) {
-      throw new CLIError("OPENKEY_SCOPE_MISMATCH", `The approved space differs from the requested space. ${notStored}`, ExitCode.PERMISSION_DENIED);
+  const spaces = [...new Set(requested.filter((p) => !isRawEncryptionPermission(p) && !isRawCidRevocationPermission(p)).map((p) => normalizePkhIdentifier(ownerSpaceId(p.space ?? "", signed.ownerDid))))].sort();
+  const primary = spaces.find((space) => space.endsWith(":applications")) ?? spaces[0];
+  if (primary && normalizePkhIdentifier(spaceId) !== primary) {
+    throw new CLIError("OPENKEY_SCOPE_MISMATCH", `OpenKey approved a different space than the one requested, ${soNotStored}`, ExitCode.PERMISSION_DENIED);
+  }
+  if (spaces.length > 1 || data.requestedSpaces !== void 0) {
+    const entries = data.requestedSpaces;
+    if (!Array.isArray(entries) || entries.length !== spaces.length || new Set(entries.map((entry) => typeof entry?.spaceId === "string" ? normalizePkhIdentifier(entry.spaceId) : entry?.spaceId)).size !== spaces.length || entries.some((entry) => !entry || typeof entry.space !== "string" || typeof entry.spaceId !== "string" || !spaces.includes(normalizePkhIdentifier(entry.spaceId)) || normalizePkhIdentifier(ownerSpaceId(entry.space, signed.ownerDid)) !== normalizePkhIdentifier(entry.spaceId) || ![true, false, null].includes(entry.spaceReady) || entry.spacePending !== void 0 && entry.spacePending !== true || entry.spaceError !== void 0 && typeof entry.spaceError !== "string") || data.spaceReady === true !== entries.every((entry) => entry.spaceReady === true)) {
+      throw new CLIError("OPENKEY_SCOPE_MISMATCH", `OpenKey's approval doesn't match the requested spaces, ${soNotStored}`, ExitCode.PERMISSION_DENIED);
     }
   }
   const legacyNested = [];
@@ -16546,8 +16552,11 @@ function verifyScopedLogin(data, key, sessionDid, requested, expected = {}) {
   if (!expected.exactApproval && !scopeCovers(requested, approved, signed.ownerDid)) {
     throw new CLIError("OPENKEY_GRANT_BROADENED", `The signed grant contains authority beyond the requested ${expected.purpose === "grant" ? "grant" : "manifest"}. ${notStored}`, ExitCode.PERMISSION_DENIED);
   }
-  if (expected.exactApproval && !scopeCovers(approved, requested, signed.ownerDid)) {
-    throw new CLIError("OPENKEY_APPROVAL_NARROWER", `The approval was narrower than the request. Approve all of it, or ask the agent to request less. ${notStored}`, ExitCode.PERMISSION_DENIED);
+  if ((expected.exactApproval || spaces.length > 1) && !scopeCovers(approved, requested, signed.ownerDid)) {
+    const approvedSpaces = new Set(approved.filter((permission2) => !isRawEncryptionPermission(permission2) && !isRawCidRevocationPermission(permission2)).map((permission2) => normalizePkhIdentifier(ownerSpaceId(permission2.space ?? "default", signed.ownerDid))));
+    const missingSpaces = [...new Set(requested.filter((permission2) => !isRawEncryptionPermission(permission2) && !isRawCidRevocationPermission(permission2)).filter((permission2) => !approvedSpaces.has(normalizePkhIdentifier(ownerSpaceId(permission2.space ?? "default", signed.ownerDid)))).map((permission2) => permission2.space ?? "default"))];
+    const message = missingSpaces.length > 0 ? `The owner didn't approve access to ${missingSpaces.map((space) => `"${space}"`).join(", ")}, and this task needs every requested space, ${soNotStored}` : `The approval was narrower than the request, ${soNotStored}`;
+    throw new CLIError("OPENKEY_APPROVAL_NARROWER", message, ExitCode.PERMISSION_DENIED);
   }
   const session = withVerifiedAuthority({ ...data, jwk: key }, { ...signed, permissions: approved });
   return { session, legacyNested };
@@ -16737,6 +16746,7 @@ var init_device_auth = __esm({
     init_constants();
     init_errors();
     init_caveat_refusal();
+    init_space();
     init_raw_encryption();
     init_local_key();
     init_browser_auth();

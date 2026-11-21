@@ -32,6 +32,13 @@ export interface PermissionRequestModalOptions {
   appIcon?: string;
   /** The additional permissions the app wants on top of its current session. */
   additional: PermissionEntry[];
+  /**
+   * Display name of the app the request is for, when `appName` asks on its
+   * behalf. Names it in the title and the description.
+   */
+  onBehalfOf?: string;
+  /** `false` hides the "Do not show me again for 30 days" option. Default `true`. */
+  allowSuppression?: boolean;
   /** Called when the user clicks Decline or dismisses the modal. */
   onDismiss?: () => void;
 }
@@ -88,6 +95,19 @@ export class TinyCloudPermissionRequestModal extends HTMLElement {
     // path come straight from user-controlled manifest input; dropping
     // them into innerHTML without escaping would be an XSS vector.
     const appName = escapeHtml(this.options.appName);
+    const onBehalfOf = this.options.onBehalfOf === undefined ? undefined : escapeHtml(this.options.onBehalfOf);
+    const title = onBehalfOf === undefined
+      ? `${appName} is requesting additional permissions`
+      : `${onBehalfOf} in ${appName} is asking for more access`;
+    const description = onBehalfOf === undefined
+      ? "This app is asking you to grant scoped permission. Review what it will be allowed to do before approving."
+      : `Review what ${onBehalfOf} will be allowed to do before you approve.`;
+    const suppressionMarkup = this.options.allowSuppression === false
+      ? ""
+      : `<label class="suppression-option">
+                <input type="checkbox" class="suppression-checkbox" data-role="suppress-prompt" />
+                <span>Do not show me again for 30 days</span>
+              </label>`;
     const iconMarkup = this.options.appIcon
       ? `<img class="app-icon" src="${escapeAttr(this.options.appIcon)}" alt="" />`
       : `<div class="app-icon app-icon--placeholder">
@@ -103,7 +123,7 @@ export class TinyCloudPermissionRequestModal extends HTMLElement {
           <div class="modal-content">
             <div class="modal-header">
               ${iconMarkup}
-              <h2 class="modal-title" id="tc-permission-title">${appName} is requesting additional permissions</h2>
+              <h2 class="modal-title" id="tc-permission-title">${title}</h2>
               <button class="modal-close" aria-label="Close">
                 <svg width="14" height="14" viewBox="0 0 14 14" fill="none" xmlns="http://www.w3.org/2000/svg">
                   <path d="M1 1L13 13M13 1L1 13" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
@@ -113,13 +133,10 @@ export class TinyCloudPermissionRequestModal extends HTMLElement {
 
             <div class="modal-body">
               <p class="modal-description" id="tc-permission-description">
-                This app is asking you to grant scoped permission. Review what it will be allowed to do before approving.
+                ${description}
               </p>
               <ul class="permission-list">${entriesHtml}</ul>
-              <label class="suppression-option">
-                <input type="checkbox" class="suppression-checkbox" data-role="suppress-prompt" />
-                <span>Do not show me again for 30 days</span>
-              </label>
+              ${suppressionMarkup}
             </div>
 
             <div class="modal-actions">
