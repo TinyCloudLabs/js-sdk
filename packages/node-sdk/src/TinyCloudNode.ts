@@ -2444,8 +2444,8 @@ export class TinyCloudNode {
    * registry record still decides whenever the owner has one.
    */
   private transportForShareHost(graph: ServiceGraphLifetime, host: string): ResourceTransport | undefined {
-    const { host: configured, newUserHost, tinycloudFallbackHosts } = this.config;
-    if (!isKnownTinyCloudNode(host, [configured, newUserHost, ...(tinycloudFallbackHosts ?? [])])) return undefined;
+    const { newUserHost, tinycloudFallbackHosts } = this.config;
+    if (!isKnownTinyCloudNode(host, [this.explicitHost, newUserHost, ...(tinycloudFallbackHosts ?? [])])) return undefined;
     return this.createResourceTransport(graph, undefined, undefined, [host]);
   }
 

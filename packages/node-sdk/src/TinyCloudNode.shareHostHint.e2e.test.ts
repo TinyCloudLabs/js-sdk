@@ -166,3 +166,32 @@ describe("a v1 share while the registry is unavailable", () => {
     expect(seen.every((entry) => entry.origin === registry.url.origin)).toBe(true);
   });
 });
+
+describe("a recipient that restored a persisted session", () => {
+  async function restoredRecipient(extra: ConstructorParameters<typeof TinyCloudNode>[0] = {}) {
+    const restored = recipient(extra);
+    await restored.restoreSession({ ...fixture.ownerRestorableSession, tinycloudHosts: [hostile.url.origin] });
+    return restored;
+  }
+
+  test("a host that came from the persisted session is not a known node", async () => {
+    const { token } = await share(60_000, hostile.url.origin);
+    const restored = await restoredRecipient();
+    hostileRequests = [];
+    seen = [];
+    const result = await read(restored, token);
+    expect(result.ok).toBe(false);
+    expect(hostileRequests).toEqual([]);
+    expect(sentTo(hostile.url.origin)).toEqual([]);
+  });
+
+  test("a host the recipient configured is a known node when a session is restored", async () => {
+    const { token } = await share(60_000);
+    const restored = await restoredRecipient({ host: fixture.host });
+    seen = [];
+    const result = await read(restored, token);
+    expect(result).toMatchObject({ ok: true, data: { data: { message: "shared by the owner" } } });
+    expect(hostileRequests).toEqual([]);
+    expect(sentTo(fixture.host).some((entry) => entry.path === "/invoke")).toBe(true);
+  });
+});
