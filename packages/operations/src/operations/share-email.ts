@@ -297,7 +297,7 @@ export async function executeShareEmail(
         status: "authority_required",
         missing: [{ service: "tinycloud.encryption", path: `${network}/share/`, actions: ["tinycloud.encryption/key.create", "tinycloud.encryption/decrypt"] }],
         request: { requestId: approval.requestId },
-        approval: { kind: "openkey", requestId: approval.requestId, url: approval.approvalUrl, fallback: "Ask the owner to open the approval link and approve the one-key invitation, then call this tool again with the same input. Tell them this also lets the agent delete their other shares, though not read them." },
+        approval: { kind: "openkey", requestId: approval.requestId, url: approval.approvalUrl, fallback: "Ask the owner to open the approval link and approve the one-key invitation, then call this tool again with the same input. Tell them the agent's permission to share also lets it delete their other shares, though not read them." },
         requiresCallerInput: true,
       };
     }

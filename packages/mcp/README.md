@@ -428,7 +428,7 @@ OpenCredentials issuer can open it, and TinyCloud emails them the invitation. Th
 is never returned. When the session cannot decrypt, the first call returns
 `authority_required` with an OpenKey approval link for one key for this invitation (it
 lasts at most a day); after the owner approves, call the tool again with the same input.
-If the invitation cannot be delivered the share is revoked again: `delivery: "failed"`
+If the invitation cannot be delivered the share is revoked: `delivery: "failed"`
 with `revoked: true`, or `revoked: false` and the `shareId` for the owner to stop it.
 The permission it needs lets the agent save and delete files under the owner's `shares/` folder, so it can delete the owner's other shares but cannot read them. Every share is recorded in the owner's share history: `tinycloud share list` shows it and `tinycloud share revoke <id>` ends it. Domain and DID recipients are not supported.
 
