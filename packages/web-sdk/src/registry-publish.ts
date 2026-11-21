@@ -75,6 +75,14 @@ export interface EnsureOwnerRegistryRecordOptions {
   onConsent?: (preview: RegistryPublishPreview) => Promise<boolean>;
   /** Host-supplied error hook. Called for every failure before we map the outcome to `"unavailable"`. Never throws. */
   onError?: (error: unknown) => void;
+  /**
+   * Called after every await the helper issues. Throws when the signed-in session has
+   * changed under the helper (sign-out, account switch). Fail-closed: the helper catches
+   * the throw, reports via `onError`, and returns `"unavailable"` without writing anything,
+   * so a stale consent tap after a sign-out never reaches the registry or the new account's
+   * KV. See TC-3547 F2 (Bobbie 13:52:41Z).
+   */
+  assertCurrent?: () => void;
   /** Overridable for tests. */
   now?: () => Date;
   /** Overridable for tests; defaults to the globalThis fetch used elsewhere in the SDK. */
@@ -103,13 +111,18 @@ export interface EnsureOwnerRegistryRecordOptions {
  *    node identity comes only from `node.activeNodeIdentity()` — never from caller input,
  *    which is Bobbie's req. 1 (a signed record pointing at the wrong node is the real
  *    attacker gain).
- * 4. We never overwrite. `publishLocationRecordV2` refuses an overwrite that reduces to
- *    the same payload (its own idempotence); we also return `"already-current"` when the
- *    verdict is already `registered`, so a second call does not even reach the registry.
- * 5. We swallow every error and funnel through `onError`. Sign-in never fails because of this.
+ * 4. We NEVER overwrite or merge into an existing record. The verdict is checked once
+ *    up front; `publishLocationRecordV2`'s own `onPrepared` fence is used to refuse the
+ *    publish if the final pre-sign re-read now sees a record (TC-3547 F1, Bobbie 13:52:41Z).
+ *    An `offline` verdict is refused: a cold registry cannot prove the owner is actually
+ *    absent, so publishing on it risks an unintended merge after the registry comes back.
+ * 5. Sign-out / account switch is caught by `assertCurrent` after every await, so a stale
+ *    tap after sign-out never writes to the new account's KV nor publishes with the old
+ *    account's signer (TC-3547 F2).
+ * 6. We swallow every error and funnel through `onError`. Sign-in never fails because of this.
  */
 export async function ensureOwnerRegistryRecord(options: EnsureOwnerRegistryRecordOptions): Promise<RegistryPublishOutcome> {
-  const { node, subject, onConsent, onError, resolveSigner } = options;
+  const { node, subject, onConsent, onError, resolveSigner, assertCurrent } = options;
   const registryUrl = options.registryUrl === undefined ? DEFAULT_TINYCLOUD_LOCATION_REGISTRY_URL : options.registryUrl;
   if (registryUrl === null) return "unavailable";
   try {
@@ -117,6 +130,7 @@ export async function ensureOwnerRegistryRecord(options: EnsureOwnerRegistryReco
     // account-registry KV, so both home.tinycloud.xyz and tinycloud.one read the same bit.
     // Owner-started retries (ignoreDismissed) skip this check; all other guards hold.
     if (!options.ignoreDismissed && await readRegistryPublishDismissed(node)) return "declined";
+    assertCurrent?.();
 
     // Registry verdict decides whether to prompt at all. This is the same lookup NodeUserAuthorization
     // does during third-party sign-in; here we use its result to decide whether to publish.
@@ -132,10 +146,17 @@ export async function ensureOwnerRegistryRecord(options: EnsureOwnerRegistryReco
       onError?.(error);
       return undefined;
     });
+    assertCurrent?.();
     if (!verdict) return "unavailable";
     if (verdict.status !== "unregistered") return "already-current";
+    // TC-3547 F1: an `offline` verdict is "unregistered + couldn't reach the registry".
+    // It cannot prove absence, so publishing on it risks an unintended merge after the
+    // registry comes back online. Fail closed; the next sign-in retries from a fresh
+    // verdict.
+    if ((verdict as { offline?: boolean }).offline === true) return "unavailable";
 
     const activeNode = await node.activeNodeIdentity();
+    assertCurrent?.();
     const space = node.spaceId;
     if (typeof space !== "string" || !space.startsWith("tinycloud:")) return "unavailable";
 
@@ -156,6 +177,10 @@ export async function ensureOwnerRegistryRecord(options: EnsureOwnerRegistryReco
       onError?.(error);
       return "declined";
     }
+    // Check after the consent await — the owner may have signed out while the modal was open.
+    // If they did, we must NOT write the dismissed flag (that would hit the new account's KV)
+    // and we must NOT proceed to sign/publish on behalf of the old account.
+    try { assertCurrent?.(); } catch (error) { onError?.(error); return "unavailable"; }
     if (!approved) {
       await writeRegistryPublishDismissed(node).catch((error) => onError?.(error));
       return "declined";
@@ -165,11 +190,13 @@ export async function ensureOwnerRegistryRecord(options: EnsureOwnerRegistryReco
       onError?.(error);
       return undefined;
     });
+    assertCurrent?.();
     if (!signer) return "unavailable";
-    if (signer.subject !== subject) {
-      onError?.(new Error("Owner signer subject does not match active node owner"));
-      return "unavailable";
-    }
+    // Signer subject comparison skipped on purpose: `tcw.ts` derives both `subject` and
+    // the signer's declared subject from the same `node.did`, so the check would be a
+    // no-op (Bobbie 13:52:41Z). The real guards are `signLocationRecordV2`'s type/subject
+    // enforcement and `verifyLocationRecordV2`'s EIP-191 recover against the record's
+    // subject — the registry rejects any mismatch.
     const recordSigner: LocationRecordSigner = {
       type: "did:pkh",
       signMessage: (message) => signer.signMessage(message),
@@ -187,13 +214,16 @@ export async function ensureOwnerRegistryRecord(options: EnsureOwnerRegistryReco
         }],
         ...(options.registrySequenceStore ? { sequenceStore: options.registrySequenceStore } : {}),
         ...(options.registryCacheStore ? { cacheStore: options.registryCacheStore } : {}),
-        // Consent was the onConsent callback above; onPrepared is the second fence after merges
-        // against existing memberships. Here the merge target is empty (owner is `unregistered`),
-        // so nothing can slip in between preview and sign.
-        onPrepared: async () => true,
+        // TC-3547 F1: `onPrepared` is the second, publisher-time fence. The first verdict
+        // check above may be minutes old by the time the modal is answered; publishLocationRecordV2
+        // re-reads the registry just before signing and passes the live `current` here. We
+        // refuse the publish if the owner already has ANY record now, so we never merge this
+        // node into someone-else-wrote-it-while-the-modal-was-open.
+        onPrepared: async (_prepared, current) => current === null,
         ...(options.fetch ? { fetch: options.fetch } : {}),
         ...(options.now ? { now: options.now } : {}),
       });
+      assertCurrent?.();
       options.registryVerdictCache?.invalidate(registryUrl, subject);
       return "published";
     } catch (error) {

@@ -1512,6 +1512,21 @@ export class TinyCloudWeb {
     if (!node || !session || !session.address) return "already-current";
     const subject = node.did;
     if (!subject.startsWith("did:pkh:")) return "already-current";
+    // TC-3547 F2 (Bobbie 13:52:41Z): capture the sign-out generation and the owner address
+    // at entry. The helper calls `assertCurrent()` after every await; a sign-out or account
+    // switch during the flow throws before the next KV write or registry PUT, so a stale
+    // tap can never write the dismissed flag to the next account's KV or sign a record
+    // with the old account's key.
+    const signOutsAtEntry = this.signOutCount;
+    const addressAtEntry = session.address;
+    const assertCurrent = () => {
+      if (this.signOutCount !== signOutsAtEntry || this.signOutInFlight > 0) {
+        throw new Error("Session signed out during registry publish; aborting.");
+      }
+      if (this._node?.session?.address !== addressAtEntry) {
+        throw new Error("Owner address changed during registry publish; aborting.");
+      }
+    };
     const walletSigner = this.walletSigner;
     const openkey = this.config.openkey;
     // tcw.ts stays clear of a static import on `@tinycloud/sdk-core`; the OpenKey client wears
@@ -1538,6 +1553,7 @@ export class TinyCloudWeb {
         ...(onConsent ? { onConsent } : {}),
         ...(onError ? { onError } : {}),
         ...(options.ignoreDismissed ? { ignoreDismissed: true } : {}),
+        assertCurrent,
         resolveSigner: async () => {
           if (walletSigner) {
             return {

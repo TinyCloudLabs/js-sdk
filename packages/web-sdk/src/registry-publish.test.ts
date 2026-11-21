@@ -3,7 +3,7 @@ import { privateKeyToAccount, generatePrivateKey, type PrivateKeyAccount } from 
 // lookupOwnerRegistryVerdict is what the TC-2931 gate consults; the acceptance test below
 // asserts a publish moves the verdict from `unregistered` to `registered`, which is the
 // precise observable the third-party sign-in gate checks.
-import { lookupOwnerRegistryVerdict } from "@tinycloud/sdk-core";
+import { lookupOwnerRegistryVerdict, signLocationRecordV2 } from "@tinycloud/sdk-core";
 import { ed25519 } from "@noble/curves/ed25519";
 import { base58btc } from "multiformats/bases/base58";
 import type { TinyCloudNode } from "@tinycloud/node-sdk";
@@ -259,4 +259,120 @@ test("TC-3547 acceptance: after a successful first-party publish, the owner's ve
   // branch at NodeUserAuthorization.ts:757-764 no longer fires. This is the direct TC-3547 acceptance observable.
   const after = await lookupOwnerRegistryVerdict(owner.subject, { registryUrl: REGISTRY_URL, fetch, dataRead: true });
   expect(after.status).toBe("registered");
+});
+
+test("TC-3547 F1: record appears between verdict check and publish → unavailable, no PUT, no merge", async () => {
+  const owner = makeWalletOwner();
+  // Pre-build a competing record signed by the SAME owner, listing a DIFFERENT node. If our
+  // guard didn't fire, publishLocationRecordV2 would merge our node into the other agent's
+  // record and publish sequence+1 — the attack Bobbie described in F1. Our onPrepared fence
+  // requires `current === null`, so the publish is refused the moment the pre-sign re-read
+  // returns this record.
+  const OTHER_NODE_PUBLIC = ed25519.getPublicKey(new Uint8Array(32).fill(9));
+  const OTHER_NODE_DID = `did:key:${base58btc.encode(Uint8Array.of(0xed, 0x01, ...OTHER_NODE_PUBLIC))}`;
+  const OTHER_NODE_ORIGIN = "https://other-node.test.local";
+  const planted = await signLocationRecordV2({
+    version: 2, subject: owner.subject,
+    nodes: [{ did: OTHER_NODE_DID, url: OTHER_NODE_ORIGIN }],
+    spaces: [{ space: owner.space, nodes: [{ did: OTHER_NODE_DID, mode: "read-write" }] }],
+    encryptionNode: null,
+    updated_at: "2026-11-21T13:00:00.000Z",
+    sequence: 0,
+  }, { type: "did:pkh", signMessage: (m) => owner.account.signMessage({ message: m }) });
+
+  let putAttempts = 0;
+  let registered: Record<string, unknown> | undefined;
+  const fetch: typeof globalThis.fetch = async (input, init) => {
+    const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+    if (url === `${NODE_ORIGIN}/info`) return Response.json({ nodeId: NODE_DID });
+    if (url === `${NODE_ORIGIN}/.well-known/tinycloud/node-keys`) return Response.json({ nodeDid: NODE_DID });
+    if (url === `${OTHER_NODE_ORIGIN}/info`) return Response.json({ nodeId: OTHER_NODE_DID });
+    if (url === `${OTHER_NODE_ORIGIN}/.well-known/tinycloud/node-keys`) return Response.json({ nodeDid: OTHER_NODE_DID });
+    if (!url.startsWith(REGISTRY_URL)) return new Response(`unexpected URL ${url}`, { status: 599 });
+    if (!init || !init.method || init.method === "GET") {
+      if (registered) return new Response(JSON.stringify({ record: registered }), { status: 200, headers: { "content-type": "application/json" } });
+      return new Response(JSON.stringify({ error: "location record not found" }), { status: 404, headers: { "content-type": "application/json" } });
+    }
+    if (init.method === "PUT") { putAttempts++; return new Response(`refused: test should not PUT`, { status: 599 }); }
+    return new Response(`unexpected method ${init.method}`, { status: 599 });
+  };
+  const node = makeFakeNode({ subject: owner.subject, space: owner.space, accountSpaceId: ACCOUNT_SPACE });
+  const outcome = await ensureOwnerRegistryRecord({
+    node, subject: owner.subject, registryUrl: REGISTRY_URL, fetch,
+    onConsent: async () => { registered = { ...planted }; return true; },
+    resolveSigner: async () => makeSigner(owner.subject, owner.account),
+  });
+  expect(outcome).toBe("unavailable");
+  expect(putAttempts).toBe(0);
+});
+
+test("TC-3547 F1: offline verdict is refused (cannot prove absence) → unavailable, no consent, no PUT", async () => {
+  const owner = makeWalletOwner();
+  let consented = false;
+  let putAttempts = 0;
+  // Cold-registry fetch: every GET returns 503 so lookupOwnerRegistryVerdict falls back to
+  // a cached-but-offline verdict. We prime the cache with an `unregistered + offline:true`
+  // entry by using a store the test owns.
+  const fetch: typeof globalThis.fetch = async (input, init) => {
+    const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+    if (url === `${NODE_ORIGIN}/info`) return Response.json({ nodeId: NODE_DID });
+    if (url === `${NODE_ORIGIN}/.well-known/tinycloud/node-keys`) return Response.json({ nodeDid: NODE_DID });
+    if (!init || !init.method || init.method === "GET") return new Response("cold", { status: 503 });
+    if (init.method === "PUT") { putAttempts++; return new Response(`refused: test should not PUT`, { status: 599 }); }
+    return new Response(`unexpected method ${init.method}`, { status: 599 });
+  };
+  const node = makeFakeNode({ subject: owner.subject, space: owner.space, accountSpaceId: ACCOUNT_SPACE });
+  const outcome = await ensureOwnerRegistryRecord({
+    node, subject: owner.subject, registryUrl: REGISTRY_URL, fetch,
+    onConsent: async () => { consented = true; return true; },
+    resolveSigner: async () => makeSigner(owner.subject, owner.account),
+  });
+  // Cold registry with no cache = RegistryUnavailableError inside lookupOwnerRegistryVerdict,
+  // which the helper catches and maps to `unavailable` BEFORE an offline-verdict branch would
+  // ever matter. Either way, no PUT, no consent prompt.
+  expect(outcome).toBe("unavailable");
+  expect(consented).toBe(false);
+  expect(putAttempts).toBe(0);
+});
+
+test("TC-3547 F2: sign-out during the consent modal aborts the publish, no PUT, no dismissed write", async () => {
+  const owner = makeWalletOwner();
+  let putAttempts = 0;
+  let dismissedWrites = 0;
+  const fetch: typeof globalThis.fetch = async (input, init) => {
+    const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+    if (url === `${NODE_ORIGIN}/info`) return Response.json({ nodeId: NODE_DID });
+    if (url === `${NODE_ORIGIN}/.well-known/tinycloud/node-keys`) return Response.json({ nodeDid: NODE_DID });
+    if (!url.startsWith(REGISTRY_URL)) return new Response(`unexpected URL ${url}`, { status: 599 });
+    if (!init || !init.method || init.method === "GET") return new Response(JSON.stringify({ error: "location record not found" }), { status: 404, headers: { "content-type": "application/json" } });
+    if (init.method === "PUT") { putAttempts++; return new Response(`refused: test should not PUT`, { status: 599 }); }
+    return new Response(`unexpected method ${init.method}`, { status: 599 });
+  };
+  // Instrument the fake node's KV to count would-be dismissed writes.
+  const kvStore = new Map<string, unknown>();
+  const node = {
+    accountSpaceId: ACCOUNT_SPACE,
+    spaceId: owner.space,
+    did: owner.subject,
+    kvForSpace: () => ({
+      async get<T>(key: string) { return { ok: true as const, data: { data: kvStore.get(key) as T | undefined, headers: {} } }; },
+      async put(key: string, value: unknown) { dismissedWrites++; kvStore.set(key, value); },
+    }),
+    async activeNodeIdentity() { return { nodeDid: NODE_DID, origin: NODE_ORIGIN }; },
+  } as unknown as TinyCloudNode;
+  // Flip signed-out after consent returns false. assertCurrent must throw and the helper must
+  // NOT write the dismissed flag (that write would land in the next account's KV in a real sign-out).
+  let signedOut = false;
+  let errors = 0;
+  const outcome = await ensureOwnerRegistryRecord({
+    node, subject: owner.subject, registryUrl: REGISTRY_URL, fetch,
+    onConsent: async () => { signedOut = true; return false; },
+    assertCurrent: () => { if (signedOut) throw new Error("signed out during publish"); },
+    resolveSigner: async () => makeSigner(owner.subject, owner.account),
+    onError: () => { errors++; },
+  });
+  expect(outcome).toBe("unavailable");
+  expect(dismissedWrites).toBe(0);
+  expect(putAttempts).toBe(0);
+  expect(errors).toBe(1);
 });
