@@ -95,7 +95,7 @@ for (const config of [
       assert(!fetches.includes("/delegate"), config.name);
       if (config.error === "ACCOUNT_SETUP_REQUIRED") {
         assert.equal(failure.code, config.error);
-        assert.equal(failure.setupUrl, "https://home.tinycloud.xyz/");
+        assert.equal(failure.setupUrl, "https://tinycloud.one/?finish-setup=registry");
       } else assert.notEqual(failure.code, "ACCOUNT_SETUP_REQUIRED");
       results.push({ name: config.name, refusedBeforeSignature: true });
     } else {

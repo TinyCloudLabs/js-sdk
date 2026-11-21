@@ -1,9 +1,9 @@
 import { AccountSetupRequiredError, FINISH_SETUP_REGISTRY_INTENT } from "./account-setup";
 
 describe("AccountSetupRequiredError", () => {
-  it("defaults setupUrl to Home with finish-setup=registry intent (TC-3547)", () => {
+  it("defaults setupUrl to TinyCloud One with finish-setup=registry intent (TC-3547)", () => {
     const err = new AccountSetupRequiredError();
-    expect(err.setupUrl).toBe(`https://home.tinycloud.xyz/?${FINISH_SETUP_REGISTRY_INTENT}`);
+    expect(err.setupUrl).toBe(`https://tinycloud.one/?${FINISH_SETUP_REGISTRY_INTENT}`);
     expect(FINISH_SETUP_REGISTRY_INTENT).toBe("finish-setup=registry");
   });
 
@@ -22,7 +22,7 @@ describe("AccountSetupRequiredError", () => {
     expect(err.message).toBe(custom);
     // Nothing else moves — the code and the setup URL (with intent) are the stable contract.
     expect(err.code).toBe("ACCOUNT_SETUP_REQUIRED");
-    expect(err.setupUrl).toBe(`https://home.tinycloud.xyz/?${FINISH_SETUP_REGISTRY_INTENT}`);
+    expect(err.setupUrl).toBe(`https://tinycloud.one/?${FINISH_SETUP_REGISTRY_INTENT}`);
   });
 
   it("logs its string form with no signature and no record payload (nothing to redact here)", () => {

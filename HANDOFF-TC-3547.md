@@ -8,7 +8,7 @@
 
 ## Scope (locked)
 
-New `@tinycloud/web-sdk` surface `ensureOwnerRegistryRecord` called from `tcw.ts._init` after sign-in succeeds. First-party only; publishes only when the owner's `did:pkh` is `unregistered`; never overwrites; verified node identity only (no caller override); publish failure never fails sign-in; logs carry no signature or full record. Consent is an app-rendered modal plus wallet `personal_sign` / OpenKey `signMessage`. A declined publish persists in the account-registry KV at `system/registry-publish/dismissed/v1`. `AccountSetupRequiredError` gains a `setupInstruction` field so the outside-app error carries one labelled link to Home with Monica's words.
+New `@tinycloud/web-sdk` surface `ensureOwnerRegistryRecord` called from `tcw.ts._init` after sign-in succeeds. First-party only; publishes only when the owner's `did:pkh` is `unregistered`; never overwrites; verified node identity only (no caller override); publish failure never fails sign-in; logs carry no signature or full record. Consent is an app-rendered modal plus wallet `personal_sign` / OpenKey `signMessage`. A declined publish persists in the account-registry KV at `system/registry-publish/dismissed/v1`. `AccountSetupRequiredError`'s default message now names TinyCloud One and ends with the error's `setupUrl` (`https://tinycloud.one/?finish-setup=registry`); the host app can still pass its own `setupInstruction` to the constructor.
 
 ## Files expected to change
 
@@ -42,7 +42,14 @@ Sign a real `canonicalLocationPayloadV2` through OpenKey's `signMessage` (`packa
 ## 2026-11-21 second commit (owed items from the draft PR body)
 
 - Added unit tests: `packages/web-sdk/src/registry-publish.test.ts` (8 cases, all four outcomes + `onConsent` = false persists dismissed + `ignoreDismissed` bypass + signer-subject mismatch + primary space missing) and `packages/web-sdk/src/registry-publish-dismissed.test.ts` (4 cases). 16 passing including the sdk-core tests.
-- Soren / Naomi / Bobbie 13:26-13:27Z addendum folded in: `AccountSetupRequiredError.setupUrl` carries `?finish-setup=registry` by default; `ensureOwnerRegistryRecord({ ignoreDismissed: true })` bypasses the dismissed flag but preserves every other guard (unregistered-only, verified node identity, consent required, no overwrite). Bobbie's host-side conditions 3 & 4 are documented on the method's JSDoc: host page needs `frame-ancestors 'self'` and must strip the query via `history.replaceState` after reading it.
+- Mid-day addendum folded in: `AccountSetupRequiredError.setupUrl` carries `?finish-setup=registry` by default; `ensureOwnerRegistryRecord({ ignoreDismissed: true })` bypasses the dismissed flag but preserves every other guard (unregistered-only, verified node identity, consent required, no overwrite). Host-side conditions 3 & 4 are documented on the method's JSDoc: host page needs `frame-ancestors 'self'` and must strip the query via `history.replaceState` after reading it.
 - `tsconfig.json` on web-sdk now excludes `src/**/*.test.ts` so webpack's ts-loader doesn't try to compile bun-test files into the bundle.
 - OpenKey loopback check (Bobbie Q1 inference) resolved SOURCE-LEVEL from OpenKey main `repositories/openkey@911925f0`: `signMessage` is contractually byte-exact ("OpenKey never rewrites their bytes", `packages/sdk/src/index.ts:1159-1174`), the widget's SIWE parser doesn't refuse non-SIWE messages (`apps/web/src/lib/exact-message-surfaces-mounted.test.ts:213`), and the signed EIP-191 result verifies cleanly through `verifyLocationRecordV2`. Reported to Naomi 13:17Z+; no scope cut needed, both wallet and OpenKey covered on 11-22.
 - OpenKey driver `664ddfba` (Naomi 13:24:30Z) has a separate P1 to fix OpenKey authorize-sign's skipped new-account bootstrap. The integration acceptance test for TC-3547 uses a wallet account so it does not depend on that fix. Full OpenKey end-to-end coverage lands as a follow-up commit once `664ddfba` merges; the dependency is named here and in the PR body.
+
+## 2026-11-21 third commit (AccountSetupRequiredError text update)
+
+- `AccountSetupRequiredError.setupUrl` → `https://tinycloud.one/?finish-setup=registry` (Home 302s here with the query preserved; verified by `curl -I https://home.tinycloud.xyz/?finish-setup=registry`).
+- Default message now reads: `Finish setting up your TinyCloud account in TinyCloud One, then sign in to this app again: ${setupUrl}`. Host apps can still pass their own `setupInstruction`.
+- Changeset updated to name TinyCloud One, add the upgrading note, and end `Details: TC-3547`.
+- Account-setup unit tests pin the new URL and message. Under the written test-ruling (2026-11-21), only expected strings change; no assertion is removed or loosened.
