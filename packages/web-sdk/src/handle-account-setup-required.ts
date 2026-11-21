@@ -81,8 +81,9 @@ export interface HandleAccountSetupRequiredOptions {
   readonly requestingApp?: { name?: string; manifest?: unknown };
   /** OpenKey client resolved by tcw.ts from its own config. `undefined` → outcome is `"no-openkey"`. */
   readonly openkey: OpenKeySetupClient | undefined;
-  /** Mode forwarded to OpenKey, matching the existing authorizeTinyCloud mode choice. */
-  readonly mode?: "iframe" | "popup" | "redirect";
+  // Bobbie N1 (14:53:16Z): no `mode` option. This path always uses a top-level popup so the
+  // outside app cannot embed / overlay the consent screen; OpenKey's server also refuses to
+  // render the setup screen when framed (acceptance in the OpenKey slice).
   /** The signed-in owner's `did:pkh`, from `node.did`. Used as the throttle key and the OpenKey session owner. */
   readonly subject: string;
   /** Node handle, read only for sign-out detection in the retry step (not passed to OpenKey). */
@@ -200,9 +201,12 @@ export async function handleAccountSetupRequired(
     }
     let result: TinyCloudSetupResultV1;
     try {
-      result = options.mode
-        ? await openkey.authorizeTinyCloudSetup!(request, { mode: options.mode })
-        : await openkey.authorizeTinyCloudSetup!(request);
+      // Bobbie N1 (14:53:16Z): force popup mode. The host's configured `openkey.mode` can be
+      // `"iframe"` (which the outside app can overlay/clickjack); this setup consent must always
+      // be a top-level popup regardless of the host's TinyCloudWeb mode. The OpenKey server's
+      // framed-request refusal is the authoritative guard (acceptance in the OpenKey slice);
+      // this is the client-side mirror.
+      result = await openkey.authorizeTinyCloudSetup!(request, { mode: "popup" });
     } catch (error) {
       onError?.(error);
       rememberOutsideAppSetupAttempt(subject, outsideAppOrigin, throttleStorage, now);

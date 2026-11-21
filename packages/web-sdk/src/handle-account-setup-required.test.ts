@@ -209,3 +209,19 @@ test("retrySignIn throws → outcome stays 'published', onError observes the thr
   expect(outcome).toBe("published");
   expect(errors.length).toBe(1);
 });
+
+test("Bobbie N1 (14:53:16Z): the setup call always uses mode 'popup' — never an iframe, even if a host configured one", async () => {
+  const seen: Array<{ mode?: string }> = [];
+  const openkey: OpenKeySetupClient = {
+    authorizeTinyCloudSetup: async (_request, opts) => {
+      seen.push({ mode: opts?.mode });
+      return { status: "declined" };
+    },
+  };
+  // Fresh throttle so the call reaches OpenKey.
+  await handleAccountSetupRequired({
+    error: STUB_ERROR, subject: SUBJECT, node: STUB_NODE, openkey,
+    throttleStorage: memoryThrottleStorage(),
+  });
+  expect(seen).toEqual([{ mode: "popup" }]);
+});

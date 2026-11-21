@@ -1622,7 +1622,8 @@ export class TinyCloudWeb {
         subject,
         node,
         openkey: openkey?.client as OpenKeySetupClient | undefined,
-        ...(openkey?.mode ? { mode: openkey.mode } : {}),
+        // Bobbie N1 (14:53:16Z): no `mode` forwarded. The helper always opens the setup popup
+        // regardless of the host's configured openkey.mode (which could be "iframe").
         ...(Object.keys(forwardedRequest).length > 0 ? { requestingApp: forwardedRequest } : {}),
         ...(onError ? { onError } : {}),
         ...(options.retrySignIn ? { retrySignIn: options.retrySignIn } : {}),
