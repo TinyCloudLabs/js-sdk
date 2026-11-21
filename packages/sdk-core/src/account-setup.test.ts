@@ -1,13 +1,17 @@
-import { AccountSetupRequiredError } from "./account-setup";
+import { AccountSetupRequiredError, FINISH_SETUP_REGISTRY_INTENT } from "./account-setup";
 
 describe("AccountSetupRequiredError", () => {
-  it("keeps the previous human message as the default setupInstruction and Error.message", () => {
+  it("defaults setupUrl to Home with finish-setup=registry intent (TC-3547)", () => {
     const err = new AccountSetupRequiredError();
-    const expected = "Finish setting up your TinyCloud account at https://home.tinycloud.xyz/ before signing in to this app.";
-    expect(err.setupInstruction).toBe(expected);
-    expect(err.message).toBe(expected);
+    expect(err.setupUrl).toBe(`https://home.tinycloud.xyz/?${FINISH_SETUP_REGISTRY_INTENT}`);
+    expect(FINISH_SETUP_REGISTRY_INTENT).toBe("finish-setup=registry");
+  });
+
+  it("default setupInstruction and Error.message name the same URL as setupUrl", () => {
+    const err = new AccountSetupRequiredError();
+    expect(err.setupInstruction).toContain(err.setupUrl);
+    expect(err.message).toContain(err.setupUrl);
     expect(err.code).toBe("ACCOUNT_SETUP_REQUIRED");
-    expect(err.setupUrl).toBe("https://home.tinycloud.xyz/");
     expect(err.name).toBe("AccountSetupRequiredError");
   });
 
@@ -16,9 +20,9 @@ describe("AccountSetupRequiredError", () => {
     const err = new AccountSetupRequiredError(custom);
     expect(err.setupInstruction).toBe(custom);
     expect(err.message).toBe(custom);
-    // Nothing else moves — the code and the setup URL are the stable contract outside apps rely on.
+    // Nothing else moves — the code and the setup URL (with intent) are the stable contract.
     expect(err.code).toBe("ACCOUNT_SETUP_REQUIRED");
-    expect(err.setupUrl).toBe("https://home.tinycloud.xyz/");
+    expect(err.setupUrl).toBe(`https://home.tinycloud.xyz/?${FINISH_SETUP_REGISTRY_INTENT}`);
   });
 
   it("logs its string form with no signature and no record payload (nothing to redact here)", () => {

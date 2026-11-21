@@ -1492,10 +1492,21 @@ export class TinyCloudWeb {
    * TC-3547: publish the owner's registry location record once, if the registry verdict
    * is `unregistered` and the host supplied an `onRegistryPublishConsent` callback. Runs
    * automatically at the end of a first-party sign-in; also safe to call from a "finish
-   * setup" retry button. Returns one of `"published"`, `"already-current"`, `"declined"`,
-   * `"unavailable"`. Sign-in is never failed; this method never throws.
+   * setup" retry button.
+   *
+   * Pass `{ ignoreDismissed: true }` when the host opens the publish consent in response
+   * to the `finish-setup=registry` URL intent (see `AccountSetupRequiredError.setupUrl`).
+   * It skips the dismissed-flag short-circuit but preserves every other guard (unregistered
+   * only, verified node identity only, consent still required, no overwrite). Host conditions
+   * (Bobbie 13:27:14Z, Soren 13:27:29Z): the hosting page must set `frame-ancestors 'self'`
+   * (or equivalent) so no outside origin can clickjack the tap, and the host must strip the
+   * query via `history.replaceState` after reading it so a reload or shared link does not
+   * keep reopening the consent.
+   *
+   * Returns one of `"published"`, `"already-current"`, `"declined"`, `"unavailable"`.
+   * Sign-in is never failed; this method never throws.
    */
-  async ensureOwnerRegistryRecord(): Promise<"published" | "already-current" | "declined" | "unavailable"> {
+  async ensureOwnerRegistryRecord(options: { ignoreDismissed?: boolean } = {}): Promise<"published" | "already-current" | "declined" | "unavailable"> {
     const node = this._node;
     const session = node?.session;
     if (!node || !session || !session.address) return "already-current";
@@ -1526,6 +1537,7 @@ export class TinyCloudWeb {
         ...(this.config.registryCacheStore ? { registryCacheStore: this.config.registryCacheStore } : {}),
         ...(onConsent ? { onConsent } : {}),
         ...(onError ? { onError } : {}),
+        ...(options.ignoreDismissed ? { ignoreDismissed: true } : {}),
         resolveSigner: async () => {
           if (walletSigner) {
             return {

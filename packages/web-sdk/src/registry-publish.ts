@@ -79,6 +79,17 @@ export interface EnsureOwnerRegistryRecordOptions {
   now?: () => Date;
   /** Overridable for tests; defaults to the globalThis fetch used elsewhere in the SDK. */
   fetch?: typeof fetch;
+  /**
+   * Owner-started retry (TC-3547 Soren 13:26:53Z, Bobbie 13:27:14Z, Naomi 13:27:03Z):
+   * when the host observes the `finish-setup=registry` intent on the URL and the owner
+   * is signed in on a first-party page, call with this `true` to bypass the dismissed
+   * flag. The intent is a fixed token the host matches and strips (`replaceState`);
+   * NOTHING from the URL feeds the record. The record's node, origin, DID and contents
+   * still come only from the SDK's verified active node (Bobbie req. 1). The consent
+   * callback still runs; the verdict is still checked; `unregistered` is still the
+   * only publish path; overwrites are still refused (Bobbie req. 2).
+   */
+  ignoreDismissed?: boolean;
 }
 
 /**
@@ -104,7 +115,8 @@ export async function ensureOwnerRegistryRecord(options: EnsureOwnerRegistryReco
   try {
     // Was the publish declined before? The dismissed flag lives in the owner's own
     // account-registry KV, so both home.tinycloud.xyz and tinycloud.one read the same bit.
-    if (await readRegistryPublishDismissed(node)) return "declined";
+    // Owner-started retries (ignoreDismissed) skip this check; all other guards hold.
+    if (!options.ignoreDismissed && await readRegistryPublishDismissed(node)) return "declined";
 
     // Registry verdict decides whether to prompt at all. This is the same lookup NodeUserAuthorization
     // does during third-party sign-in; here we use its result to decide whether to publish.
@@ -114,6 +126,7 @@ export async function ensureOwnerRegistryRecord(options: EnsureOwnerRegistryReco
       ...(options.registrySequenceStore ? { sequenceStore: options.registrySequenceStore } : {}),
       ...(options.registryCacheStore ? { cacheStore: options.registryCacheStore } : {}),
       ...(options.registryVerdictCache ? { verdictCache: options.registryVerdictCache } : {}),
+      ...(options.fetch ? { fetch: options.fetch } : {}),
       dataRead: true,
     }).catch((error) => {
       onError?.(error);
