@@ -1435,7 +1435,7 @@ describe("CLI secrets commands", () => {
       });
 
       expect(streams).toContain(
-        'did:key:z6MkRecipient will be able to read every secret in the "shared" network, including secrets added later, until 2026-12-21T14:30:00.000Z.',
+        'did:key:z6MkRecipient can read every secret in the "shared" network, including secrets added later, until 2026-12-21 14:30 UTC.',
       );
       expect(recorded.outputs).toHaveLength(1);
       expect(recorded.outputs[0]).toMatchObject({ scope: "whole-network", networkId: descriptor.networkId });
@@ -1445,7 +1445,7 @@ describe("CLI secrets commands", () => {
       const streams = await grantStreams({ networkInitResult: makeDescriptor("urn:tinycloud:encryption:did:key:z6MkPrincipal:shared") });
 
       expect(streams).toContain(
-        'did:key:z6MkRecipient will be able to read every secret in the "shared" network, including secrets added later, for as long as this grant lasts.',
+        'did:key:z6MkRecipient can read every secret in the "shared" network, including secrets added later, for as long as this grant lasts.',
       );
     });
 
@@ -1463,7 +1463,7 @@ describe("CLI secrets commands", () => {
         stderrSpy.mockRestore();
       }
 
-      expect(streams).not.toContain("will be able to read");
+      expect(streams).not.toContain("can read every secret");
       expect(recorded.outputs).toEqual([]);
     });
   });

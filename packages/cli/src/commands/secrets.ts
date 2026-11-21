@@ -405,9 +405,9 @@ function scopedSecretLoginHint(profileName: string): string {
 /** What a network grant lets the recipient do, printed once the grant is made; `expiry` is the signed end, when the node-sdk reports one. */
 function networkGrantNotice(recipientDid: string, networkName: string, expiry: Date | undefined): string {
   const until = expiry instanceof Date && Number.isFinite(expiry.getTime())
-    ? `until ${expiry.toISOString()}`
+    ? `until ${expiry.toISOString().slice(0, 16).replace("T", " ")} UTC`
     : "for as long as this grant lasts";
-  return `${safeInline(recipientDid)} will be able to read every secret in the "${safeInline(networkName)}" network, including secrets added later, ${until}.`;
+  return `${safeInline(recipientDid)} can read every secret in the "${safeInline(networkName)}" network, including secrets added later, ${until}.`;
 }
 
 
