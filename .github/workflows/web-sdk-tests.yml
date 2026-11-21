@@ -18,8 +18,8 @@ permissions:
   pull-requests: read # the gate step lists PR files via the API
 
 concurrency:
-  group: web-sdk-tests-${{ github.ref }}
-  cancel-in-progress: true
+  group: web-sdk-tests-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   web-sdk-tests:

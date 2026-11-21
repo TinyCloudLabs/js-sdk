@@ -26,8 +26,8 @@ permissions:
   contents: read
 
 concurrency:
-  group: workspace-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: workspace-${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   workspace:
