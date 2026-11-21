@@ -1855,7 +1855,7 @@ export function registerSecretsCommand(
           actions: ["decrypt"],
         };
         const result = await withSpinner(
-          `Granting ${recipientDid} access to read secrets...`,
+          `Granting ${safeInline(recipientDid)} access to read secrets...`,
           () => node.delegateTo(recipientDid, [permission]),
         );
         process.stderr.write(networkGrantNotice(recipientDid, networkName, result.delegation.expiry) + "\n");
