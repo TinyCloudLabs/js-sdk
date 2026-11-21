@@ -6,7 +6,7 @@ import { readFeedCardMd } from "@tinycloud/sdk-services/feed";
 import type { FeedReadDatabase } from "@tinycloud/sdk-services/feed";
 import { sqliteHandle, unwrap } from "../../../sdk-services/src/feed/sqlite.test-helper";
 import { CARD_MD_DEFAULT, CARD_MD_DEFAULT_VERSION } from "./card-md-default.js";
-import { cardMdChangedText, cardMdOrDefaultForPublish, copyCardMdToAgent, markDefault } from "./card-md.js";
+import { cardMdChangedText, cardMdOrDefaultForPublish, markDefault, seedDefaultCardMd } from "./card-md.js";
 
 const directories: string[] = [];
 afterEach(async () => { await Promise.all(directories.splice(0).map((dir) => rm(dir, { recursive: true, force: true }))); });
@@ -25,28 +25,11 @@ const row = (text: string, version: string): FeedReadDatabase => ({
   query: async () => ({ ok: true, data: { columns: ["text", "version", "updated_at"], rows: [[text, version, "2026-11-19T01:00:00Z"]] as never, rowCount: 1 } }),
 });
 
-test("connecting an agent copies the owner's card.md into its response database, and a later copy of the same version changes nothing", async () => {
-  const owner = await ownerWith("Keep cards short.", "aaaaaaaaaaaa");
-  const agent = sqliteHandle();
-  try {
-    expect(await copyCardMdToAgent(owner.handle, agent.handle)).toBe(true);
-    const copied = unwrap(await readFeedCardMd(agent.handle));
-    expect(copied).toEqual({ text: "Keep cards short.", version: "aaaaaaaaaaaa", updatedAt: "2026-11-19T01:00:00Z" });
-    // The Feed's own copy later is the same upsert: same version, no change.
-    expect(await copyCardMdToAgent(owner.handle, agent.handle)).toBe(true);
-    expect(unwrap(await readFeedCardMd(agent.handle))).toEqual(copied);
-    // A newer owner version replaces it.
-    unwrap(await owner.handle.execute("UPDATE card_md SET text = ?, version = ? WHERE id = 1", ["Keep cards very short.", "bbbbbbbbbbbb"]));
-    await copyCardMdToAgent(owner.handle, agent.handle);
-    expect(unwrap(await readFeedCardMd(agent.handle))?.version).toBe("bbbbbbbbbbbb");
-  } finally { owner.close(); agent.close(); }
-});
-
-test("an agent connected while the owner has no card.md (the Feed is closed) still gets one: the bundled default, marked default", async () => {
+test("an agent connected while the Feed is closed still gets a card.md: the bundled default, marked default", async () => {
   const agent = sqliteHandle();
   const dir = await profileDir();
   try {
-    expect(await copyCardMdToAgent(noTable, agent.handle)).toBe(true);
+    expect(await seedDefaultCardMd(agent.handle)).toBe(true);
     const stored = unwrap(await readFeedCardMd(agent.handle));
     expect(stored).toMatchObject({ text: CARD_MD_DEFAULT, version: CARD_MD_DEFAULT_VERSION });
     // Read back through the agent's own path, the copy is the default, not an owner's card.md.
@@ -57,28 +40,11 @@ test("an agent connected while the owner has no card.md (the Feed is closed) sti
   } finally { agent.close(); }
 });
 
-test("the default copy never replaces a card.md the agent's database already has, and the owner's card.md replaces the default", async () => {
-  const agent = sqliteHandle();
-  const owner = await ownerWith("Keep cards short.", "aaaaaaaaaaaa");
+test("seeding the default never replaces a card.md the agent's database already has", async () => {
+  const agent = await ownerWith("Keep cards short.", "aaaaaaaaaaaa");
   try {
-    expect(await copyCardMdToAgent(owner.handle, agent.handle)).toBe(true);
-    expect(await copyCardMdToAgent(noTable, agent.handle)).toBe(true);
-    expect(unwrap(await readFeedCardMd(agent.handle))?.version).toBe("aaaaaaaaaaaa");
-    const fresh = sqliteHandle();
-    try {
-      await copyCardMdToAgent(noTable, fresh.handle);
-      await copyCardMdToAgent(owner.handle, fresh.handle);
-      expect(unwrap(await readFeedCardMd(fresh.handle))).toMatchObject({ text: "Keep cards short.", version: "aaaaaaaaaaaa" });
-    } finally { fresh.close(); }
-  } finally { owner.close(); agent.close(); }
-});
-
-test("an owner's card.md that cannot be read copies nothing, and never stops the connection", async () => {
-  const agent = sqliteHandle();
-  try {
-    expect(await copyCardMdToAgent(refused, agent.handle)).toBe(false);
-    const tables = unwrap(await agent.handle.query<string>("SELECT name FROM sqlite_master WHERE name = 'card_md'"));
-    expect(tables.rowCount).toBe(0);
+    expect(await seedDefaultCardMd(agent.handle)).toBe(true);
+    expect(unwrap(await readFeedCardMd(agent.handle))).toEqual({ text: "Keep cards short.", version: "aaaaaaaaaaaa", updatedAt: "2026-11-19T01:00:00Z" });
   } finally { agent.close(); }
 });
 

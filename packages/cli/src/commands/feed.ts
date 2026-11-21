@@ -23,7 +23,7 @@ import { disconnectFeedAgent } from "../feed/disconnect.js";
 import { revokeIssuedDelegation } from "./delegation.js";
 import { exportFeedRawSnapshot } from "../feed/export.js";
 import { importFeedPreparedBundle } from "../feed/import.js";
-import { CARD_MD_RESOURCE, DEFAULT_CARD_MD, cardMdChangedText, cardMdOrDefaultForPublish, copyCardMdToAgent, markDefault, rememberCardMdVersion } from "../feed/card-md.js";
+import { DEFAULT_CARD_MD, cardMdChangedText, cardMdOrDefaultForPublish, markDefault, rememberCardMdVersion, seedDefaultCardMd } from "../feed/card-md.js";
 
 const FEED_PREFIX = "xyz.tinycloud.tinychat/feed";
 const REGISTRY = "xyz.tinycloud.tinychat/home_feed";
@@ -153,8 +153,8 @@ slash prefix and output are explicit; source get/sync grants are separate from f
         };
         const delegation = await connectFeedAgent(sql.db(REGISTRY), source, async () => {
           value(await initializeFeedDatabases({ output, responses }));
-          // The agent has the owner's card.md from its first read, not from the Feed's next open.
-          await copyCardMdToAgent(sql.db(CARD_MD_RESOURCE), responses);
+          // The owner's card.md is outside the Feed's namespace, so the agent starts from the default until the owner's Feed delivers it.
+          await seedDefaultCardMd(responses);
           const expiry = parseExpiry(options.expiry).getTime() - Date.now();
           const { delegation } = await node.delegateTo(did, feedAgentPermissions(space, resources), { expiry, requireActivation: true });
           return delegation;
