@@ -292,6 +292,29 @@ export interface Config extends ClientConfig {
   shareReceiver?: ShareReceiverServiceOptions;
   /** Floating button, panel, and toasts. `false` creates no host, button, toasts, or listeners. See {@link UiConfig}. */
   ui?: UiConfig | false;
+
+  /**
+   * TC-3547: host-rendered consent for publishing the owner's registry location record
+   * at the first first-party sign-in. The SDK calls this with a plain-words preview of
+   * exactly what will be published (owner DID, node DID + origin, primary space URI);
+   * returning `true` triggers one owner signature (wallet `personal_sign` or OpenKey
+   * `signMessage`) and one PUT to the registry. Returning `false` persists a dismissed
+   * flag in the account-registry KV so the Home banner stays dismissed across sign-ins.
+   * Omitted: the automatic publish never runs; sign-in is unaffected.
+   */
+  onRegistryPublishConsent?: (preview: {
+    readonly subject: string;
+    readonly nodeDid: string;
+    readonly nodeOrigin: string;
+    readonly space: string;
+  }) => Promise<boolean>;
+  /**
+   * TC-3547: notified on every error from the automatic publish path (verdict lookup,
+   * signer resolution, consent callback throws, registry 4xx/5xx). Hosts can fold it
+   * into their own telemetry. Sign-in is not failed; the publish outcome string carries
+   * the branch (`"unavailable"` / `"declined"`).
+   */
+  onRegistryPublishError?: (error: unknown) => void;
 }
 
 /**
@@ -1448,6 +1471,13 @@ export class TinyCloudWeb {
     if (!session) throw new Error("Sign-in completed but no session available");
     // Explicit logout never permits an older tab's persisted proof to satisfy the next sign-in.
     if (!this.signOutCleanupFailed && this.signOutInFlight === 0) this.persistedRestoreBlocked = false;
+    // TC-3547: publish the owner's registry location record once, if the owner's did:pkh
+    // is `unregistered`. Fire-and-forget so sign-in returns immediately; the publish
+    // triggers a host-rendered consent modal (onRegistryPublishConsent) and one owner
+    // signature, both optional.
+    if (this.bootstrapSignInPolicy().autoBootstrapAccount && session.address) {
+      void this.ensureOwnerRegistryRecord().catch((error) => this.config.onRegistryPublishError?.(error));
+    }
     return {
       address: session.address,
       walletAddress: session.address,
@@ -1457,6 +1487,73 @@ export class TinyCloudWeb {
       signature: session.signature,
     };
   };
+
+  /**
+   * TC-3547: publish the owner's registry location record once, if the registry verdict
+   * is `unregistered` and the host supplied an `onRegistryPublishConsent` callback. Runs
+   * automatically at the end of a first-party sign-in; also safe to call from a "finish
+   * setup" retry button. Returns one of `"published"`, `"already-current"`, `"declined"`,
+   * `"unavailable"`. Sign-in is never failed; this method never throws.
+   */
+  async ensureOwnerRegistryRecord(): Promise<"published" | "already-current" | "declined" | "unavailable"> {
+    const node = this._node;
+    const session = node?.session;
+    if (!node || !session || !session.address) return "already-current";
+    const subject = node.did;
+    if (!subject.startsWith("did:pkh:")) return "already-current";
+    const walletSigner = this.walletSigner;
+    const openkey = this.config.openkey;
+    // tcw.ts stays clear of a static import on `@tinycloud/sdk-core`; the OpenKey client wears
+    // the library's OpenKeyAuthorizeTinyCloud type, and the owner-message `signMessage` entry
+    // is structurally present on the hosted client but not visible through that type. The same
+    // intersection-cast pattern is already used at the runtime-signer boundary above.
+    const openkeyMessageClient: (OpenKeyAuthorizeTinyCloud & OpenKeyMessageSigner) | undefined =
+      openkey ? openkey.client as (OpenKeyAuthorizeTinyCloud & OpenKeyMessageSigner) : undefined;
+    const onConsent = this.config.onRegistryPublishConsent;
+    const onError = this.config.onRegistryPublishError;
+    try {
+      // Dynamic import: the TC-858 root-chunk ceiling on @tinycloud/web-sdk is measured in
+      // CI; keeping registry-publish.ts off the root chunk avoids a size-ledger row entirely.
+      // The js-sdk lead recommended this shape in his 13:07:23Z note on TC-3547. The specifier
+      // is a literal, so bundlers still see the dependency.
+      const { ensureOwnerRegistryRecord } = await import("../registry-publish");
+      return await ensureOwnerRegistryRecord({
+        node,
+        subject,
+        ...(this.config.tinycloudRegistryUrl !== undefined ? { registryUrl: this.config.tinycloudRegistryUrl } : {}),
+        ...(this.config.registryChainId !== undefined ? { registryChainId: this.config.registryChainId } : {}),
+        ...(this.config.registrySequenceStore ? { registrySequenceStore: this.config.registrySequenceStore } : {}),
+        ...(this.config.registryCacheStore ? { registryCacheStore: this.config.registryCacheStore } : {}),
+        ...(onConsent ? { onConsent } : {}),
+        ...(onError ? { onError } : {}),
+        resolveSigner: async () => {
+          if (walletSigner) {
+            return {
+              subject,
+              signMessage: (message) => walletSigner.signMessage(message),
+            };
+          }
+          if (openkeyMessageClient && typeof openkeyMessageClient.signMessage === "function") {
+            const account = node.address;
+            if (!account) return undefined;
+            const mode = openkey?.mode ?? "popup";
+            const keyId = await resolveOpenKeySigningKey(openkeyMessageClient, account, mode, () => {});
+            return {
+              subject,
+              signMessage: async (message) => {
+                const { signature } = await openkeyMessageClient.signMessage!({ message, keyId }, { mode });
+                return signature;
+              },
+            };
+          }
+          return undefined;
+        },
+      });
+    } catch (error) {
+      onError?.(error);
+      return "unavailable";
+    }
+  }
 
   /**
    * Sign out: end the session on this instance and clear the persisted
