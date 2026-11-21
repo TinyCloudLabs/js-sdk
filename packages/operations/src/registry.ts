@@ -6,6 +6,7 @@ import { knowledgeOperationDefinitions } from "./operations/knowledge.js";
 import { readOperationDefinitions } from "./operations/read.js";
 import { readScopeOperationDefinitions } from "./operations/read-scope.js";
 import { secretsGetOperationDefinitions } from "./operations/secrets-get.js";
+import { shareEmailOperationDefinitions } from "./operations/share-email.js";
 import { secretsStatusOperationDefinitions } from "./operations/secrets-status.js";
 import { sqlOperationDefinitions } from "./operations/sql.js";
 import { statusOperationDefinitions } from "./operations/status.js";
@@ -34,6 +35,7 @@ function registeredOperationDefinitions(): readonly OperationDefinition<any, any
     ...readScopeOperationDefinitions,
     ...readOperationDefinitions,
     ...explorationOperationDefinitions,
+    ...shareEmailOperationDefinitions,
     ...appsOperationDefinitions,
     ...sqlOperationDefinitions,
     ...secretsGetOperationDefinitions,
