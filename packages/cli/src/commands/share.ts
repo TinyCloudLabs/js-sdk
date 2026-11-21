@@ -1,4 +1,5 @@
 import { Command, Option } from "commander";
+import { readFile } from "node:fs/promises";
 import { CLI_NAME } from "@tinycloud/operations/cli-name";
 import {
   ArtifactError,
@@ -223,6 +224,11 @@ export function shareCliError(error: unknown, operation: "publish" | "notify" = 
     if (failure.kind === "share-service-unavailable") {
       const outcome = operation === "publish" ? "nothing was shared" : "no invitation was sent";
       return new CLIError("SHARE_SERVICE_UNAVAILABLE", `the Share service at ${failure.origin} could not be reached, so ${outcome}; try again shortly`, 4);
+    }
+    if (failure.kind === "email-issuer-unavailable") {
+      return new CLIError("UNAVAILABLE", failure.reason === "mismatch"
+        ? "the OpenCredentials email issuer doesn't match the issuer this CLI trusts, so nothing was shared"
+        : "couldn't reach the OpenCredentials email issuer, so nothing was shared; try again shortly", 4);
     }
     if (failure.kind === "node-info-unavailable") {
       const outcome = operation === "publish" ? "nothing was shared and no invitation was sent" : "no invitation was sent";
@@ -462,10 +468,10 @@ export function registerShareCommand(program: Command): void {
   share.command("publish <files...>")
     .description("Publish one or more bounded files as a Share, or a folder with an index.html as one self-contained page (anyone links only)")
     .option("--name <filename>", "Filename for stdin input, or the published .html name of a folder")
-    .option("--to <target>", "Share target", "anyone")
-    .option("--credential-descriptor <path>", "Email credential flow descriptor JSON")
-    .option("--issuer-did <did>", "Trusted email credential issuer DID")
-    .option("--issuer-kid <kid>", "Trusted email credential issuer key ID")
+    .option("--to <target>", "Share target: anyone (a link) or an email address (person@example.com), which only the person who proves that address can open", "anyone")
+    .option("--credential-descriptor <path>", "Use this email credential descriptor (JSON file) instead of the built-in OpenCredentials issuer; needs --issuer-did and --issuer-kid")
+    .option("--issuer-did <did>", "Issuer DID of the --credential-descriptor")
+    .option("--issuer-kid <kid>", "Issuer key ID of the --credential-descriptor")
     .option("--notify", "Email an exact-email recipient, or a domain mailbox on node 1.17.3+")
     .option("--notify-to <address>", "Mailbox to invite for --to domain:<name> --notify (node 1.17.3+)")
     .option("--expires <duration>", "Share lifetime")
@@ -490,15 +496,27 @@ export function registerShareCommand(program: Command): void {
         // with link-as-delegation (TC-1428 ruling).
         if (options.ongoing === true) throw new CLIError("UNSUPPORTED_TARGET", ONGOING_UNAVAILABLE, 2);
         const target = parseShareTarget(options.to);
-        if (target.kind === "email") throw new CLIError("UNAVAILABLE", "email-addressed shares are not available in this release; nothing was shared", 4);
         const maxBytes = byteLimit(options.maxBytes);
         const ceiling = shareCeiling(target);
         if (files.length === 0 || (files.includes("-") && files.length > 1)) throw new CLIError("INVALID_ARGUMENT", "stdin must be the only publish input", 2);
         const name = files.length === 1 ? options.name : undefined;
         const actions = requestedActions(options.action);
         if (options.notify === true && !actions.includes("read")) throw new CLIError("INVALID_ARGUMENT", "--notify requires the read action; nothing was shared", 2);
-        if (options.credentialDescriptor || options.issuerDid || options.issuerKid) {
+        const credentialOptions = [options.credentialDescriptor, options.issuerDid, options.issuerKid];
+        if (target.kind !== "email" && credentialOptions.some(Boolean)) {
           throw new CLIError("INVALID_ARGUMENT", "credential options require an exact email target", 2);
+        }
+        // An email share is addressed to the built-in OpenCredentials issuer unless all three options name another one.
+        if (target.kind === "email" && credentialOptions.some(Boolean) && !credentialOptions.every(Boolean)) {
+          throw new CLIError("INVALID_ARGUMENT", "--credential-descriptor, --issuer-did and --issuer-kid go together; give all three, or none to use the built-in OpenCredentials issuer", 2);
+        }
+        let credentialDescriptor: unknown;
+        if (target.kind === "email" && options.credentialDescriptor) {
+          try {
+            credentialDescriptor = JSON.parse(await readFile(options.credentialDescriptor, "utf8")) as unknown;
+          } catch {
+            throw new CLIError("INVALID_ARGUMENT", "--credential-descriptor must be a readable JSON file; nothing was shared", 2);
+          }
         }
         // A folder with an index.html becomes one self-contained page for an anyone-with-the-link share. Addressed and
         // --prefix publication of a folder is not offered: a directory falls through to the file reader and is refused.
@@ -532,7 +550,8 @@ export function registerShareCommand(program: Command): void {
           throw new CLIError("INVALID_ARGUMENT", "--notify-to requires --to domain:<name> --notify", 2);
         }
         let notifyRecipient: string | undefined;
-        if (options.notify === true && target.kind === "emailDomain") {
+        if (options.notify === true && target.kind === "email") notifyRecipient = target.address;
+        else if (options.notify === true && target.kind === "emailDomain") {
           const mailbox = options.notifyTo === undefined ? undefined : canonicalMailbox(options.notifyTo);
           if (mailbox === undefined || mailbox.domain !== target.domain) {
             throw new CLIError("INVALID_ARGUMENT", "--to domain:<name> --notify requires --notify-to <email> at that exact domain (node 1.17.3+)", 2);
@@ -559,6 +578,7 @@ export function registerShareCommand(program: Command): void {
           origin: options.viewerOrigin,
           ...(maxBytes === undefined ? {} : { maxBytes }),
           notify: options.notify === true,
+          ...(credentialDescriptor === undefined ? {} : { credentialDescriptor, issuerDid: options.issuerDid, issuerKid: options.issuerKid }),
           // The artifact request rides on the adapter call rather than through `publishTargetShare`, whose code is part of
           // the browser bundles (the web-sdk size ceiling counts every byte it carries).
           targetAdapter: artifact === undefined || shareServices.targetAdapter === undefined

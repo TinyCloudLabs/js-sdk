@@ -3,6 +3,7 @@ import { kvArtifactStore } from "./artifact-store.js";
 import { createShareLinks, type ShareLinks } from "./short-links.js";
 import type { EmailInviteApprover } from "./invite-approval.js";
 import { publishEmailShareV3 } from "@tinycloud/node-sdk/share-publish";
+import { EmailProofError, emailProofDescriptor } from "@tinycloud/node-sdk/credentials";
 import { artifactSpaceNotReady, failIfSpaceNotReady } from "./space-not-ready.js";
 import { POLICY_ROOT_MAX_LIFETIME_SECONDS } from "@tinycloud/share-envelope";
 import { ShareHistoryReadError, ShareHistoryRetryError, ShareHistoryUnreadableError, SharePublishAuthorityError } from "./errors.js";
@@ -747,9 +748,25 @@ export function createShareAuthorityAdapters(input: {
     // An addressed share's policy ceiling includes decrypt on the owner's encryption network, which a
     // session-only sign-in (e.g. builtin:share-publishing) deliberately lacks. Refuse before any Share
     // or node request, registry write or upload. A signer-backed (local-key) owner has full authority.
-    if (targetInput.target.kind === "email" &&
-        (targetInput.credentialDescriptor === undefined || targetInput.issuerDid === undefined || targetInput.issuerKid === undefined)) {
-      throw new TypeError("email credential descriptor and issuer are required");
+    // An email share names the credential its recipient must present. With no override it is the built-in OpenCredentials issuer:
+    // the descriptor comes from its witness, pinned to the issuer and descriptor digest this SDK trusts. Resolved before anything is
+    // approved, stored or registered, so a failure leaves nothing behind.
+    let emailCredential: { readonly descriptor: unknown; readonly issuerDid: string; readonly issuerKid: string } | undefined;
+    if (targetInput.target.kind === "email") {
+      if (targetInput.credentialDescriptor === undefined && targetInput.issuerDid === undefined && targetInput.issuerKid === undefined) {
+        try {
+          const descriptor = await emailProofDescriptor(targetInput.target.address, { fetch: fetchFn });
+          emailCredential = { descriptor, issuerDid: descriptor.issuer.did, issuerKid: descriptor.issuer.kid };
+        } catch (error) {
+          // PROFILE_UNAVAILABLE is the witness answering with a catalog entry that is not the pinned issuer or descriptor.
+          const mismatch = error instanceof EmailProofError && error.code === "PROFILE_UNAVAILABLE";
+          throw new SharePublishAuthorityError({ kind: "email-issuer-unavailable", reason: mismatch ? "mismatch" : "unreachable" }, { cause: error });
+        }
+      } else if (targetInput.credentialDescriptor === undefined || targetInput.issuerDid === undefined || targetInput.issuerKid === undefined) {
+        throw new TypeError("email credential descriptor and issuer are required together");
+      } else {
+        emailCredential = { descriptor: targetInput.credentialDescriptor, issuerDid: targetInput.issuerDid, issuerKid: targetInput.issuerKid };
+      }
     }
     const addressedEncryptionNetwork = targetInput.target.kind === "bearer" ? undefined : targetInput.target.kind === "email"
       ? node.getDefaultEncryptionNetworkId() : node.getEncryptionNetworkIdForSpace(ownerSpaceId);
@@ -1047,8 +1064,8 @@ export function createShareAuthorityAdapters(input: {
     try {
       published = prepared.target.kind === "email"
         ? await publishEmailShareV3({ ...addressedOptions, target: prepared.target,
-          credentialDescriptor: targetInput.credentialDescriptor,
-          issuerDid: targetInput.issuerDid!, issuerKid: targetInput.issuerKid! })
+          credentialDescriptor: emailCredential!.descriptor,
+          issuerDid: emailCredential!.issuerDid, issuerKid: emailCredential!.issuerKid })
         : await publishAddressedShare(addressedOptions);
     } catch (error) {
       if (!(error instanceof AddressedShareOverLimitError)) throw error;

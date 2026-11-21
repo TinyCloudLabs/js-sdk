@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, mock } from "bun:test";
 import { readFile } from "node:fs/promises";
 import type { TargetPublishInput } from "@tinycloud/share-sdk";
+import { canonicalDigest } from "@tinycloud/sdk-core";
 import type { EmailInviteApprover } from "./invite-approval.js";
 
 const ownerDid = "did:pkh:eip155:1:0x1111111111111111111111111111111111111111";
@@ -73,6 +74,45 @@ describe("per-invitation approval for a session-only email share", () => {
     expect(error).toBe(stop);
     expect(asked).toEqual([{ node: undefined, profile: "test", recipientEmail: "owner@example.com", subjectName: "note.md", subjectKind: "file", accessExpiresAt: EXPIRES, contentSha256: undefined }]);
     expect(events).toEqual(["registry record", `encrypt share/${APPROVED_ID}`]);
+  });
+
+  it("resolves the built-in OpenCredentials issuer before asking for the approval when no credential options are given", async () => {
+    const bare = { ...input, credentialDescriptor: undefined, issuerDid: undefined, issuerKid: undefined } as TargetPublishInput;
+    const catalog = {
+      type: "tinycloud.credentials/catalog/v1", protocol: "tinycloud.credentials/acquisition/v1", catalogVersion: 1,
+      profiles: [{ supported: true, enabled: true, readiness: "ready", descriptor, descriptorDigest: await canonicalDigest(descriptor as Parameters<typeof canonicalDigest>[0]) }],
+    };
+    const fetchFn = (async (url: string | URL | Request) => {
+      requests.push(String(url));
+      if (String(url) === "https://witness.credentials.org/.well-known/opencredentials") return Response.json(catalog);
+      return Response.json({ version: "tinycloud.share/config-v2", shareOrigin: "https://share.example", registryOrigin: "https://registry.example", credentialsOrigin: "https://credentials.example" });
+    }) as unknown as typeof globalThis.fetch;
+    let askedAfter: string[] | undefined;
+    const error = await createShareAuthorityAdapters({
+      origin: "https://share.example", profileName: async () => "test", fetchFn,
+      approveEmailInviteKey: async (request) => {
+        askedAfter = [...requests];
+        return { shareId: APPROVED_ID, accessExpiresAt: request.accessExpiresAt.toISOString(), resumed: false };
+      },
+    }).targetAdapter.publish(bare).then(() => undefined, (caught: unknown) => caught);
+    expect(error).toBe(stop);
+    expect(askedAfter).toContain("https://witness.credentials.org/.well-known/opencredentials");
+    expect(events).toEqual(["registry record", `encrypt share/${APPROVED_ID}`]);
+  });
+
+  it("stops before asking for any approval when the built-in issuer cannot be reached", async () => {
+    let asked = 0;
+    const bare = { ...input, credentialDescriptor: undefined, issuerDid: undefined, issuerKid: undefined } as TargetPublishInput;
+    const fetchFn = (async (url: string | URL | Request) => {
+      if (String(url).startsWith("https://witness.credentials.org")) throw new TypeError("fetch failed");
+      return Response.json({ version: "tinycloud.share/config-v2", shareOrigin: "https://share.example", registryOrigin: "https://registry.example", credentialsOrigin: "https://credentials.example" });
+    }) as unknown as typeof globalThis.fetch;
+    await expect(createShareAuthorityAdapters({
+      origin: "https://share.example", profileName: async () => "test", fetchFn,
+      approveEmailInviteKey: (async () => { asked += 1; return { shareId: APPROVED_ID, accessExpiresAt: "", resumed: false }; }) as never,
+    }).targetAdapter.publish(bare)).rejects.toMatchObject({ failure: { kind: "email-issuer-unavailable" } });
+    expect(asked).toBe(0);
+    expect(events).toEqual([]);
   });
 
   it("refuses a file that would stay readable longer than the 31-day policy root limit before any request or approval, and accepts 31 days minus 30 seconds", async () => {

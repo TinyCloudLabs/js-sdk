@@ -118,9 +118,8 @@ describe("tc share publish ./site/", () => {
     }
     for (const args of [["--to", "email:alice@example.com"], ["--prefix", "--to", "email:alice@example.com"], ["--prefix"], ["--to", "domain:example.com"]]) {
       const refused = await run([site, ...args, ...(args.includes("email:alice@example.com") ? emailArgs : [])]);
-      const exactEmail = args.includes("email:alice@example.com");
-      expect(errorOf(refused.stderr).code, args.join(" ")).toBe(exactEmail ? "UNAVAILABLE" : "MAX_BYTES_EXCEEDED");
-      expect(refused.exitCode).toBe(exactEmail ? 4 : 7);
+      expect(errorOf(refused.stderr).code, args.join(" ")).toBe("MAX_BYTES_EXCEEDED");
+      expect(refused.exitCode).toBe(7);
     }
     expect(published).toHaveLength(0);
   });
