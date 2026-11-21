@@ -1,5 +1,9 @@
 import { expect, test } from "bun:test";
 import { privateKeyToAccount, generatePrivateKey, type PrivateKeyAccount } from "viem/accounts";
+// lookupOwnerRegistryVerdict is what the TC-2931 gate consults; the acceptance test below
+// asserts a publish moves the verdict from `unregistered` to `registered`, which is the
+// precise observable the third-party sign-in gate checks.
+import { lookupOwnerRegistryVerdict } from "@tinycloud/sdk-core";
 import { ed25519 } from "@noble/curves/ed25519";
 import { base58btc } from "multiformats/bases/base58";
 import type { TinyCloudNode } from "@tinycloud/node-sdk";
@@ -235,4 +239,24 @@ test("primary space missing → unavailable, consent never prompted", async () =
   });
   expect(outcome).toBe("unavailable");
   expect(consented).toBe(false);
+});
+
+test("TC-3547 acceptance: after a successful first-party publish, the owner's verdict is `registered` so the TC-2931 third-party gate no longer refuses", async () => {
+  const owner = makeWalletOwner();
+  const fetch = makeMockRegistry();
+  const node = makeFakeNode({ subject: owner.subject, space: owner.space, accountSpaceId: ACCOUNT_SPACE });
+  // Precondition: the verdict is `unregistered` — exactly the state TC-2931 refuses third-party on.
+  const before = await lookupOwnerRegistryVerdict(owner.subject, { registryUrl: REGISTRY_URL, fetch, dataRead: true });
+  expect(before.status).toBe("unregistered");
+  const outcome = await ensureOwnerRegistryRecord({
+    node, subject: owner.subject, registryUrl: REGISTRY_URL, fetch,
+    onConsent: async () => true,
+    resolveSigner: async () => makeSigner(owner.subject, owner.account),
+  });
+  expect(outcome).toBe("published");
+  // Postcondition: the same verdict lookup (the one `NodeUserAuthorization.resolveResourceDestinations` uses)
+  // now returns `registered`, so the gate's `if (this.requireExistingAccount && verdict.status === "unregistered")`
+  // branch at NodeUserAuthorization.ts:757-764 no longer fires. This is the direct TC-3547 acceptance observable.
+  const after = await lookupOwnerRegistryVerdict(owner.subject, { registryUrl: REGISTRY_URL, fetch, dataRead: true });
+  expect(after.status).toBe("registered");
 });
