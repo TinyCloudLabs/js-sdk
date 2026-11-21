@@ -517,7 +517,7 @@ evaluate legacy expiry, restore state, or dispatch pending responses.
 | `tinycloud secrets` | Manage network-encrypted secrets |
 | `tinycloud secrets network show` | Show a secrets decryption network |
 | `tinycloud secrets network init` | Create or fetch the default secrets network |
-| `tinycloud secrets network grant` | Grant `tinycloud.encryption/decrypt` on a secrets network |
+| `tinycloud secrets network grant` | Let someone read every secret in an encryption network (`tinycloud.encryption/decrypt` on the whole network) |
 | `tinycloud secrets run` | Run a command with secrets in its environment |
 | `tinycloud secrets request` | Print a Secret Manager link asking the owner to add secrets (offline) |
 | `tinycloud secrets wait` | Wait until secrets exist and are readable (never signs in; needs a stored session; exit 8 pending, 130 interrupted) |
@@ -530,8 +530,9 @@ evaluate legacy expiry, restore state, or dispatch pending responses.
 Secret names are env-style uppercase identifiers such as `FIREFLIES_API_KEY`.
 `tinycloud secrets network show` accepts either a short network name or a full
 `urn:tinycloud:encryption:<ownerDid>:<network>` identifier. `tinycloud secrets
-network grant` takes the short name, resolves the network, and grants
-`tinycloud.encryption/decrypt`.
+network grant` takes the short network name, resolves the network, and grants
+`tinycloud.encryption/decrypt` on the whole network: every secret in it,
+including secrets added later. The JSON output carries `"scope":"whole-network"`.
 
 `tinycloud apps install` re-creates the pinned views on every run (reported as
 `viewsRecreated`). Knowledge notes whose bytes differ from the pinned version
