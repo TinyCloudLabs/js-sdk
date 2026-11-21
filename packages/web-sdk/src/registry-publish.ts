@@ -26,8 +26,7 @@ import {
 import { publishLocationRecordV2 } from "@tinycloud/sdk-core/registry-publication";
 
 import type { TinyCloudNode } from "@tinycloud/node-sdk";
-
-import { readRegistryPublishDismissed, writeRegistryPublishDismissed } from "./registry-publish-dismissed";
+import { readRegistryPublishDismissed, writeRegistryPublishDismissed, type DismissedFlagStorage } from "./registry-publish-dismissed";
 
 /**
  * Payload preview given to the host app's consent callback. The host renders it in plain
@@ -88,6 +87,12 @@ export interface EnsureOwnerRegistryRecordOptions {
   /** Overridable for tests; defaults to the globalThis fetch used elsewhere in the SDK. */
   fetch?: typeof fetch;
   /**
+   * Overridable for tests; defaults to `globalThis.localStorage`. SSR / private-mode /
+   * cross-origin denial automatically fall through to "no storage" → fail-open ("not
+   * dismissed"), per Naomi 14:20:13Z: localStorage keyed by `did:pkh`, per-device.
+   */
+  dismissedStorage?: DismissedFlagStorage;
+  /**
    * Owner-started retry (TC-3547 Soren 13:26:53Z, Bobbie 13:27:14Z, Naomi 13:27:03Z):
    * when the host observes the `finish-setup=registry` intent on the URL and the owner
    * is signed in on a first-party page, call with this `true` to bypass the dismissed
@@ -129,7 +134,7 @@ export async function ensureOwnerRegistryRecord(options: EnsureOwnerRegistryReco
     // Was the publish declined before? The dismissed flag lives in the owner's own
     // account-registry KV, so both home.tinycloud.xyz and tinycloud.one read the same bit.
     // Owner-started retries (ignoreDismissed) skip this check; all other guards hold.
-    if (!options.ignoreDismissed && await readRegistryPublishDismissed(node)) return "declined";
+    if (!options.ignoreDismissed && readRegistryPublishDismissed(subject, options.dismissedStorage)) return "declined";
     assertCurrent?.();
 
     // Registry verdict decides whether to prompt at all. This is the same lookup NodeUserAuthorization
@@ -182,7 +187,10 @@ export async function ensureOwnerRegistryRecord(options: EnsureOwnerRegistryReco
     // and we must NOT proceed to sign/publish on behalf of the old account.
     try { assertCurrent?.(); } catch (error) { onError?.(error); return "unavailable"; }
     if (!approved) {
-      await writeRegistryPublishDismissed(node).catch((error) => onError?.(error));
+      // Bobbie 14:20:15Z: assertCurrent runs immediately before the flag write so a stale
+      // decline after sign-out never persists for the (possibly-new) current account.
+      try { assertCurrent?.(); } catch (error) { onError?.(error); return "unavailable"; }
+      writeRegistryPublishDismissed(subject, options.dismissedStorage);
       return "declined";
     }
 

@@ -8,6 +8,17 @@ import { ed25519 } from "@noble/curves/ed25519";
 import { base58btc } from "multiformats/bases/base58";
 import type { TinyCloudNode } from "@tinycloud/node-sdk";
 import { ensureOwnerRegistryRecord, type RegistryPublishPreview } from "./registry-publish";
+import { dismissedStorageKey, type DismissedFlagStorage } from "./registry-publish-dismissed";
+
+function memoryDismissedStorage(): DismissedFlagStorage & { raw: Map<string, string> } {
+  const raw = new Map<string, string>();
+  return {
+    raw,
+    getItem(key) { return raw.has(key) ? raw.get(key)! : null; },
+    setItem(key, value) { raw.set(key, value); },
+    removeItem(key) { raw.delete(key); },
+  };
+}
 
 // Shared test fixtures --------------------------------------------------------
 
@@ -34,17 +45,36 @@ interface FakeNodeOptions {
   space: string;
   accountSpaceId?: string | undefined;
   activeNodeOverride?: { nodeDid: string; origin: string };
-  dismissedFlag?: boolean;
 }
 
-function makeFakeNode(options: FakeNodeOptions): TinyCloudNode {
+interface FakeNodeHandle {
+  node: TinyCloudNode;
+  kvWrites: Array<{ space: string; key: string }>;
+}
+
+/** A node fake whose account-registry KV REFUSES every write except the subset
+ *  ACCOUNT_MANIFEST_PERMISSIONS actually grants. Mirrors a real node's recap
+ *  enforcement so the publish path cannot write outside the recap unnoticed
+ *  (Naomi 14:20:13Z). The kvWrites list records every allowed write for the
+ *  "no writes outside the granted permissions" assertion below. */
+function makeFakeNode(options: FakeNodeOptions): FakeNodeHandle {
   const kvStore = new Map<string, unknown>();
-  if (options.dismissedFlag) kvStore.set("system/registry-publish/dismissed/v1", { dismissed: true, at: new Date().toISOString() });
+  const kvWrites: FakeNodeHandle["kvWrites"] = [];
+  // Mirrors packages/bootstrap/src/index.ts:599-636 ACCOUNT_MANIFEST_PERMISSIONS kv entries.
+  const allowedWritePrefixes = ["applications/", "spaces/"] as const;
+  const allowedWriteExact: Record<string, true> = { "system/bootstrap/complete": true };
+  const isAllowed = (key: string) => allowedWriteExact[key] === true || allowedWritePrefixes.some((p) => key.startsWith(p));
   const kv = {
     async get<T>(key: string) { return { ok: true as const, data: { data: kvStore.get(key) as T | undefined, headers: {} } }; },
-    async put(key: string, value: unknown) { kvStore.set(key, value); },
+    async put(key: string, value: unknown) {
+      if (!isAllowed(key)) {
+        throw new Error(`account-registry KV put refused: key "${key}" is not in ACCOUNT_MANIFEST_PERMISSIONS`);
+      }
+      kvWrites.push({ space: options.accountSpaceId ?? "(none)", key });
+      kvStore.set(key, value);
+    },
   };
-  return {
+  const node = {
     accountSpaceId: options.accountSpaceId,
     spaceId: options.space,
     did: options.subject,
@@ -56,6 +86,7 @@ function makeFakeNode(options: FakeNodeOptions): TinyCloudNode {
       return options.activeNodeOverride ?? { nodeDid: NODE_DID, origin: NODE_ORIGIN };
     },
   } as unknown as TinyCloudNode;
+  return { node, kvWrites };
 }
 
 // Build a fetch that models the location registry's canonical answers AND the node's
@@ -97,7 +128,7 @@ test("verdict unregistered + consent accepts → publishes and PUT uses the SDK'
   let seenPreview: RegistryPublishPreview | undefined;
   let seenPut: Record<string, unknown> | undefined;
   const fetch = makeMockRegistry((record) => { seenPut = record; });
-  const node = makeFakeNode({ subject: owner.subject, space: owner.space, accountSpaceId: ACCOUNT_SPACE });
+  const { node } = makeFakeNode({ subject: owner.subject, space: owner.space, accountSpaceId: ACCOUNT_SPACE });
   const outcome = await ensureOwnerRegistryRecord({
     node, subject: owner.subject, registryUrl: REGISTRY_URL, fetch,
     onConsent: async (preview) => { seenPreview = preview; return true; },
@@ -119,7 +150,7 @@ test("verdict registered → already-current, registry not asked to PUT", async 
   const baseFetch = makeMockRegistry();
   // First seed the registry with a published record by doing one publish, then test a second call
   // sees it as `registered` and returns `already-current` with no PUT on the second attempt.
-  const node = makeFakeNode({ subject: owner.subject, space: owner.space, accountSpaceId: ACCOUNT_SPACE });
+  const { node } = makeFakeNode({ subject: owner.subject, space: owner.space, accountSpaceId: ACCOUNT_SPACE });
   await ensureOwnerRegistryRecord({
     node, subject: owner.subject, registryUrl: REGISTRY_URL, fetch: baseFetch,
     onConsent: async () => true,
@@ -143,7 +174,7 @@ test("no onConsent callback → declined, registry never contacted beyond the ve
   const owner = makeWalletOwner();
   let putSeen = false;
   const fetch = makeMockRegistry(() => { putSeen = true; });
-  const node = makeFakeNode({ subject: owner.subject, space: owner.space, accountSpaceId: ACCOUNT_SPACE });
+  const { node } = makeFakeNode({ subject: owner.subject, space: owner.space, accountSpaceId: ACCOUNT_SPACE });
   const outcome = await ensureOwnerRegistryRecord({
     node, subject: owner.subject, registryUrl: REGISTRY_URL, fetch,
     resolveSigner: async () => makeSigner(owner.subject, owner.account),
@@ -152,13 +183,14 @@ test("no onConsent callback → declined, registry never contacted beyond the ve
   expect(putSeen).toBe(false);
 });
 
-test("onConsent returns false → declined, dismissed flag persisted, registry not PUT", async () => {
+test("onConsent returns false → declined, dismissed flag persisted in localStorage mock, registry not PUT", async () => {
   const owner = makeWalletOwner();
   let putSeen = false;
   const fetch = makeMockRegistry(() => { putSeen = true; });
-  const node = makeFakeNode({ subject: owner.subject, space: owner.space, accountSpaceId: ACCOUNT_SPACE });
+  const { node } = makeFakeNode({ subject: owner.subject, space: owner.space, accountSpaceId: ACCOUNT_SPACE });
+  const dismissedStorage = memoryDismissedStorage();
   const outcome = await ensureOwnerRegistryRecord({
-    node, subject: owner.subject, registryUrl: REGISTRY_URL, fetch,
+    node, subject: owner.subject, registryUrl: REGISTRY_URL, fetch, dismissedStorage,
     onConsent: async () => false,
     resolveSigner: async () => makeSigner(owner.subject, owner.account),
   });
@@ -167,7 +199,7 @@ test("onConsent returns false → declined, dismissed flag persisted, registry n
   // The second attempt short-circuits immediately on the persisted dismissed flag, before verdict lookup.
   let consentCount = 0;
   const outcome2 = await ensureOwnerRegistryRecord({
-    node, subject: owner.subject, registryUrl: REGISTRY_URL, fetch,
+    node, subject: owner.subject, registryUrl: REGISTRY_URL, fetch, dismissedStorage,
     onConsent: async () => { consentCount++; return true; },
     resolveSigner: async () => makeSigner(owner.subject, owner.account),
   });
@@ -178,17 +210,18 @@ test("onConsent returns false → declined, dismissed flag persisted, registry n
 test("ignoreDismissed bypasses the dismissed flag but still requires consent + unregistered (TC-3547 finish-setup=registry)", async () => {
   const owner = makeWalletOwner();
   const fetch = makeMockRegistry();
-  const node = makeFakeNode({ subject: owner.subject, space: owner.space, accountSpaceId: ACCOUNT_SPACE, dismissedFlag: true });
-  // Without ignoreDismissed the dismissed flag short-circuits even though consent would accept.
+  const { node } = makeFakeNode({ subject: owner.subject, space: owner.space, accountSpaceId: ACCOUNT_SPACE });
+  // Pre-seed the dismissed flag directly; then declined-path and bypass-path can test both halves.
+  const dismissedStorage = memoryDismissedStorage();
+  dismissedStorage.setItem(dismissedStorageKey(owner.subject), JSON.stringify({ dismissed: true, at: new Date().toISOString() }));
   const declined = await ensureOwnerRegistryRecord({
-    node, subject: owner.subject, registryUrl: REGISTRY_URL, fetch,
+    node, subject: owner.subject, registryUrl: REGISTRY_URL, fetch, dismissedStorage,
     onConsent: async () => true,
     resolveSigner: async () => makeSigner(owner.subject, owner.account),
   });
   expect(declined).toBe("declined");
-  // With ignoreDismissed the consent runs and the publish completes.
   const published = await ensureOwnerRegistryRecord({
-    node, subject: owner.subject, registryUrl: REGISTRY_URL, fetch,
+    node, subject: owner.subject, registryUrl: REGISTRY_URL, fetch, dismissedStorage,
     ignoreDismissed: true,
     onConsent: async () => true,
     resolveSigner: async () => makeSigner(owner.subject, owner.account),
@@ -199,7 +232,7 @@ test("ignoreDismissed bypasses the dismissed flag but still requires consent + u
 test("registry URL explicitly disabled (null) → unavailable", async () => {
   const owner = makeWalletOwner();
   const outcome = await ensureOwnerRegistryRecord({
-    node: makeFakeNode({ subject: owner.subject, space: owner.space, accountSpaceId: ACCOUNT_SPACE }),
+    node: makeFakeNode({ subject: owner.subject, space: owner.space, accountSpaceId: ACCOUNT_SPACE }).node,
     subject: owner.subject,
     registryUrl: null,
     onConsent: async () => true,
@@ -214,7 +247,7 @@ test("signer subject mismatch → unavailable, onError informed, registry never 
   let errors = 0;
   let putSeen = false;
   const fetch = makeMockRegistry(() => { putSeen = true; });
-  const node = makeFakeNode({ subject: owner.subject, space: owner.space, accountSpaceId: ACCOUNT_SPACE });
+  const { node } = makeFakeNode({ subject: owner.subject, space: owner.space, accountSpaceId: ACCOUNT_SPACE });
   const outcome = await ensureOwnerRegistryRecord({
     node, subject: owner.subject, registryUrl: REGISTRY_URL, fetch,
     onConsent: async () => true,
@@ -231,7 +264,7 @@ test("primary space missing → unavailable, consent never prompted", async () =
   const owner = makeWalletOwner();
   let consented = false;
   const fetch = makeMockRegistry();
-  const node = makeFakeNode({ subject: owner.subject, space: "", accountSpaceId: ACCOUNT_SPACE });
+  const { node } = makeFakeNode({ subject: owner.subject, space: "", accountSpaceId: ACCOUNT_SPACE });
   const outcome = await ensureOwnerRegistryRecord({
     node, subject: owner.subject, registryUrl: REGISTRY_URL, fetch,
     onConsent: async () => { consented = true; return true; },
@@ -244,7 +277,7 @@ test("primary space missing → unavailable, consent never prompted", async () =
 test("TC-3547 acceptance: after a successful first-party publish, the owner's verdict is `registered` so the TC-2931 third-party gate no longer refuses", async () => {
   const owner = makeWalletOwner();
   const fetch = makeMockRegistry();
-  const node = makeFakeNode({ subject: owner.subject, space: owner.space, accountSpaceId: ACCOUNT_SPACE });
+  const { node } = makeFakeNode({ subject: owner.subject, space: owner.space, accountSpaceId: ACCOUNT_SPACE });
   // Precondition: the verdict is `unregistered` — exactly the state TC-2931 refuses third-party on.
   const before = await lookupOwnerRegistryVerdict(owner.subject, { registryUrl: REGISTRY_URL, fetch, dataRead: true });
   expect(before.status).toBe("unregistered");
@@ -296,7 +329,7 @@ test("TC-3547 F1: record appears between verdict check and publish → unavailab
     if (init.method === "PUT") { putAttempts++; return new Response(`refused: test should not PUT`, { status: 599 }); }
     return new Response(`unexpected method ${init.method}`, { status: 599 });
   };
-  const node = makeFakeNode({ subject: owner.subject, space: owner.space, accountSpaceId: ACCOUNT_SPACE });
+  const { node } = makeFakeNode({ subject: owner.subject, space: owner.space, accountSpaceId: ACCOUNT_SPACE });
   const outcome = await ensureOwnerRegistryRecord({
     node, subject: owner.subject, registryUrl: REGISTRY_URL, fetch,
     onConsent: async () => { registered = { ...planted }; return true; },
@@ -321,7 +354,7 @@ test("TC-3547 F1: offline verdict is refused (cannot prove absence) → unavaila
     if (init.method === "PUT") { putAttempts++; return new Response(`refused: test should not PUT`, { status: 599 }); }
     return new Response(`unexpected method ${init.method}`, { status: 599 });
   };
-  const node = makeFakeNode({ subject: owner.subject, space: owner.space, accountSpaceId: ACCOUNT_SPACE });
+  const { node } = makeFakeNode({ subject: owner.subject, space: owner.space, accountSpaceId: ACCOUNT_SPACE });
   const outcome = await ensureOwnerRegistryRecord({
     node, subject: owner.subject, registryUrl: REGISTRY_URL, fetch,
     onConsent: async () => { consented = true; return true; },
@@ -335,10 +368,9 @@ test("TC-3547 F1: offline verdict is refused (cannot prove absence) → unavaila
   expect(putAttempts).toBe(0);
 });
 
-test("TC-3547 F2: sign-out during the consent modal aborts the publish, no PUT, no dismissed write", async () => {
+test("TC-3547 F2 (Bobbie 14:20:15Z): sign-out mid-consent writes NO dismissed flag; the stale answer stores nothing", async () => {
   const owner = makeWalletOwner();
   let putAttempts = 0;
-  let dismissedWrites = 0;
   const fetch: typeof globalThis.fetch = async (input, init) => {
     const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
     if (url === `${NODE_ORIGIN}/info`) return Response.json({ nodeId: NODE_DID });
@@ -348,31 +380,49 @@ test("TC-3547 F2: sign-out during the consent modal aborts the publish, no PUT, 
     if (init.method === "PUT") { putAttempts++; return new Response(`refused: test should not PUT`, { status: 599 }); }
     return new Response(`unexpected method ${init.method}`, { status: 599 });
   };
-  // Instrument the fake node's KV to count would-be dismissed writes.
-  const kvStore = new Map<string, unknown>();
-  const node = {
-    accountSpaceId: ACCOUNT_SPACE,
-    spaceId: owner.space,
-    did: owner.subject,
-    kvForSpace: () => ({
-      async get<T>(key: string) { return { ok: true as const, data: { data: kvStore.get(key) as T | undefined, headers: {} } }; },
-      async put(key: string, value: unknown) { dismissedWrites++; kvStore.set(key, value); },
-    }),
-    async activeNodeIdentity() { return { nodeDid: NODE_DID, origin: NODE_ORIGIN }; },
-  } as unknown as TinyCloudNode;
-  // Flip signed-out after consent returns false. assertCurrent must throw and the helper must
-  // NOT write the dismissed flag (that write would land in the next account's KV in a real sign-out).
+  const { node } = makeFakeNode({ subject: owner.subject, space: owner.space, accountSpaceId: ACCOUNT_SPACE });
+  const dismissedStorage = memoryDismissedStorage();
   let signedOut = false;
   let errors = 0;
   const outcome = await ensureOwnerRegistryRecord({
-    node, subject: owner.subject, registryUrl: REGISTRY_URL, fetch,
+    node, subject: owner.subject, registryUrl: REGISTRY_URL, fetch, dismissedStorage,
     onConsent: async () => { signedOut = true; return false; },
     assertCurrent: () => { if (signedOut) throw new Error("signed out during publish"); },
     resolveSigner: async () => makeSigner(owner.subject, owner.account),
     onError: () => { errors++; },
   });
   expect(outcome).toBe("unavailable");
-  expect(dismissedWrites).toBe(0);
+  expect(dismissedStorage.raw.size).toBe(0);
   expect(putAttempts).toBe(0);
   expect(errors).toBe(1);
+});
+
+test("TC-3547 (Naomi 14:20:13Z): the publish path writes ZERO account-registry KV keys — the dismissed flag lives in localStorage, not in the recap-granted KV", async () => {
+  // The `makeFakeNode` KV enforces the real ACCOUNT_MANIFEST_PERMISSIONS write policy: any put
+  // outside `applications/*`, `spaces/*`, `system/bootstrap/complete` throws. This test runs the
+  // full publish flow (decline then accept) through that enforcement and asserts kvWrites
+  // stays empty: nothing the publish path does should touch the account-registry KV at all.
+  const owner = makeWalletOwner();
+  const fetch = makeMockRegistry();
+  const { node, kvWrites } = makeFakeNode({ subject: owner.subject, space: owner.space, accountSpaceId: ACCOUNT_SPACE });
+  const dismissedStorage = memoryDismissedStorage();
+  // Decline path: historically wrote `system/registry-publish/dismissed/v1` to the KV, which
+  // ACCOUNT_MANIFEST_PERMISSIONS doesn't cover. Now it writes localStorage.
+  const declined = await ensureOwnerRegistryRecord({
+    node, subject: owner.subject, registryUrl: REGISTRY_URL, fetch, dismissedStorage,
+    onConsent: async () => false,
+    resolveSigner: async () => makeSigner(owner.subject, owner.account),
+  });
+  expect(declined).toBe("declined");
+  expect(kvWrites).toEqual([]);
+  expect(dismissedStorage.raw.get(dismissedStorageKey(owner.subject))).toBeDefined();
+  // Accept path: still writes nothing to the account-registry KV; only the registry PUT fires.
+  const dismissedStorageB = memoryDismissedStorage();
+  const published = await ensureOwnerRegistryRecord({
+    node, subject: owner.subject, registryUrl: REGISTRY_URL, fetch, dismissedStorage: dismissedStorageB,
+    onConsent: async () => true,
+    resolveSigner: async () => makeSigner(owner.subject, owner.account),
+  });
+  expect(published).toBe("published");
+  expect(kvWrites).toEqual([]);
 });

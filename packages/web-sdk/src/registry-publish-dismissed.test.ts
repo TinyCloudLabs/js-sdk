@@ -1,73 +1,90 @@
 import { expect, test } from "bun:test";
-import type { TinyCloudNode } from "@tinycloud/node-sdk";
 import {
-  DISMISSED_FLAG_KEY_FOR_TEST,
   readRegistryPublishDismissed,
   writeRegistryPublishDismissed,
+  dismissedStorageKey,
+  type DismissedFlagStorage,
 } from "./registry-publish-dismissed";
 
-// Minimal KV + node fake. Only the surfaces the helpers actually read are present; anything else
-// would be noise and would mask a real breakage behind an incidental shape change.
-function makeNode(accountSpaceId: string | undefined = "tinycloud:pkh:eip155:1:0x00000000000000000000000000000000000000AA:account-registry") {
-  const store = new Map<string, unknown>();
-  const kv = {
-    async get<T>(key: string) {
-      const value = store.get(key);
-      // Match sdk-services' Result<KVResponse<T>> contract.
-      return { ok: true as const, data: { data: value as T | undefined, headers: {} } };
-    },
-    async put(key: string, value: unknown) {
-      store.set(key, value);
-    },
+function makeMemoryStorage(initial: Record<string, string> = {}): { store: DismissedFlagStorage; raw: Map<string, string> } {
+  const raw = new Map<string, string>(Object.entries(initial));
+  const store: DismissedFlagStorage = {
+    getItem(key) { return raw.has(key) ? raw.get(key)! : null; },
+    setItem(key, value) { raw.set(key, value); },
+    removeItem(key) { raw.delete(key); },
   };
-  const node = {
-    accountSpaceId,
-    kvForSpace(spaceId: string) {
-      if (spaceId !== accountSpaceId) throw new Error("kvForSpace called with wrong space id");
-      return kv;
-    },
-  } as unknown as TinyCloudNode;
-  return { node, store, kv };
+  return { store, raw };
 }
 
-test("dismissed flag defaults to false when nothing is stored", async () => {
-  const { node } = makeNode();
-  expect(await readRegistryPublishDismissed(node)).toBe(false);
+const SUBJECT_A = "did:pkh:eip155:1:0xAaAaaaAAaaAAaaaAAaaAAaaAAAaaAAaaAAaaAA00";
+const SUBJECT_B = "did:pkh:eip155:1:0xBbBBBbbbbBbBBbBbbBBbBBbBBBBbBBBBbbbbbbB1";
+
+test("key format is lowercased per owner (Bobbie 14:20:15Z: account B never inherits A's 'Not now')", () => {
+  const keyA = dismissedStorageKey(SUBJECT_A);
+  const keyB = dismissedStorageKey(SUBJECT_B);
+  expect(keyA).toBe(`tcw.tc3547.dismissed.${SUBJECT_A.toLowerCase()}`);
+  expect(keyB).toBe(`tcw.tc3547.dismissed.${SUBJECT_B.toLowerCase()}`);
+  expect(keyA).not.toBe(keyB);
+  // Case-variant copy of the same owner collapses to the same key.
+  expect(dismissedStorageKey(SUBJECT_A.toUpperCase())).toBe(keyA);
 });
 
-test("write then read: dismissed is true after writeRegistryPublishDismissed", async () => {
-  const { node, store } = makeNode();
-  await writeRegistryPublishDismissed(node);
-  const written = store.get(DISMISSED_FLAG_KEY_FOR_TEST) as { dismissed: boolean; at: string } | undefined;
-  expect(written?.dismissed).toBe(true);
-  expect(typeof written?.at).toBe("string");
-  expect(await readRegistryPublishDismissed(node)).toBe(true);
+test("fresh storage reports not dismissed; write+read round-trips true", () => {
+  const { store } = makeMemoryStorage();
+  expect(readRegistryPublishDismissed(SUBJECT_A, store)).toBe(false);
+  writeRegistryPublishDismissed(SUBJECT_A, store);
+  expect(readRegistryPublishDismissed(SUBJECT_A, store)).toBe(true);
 });
 
-test("without an account-registry space the dismissed flag defaults to false", async () => {
-  // Explicitly no account-registry space; `kvForSpace` is still present so the helper
-  // takes the "no spaceId" branch rather than the "no kvForSpace" branch.
-  const node = { accountSpaceId: undefined, kvForSpace: () => { throw new Error("should not be called"); } } as unknown as TinyCloudNode;
-  expect(await readRegistryPublishDismissed(node)).toBe(false);
-  // A write with no space is a no-op; the next read still reports false.
-  await writeRegistryPublishDismissed(node);
-  expect(await readRegistryPublishDismissed(node)).toBe(false);
+test("account isolation (Bobbie): A's flag does not suppress B", () => {
+  const { store, raw } = makeMemoryStorage();
+  writeRegistryPublishDismissed(SUBJECT_A, store);
+  expect(readRegistryPublishDismissed(SUBJECT_A, store)).toBe(true);
+  expect(readRegistryPublishDismissed(SUBJECT_B, store)).toBe(false);
+  // We wrote exactly one key, under A's owner, and nothing else in the store.
+  expect(raw.size).toBe(1);
+  expect(Array.from(raw.keys())).toEqual([dismissedStorageKey(SUBJECT_A)]);
 });
 
-test("KV error surfacing never short-circuits the consent prompt (fail-open)", async () => {
-  const node = {
-    accountSpaceId: "tinycloud:pkh:eip155:1:0x00000000000000000000000000000000000000AA:account-registry",
-    kvForSpace() {
-      return {
-        async get() {
-          throw new Error("kv offline");
-        },
-        async put() {
-          throw new Error("kv offline");
-        },
-      };
-    },
-  } as unknown as TinyCloudNode;
-  // Read catches and reports "not dismissed" so the host still gets to prompt once.
-  expect(await readRegistryPublishDismissed(node)).toBe(false);
+test("the write touches only its own key (Bobbie: clearing nothing else)", () => {
+  const unrelated = { "tinychat.session": "something", "other.flag": "value" };
+  const { store, raw } = makeMemoryStorage(unrelated);
+  writeRegistryPublishDismissed(SUBJECT_A, store);
+  expect(raw.get("tinychat.session")).toBe("something");
+  expect(raw.get("other.flag")).toBe("value");
+  expect(raw.get(dismissedStorageKey(SUBJECT_A))).toBeDefined();
+  expect(raw.size).toBe(3);
+});
+
+test("fail-open on missing storage: no globalThis.localStorage → not dismissed, no throw", () => {
+  expect(readRegistryPublishDismissed(SUBJECT_A, undefined)).toBe(false);
+  writeRegistryPublishDismissed(SUBJECT_A, undefined); // must not throw
+});
+
+test("fail-open on read errors: storage.getItem throws → not dismissed (Bobbie: ask on read errors)", () => {
+  const broken: DismissedFlagStorage = {
+    getItem() { throw new Error("SecurityError: cross-origin"); },
+    setItem() {},
+  };
+  expect(readRegistryPublishDismissed(SUBJECT_A, broken)).toBe(false);
+});
+
+test("fail-open on unparseable values (Bobbie: ask on unparseable values)", () => {
+  const { store } = makeMemoryStorage({ [dismissedStorageKey(SUBJECT_A)]: "not-json" });
+  expect(readRegistryPublishDismissed(SUBJECT_A, store)).toBe(false);
+});
+
+test("fail-open on wrongly-shaped value: valid JSON but no `dismissed:true`", () => {
+  const { store } = makeMemoryStorage({ [dismissedStorageKey(SUBJECT_A)]: JSON.stringify({ at: "2026-11-21T00:00:00Z" }) });
+  expect(readRegistryPublishDismissed(SUBJECT_A, store)).toBe(false);
+});
+
+test("fail-silent on write errors: setItem throws (quota/SecurityError) → no throw escapes", () => {
+  const broken: DismissedFlagStorage = {
+    getItem() { return null; },
+    setItem() { throw new Error("QuotaExceededError"); },
+  };
+  writeRegistryPublishDismissed(SUBJECT_A, broken); // must not throw
+  // A follow-up read on broken storage still returns not-dismissed, so the host prompts again next time.
+  expect(readRegistryPublishDismissed(SUBJECT_A, broken)).toBe(false);
 });
