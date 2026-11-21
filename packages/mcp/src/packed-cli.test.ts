@@ -100,6 +100,7 @@ process.stdout.write(JSON.stringify(tools));
     tinycloud_sql_execute: "tinycloud.sql.execute",
     tinycloud_secrets_get: "tinycloud.secrets.get",
     tinycloud_secrets_status: "tinycloud.secrets.status",
+    tinycloud_share_email: "tinycloud.share.publish_email",
   };
   for (const format of ["esm", "cjs"] as const) {
     const result = Bun.spawnSync([

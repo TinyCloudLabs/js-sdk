@@ -398,6 +398,24 @@
       "sensitiveOutput": false
     },
     {
+      "name": "tinycloud_share_email",
+      "surfaces": [
+        "local"
+      ],
+      "operationId": "tinycloud.share.publish_email",
+      "operationVersion": 1,
+      "effects": [
+        "write",
+        "external"
+      ],
+      "postures": [
+        "delegate-session",
+        "owner-openkey",
+        "local-owner-key"
+      ],
+      "sensitiveOutput": false
+    },
+    {
       "name": "tinycloud_sql_execute",
       "surfaces": [
         "local",

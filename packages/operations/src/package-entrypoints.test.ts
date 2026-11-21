@@ -11,3 +11,12 @@ test("state exposes only lock-owning primitives, never the lock-assuming writer"
   expect("updateProfileStoreWhileLocked" in state).toBe(false);
 });
 
+test("invitation-approval exposes the one non-blocking approval call", async () => {
+  const invitation = await import("./invitation-approval.js");
+  expect(Object.keys(invitation)).toEqual(["requestInvitationApproval"]);
+});
+
+test("share-history exposes the profile sender history and its refusal error", async () => {
+  const history = await import("./share-history.js");
+  expect(Object.keys(history).sort()).toEqual(["ShareHistoryUnreadableError", "openProfileShareHistory"]);
+});

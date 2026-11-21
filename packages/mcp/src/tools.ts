@@ -32,6 +32,7 @@ export const TOOL_NAMES = [
   "tinycloud_sql_execute",
   "tinycloud_secrets_get",
   "tinycloud_secrets_status",
+  "tinycloud_share_email",
   "tinycloud_apps_context",
   "tinycloud_apps_read",
   "tinycloud_apps_write",
@@ -327,6 +328,18 @@ export const TOOL_BINDINGS: readonly ToolBinding[] = [
     openWorldHint: true,
     // Hosted has no persistent reauthorization path for a revoked session
     // yet (TC-896), so status is local/stdio only.
+    surfaces: ["local"],
+  },
+  {
+    name: "tinycloud_share_email",
+    operationId: "tinycloud.share.publish_email",
+    operationVersion: 1,
+    readOnlyHint: false,
+    idempotentHint: false,
+    destructiveHint: false,
+    openWorldHint: true,
+    // It emails a person in the owner's name from shared infrastructure, and a hosted principal has no
+    // per-tenant pending-approval state yet, so this is local/stdio only.
     surfaces: ["local"],
   },
   {
