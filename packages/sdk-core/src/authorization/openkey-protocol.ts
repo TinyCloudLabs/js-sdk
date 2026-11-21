@@ -594,7 +594,11 @@ export function extractRecapAttenuations(siwe: string): RecapAttenuation {
       // base64url decode, tolerating with or without padding
       const normalized = encoded.replace(/-/g, "+").replace(/_/g, "/");
       const padded = normalized + "=".repeat((4 - (normalized.length % 4)) % 4);
-      decodedJson = Buffer.from(padded, "base64").toString("utf8");
+      // atob and TextDecoder, not Node's Buffer: browser bundles may not provide one.
+      const binary = atob(padded);
+      const bytes = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+      decodedJson = new TextDecoder().decode(bytes);
     } catch (err) {
       throw new Error(
         `Failed to decode urn:recap: payload: ${(err as Error).message}`,
