@@ -805,12 +805,12 @@ function isV2UtcTimestamp(value: string): boolean {
   );
 }
 
-/** Normalise the ECDSA recovery byte so wallet signatures that use v in {0, 1}
- *  land at v in {27, 28} before the canonical-signature check rejects them.
- *  External/hardware wallets differ on this; the registry only accepts {27, 28}.
- *  Only the last byte is touched; r, s, low-s, and length are untouched. A
- *  signature already at {27, 28} or any other v value is returned unchanged
- *  (the canonical check then refuses the unknown v downstream). */
+/** Normalise the ECDSA recovery byte so wallet signatures that end in v in
+ *  {0, 1} (Ledger-style, 65-byte form) land at v in {27, 28} before the
+ *  canonical-signature check rejects them. The registry only accepts {27, 28}.
+ *  Only the last byte is touched; r, s, low-s and length are untouched. A
+ *  signature already at v in {27, 28} or any other v value is returned
+ *  unchanged (the canonical check then refuses an unknown v downstream). */
 function normalizeRecoveryByte(signature: string): string {
   if (!/^0x[0-9a-fA-F]{130}$/.test(signature)) return signature;
   const v = Number.parseInt(signature.slice(130), 16);

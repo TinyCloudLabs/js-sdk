@@ -9,4 +9,6 @@ First-party sign-in (home.tinycloud.xyz, tinycloud.one and the SDK's first-party
 
 Upgrading: an app that matches the message text should check `instanceof AccountSetupRequiredError` or read `setupUrl` instead.
 
+`signLocationRecordV2` accepts a wallet signature whose recovery byte is 0 or 1, as some hardware wallets return, and records it as 27 or 28.
+
 Details: TC-3547

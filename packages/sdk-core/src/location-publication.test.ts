@@ -447,7 +447,7 @@ test("signLocationRecordV2 normalises wallet recovery byte v in {0, 1} to {27, 2
     spaces: [{ space: space("primary"), nodes: [{ did: NODE, mode: "read-write" as const }] }],
     encryptionNode: null, sequence: 0, updated_at: NOW.toISOString(),
   };
-  // Reference signature from the real wallet — already v in {27, 28} because viem canonicalises.
+  // Reference signature from the real wallet: already v in {27, 28} because viem canonicalises.
   const reference = await owner.signMessage({ message: await (async () => {
     const { canonicalLocationPayloadV2 } = await import("./location");
     return canonicalLocationPayloadV2(payload);
@@ -460,7 +460,7 @@ test("signLocationRecordV2 normalises wallet recovery byte v in {0, 1} to {27, 2
   const normalised = await signLocationRecordV2(payload, flippedSigner);
   expect(normalised.signature).toBe(reference);
   expect(await verifyLocationRecordV2(normalised)).toBe(true);
-  // A signature already at v in {27, 28} is unchanged — passes straight through.
+  // A signature already at v in {27, 28} is unchanged. Passes straight through.
   const passthroughSigner = { type: "did:pkh" as const, signMessage: async () => reference };
   const passthrough = await signLocationRecordV2(payload, passthroughSigner);
   expect(passthrough.signature).toBe(reference);
