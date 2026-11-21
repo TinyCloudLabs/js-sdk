@@ -40,13 +40,13 @@ describe("extractRecapAttenuations without Node's Buffer (TC-3639)", () => {
     expect(caps).toEqual(att);
   });
 
-  it("decodes a payload with its base64 padding as well as one without", () => {
+  it("decodes a payload with its base64 padding, without it, and with one stray trailing '='", () => {
     const att = { "tinycloud:space/kv/a": { "tinycloud.kv/get": [{}], "tinycloud.kv/put": [{}] } };
     const json = JSON.stringify({ att });
     const unpadded = nodeBuffer.from(json, "utf8").toString("base64url");
     const padded = unpadded + "=".repeat((4 - (unpadded.length % 4)) % 4);
     expect(padded.endsWith("=")).toBe(true);
-    for (const payload of [unpadded, padded]) {
+    for (const payload of [unpadded, padded, `${unpadded}=`]) {
       const siwe = recapSiwe({ att }).replace(/urn:recap:\S+/, `urn:recap:${payload}`);
       expect(withoutBuffer(() => extractRecapAttenuations(siwe))).toEqual(att);
     }
