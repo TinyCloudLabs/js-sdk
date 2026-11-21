@@ -212,14 +212,19 @@ export async function ensureOwnerRegistryRecord(options: EnsureOwnerRegistryReco
           node: { did: activeNode.nodeDid, url: activeNode.origin },
           mode: "read-write",
         }],
-        ...(options.registrySequenceStore ? { sequenceStore: options.registrySequenceStore } : {}),
-        ...(options.registryCacheStore ? { cacheStore: options.registryCacheStore } : {}),
-        // TC-3547 F1: `onPrepared` is the second, publisher-time fence. The first verdict
-        // check above may be minutes old by the time the modal is answered; publishLocationRecordV2
-        // re-reads the registry just before signing and passes the live `current` here. We
-        // refuse the publish if the owner already has ANY record now, so we never merge this
-        // node into someone-else-wrote-it-while-the-modal-was-open.
-        onPrepared: async (_prepared, current) => current === null,
+        // TC-3547 F1 + F2 tightening (Bobbie 14:00:27Z): check assertCurrent HERE, right
+        // before signLocationRecordV2's own PUT. This moves the last session-change check
+        // past publishLocationRecordV2's two registry reads and node-identity probe, so the
+        // only remaining window is the wallet / OpenKey signature prompt itself — which is
+        // owner-presence anyway.
+        onPrepared: async (_prepared, current) => {
+          assertCurrent?.();
+          return current === null;
+        },
+        // (The up-front verdict check above may be minutes old by the time the modal is
+        // answered. publishLocationRecordV2 re-reads the registry just before signing and
+        // passes the live `current` to onPrepared; refusing anything but `current === null`
+        // is the authoritative no-overwrite guarantee.)
         ...(options.fetch ? { fetch: options.fetch } : {}),
         ...(options.now ? { now: options.now } : {}),
       });
