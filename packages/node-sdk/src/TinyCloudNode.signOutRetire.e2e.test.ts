@@ -5,6 +5,7 @@ import { createServer } from "node:net";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { NodeWasmBindings } from "./NodeWasmBindings";
+import { signedRestorableSession } from "./test-support/signed-restorable-session";
 import { PrivateKeySigner } from "./signers/PrivateKeySigner";
 import "./replication/node-loader";
 import { TinyCloudNode } from "./TinyCloudNode";
@@ -121,5 +122,66 @@ describe.skipIf(!nodeBinary)("sign-out retires the session key on a real node", 
     await owner.signIn();
     const read = await owner.kv.get("retire/message");
     expect(read.ok, JSON.stringify(read.ok ? undefined : read.error)).toBe(true);
+  }, 120_000);
+
+  test("a root the node refuses is dropped once: the node records the retire without it, and the host is reported refused", async () => {
+    const config = {
+      host,
+      tinycloudRegistryUrl: registry.url.origin,
+      wasmBindings: new NodeWasmBindings(),
+      domain: "retire.test",
+      autoBootstrapAccount: false,
+      enablePublicSpace: false,
+    };
+    const strangerKey = randomBytes(32).toString("hex");
+    const stranger = new TinyCloudNode({ ...config, signer: new PrivateKeySigner(strangerKey), autoCreateSpace: true });
+    await stranger.signIn();
+    const put = await stranger.kv.put("retire/message", "private");
+    expect(put.ok, JSON.stringify(put.ok ? undefined : put.error)).toBe(true);
+    const leaving = stranger.restorableSession!;
+    // A root the stranger signs for its own session key over the owner's space: it verifies, but no node admits it.
+    const ownerSpace = config.wasmBindings.makeSpaceId(await new PrivateKeySigner(ownerKey).getAddress(), 1, "default");
+    const foreign = await signedRestorableSession({
+      privateKey: strangerKey,
+      sessionKey: { jwk: leaving.jwk, verificationMethod: leaving.verificationMethod },
+      spaces: { owner: ownerSpace },
+    });
+    (stranger as unknown as { runtimePermissionGrants: unknown[] }).runtimePermissionGrants.push({
+      session: { ...foreign },
+      delegation: {
+        cid: foreign.delegationCid, delegationHeader: foreign.delegationHeader, spaceId: foreign.spaceId,
+        path: "", actions: [], expiry: new Date(foreign.expiresAt), delegateDID: foreign.verificationMethod,
+        ownerAddress: foreign.address, chainId: foreign.chainId,
+        siweProof: { siwe: foreign.siwe, signature: foreign.signature },
+      },
+      operations: [],
+      expiresAt: new Date(foreign.expiresAt),
+      provenance: "delegated",
+    });
+
+    await stranger.signOut();
+    const status = await stranger.nodeSignOutStatus();
+    expect(status?.confirmed, JSON.stringify(status)).toEqual([]);
+    expect(status?.nothingToRecord).toEqual([]);
+    expect(status?.notConfirmed).toHaveLength(1);
+    expect(status?.notConfirmed[0]).toMatchObject({ host, reason: "refused", status: 401 });
+    expect(typeof status?.notConfirmed[0]?.delegation).toBe("number");
+
+    // The retry without that root recorded: the key is refused.
+    const copy = new TinyCloudNode(config);
+    await copy.restoreSession({
+      delegationHeader: leaving.delegationHeader,
+      delegationCid: leaving.delegationCid,
+      spaceId: leaving.spaceId,
+      jwk: leaving.jwk,
+      verificationMethod: leaving.verificationMethod,
+      address: leaving.address,
+      chainId: leaving.chainId,
+      siwe: leaving.siwe,
+      signature: leaving.signature,
+    });
+    const refused = await copy.kv.get("retire/message");
+    expect(refused.ok).toBe(false);
+    expect(JSON.stringify(refused)).toContain("session_retired");
   }, 120_000);
 });

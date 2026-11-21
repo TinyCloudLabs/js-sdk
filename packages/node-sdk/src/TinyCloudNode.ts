@@ -3066,8 +3066,9 @@ export class TinyCloudNode {
    *
    * The session key is refused on the `confirmed` nodes only. Sign-out is
    * complete on every node only when `nothingToRecord` and `notConfirmed`
-   * are both empty. In a browser, only the first request to each node may
-   * outlive a page that unloads right after sign-out.
+   * are both empty. In a browser, a node's first request outlives a page that
+   * unloads right after sign-out only while the sign-out's requests stay
+   * under the keepalive allowance (48 KiB in total).
    */
   nodeSignOutStatus(): Promise<NodeSignOutStatus | undefined> {
     return this.sessionRetire ?? Promise.resolve(undefined);
@@ -3086,7 +3087,22 @@ export class TinyCloudNode {
     this.signOutResult = result;
 
     // Taken before teardown replaces the key: the retire is signed with the leaving key.
-    const retire = this.leavingSessionRetire();
+    // A throw here never stops local sign-out; every host it knew of is then reported unconfirmed.
+    let retire: RetireSessionKeyInput[] | undefined;
+    try {
+      retire = this.leavingSessionRetire();
+    } catch (error) {
+      const message = String(error).slice(0, 200);
+      const notSent: NodeSignOutStatus = { confirmed: [], nothingToRecord: [], notConfirmed: [] };
+      try {
+        for (const host of new Set([...this.sessionHosts.list(), ...this.hosts].filter(Boolean))) {
+          notSent.notConfirmed.push({ host, reason: "failed", message });
+        }
+      } catch {
+        // Hosts unreadable too: no status, rather than one that names no unconfirmed host.
+      }
+      this.sessionRetire = notSent.notConfirmed.length ? Promise.resolve(notSent) : undefined;
+    }
 
     const leavingAddress = this.address ?? this._restoredTcSession?.address;
     const leavingChainId = this._chainId;
@@ -8328,6 +8344,16 @@ export class TinyCloudNode {
       ...prepared,
       signature,
     });
+    // Sign-out sends this root with the retire even if no host stores it (TC-3443).
+    this.signedSessionRoots.push({
+      delegationHeader: delegationSession.delegationHeader,
+      delegationCid: delegationSession.delegationCid,
+      spaceId: publicSpaceId,
+      address: this.session.address,
+      chainId: this.session.chainId,
+      siwe: prepared.siwe,
+      signature,
+    });
 
     const activateResult = await this.activateSignedSession(delegationSession, prepared.siwe, graph.signal);
     graph.assertActive();
@@ -10265,6 +10291,16 @@ export class TinyCloudNode {
     // Complete the session setup
     const invokerSession = this.wasmBindings.completeSessionSetup({
       ...prepared,
+      signature,
+    });
+    // Sign-out sends this root with the retire even if no host stores it (TC-3443).
+    this.signedSessionRoots.push({
+      delegationHeader: invokerSession.delegationHeader,
+      delegationCid: invokerSession.delegationCid,
+      spaceId: delegation.spaceId,
+      address: mySession.address,
+      chainId: mySession.chainId,
+      siwe: prepared.siwe,
       signature,
     });
 

@@ -22,7 +22,7 @@ interface Retire { host: string; iss: string; delegations: string[] }
 
 /** Fake nodes: `/info`, `/delegate` and `/session/retire` on HOST and OTHER; DOWN refuses every connection. */
 function fakeNodes() {
-  const state = { refuseDelegate: false };
+  const state = { refuseDelegate: false, refuseRetireOf: undefined as string | undefined };
   const retires: Retire[] = [];
   const delegated: string[] = [];
   globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
@@ -43,6 +43,9 @@ function fakeNodes() {
       const payload = JSON.parse(Buffer.from(authorization!.replace(/^Bearer /, "").split(".")[1]!, "base64url").toString("utf8"));
       const body = typeof init?.body === "string" ? JSON.parse(init.body) as { delegations: string[] } : { delegations: [] };
       retires.push({ host: url.origin, iss: payload.iss, delegations: body.delegations });
+      // As the node: a carried root it will not admit refuses the whole retire, naming its index.
+      const refused = state.refuseRetireOf === undefined ? -1 : body.delegations.indexOf(state.refuseRetireOf);
+      if (refused >= 0) return new Response(`session_retire_invalid: delegation ${refused}: the delegation is not authorized`, { status: 401 });
       return Response.json({ did: payload.iss.split("#")[0], retiredAt: new Date().toISOString(), recorded: true });
     }
     throw new Error("Unexpected test endpoint");
@@ -94,7 +97,7 @@ test("a sign-in saves the hosts it activated on, and sign-out retires the key th
   expect(nodes.retires.map(({ iss }) => iss)).toEqual([verificationMethod, second]);
 });
 
-test("sign-out sends every root for the key across spaces, one that no host accepted included", async () => {
+test("sign-out sends every root for the key across spaces, one that no host accepted included; a root the host refuses is dropped once and named", async () => {
   const nodes = fakeNodes();
   const { node } = await signedIn();
   const sessionRoot = node.session!.delegationHeader.Authorization;
@@ -105,12 +108,26 @@ test("sign-out sends every root for the key across spaces, one that no host acce
   // The refused grant's root reached the host once and was not stored there.
   const unposted = nodes.delegated.slice(delegatedBefore);
   expect(new Set(unposted).size).toBe(1);
+  // The host refuses that root at retire too, for a lasting reason.
+  nodes.state.refuseRetireOf = unposted[0];
 
-  await signOutAndRetire(node);
+  const outcome = await signOutAndRetire(node);
   const roots = [sessionRoot, installed!.delegationHeader.Authorization, unposted[0]!];
   expect(new Set(roots).size).toBe(3);
-  expect(nodes.retires.length).toBeGreaterThan(0);
-  for (const retire of nodes.retires) expect([...retire.delegations].sort()).toEqual([...roots].sort());
+  // The first request carries every root; the one retry carries the others, so the host can still record the retire.
+  expect(nodes.retires).toHaveLength(2);
+  const [first, retry] = nodes.retires;
+  expect([...first!.delegations].sort()).toEqual([...roots].sort());
+  const refused = first!.delegations.indexOf(unposted[0]!);
+  expect(retry!.delegations).toEqual(first!.delegations.filter((root) => root !== unposted[0]));
+  // Even though the retry recorded, the host is not confirmed: the refused root was never recorded there.
+  expect(outcome).toEqual({
+    confirmed: [], nothingToRecord: [],
+    notConfirmed: [{
+      host: HOST, reason: "refused", status: 401, delegation: refused,
+      message: `session_retire_invalid: delegation ${refused}: the delegation is not authorized`,
+    }],
+  });
 });
 
 test("sign-out also retires each bootstrap key, with its own root; a host is confirmed once every key recorded", async () => {
@@ -126,6 +143,23 @@ test("sign-out also retires each bootstrap key, with its own root; a host is con
     { host: HOST, iss: verificationMethod, delegations: [delegationHeader.Authorization] },
     { host: HOST, iss: bootstrap.verificationMethod, delegations: [bootstrap.delegationHeader.Authorization] },
   ].sort((a, b) => a.iss.localeCompare(b.iss)));
+});
+
+test("a throw while gathering the retire still signs out locally, names the hosts unconfirmed, and frees the next sign-in", async () => {
+  const nodes = fakeNodes();
+  const storage = new MemorySessionStorage();
+  const { node, address } = await signedIn(storage);
+  (node as unknown as { leavingSessionRetire: () => never }).leavingSessionRetire = () => { throw new Error("broken key"); };
+
+  await node.signOut();
+  expect(node.session).toBeUndefined();
+  expect(storage.exists(address)).toBe(false);
+  expect(await node.nodeSignOutStatus()).toEqual({
+    confirmed: [], nothingToRecord: [], notConfirmed: [{ host: HOST, reason: "failed", message: "Error: broken key" }],
+  });
+  expect(nodes.retires).toHaveLength(0);
+  await node.signIn();
+  expect(node.session).toBeDefined();
 });
 
 test("a restored session retires on its saved hosts with every root of its key, whatever its time window; a stray root is never sent", async () => {

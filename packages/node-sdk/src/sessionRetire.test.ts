@@ -170,15 +170,38 @@ describe("retireSessionKey", () => {
     });
     expect(outcome.confirmed).toEqual(["https://a.test"]);
     expect(outcome.nothingToRecord).toEqual(["https://b.test"]);
-    // A refused root is named by its place among all roots sent, and the host is not asked again without it.
+    // A refused root is named by its place among all roots sent. The host is asked once more without it,
+    // and stays unconfirmed even though that recorded.
     expect(outcome.notConfirmed).toEqual([{
       host: "https://c.test", reason: "refused", status: 401, delegation: 10,
       message: "session_retire_invalid: delegation 2: its delegatee is not the retiring key",
     }]);
-    expect(nodes.retires("https://c.test")).toHaveLength(2);
+    const retried = nodes.retires("https://c.test").map((request) => JSON.parse(request.body!).delegations as string[]);
+    expect(retried).toEqual([roots.slice(0, 8), roots.slice(8), ["root-8", "root-9"]]);
     const bodies = nodes.retires("https://a.test").map((request) => JSON.parse(request.body!).delegations as string[]);
     expect(bodies.map((body) => body.length)).toEqual([8, 3]);
     expect(bodies.flat()).toEqual(roots);
+  });
+
+  test("after a refused root is dropped, the later requests still go; a second refusal is reported in the original numbering and ends the host", async () => {
+    const { signer } = sessionSigner();
+    const roots = Array.from({ length: 11 }, (_, index) => `root-${index}`);
+    const nodes = fakeNodes({ "https://a.test": ["refuse_root_2", 200, 200], "https://b.test": ["refuse_root_2", "refuse_root_2", 200] });
+    const outcome = await retireSessionKey({
+      signer, hosts: ["https://a.test", "https://b.test"], delegations: roots, fetch: nodes.fetch, now: () => NOW_MS, sleep: noSleep,
+    });
+    const sent = (host: string) => nodes.retires(host).map((request) => JSON.parse(request.body!).delegations as string[]);
+    const withoutRoot2 = roots.slice(0, 8).filter((root) => root !== "root-2");
+    expect(sent("https://a.test")).toEqual([roots.slice(0, 8), withoutRoot2, roots.slice(8)]);
+    // b refuses the retry's third root, root-3: no third try, and the remaining roots are not sent.
+    expect(sent("https://b.test")).toEqual([roots.slice(0, 8), withoutRoot2]);
+    expect(outcome).toEqual({
+      confirmed: [], nothingToRecord: [],
+      notConfirmed: [
+        { host: "https://a.test", reason: "refused", status: 401, delegation: 2, message: "session_retire_invalid: delegation 2: its delegatee is not the retiring key" },
+        { host: "https://b.test", reason: "refused", status: 401, delegation: 3, message: "session_retire_invalid: delegation 2: its delegatee is not the retiring key" },
+      ],
+    });
   });
 
   test("the retire UCAN matches the node contract and is signed by the session key", async () => {
@@ -228,5 +251,22 @@ describe("retireSessionKeys", () => {
       nothingToRecord: ["https://c.test"],
       notConfirmed: [{ host: "https://b.test", reason: "refused", status: 401, message: "session_retire_invalid: the audience is not this node" }],
     });
+  });
+
+  test("first tries are keepalive only while the sign-out's bodies, across keys and hosts, fit one 48 KiB allowance", async () => {
+    const hosts = ["https://a.test", "https://b.test", "https://c.test"];
+    const script = () => Object.fromEntries(hosts.map((host) => [host, [200, 200] as Reply[]]));
+    const nodes = fakeNodes(script());
+    // About 10 KB per request: two keys on three hosts would be about 60 KB, past the browser's 64 KiB with any other request.
+    const roots = (key: string) => Array.from({ length: 4 }, (_, index) => `${key}-${index}-${"x".repeat(2_500)}`);
+    const keys = ["first", "second"].map((key) => ({
+      signer: sessionSigner().signer, hosts, delegations: roots(key), fetch: nodes.fetch, now: () => NOW_MS, sleep: noSleep,
+    }));
+    expect((await retireSessionKeys(keys)).confirmed).toEqual(hosts);
+    const requests = nodes.seen.filter((entry) => entry.path === "/session/retire");
+    expect(requests).toHaveLength(6);
+    const keepalive = requests.filter((request) => request.keepalive);
+    expect(keepalive.length).toBe(4);
+    expect(keepalive.reduce((total, request) => total + request.body!.length, 0)).toBeLessThanOrEqual(48 * 1024);
   });
 });

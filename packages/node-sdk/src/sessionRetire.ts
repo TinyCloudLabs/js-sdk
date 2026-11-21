@@ -18,6 +18,14 @@ const BACKOFF_MS = [250, 1_000];
 const TIMEOUT_MS = 5_000;
 /** The node's cap on delegations in one retire body. */
 const MAX_ROOTS = 8;
+/**
+ * Browsers cap a page's in-flight `keepalive` request bodies at 64 KiB in
+ * total, and refuse a request past the cap. One sign-out's keepalive bodies
+ * stay under this, leaving room for the page's own.
+ */
+const KEEPALIVE_BUDGET_BYTES = 48 * 1024;
+/** What is left of one sign-out's keepalive allowance, shared by all its requests. */
+interface KeepaliveBudget { bytes: number }
 
 export interface SessionRetireSigner {
   /** `did:key:…#…` of the session key; becomes the UCAN `iss`. */
@@ -30,16 +38,19 @@ export interface NodeSignOutFailure {
   host: string;
   /**
    * - `unreachable`: no answer (network error or timeout) on every try.
-   * - `refused`: 401; the host refused the request. Not retried.
+   * - `refused`: 401; the host refused the request. Not retried, except once without a refused root (see `delegation`).
    * - `unsupported`: 404; the host has no `/session/retire`. Not retried.
    * - `failed`: any other answer, including 429 or 503 on every try (see `status`).
    */
   reason: "unreachable" | "refused" | "unsupported" | "failed";
   status?: number;
   /**
-   * With `refused`: the index, among the roots sent for one key, of the one
-   * the host would not admit. The host wrote nothing. Not retried without it: that root
-   * would then stay unrecorded on the host.
+   * With `refused`: the index, among the roots sent for one key, of the root
+   * the host would not admit; that request wrote nothing. The client then
+   * sends the request once more without that root, so the host can still
+   * record the retire for the key's other grants. The host stays here even
+   * when that second request records: the refused root was not recorded
+   * there. When the second request is refused too, this reports that refusal.
    */
   delegation?: number;
   /** The node's reply or the transport error, at most 200 characters. Diagnostics only. */
@@ -113,7 +124,7 @@ async function send(fetch: typeof globalThis.fetch, url: string, init: RequestIn
 }
 
 /** One try for one host: learn its node DID if needed, then post a freshly signed retire. */
-async function attempt(input: RetireSessionKeyInput, host: string, nodeDid: { value?: string }, roots: string[], keepalive: boolean): Promise<Attempt> {
+async function attempt(input: RetireSessionKeyInput, host: string, nodeDid: { value?: string }, roots: string[], budget: KeepaliveBudget | undefined): Promise<Attempt> {
   const fetch = input.fetch!;
   if (!nodeDid.value) {
     const response = await send(fetch, `${host}/info`, {});
@@ -136,14 +147,17 @@ async function attempt(input: RetireSessionKeyInput, host: string, nodeDid: { va
   } catch (error) {
     return { reason: "failed", message: brief(String(error)) };
   }
+  const body = roots.length ? JSON.stringify({ delegations: roots }) : undefined;
+  // Lets a first try outlive a page that unloads right after sign-out, while the
+  // sign-out's keepalive bodies stay under the browser's cap. Retries go without.
+  const keepalive = budget !== undefined && (body?.length ?? 0) <= budget.bytes;
+  if (keepalive) budget.bytes -= body?.length ?? 0;
   const response = await send(fetch, `${host}/session/retire`, {
     method: "POST",
     headers: roots.length
       ? { Authorization: `Bearer ${authorization}`, "Content-Type": "application/json" }
       : { Authorization: `Bearer ${authorization}` },
-    body: roots.length ? JSON.stringify({ delegations: roots }) : undefined,
-    // Lets the first try outlive a page that unloads right after sign-out.
-    // Retries go without: browsers cap a page's in-flight keepalive bodies at 64 KiB.
+    body,
     keepalive,
   });
   if (!(response instanceof Response)) return response;
@@ -164,39 +178,62 @@ async function attempt(input: RetireSessionKeyInput, host: string, nodeDid: { va
 /**
  * Every root goes to the host, at most {@link MAX_ROOTS} per request, one
  * request after another. The host confirms only when every request recorded.
+ *
+ * A request refused for one carried root (a root the host refuses for a
+ * lasting reason would otherwise block the retire on every sign-out) is sent
+ * once more without that root, and the remaining requests still go. The host
+ * is reported `refused` with that root's index even if the rest recorded; a
+ * second refusal is reported instead and ends the host's requests.
  */
-async function retireOnHost(input: RetireSessionKeyInput, host: string): Promise<boolean | Failure> {
+async function retireOnHost(input: RetireSessionKeyInput, host: string, budget: KeepaliveBudget): Promise<boolean | Failure> {
   const nodeDid = { value: input.knownNodeIds?.get(host) };
   const roots = [...new Set(input.delegations ?? [])];
   const sleep = input.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
-  let recorded = true;
-  for (let offset = 0; offset === 0 || offset < roots.length; offset += MAX_ROOTS) {
+  const post = async (chunk: string[]): Promise<boolean | Failure> => {
     let result: Attempt = false;
     for (let tries = 0; tries < ATTEMPTS; tries++) {
       if (tries > 0) await sleep(BACKOFF_MS[tries - 1]!);
-      result = await attempt(input, host, nodeDid, roots.slice(offset, offset + MAX_ROOTS), tries === 0);
+      result = await attempt(input, host, nodeDid, chunk, tries === 0 ? budget : undefined);
       if (typeof result === "boolean" || !result.retry) break;
     }
+    if (typeof result === "boolean") return result;
+    const { retry: _, ...failure } = result;
+    return failure;
+  };
+  let recorded = true;
+  let refusal: Failure | undefined;
+  for (let offset = 0; offset === 0 || offset < roots.length; offset += MAX_ROOTS) {
+    const chunk = roots.slice(offset, offset + MAX_ROOTS);
+    let result = await post(chunk);
+    if (typeof result !== "boolean" && result.delegation !== undefined && !refusal) {
+      const refused = result.delegation;
+      refusal = { ...result, delegation: offset + refused };
+      result = await post(chunk.filter((_, index) => index !== refused));
+      // A second refusal's index, in the original numbering.
+      if (typeof result !== "boolean" && result.delegation !== undefined && result.delegation >= refused) result.delegation += 1;
+    }
     if (typeof result !== "boolean") {
-      const { retry: _, ...failure } = result;
-      if (failure.delegation !== undefined) failure.delegation += offset;
-      return failure;
+      if (result.delegation !== undefined) result.delegation += offset;
+      return result;
     }
     recorded &&= result;
   }
-  return recorded;
+  return refusal ?? recorded;
 }
 
 /**
  * Retire the session key on every host, in parallel. Never rejects: every
  * host ends up in exactly one of the status lists.
  */
-export async function retireSessionKey(input: RetireSessionKeyInput): Promise<NodeSignOutStatus> {
+export async function retireSessionKey(
+  input: RetireSessionKeyInput,
+  budget: KeepaliveBudget = { bytes: KEEPALIVE_BUDGET_BYTES },
+): Promise<NodeSignOutStatus> {
   // Resolved now, at sign-out: a retry must not pick up a `fetch` installed later.
   input = { ...input, fetch: input.fetch ?? globalThis.fetch.bind(globalThis) };
   const hosts = [...new Set(input.hosts)];
   const results = await Promise.all(hosts.map((host) =>
-    retireOnHost(input, host).catch((error): Failure => ({ reason: "failed", message: brief(String(error)) }))));
+    retireOnHost(input, host, budget).catch((error): Failure => ({ reason: "failed", message: brief(String(error)) }))));
   const status: NodeSignOutStatus = { confirmed: [], nothingToRecord: [], notConfirmed: [] };
   hosts.forEach((host, index) => {
     const result = results[index]!;
@@ -213,7 +250,9 @@ export async function retireSessionKey(input: RetireSessionKeyInput): Promise<No
  * failure's `delegation` indexes that key's roots.
  */
 export async function retireSessionKeys(inputs: readonly RetireSessionKeyInput[]): Promise<NodeSignOutStatus> {
-  const statuses = await Promise.all(inputs.map(retireSessionKey));
+  // One keepalive allowance for the whole sign-out: its requests are in flight together.
+  const budget: KeepaliveBudget = { bytes: KEEPALIVE_BUDGET_BYTES };
+  const statuses = await Promise.all(inputs.map((input) => retireSessionKey(input, budget)));
   if (statuses.length === 1) return statuses[0]!;
   const merged: NodeSignOutStatus = { confirmed: [], nothingToRecord: [], notConfirmed: [] };
   for (const host of new Set(inputs.flatMap((input) => input.hosts))) {
