@@ -32,6 +32,8 @@ export interface RequestPermissionsCoreDeps {
     approved: boolean;
     suppressPromptFor30Days?: boolean;
   }>;
+  /** True when the signer shows the request itself (OpenKey): the SDK prompt is skipped and no opt-out is read or stored. */
+  skipPrompt?: boolean;
   /** Whether this page/app has opted out of the SDK explainer prompt. */
   isPromptSuppressed?: () => boolean;
   /** Persist a successful opt-out from the SDK explainer prompt. */
@@ -101,7 +103,7 @@ export async function requestPermissionsCore(
   const allowSuppression = options?.allowPromptSuppression !== false;
   const onBehalfOf = options?.onBehalfOf;
   let shouldSuppressPrompt = false;
-  if (!allowSuppression || deps.isPromptSuppressed?.() !== true) {
+  if (deps.skipPrompt !== true && (!allowSuppression || deps.isPromptSuppressed?.() !== true)) {
     const modalResult = await deps.showModal({
       appName: deps.manifest.name,
       appIcon: deps.manifest.icon,
