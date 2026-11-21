@@ -75,8 +75,13 @@ afterEach(() => {
   globalThis.fetch = originalFetch;
 });
 
+// Data calls only: sign-out's session-retire request and its /info lookup run after it resolves.
+function dataCalls(): number {
+  return requests.filter((url) => !["/session/retire", "/info"].includes(new URL(url).pathname)).length;
+}
+
 async function expectNoAuthorizedCall(call: () => Promise<unknown>): Promise<void> {
-  const before = requests.length;
+  const before = dataCalls();
   let failed = false;
   try {
     const result = await call();
@@ -85,7 +90,7 @@ async function expectNoAuthorizedCall(call: () => Promise<unknown>): Promise<voi
     failed = true;
   }
   expect(failed).toBe(true);
-  expect(requests.length).toBe(before);
+  expect(dataCalls()).toBe(before);
 }
 
 describe.each([

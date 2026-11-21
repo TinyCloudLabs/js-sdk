@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { generateKeyPairSync, sign as edSign, verify as edVerify, type KeyObject } from "node:crypto";
-import { retireSessionKey, retireSessionKeys, type SessionRetireSigner } from "./sessionRetire";
+import { retireSessionKey, retireSessionKeys } from "./session-retire";
+import type { SessionRetireSigner } from "./sessionRetire";
 
 const NOW_MS = Date.UTC(2026, 10, 21, 12, 0, 0);
 

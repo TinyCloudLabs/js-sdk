@@ -1,5 +1,6 @@
 import "../../operations/test-support/test-bootstrap.mjs";
 import { afterEach, expect, test } from "bun:test";
+import { fileURLToPath } from "node:url";
 import type { PersistedSessionData, PermissionEntry } from "@tinycloud/sdk-core";
 import { TinyCloudNode } from "./TinyCloudNode";
 import { NodeWasmBindings } from "./NodeWasmBindings";
@@ -229,4 +230,59 @@ test("a restored session retires on its saved hosts with every root of its key, 
   await node.signOut();
   expect(nodes.retires.length).toBe(asked);
   expect(await node.nodeSignOutStatus()).toBe(outcome);
+});
+
+test.each([
+  ["wallet", true],
+  ["walletless", false],
+] as const)("after a %s restore, sign-out sends the retire for the restored key", async (_label, withSigner) => {
+  const nodes = fakeNodes();
+  const proof = await signedRestorableSession();
+  const node = new TinyCloudNode({
+    host: HOST, tinycloudRegistryUrl: null, wasmBindings: new NodeWasmBindings(),
+    sessionStorage: new MemorySessionStorage(), autoBootstrapAccount: false,
+    ...(withSigner ? { signer: new PrivateKeySigner(PROOF_PRIVATE_KEY) } : {}),
+  });
+  await node.restoreSession({ ...proof, tinycloudHosts: [HOST] });
+  const outcome = await signOutAndRetire(node);
+  expect(outcome).toEqual({ confirmed: [HOST], nothingToRecord: [], notConfirmed: [] });
+  expect(nodes.retires).toEqual([{ host: HOST, iss: proof.verificationMethod, delegations: [proof.delegationHeader.Authorization] }]);
+});
+
+/** Run the staged-load child (`test-support/sign-out-retire-load.ts`) and parse its JSON line. */
+async function signOutWhileRetireLoads(mode: "pending" | "fail") {
+  const child = Bun.spawn(
+    [process.execPath, fileURLToPath(new URL("./test-support/sign-out-retire-load.ts", import.meta.url)), mode],
+    { stdout: "pipe", stderr: "pipe" },
+  );
+  const [stdout, stderr, exitCode] = await Promise.all([
+    new Response(child.stdout).text(),
+    new Response(child.stderr).text(),
+    child.exited,
+  ]);
+  expect(exitCode, stderr).toBe(0);
+  return JSON.parse(stdout.trim().split("\n").at(-1) ?? "");
+}
+
+test("a sign-out before the retire module has loaded still retires the key with every root once it loads", async () => {
+  const run = await signOutWhileRetireLoads("pending");
+  // The sign-in started the load; local sign-out finished while it was still pending, before any node call.
+  expect(run.loadStartedAtSignIn).toBe(true);
+  expect(run.signedOut).toEqual({ session: true, stored: false, loadFinished: false, retires: 0 });
+  expect(run.retires).toHaveLength(1);
+  expect(run.retires[0].iss).toBe(run.iss);
+  expect([...run.retires[0].delegations].sort()).toEqual([...run.roots].sort());
+  expect(run.status).toEqual({ confirmed: ["https://primary.retire.test"], nothingToRecord: [], notConfirmed: [] });
+  expect(run.signedInAgain).toBe(true);
+});
+
+test("a retire module that fails to load still signs out locally and names every host failed", async () => {
+  const run = await signOutWhileRetireLoads("fail");
+  expect(run.signedOut).toEqual({ session: true, stored: false, loadFinished: false, retires: 0 });
+  expect(run.retires).toEqual([]);
+  expect(run.status).toEqual({
+    confirmed: [], nothingToRecord: [],
+    notConfirmed: [{ host: "https://primary.retire.test", reason: "failed", message: "Error: Loading chunk session-retire failed." }],
+  });
+  expect(run.signedInAgain).toBe(true);
 });

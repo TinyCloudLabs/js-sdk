@@ -1547,7 +1547,7 @@ export class TinyCloudWeb {
    * Which nodes stopped accepting the session key at the latest sign-out that ended a session; see
    * `TinyCloudNode.nodeSignOutStatus()`. Resolves `undefined` before any. `signOut()` does not wait for these node
    * calls, and only a node's first request, within a 48 KiB keepalive allowance, may outlive a page that unloads
-   * right after it.
+   * right after it, once the retire code (loaded when the session starts) has loaded.
    */
   nodeSignOutStatus = (): Promise<NodeSignOutStatus | undefined> =>
     this.signedOutNode?.nodeSignOutStatus() ?? Promise.resolve(undefined);

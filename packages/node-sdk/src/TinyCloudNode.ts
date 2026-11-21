@@ -106,7 +106,6 @@ import {
   IENSResolver,
   IWasmBindings,
   ISessionManager,
-  type PersistedSessionProof,
   type WasmRecapEntry,
   ISpaceCreationHandler,
   SignInOptions,
@@ -257,7 +256,7 @@ import type { SignStrategy } from "./authorization/strategies";
 import { AccountService } from "./account/AccountService";
 import { FileSessionStorage } from "./storage/FileSessionStorage";
 import { clearPersistedSessionIfOwn } from "./storage/clearPersistedSessionIfOwn";
-import { retireSessionKeys, SessionHosts, type NodeSignOutStatus, type RetireSessionKeyInput } from "./sessionRetire";
+import { SessionHosts, type LeavingSession, type NodeSignOutStatus, type SessionRootProof } from "./sessionRetire";
 import { MemorySessionStorage } from "./storage/MemorySessionStorage";
 import type { PortableDelegation, SessionGrantProof, VerifiedSessionGrant } from "./delegation";
 import { DelegatedAccess, type DelegatedEncryptionFactory } from "./DelegatedAccess";
@@ -1194,9 +1193,6 @@ type DelegationPlan =
       caveated?: PermissionEntry[];
     };
 
-/** A wallet-signed root delegation, with what validation needs to bind it to a session key. */
-type SessionRootProof = Omit<PersistedSessionProof, "jwk" | "spaces" | "verificationMethod">;
-
 interface RuntimePermissionGrant {
   session: ServiceSession;
   delegation: PortableDelegation;
@@ -1252,11 +1248,18 @@ function base64UrlDecode(value: string): Uint8Array {
   return new Uint8Array(bytes);
 }
 
-/** A compact JWT of `header` and `payload`, signed with `jwk` (Ed25519). */
-async function signJwtWithJwk(header: object, payload: object, jwk: object): Promise<string> {
-  const encode = (part: object) => base64UrlEncode(new TextEncoder().encode(JSON.stringify(part)));
-  const signingInput = `${encode(header)}.${encode(payload)}`;
-  return `${signingInput}.${base64UrlEncode(await signBytesWithJwk(new TextEncoder().encode(signingInput), jwk))}`;
+async function signJwtInputWithJwk(
+  signingInput: string,
+  jwk: object,
+): Promise<Uint8Array> {
+  return signBytesWithJwk(new TextEncoder().encode(signingInput), jwk);
+}
+
+/** A sign-out status naming every host `failed` with `error`: the retire was not sent. `undefined` with no host. */
+function retireNotSent(hosts: readonly string[], error: unknown): NodeSignOutStatus | undefined {
+  const message = String(error).slice(0, 200);
+  const notConfirmed = [...new Set(hosts.filter(Boolean))].map((host) => ({ host, reason: "failed" as const, message }));
+  return notConfirmed.length ? { confirmed: [], nothingToRecord: [], notConfirmed } : undefined;
 }
 
 async function signBytesWithJwk(bytes: Uint8Array, jwk: object): Promise<Uint8Array> {
@@ -1292,7 +1295,11 @@ async function rewriteInvocationAudience(
   const header = JSON.parse(new TextDecoder().decode(base64UrlDecode(headerPart)));
   const payload = JSON.parse(new TextDecoder().decode(base64UrlDecode(payloadPart)));
   payload.aud = audience;
-  return signJwtWithJwk(header, payload, jwk);
+  const signingInput = `${base64UrlEncode(
+    new TextEncoder().encode(JSON.stringify(header)),
+  )}.${base64UrlEncode(new TextEncoder().encode(JSON.stringify(payload)))}`;
+  const signature = await signJwtInputWithJwk(signingInput, jwk);
+  return `${signingInput}.${base64UrlEncode(signature)}`;
 }
 
 function authorizationHeader(headers: Record<string, string> | [string, string][]): string {
@@ -1579,7 +1586,7 @@ export class TinyCloudNode {
   /** The caller's result can reject before captured cleanup releases the sign-in gate. */
   private signOutResult?: Promise<void>;
   /** The latest session-ending sign-out's node calls (TC-3443). Never rejects. */
-  private sessionRetire?: Promise<NodeSignOutStatus>;
+  private sessionRetire?: Promise<NodeSignOutStatus | undefined>;
   /**
    * Incremented by every sign-out. A sign-in or restore records it when it
    * starts and does not establish its session once it has changed.
@@ -3068,10 +3075,23 @@ export class TinyCloudNode {
    * complete on every node only when `nothingToRecord` and `notConfirmed`
    * are both empty. In a browser, a node's first request outlives a page that
    * unloads right after sign-out only while the sign-out's requests stay
-   * under the keepalive allowance (48 KiB in total).
+   * under the keepalive allowance (48 KiB in total) and the retire code,
+   * loaded when the session starts, has loaded. If it can't load, every node
+   * is `failed`.
    */
   nodeSignOutStatus(): Promise<NodeSignOutStatus | undefined> {
     return this.sessionRetire ?? Promise.resolve(undefined);
+  }
+
+  /**
+   * The sign-out retire module, loading. Called at session start, so a sign-out right after has it; a load that fails
+   * there is ignored and tried again at sign-out. Not a static import on purpose: web-sdk's root size budget keeps it
+   * a separate file.
+   */
+  private sessionRetireModule() {
+    const loading = import("./session-retire.js");
+    loading.catch(() => undefined);
+    return loading;
   }
 
   private endSession(): Promise<void> {
@@ -3088,20 +3108,17 @@ export class TinyCloudNode {
 
     // Taken before teardown replaces the key: the retire is signed with the leaving key.
     // A throw here never stops local sign-out; every host it knew of is then reported unconfirmed.
-    let retire: RetireSessionKeyInput[] | undefined;
+    let retire: LeavingSession | undefined;
     try {
       retire = this.leavingSessionRetire();
     } catch (error) {
-      const message = String(error).slice(0, 200);
-      const notSent: NodeSignOutStatus = { confirmed: [], nothingToRecord: [], notConfirmed: [] };
+      let hosts: string[] = [];
       try {
-        for (const host of new Set([...this.sessionHosts.list(), ...this.hosts].filter(Boolean))) {
-          notSent.notConfirmed.push({ host, reason: "failed", message });
-        }
+        hosts = [...this.sessionHosts.list(), ...this.hosts];
       } catch {
         // Hosts unreadable too: no status, rather than one that names no unconfirmed host.
       }
-      this.sessionRetire = notSent.notConfirmed.length ? Promise.resolve(notSent) : undefined;
+      this.sessionRetire = Promise.resolve(retireNotSent(hosts, error));
     }
 
     const leavingAddress = this.address ?? this._restoredTcSession?.address;
@@ -3119,7 +3136,13 @@ export class TinyCloudNode {
       teardownFailure = { error };
     }
     // Runs beside local sign-out, which never waits for it. The captured keys leave memory when it settles.
-    if (retire) this.sessionRetire = retireSessionKeys(retire);
+    // The module is normally loaded at session start; a module that fails to load is a retire not sent.
+    if (retire) {
+      const leaving = retire;
+      this.sessionRetire = this.sessionRetireModule()
+        .then(({ retireLeavingSession }) => retireLeavingSession(leaving))
+        .catch((error: unknown) => retireNotSent(leaving.hosts, error));
+    }
 
     // Start auth invalidation independently of every cleanup wait, even if key replacement failed.
     let invalidation: Promise<void>;
@@ -3179,11 +3202,14 @@ export class TinyCloudNode {
     return result;
   }
 
-  /** What sign-out needs to retire the current session key and its bootstrap keys, or `undefined` with no session. */
-  private leavingSessionRetire(): RetireSessionKeyInput[] | undefined {
+  /**
+   * What sign-out needs to retire the current session key and its bootstrap
+   * keys, or `undefined` with no session. Taken synchronously, before
+   * teardown; `session-retire` picks each key's roots from it.
+   */
+  private leavingSessionRetire(): LeavingSession | undefined {
     const session = this.currentTinyCloudSession() ?? this._activeServiceSession;
     if (!session) return undefined;
-    const jwk = session.jwk;
     const hosts = [...this.sessionHosts.list(), ...this.hosts].filter(Boolean);
     const knownNodeIds = new Map<string, string>();
     try {
@@ -3198,71 +3224,18 @@ export class TinyCloudNode {
     } catch {
       // An unreadable cached record never stops sign-out; the recorded hosts are still asked.
     }
-    // The session key, then each bootstrap key (the primary one may be reused as a bootstrap key).
-    const keys = new Map<string, object>([[session.verificationMethod, jwk]]);
-    for (const bootstrap of this.bootstrapSessions) {
-      if (!keys.has(bootstrap.verificationMethod)) keys.set(bootstrap.verificationMethod, bootstrap.jwk);
-    }
-    return [...keys].map(([verificationMethod, key]) => ({
-      signer: { verificationMethod, signJwt: (header, payload) => signJwtWithJwk(header, payload, key) },
-      hosts,
-      delegations: this.sessionRootDelegations(key),
-      knownNodeIds,
-    }));
-  }
-
-  /**
-   * Every wallet-signed root this client holds for `jwk`'s key, as `/delegate`
-   * takes it: the session's own, each bootstrap key's, each installed runtime grant's, and each
-   * runtime-grant root signed but never posted. Expired and not-yet-valid
-   * roots are kept: the host skips the expired ones, and a not-yet-valid one is
-   * authority the retire must outlast. A root that does not verify against
-   * the key (another key's delegatee, a bad signature, malformed) is left
-   * out: one such entry makes a host refuse the whole retire.
-   */
-  private sessionRootDelegations(jwk: object): string[] {
     const bindings = this.wasmBindings;
-    const validate = bindings.validateSessionRoot?.bind(bindings)
-      ?? bindings.validateSessionGrant?.bind(bindings)
-      ?? bindings.validatePersistedSession?.bind(bindings);
-    if (validate === undefined) return [];
-    const session = this.currentTinyCloudSession();
-    const candidates: SessionRootProof[] = [...this.signedSessionRoots];
-    if (session) candidates.push(session);
-    candidates.push(...this.bootstrapSessions);
-    for (const { delegation } of this.runtimePermissionGrants) {
-      if (delegation.siweProof === undefined) continue;
-      candidates.push({
-        delegationHeader: delegation.delegationHeader,
-        delegationCid: delegation.cid,
-        spaceId: delegation.spaceId,
-        address: delegation.ownerAddress,
-        chainId: delegation.chainId,
-        siwe: delegation.siweProof.siwe,
-        signature: delegation.siweProof.signature,
-      });
-    }
-    const roots = new Set<string>();
-    for (const candidate of candidates) {
-      const authorization = candidate.delegationHeader.Authorization;
-      if (roots.has(authorization)) continue;
-      try {
-        validate({
-          delegationHeader: { Authorization: authorization },
-          delegationCid: candidate.delegationCid,
-          spaceId: candidate.spaceId,
-          jwk,
-          address: canonicalizeAddress(candidate.address),
-          chainId: candidate.chainId,
-          siwe: candidate.siwe,
-          signature: candidate.signature,
-        });
-        roots.add(authorization);
-      } catch {
-        // Not a live root of this key.
-      }
-    }
-    return [...roots];
+    const current = this.currentTinyCloudSession();
+    return {
+      keys: [session, ...this.bootstrapSessions],
+      hosts,
+      knownNodeIds,
+      roots: [...this.signedSessionRoots, ...(current ? [current] : []), ...this.bootstrapSessions],
+      grants: this.runtimePermissionGrants.map(({ delegation }) => delegation),
+      canonicalizeAddress,
+      validate: (bindings.validateSessionRoot ?? bindings.validateSessionGrant ?? bindings.validatePersistedSession)?.bind(bindings),
+      signBytes: signBytesWithJwk,
+    };
   }
 
   /**
@@ -3570,6 +3543,7 @@ export class TinyCloudNode {
     this.bootstrapSessions = [];
     this.confirmedHostedSpaceIds.clear();
     this.sessionHosts.reset();
+    void this.sessionRetireModule();
     this.hostedOwnedSpaceIds.clear();
 
     const signInAttempt = this.latestSessionAttempt;
@@ -5410,6 +5384,7 @@ export class TinyCloudNode {
     this.cancelOwnedSpaceHosts();
     this._restoredNodeFeatures = undefined;
     this.sessionHosts.reset(sessionData.activatedHosts);
+    void this.sessionRetireModule();
     if (this.auth) {
       this.auth.installRestoredSession(stagedManager, stagedTcSession, [stagedHost]);
       this._restoredTcSession = undefined;
@@ -10293,6 +10268,7 @@ export class TinyCloudNode {
       ...prepared,
       signature,
     });
+    void this.sessionRetireModule();
     // Sign-out sends this root with the retire even if no host stores it (TC-3443).
     this.signedSessionRoots.push({
       delegationHeader: invokerSession.delegationHeader,
