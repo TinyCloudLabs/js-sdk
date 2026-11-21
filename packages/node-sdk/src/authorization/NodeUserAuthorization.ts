@@ -600,6 +600,19 @@ export class NodeUserAuthorization implements IUserAuthorization {
     return this.getCapabilityRequest();
   }
 
+  /**
+   * The manifests a sign-in checks for caveats before any signer call. A template whose owner
+   * is not bound yet is checked as published: resolving the token adds no caveats.
+   * @internal
+   */
+  get manifestsForCaveatRefusal(): readonly Manifest[] | undefined {
+    if (this._capabilityRequest === undefined && this._manifest !== undefined && this._manifestOwnerDid === undefined) {
+      const manifests = Array.isArray(this._manifest) ? this._manifest : [this._manifest];
+      if (manifests.some(manifestUsesOwnerPlaceholder)) return manifests;
+    }
+    return this.getCapabilityRequest()?.manifests;
+  }
+
   get hosts(): string[] {
     return this.tinycloudHosts ? [...this.tinycloudHosts] : [];
   }
@@ -1007,6 +1020,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
   }
 
   private async refreshNamedKeyFeatureForSignIn(address: string, chainId: number): Promise<void> {
+    this.bindManifestOwner(address, chainId);
     const request = this.getCapabilityRequest();
     const siweDomain = this.siweConfig?.domain ?? this.domain;
     const hasNamedKeys = request?.manifests.some((manifest) =>
@@ -1114,6 +1128,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
     address: string,
     chainId: number,
   ): { entries: PermissionEntry[]; primarySpaceId: string } {
+    this.bindManifestOwner(address, chainId);
     const request = this.getCapabilityRequest();
     if (request === undefined) {
       const primarySpaceId = makePkhSpaceId(address, chainId, this.spacePrefix);
@@ -1241,6 +1256,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
     spaceAbilities?: Record<string, AbilitiesMap>;
     rawAbilities?: Record<string, string[]>;
   } {
+    this.bindManifestOwner(address, chainId);
     const request = this.getCapabilityRequest();
     if (request === undefined) {
       const defaultNetworkId = this.defaultEncryptionNetworkId(address, chainId);

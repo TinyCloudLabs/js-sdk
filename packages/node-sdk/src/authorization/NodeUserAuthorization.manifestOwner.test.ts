@@ -83,3 +83,29 @@ test("the token anywhere but a permission path stops the sign-in before OpenKey 
   const inSpace: Manifest = { ...template, permissions: [{ ...template.permissions[0]!, space: "{owner}" }, ...template.permissions.slice(1)] };
   await expect(prepare(inSpace, ownerA)).rejects.toBeInstanceOf(ManifestValidationError);
 });
+
+test("the token only in a name is refused, with no path holding it", async () => {
+  const onlyName: Manifest = { app_id: "xyz.tinycloud.example.name", name: "{owner}", permissions: [{ service: "tinycloud.kv", space: "applications", path: "/", actions: ["tinycloud.kv/get"] }] };
+  await expect(prepare(onlyName, ownerA)).rejects.toBeInstanceOf(ManifestValidationError);
+});
+
+test("a wallet that switches accounts between two reads is asked for paths under the account that signs", async () => {
+  const addressA = await ownerA.getAddress();
+  const addressB = await ownerB.getAddress();
+  let reads = 0;
+  const wasm = new NodeWasmBindings();
+  const prepared: string[] = [];
+  const original = wasm.prepareSession;
+  wasm.prepareSession = (...args) => { prepared.push(JSON.stringify(args[0])); return original(...args); };
+  const auth = new NodeUserAuthorization({
+    signer: { getAddress: async () => (reads++ === 0 ? addressA : addressB), getChainId: async () => 1, signMessage: message => ownerB.signMessage(message) },
+    wasmBindings: wasm, sessionStorage: new MemorySessionStorage(), requireExistingAccount: false,
+    tinycloudRegistryUrl: registry, tinycloudHosts: ["https://tinycloud.test"],
+    domain: "example.com", uri: "https://example.com", signStrategy: { type: "auto-sign" },
+    manifest: template,
+  });
+  await auth.signIn().catch(() => undefined);
+  expect(prepared.length).toBeGreaterThan(0);
+  expect(prepared[0]).toContain(`did:pkh:eip155:1:${addressB}`);
+  expect(prepared[0]).not.toContain(addressA);
+});

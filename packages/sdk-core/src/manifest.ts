@@ -287,9 +287,12 @@ function ownerTokenPlace(value: unknown): string | undefined {
   return undefined;
 }
 
-/** True when a `permissions[].path` of the manifest holds {@link MANIFEST_OWNER_PLACEHOLDER}. */
+/**
+ * True when the manifest holds {@link MANIFEST_OWNER_PLACEHOLDER} anywhere: in a path, a
+ * value or an object key. {@link resolveManifestOwner} then decides whether the place is allowed.
+ */
 export function manifestUsesOwnerPlaceholder(manifest: Manifest): boolean {
-  return (manifest.permissions ?? []).some((entry) => entry.path.includes(MANIFEST_OWNER_PLACEHOLDER));
+  return JSON.stringify(manifest).includes(MANIFEST_OWNER_PLACEHOLDER);
 }
 
 /**
@@ -311,7 +314,7 @@ export function resolveManifestOwner(manifest: Manifest, ownerDid: string): Mani
       throw new ManifestValidationError(`${MANIFEST_OWNER_PLACEHOLDER} is only allowed in permissions[].path, found in ${found}`);
     }
   }
-  if (!manifestUsesOwnerPlaceholder(manifest)) return manifest;
+  if (!permissions.some((entry) => entry.path.includes(MANIFEST_OWNER_PLACEHOLDER))) return manifest;
   return {
     ...manifest,
     permissions: permissions.map((entry) => ({ ...entry, path: entry.path.split(MANIFEST_OWNER_PLACEHOLDER).join(ownerDid) })),

@@ -3352,7 +3352,7 @@ export class TinyCloudNode {
 
   private async signInWith(performSignIn: () => Promise<unknown>, identity?: PreparedOpenKeyAuthorization["identity"]): Promise<void> {
     // Refuse a caveated manifest before any signer, registry or host call.
-    refuseCaveated(this.auth?.capabilityRequest?.manifests);
+    refuseCaveated(this.auth?.manifestsForCaveatRefusal);
     // Read synchronously: a sign-out called after this sign-in started wins,
     // while a sign-out already in progress finishes before it starts.
     const epoch = this.sessionEpoch;
