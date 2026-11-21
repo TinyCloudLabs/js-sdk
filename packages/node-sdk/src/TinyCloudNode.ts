@@ -2995,6 +2995,7 @@ export class TinyCloudNode {
             await this.ensureOwnedSpaceHostedById(this.accountSpaceId);
           }
         },
+        canWriteAccountIndex: () => this.canWriteAccountIndex(),
       });
     }
     return this._account;
@@ -4244,6 +4245,7 @@ export class TinyCloudNode {
         getAccountDb: () => sql.db("account"),
         ensureAccountSpaceHosted: () =>
           this.ensureOwnedSpaceHostedById(accountSpaceId, signal),
+        canWriteAccountIndex: () => this.canWriteAccountIndex(),
       }),
     };
   }
@@ -4400,6 +4402,30 @@ export class TinyCloudNode {
       (operation) =>
         operation.service === "space" &&
         this.actionContains(operation.action, "tinycloud.space/list"),
+    );
+  }
+
+  /**
+   * Whether the current primary session's recap covers the account index
+   * writes (`tinycloud.sql` write and schema on the owned account space's
+   * `account` database). A session with no parseable recap keeps today's
+   * behavior and attempts them.
+   */
+  private canWriteAccountIndex(): boolean {
+    const session = this.currentTinyCloudSession();
+    const operations = session ? this.recapOperationsFromSession(session) : [];
+    if (operations.length === 0) {
+      return true;
+    }
+    return ["tinycloud.sql/write", "tinycloud.sql/schema"].every((action) =>
+      operations.some((granted) =>
+        this.operationCovers(granted, {
+          spaceId: this.ownedSpaceId(ACCOUNT_REGISTRY_SPACE),
+          service: "sql",
+          path: "account",
+          action,
+        }),
+      ),
     );
   }
 
