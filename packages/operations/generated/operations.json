@@ -30230,7 +30230,7 @@
       "id": "tinycloud.share.publish_email",
       "version": 1,
       "title": "Share a file with one email address",
-      "description": "Encrypt a text file and share it with one email address. Only the person who proves that address through the TinyCloud OpenCredentials issuer can open it, and TinyCloud emails them the invitation. If this session cannot decrypt, the owner is first asked to approve the share's own key. The permission it needs lets the agent save, read and delete files under the owner's `shares/` folder, so it can delete the owner's other shares and see their encrypted copies, but it can't open them; tell the owner so when you ask. Every share is recorded in the owner's share history, so `tinycloud share list` shows it and `tinycloud share revoke <id>` ends it.",
+      "description": "Encrypt a text file and share it with one email address. Only the person who proves that address through the TinyCloud OpenCredentials issuer can open it, and TinyCloud emails them the invitation. If this session cannot decrypt, the owner is first asked to approve the share's own key. The permission it needs lets the agent save, read, replace and delete files under the owner's `shares/` folder, so it can delete or change the owner's other shares and see their encrypted copies, but it can't open them; tell the owner so when you ask. Every share is recorded in the owner's share history, so `tinycloud share list` shows it and `tinycloud share revoke <id>` ends it.",
       "input": {
         "type": "object",
         "properties": {

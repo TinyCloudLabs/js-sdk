@@ -430,7 +430,7 @@ is never returned. When the session cannot decrypt, the first call returns
 lasts at most a day); after the owner approves, call the tool again with the same input.
 If the invitation cannot be delivered the share is revoked: `delivery: "failed"`
 with `revoked: true`, or `revoked: false` and the `shareId` for the owner to stop it.
-The permission it needs lets the agent save, read and delete files under the owner's `shares/` folder, so it can delete the owner's other shares and see their encrypted copies, but it can't open them. Every share is recorded in the owner's share history: `tinycloud share list` shows it and `tinycloud share revoke <id>` ends it. Domain and DID recipients are not supported.
+The permission it needs lets the agent save, read, replace and delete files under the owner's `shares/` folder, so it can delete or change the owner's other shares and see their encrypted copies, but it can't open them. Every share is recorded in the owner's share history: `tinycloud share list` shows it and `tinycloud share revoke <id>` ends it. Domain and DID recipients are not supported.
 
 `tinycloud_secrets_status` is read-only and never signs in. It uses only the
 profile's stored session and reports, without reading any value, whether each
