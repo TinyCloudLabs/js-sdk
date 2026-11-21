@@ -83,7 +83,8 @@ jobs:
           bash "$GITHUB_WORKSPACE/.github/scripts/run-private-tests.sh" bun test packages/node-sdk/src/TinyCloudNode.accountRegistrySync.test.ts
           bash "$GITHUB_WORKSPACE/.github/scripts/run-private-tests.sh" bun test packages/mcp/src/results.test.ts packages/mcp/src/tools.test.ts packages/mcp/src/stdio.test.ts packages/mcp/src/http.test.ts packages/mcp/src/remote-store.test.ts packages/mcp/src/http.e2e.test.ts
           bash "$GITHUB_WORKSPACE/.github/scripts/run-private-tests.sh" bun test packages/cli/src/commands/share.test.ts
-          bash "$GITHUB_WORKSPACE/.github/scripts/run-private-tests.sh" bun test packages/cli/src/commands/share-email-unavailable.test.ts
+          bash "$GITHUB_WORKSPACE/.github/scripts/run-private-tests.sh" bun test packages/cli/src/commands/share-email.test.ts
+          bash "$GITHUB_WORKSPACE/.github/scripts/run-private-tests.sh" bun test packages/cli/src/share/adapters-invite-approval.test.ts
           bash "$GITHUB_WORKSPACE/.github/scripts/run-private-tests.sh" bun test packages/cli/src/commands/share-addressed-unavailable.test.ts
           bash "$GITHUB_WORKSPACE/.github/scripts/run-private-tests.sh" bun test packages/cli/src/commands/share-receive-email-claim.test.ts
           bash "$GITHUB_WORKSPACE/.github/scripts/run-private-tests.sh" bun test packages/cli/src/commands/share-artifact.test.ts

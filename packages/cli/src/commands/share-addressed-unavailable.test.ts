@@ -91,14 +91,14 @@ describe("domain and DID addressed publication release refusal, through the regi
     expect(counts.profileLookups).toBe(0);
   });
 
-  test("still refuses an exact email with its own message, before the adapter", async () => {
+  test("does not refuse an exact email: it gets past the command and the adapter's target check", async () => {
     const counts = realServices();
-    const result = await runPublish(["/nonexistent/tc2242-never-read-source", "--to", "person@example.com"]);
-    expect(result.error.code).toBe("UNAVAILABLE");
-    expect(result.exitCode).toBe(4);
-    expect(result.error.message).toBe("email-addressed shares are not available in this release; nothing was shared");
-    expect(counts.requests).toEqual([]);
-    expect(counts.profileLookups).toBe(0);
+    await withSource(async (source) => {
+      const result = await runPublish([source, "--to", "person@example.com"]);
+      expect(result.error.message).not.toMatch(/not available in this release/);
+    });
+    // The real path needs an authenticated profile, so the lookup happens (the proof it proceeded).
+    expect(counts.profileLookups).toBeGreaterThan(0);
   });
 
   test.each([["--to anyone", ["--to", "anyone"]], ["the default target", []]])("does not refuse a bearer publish (%s): it gets past the adapter's target check", async (_label, to) => {
