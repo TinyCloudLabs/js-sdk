@@ -1887,9 +1887,7 @@ export class TinyCloudWeb {
       suppressPromptFor30Days: () =>
         suppressPermissionPromptFor30Days(manifest),
       grantPermissions,
-    }, openKeySigns && options?.allowPromptSuppression === undefined
-      ? { ...options, allowPromptSuppression: false }
-      : options);
+    }, openKeySigns ? { ...options, allowPromptSuppression: false } : options);
     return result.approved
       ? {
           approved: true,

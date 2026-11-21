@@ -22,7 +22,7 @@ export function openKeySignPresentation(
   onBehalfOf: string | undefined,
 ): OpenKeySignPresentation {
   const icon = manifest.icon;
-  const iconIsAccepted = icon !== undefined && icon.length <= MAX_ICON_URI_LENGTH && ICON_DATA_URI.test(icon);
+  const iconIsAccepted = typeof icon === "string" && icon.length <= MAX_ICON_URI_LENGTH && ICON_DATA_URI.test(icon);
   return {
     protocolVersion: 1,
     displayName: manifest.name,

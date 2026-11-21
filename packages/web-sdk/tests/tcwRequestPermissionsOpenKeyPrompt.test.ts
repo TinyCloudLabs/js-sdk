@@ -100,13 +100,13 @@ describe("an OpenKey client that does not accept a presentation", () => {
     expect(signMessage).toHaveBeenCalledWith({ message: SIWE, keyId: "key-1" }, { mode: "popup" });
   });
 
-  test("a caller's explicit allowPromptSuppression still decides the 30-day option", async () => {
+  test("a caller's allowPromptSuppression: true does not bring the 30-day option back", async () => {
     const { config } = openKeyConfig(undefined);
     const { tcw, showModal } = web(node(), config);
 
     await tcw.requestPermissions([ENTRY], { allowPromptSuppression: true });
 
-    expect(showModal.mock.calls[0]![0].allowSuppression).toBeUndefined();
+    expect(showModal.mock.calls[0]![0].allowSuppression).toBe(false);
   });
 });
 
@@ -160,5 +160,10 @@ describe("the presentation's icon", () => {
     for (const icon of ["https://example.com/icon.png", "data:image/svg+xml;base64,AAAA", `data:image/png;base64,${"A".repeat(32 * 1024)}`]) {
       expect(openKeySignPresentation({ name: "App", icon }, undefined)).toEqual({ protocolVersion: 1, displayName: "App" });
     }
+  });
+
+  test("is left out when the manifest's icon is not a string", () => {
+    const icon = ["data:image/png;base64,AAAA"] as unknown as string;
+    expect(openKeySignPresentation({ name: "App", icon }, undefined)).toEqual({ protocolVersion: 1, displayName: "App" });
   });
 });
