@@ -1992,6 +1992,7 @@ export class TinyCloudWeb {
    *
    * `options.openKey: true` declares that the signer signs through OpenKey and passes the `presentation` it receives with
    * the message on to OpenKey's approval. Permission requests then skip the SDK's own prompt, which OpenKey's approval replaces.
+   * Set it only for a signer that shows its own approval screen for every request; it is read from this call alone.
    */
   setRuntimePermissionSigner(signer?: RuntimePermissionSigner, options?: { openKey?: boolean }): void {
     if (signer === undefined) {
