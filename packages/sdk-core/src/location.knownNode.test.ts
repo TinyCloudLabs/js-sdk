@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { isKnownTinyCloudNode } from "./tinycloud-node";
+import { isKnownTinyCloudNode } from "./location";
 
 const node = "https://node.tinycloud.xyz";
 const tee = "https://tee.node.tinycloud.xyz";

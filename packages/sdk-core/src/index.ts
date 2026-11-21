@@ -1038,6 +1038,7 @@ export {
   createLocalStorageLocalNodeIdentityStore,
   discoverLocalTinyCloudNode,
   exactHttpOrigin,
+  isKnownTinyCloudNode,
   fetchLocationRecord,
   httpUrlToMultiaddr,
   locationPayloadForRecord,
@@ -1235,7 +1236,7 @@ export {
   type UnsignedPolicyStatus,
 } from "./policy";
 
-export { endToEndNodeHost, isKnownTinyCloudNode, sameTinyCloudNode } from "./tinycloud-node";
+export { endToEndNodeHost, sameTinyCloudNode } from "./tinycloud-node";
 export { AccountSetupRequiredError } from "./account-setup";
 export { FIRST_PARTY_ORIGINS, FIRST_PARTY_PAGES_SUBDOMAINS, isFirstPartyOrigin } from "@tinycloud/bootstrap";
 export { verifiedDelegationRouting, delegationTouchesVault, sessionTouchesVault, spaceIdsEqual } from "./delegations/portable";
