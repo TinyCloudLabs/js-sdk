@@ -1,5 +1,74 @@
 # @tinycloudlabs/web-sdk
 
+## 3.14.0-beta.1
+
+### Patch Changes
+
+- Updated dependencies
+  - @tinycloud/node-sdk@3.14.0-beta.1
+
+## 3.13.1-beta.0
+
+### Patch Changes
+
+- 8bfd1d1: The permission prompt can name the app a request is for (`onBehalfOf`) and can hide the "Do not show me again for 30 days" option.
+
+  Details: TC-3448
+
+## 3.13.0
+
+### Minor Changes
+
+- 9f3ca26: `DelegatedAccess` (from `useDelegation`) can read Secrets-app secrets through the delegation: `access.encryption` and `access.readSecret({ name, scope? })`, which returns the same `SecretReadResult` as `TinyCloudNode.readSecret`. A read needs `tinycloud.kv/get` on the secret's record and `tinycloud.encryption/decrypt` in the delegation. The decrypt permission isn't limited to that secret: it covers the owner's default network.
+
+  The new `@tinycloud/node-sdk/runtime-grants` and `@tinycloud/node-sdk/secret-read` entry points are internal: don't import them directly, as they can change in any release.
+
+  Details: TC-3338
+
+- 2395340: Share one item made of several resources with a single link, and open it in an app.
+  - `sharing.generate({ resources: [{ path, actions? }, …] })` grants up to 16 distinct paths in one share, with one owner approval when a new root is needed. `path`/`actions` keep working for a single resource. `onRootDelegationNeeded` now also receives `resources`, and a root it returns must be the owner's signature over every resource.
+  - `sharing.delegateReceivedShare` signs one child over every shared resource (or narrows to one with `path`), and reports a node refusal for a revoked chain as `REVOKED` and an expired one as `AUTH_EXPIRED`.
+  - `inspectShareToken(token)` checks a share token offline against the owner's wallet signature and returns the owner, the exact resources, when access ends and the root delegation's CID. Use it for anything shown before a share is claimed.
+  - `useDelegation` on a delegation of several resources gives a `kv` that takes full keys; `DelegatedAccess.resources` and `ShareAccess.resources` list every resource.
+  - `@tinycloud/share-sdk/native-link` adds `publishNativeShareLink` and `openNativeShareLink`: a short link to a sealed record carrying the share and up to 8 KiB of app display data, opened without reading the owner's node. The display data is not signed by the owner.
+
+  Details: TC-3194
+
+- 634753d: `TinyCloudNode.delegateTo` accepts `notBefore?: Date`, signed into the delegation's UCAN as `nbf` (whole seconds, floored like the expiry) on both the session-key and the runtime-grant paths, so a delegation can be backdated to cover an issuer clock that runs ahead of the node's. Without it nothing changes and no `nbf` is signed. It is refused when it is in the future (the node checks a delegation against its own clock with no leeway, so a future `nbf` fails activation), when it is not before the expiry that will actually be signed (including the session and runtime-grant caps), when it is not a valid `Date`, or when combined with `forceWalletSign`, whose SIWE path cannot carry it. `@tinycloud/web-sdk` re-exports the extended `DelegateToOptions`.
+
+  Details: TC-3172
+
+- 9f3ca26: `grantRuntimePermissions` (and `TinyCloudWeb.requestPermissions`) asks for one approval for a request across several spaces and returns one `PortableDelegation` per space. A requested space that isn't set up is never created: the call throws `MissingSpacesError` (`code: "SPACE_NOT_FOUND"`, `missingSpaceIds`, and `delegations` for the spaces that were granted). A space this account doesn't own throws before any approval (`code: "SPACE_NOT_OWNED"`). `MissingSpacesError` is exported from `@tinycloud/node-sdk`, `@tinycloud/node-sdk/core` and `@tinycloud/web-sdk`.
+
+  Details: TC-3338
+
+- 400cf7f: A secret can carry an optional type: `secret` (the default), `totp`, `username` or `password`. `secrets.put(name, value, { type })` stores the type inside the encrypted secret. The new `secrets.getEntry(name)` returns `{ value, type, createdAt, updatedAt }`; a secret with no stored type, or with a type the client doesn't know, reads as `secret`.
+
+  `secrets.get` is unchanged, and older clients still read typed secrets, since they only need `value`. Storing `secret`, or no type, writes the same payload as before.
+
+  `@tinycloud/sdk-services/secrets/totp` (not exported from the package root) adds `parseTotpSeed` (an `otpauth://totp/` link or a bare base32 seed), `generateTotp` (RFC 6238, SHA1/SHA256/SHA512) and `totpSecondsRemaining`.
+
+  `tinycloud secrets put --type <secret|totp|username|password>` sets the type. For `totp`, the value must be a valid seed: an `otpauth://totp/` link or a bare base32 seed.
+
+  Details: TC-3285
+
+### Patch Changes
+
+- Updated dependencies [9f3ca26]
+- Updated dependencies [2395340]
+- Updated dependencies [634753d]
+- Updated dependencies [b758e71]
+- Updated dependencies [c7741ab]
+- Updated dependencies [9f3ca26]
+- Updated dependencies [1f961e4]
+- Updated dependencies [313b056]
+- Updated dependencies [400cf7f]
+- Updated dependencies [7399b14]
+  - @tinycloud/node-sdk@3.13.0
+  - @tinycloud/sdk-core@3.13.0
+  - @tinycloud/share-sdk@1.6.0
+  - @tinycloud/replica@0.4.6
+
 ## 3.13.0-beta.9
 
 ### Patch Changes
