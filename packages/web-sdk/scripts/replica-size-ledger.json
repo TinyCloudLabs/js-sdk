@@ -3435,5 +3435,23 @@
       "ceiling": { "index.mjs": 1529858, "index.cjs": 1462849 }
     },
     "reason": "TinyCloudNode accepts a signed session grant spanning several of the owner's spaces, keeps each resource's own space in portable grants, and picks a manifest sign-in's primary space among its own requested spaces; node-sdk is bundled into the web-sdk root. Canonical Node 22/Bun 1.3.14 CI on #1060 (53e4dc78, master c5a7f854 merged in) measured index.mjs 1529858 and index.cjs 1462849 gzip -9 bytes: +186 and +180 over the TC-3448 ceilings 1529672 and 1462669. No other ceiling moves. Details: TC-2490"
+  },
+  "tc3704OpenKeyPromptRoot": {
+    "label": "the SDK permission prompt is skipped when OpenKey signs and shows the request (TC-3704)",
+    "ruling": "size-ruling: TC-3704 row tc3704OpenKeyPromptRoot index.mjs 1530206 (+348), index.cjs 1463143 (+294) gzip bytes over the tc2490 ceilings, CI's canonical figure. Details: TC-3704",
+    "base": "cb3edeab4f66ae2fc7f84243c7b8fdc3a15fc812",
+    "sourceCommits": ["ac08001eab851e5e4965a855f3179c791831fd00"],
+    "canonicalCI": {
+      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44938951455",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44938951455/job/136951745776",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44938951455/job/136951745723"
+      ]
+    },
+    "root": {
+      "delta": { "index.mjs": 348, "index.cjs": 294 },
+      "ceiling": { "index.mjs": 1530206, "index.cjs": 1463143 }
+    },
+    "reason": "requestPermissions skips the SDK prompt when OpenKey signs and shows the request, and sends OpenKey the app's name as display-only text with the sign request (TinyCloudWeb, openKeySignPresentation); the web-sdk root bundles both. Canonical Node 22/Bun 1.3.14 CI on #1117 (ac08001e, master cb3edeab) measured index.mjs 1530206 and index.cjs 1463143 gzip -9 bytes: +348 and +294 over the TC-2490 ceilings 1529858 and 1462849. No other ceiling moves. Details: TC-3704"
   }
 }
