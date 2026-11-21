@@ -660,9 +660,10 @@ export async function signLocationRecordV2(
   if ((signer.type === "did:pkh") !== isPkh) {
     throw new LocationRecordValidationError("signer type does not match owner subject");
   }
-  const signature = signer.type === "did:pkh"
+  let signature = signer.type === "did:pkh"
     ? await signer.signMessage(message)
     : base64UrlEncode(await signer.signBytes(new TextEncoder().encode(message)));
+  if (signer.type === "did:pkh") signature = normalizeRecoveryByte(signature);
   const record = validateLocationRecordV2({ ...validated, signature });
   if (!(await verifyLocationRecordV2(record))) {
     throw new LocationRecordValidationError("signature does not verify for owner subject");
@@ -802,6 +803,19 @@ function isV2UtcTimestamp(value: string): boolean {
     minute <= 59 &&
     second <= 59
   );
+}
+
+/** Normalise the ECDSA recovery byte so wallet signatures that use v in {0, 1}
+ *  land at v in {27, 28} before the canonical-signature check rejects them.
+ *  External/hardware wallets differ on this; the registry only accepts {27, 28}.
+ *  Only the last byte is touched; r, s, low-s, and length are untouched. A
+ *  signature already at {27, 28} or any other v value is returned unchanged
+ *  (the canonical check then refuses the unknown v downstream). */
+function normalizeRecoveryByte(signature: string): string {
+  if (!/^0x[0-9a-fA-F]{130}$/.test(signature)) return signature;
+  const v = Number.parseInt(signature.slice(130), 16);
+  if (v === 0 || v === 1) return `${signature.slice(0, 130)}${(v + 27).toString(16).padStart(2, "0")}`;
+  return signature;
 }
 
 function isCanonicalV2Signature(subject: string, signature: string): boolean {
