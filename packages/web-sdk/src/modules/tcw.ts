@@ -146,10 +146,12 @@ export interface RuntimePermissionSigner {
 
 /**
  * The byte-exact message signing the OpenKey SDK's `OpenKey` class offers beside `authorizeTinyCloud`. The SDK always sends a `keyId`.
- * `signMessagePresentation` is 1 on an OpenKey SDK that accepts a `presentation` on the request.
+ * `signMessagePresentation` is 1 on an OpenKey SDK that accepts a `presentation` on the request. `signMessageShowsApproval` is
+ * true when OpenKey's own approval screen shows the request, and false when the connected key signs in an external wallet.
  */
 interface OpenKeyMessageSigner extends OpenKeyConnection {
   readonly signMessagePresentation?: number;
+  readonly signMessageShowsApproval?: boolean;
   signMessage?: (
     request: { message: string; keyId: string; presentation?: OpenKeySignPresentation },
     opts?: { mode?: "iframe" | "popup" | "redirect" },
@@ -1925,14 +1927,15 @@ export class TinyCloudWeb {
   }
 
   /**
-   * Whether OpenKey's own approval shows the app's name, so the SDK prompt is skipped: a bound signer that declared itself
-   * OpenKey passes the presentation on, and the configured OpenKey client accepts one (`signMessagePresentation` is 1).
+   * Whether OpenKey's own approval shows the request, so the SDK prompt is skipped: a bound signer that declared itself
+   * OpenKey passes the presentation on; the configured OpenKey client accepts one (`signMessagePresentation` is 1) and
+   * reports its approval screen shows the request (`signMessageShowsApproval` is true, which an external-wallet key is not).
    * Otherwise the SDK prompt is still shown, without its 30-day option.
    */
   private openKeyShowsApp(): boolean {
     if (this.boundRuntimeSigner() !== undefined) return true;
     const client = this.config?.openkey?.client as (OpenKeyAuthorizeTinyCloud & OpenKeyMessageSigner) | undefined;
-    return this._node?.address !== undefined && typeof client?.signMessage === "function" && client.signMessagePresentation === 1;
+    return this._node?.address !== undefined && typeof client?.signMessage === "function" && client.signMessagePresentation === 1 && client.signMessageShowsApproval === true;
   }
 
   /**

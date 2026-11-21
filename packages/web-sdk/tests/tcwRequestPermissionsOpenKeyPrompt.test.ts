@@ -47,9 +47,15 @@ function web(stub: ReturnType<typeof node>, config: Record<string, unknown>) {
   return { tcw, showModal };
 }
 
-function openKeyConfig(marker: number | undefined) {
+function openKeyConfig(marker: number | undefined, showsApproval: boolean | "unreported" = true) {
   const signMessage = mock(async (_request: SignRequest, _opts?: { mode?: string }) => ({ signature: "0xopenkey" }));
-  const client = { authorizeTinyCloud: mock(), signMessage, lastAuth: CONNECTED, signMessagePresentation: marker };
+  const client = {
+    authorizeTinyCloud: mock(),
+    signMessage,
+    lastAuth: CONNECTED,
+    signMessagePresentation: marker,
+    signMessageShowsApproval: showsApproval === "unreported" ? undefined : showsApproval,
+  };
   return { signMessage, config: { openkey: { client } } };
 }
 
@@ -107,6 +113,27 @@ describe("an OpenKey client that does not accept a presentation", () => {
     await tcw.requestPermissions([ENTRY], { allowPromptSuppression: true });
 
     expect(showModal.mock.calls[0]![0].allowSuppression).toBe(false);
+  });
+});
+
+describe("an OpenKey client whose connected key signs in an external wallet", () => {
+  test("keeps the SDK prompt without its 30-day option, because the wallet shows only the raw message", async () => {
+    const { config } = openKeyConfig(1, false);
+    const { tcw, showModal } = web(node(), config);
+
+    await tcw.requestPermissions([ENTRY], { allowPromptSuppression: true });
+
+    expect(showModal).toHaveBeenCalledTimes(1);
+    expect(showModal.mock.calls[0]![0].allowSuppression).toBe(false);
+  });
+
+  test("keeps the SDK prompt when the client does not say whether its approval shows the request", async () => {
+    const { config } = openKeyConfig(1, "unreported");
+    const { tcw, showModal } = web(node(), config);
+
+    await tcw.requestPermissions([ENTRY]);
+
+    expect(showModal).toHaveBeenCalledTimes(1);
   });
 });
 
