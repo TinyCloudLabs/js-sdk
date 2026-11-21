@@ -1,5 +1,25 @@
 # @tinycloud/cli
 
+## 1.9.0-beta.0
+
+### Minor Changes
+
+- `tinycloud onboard` asks for the whole task in one OpenKey approval. `--with apps` (the default), `--with feed` (the Feed only, without the general apps grant) or `--with apps,feed` chooses the task. `onboard --json` still lists `granted` as `{ space, asks }`, now in sorted space order (`account` before `applications`), and each entry carries the approval's text. If the owner approves fewer spaces than requested, the CLI names the missing space and saves nothing. Onboarding, Share publishing, `tinycloud secrets` and revoking access now send OpenKey a short line saying what the request is for; OpenKey still lists the permissions separately. Device sign-in stays limited to one space.
+
+  `@tinycloud/node-sdk` accepts a signed session grant that spans several of its owner's spaces and keeps each resource's own space in portable grants. A manifest sign-in now picks its primary space among the manifest's own requested spaces: `applications` when requested, otherwise the first in sorted space-id order (previously the first non-`account` space in request order).
+
+  Details: TC-2490
+
+- 228c94d: `tinycloud onboard --with feed` now asks only for what the Feed needs: its two databases and their answer notifications, with no read-only `account` listing. The approval says so ("Set up TinyCloud on this computer: use your Feed, for 7 days."), and onboarding no longer waits for the account space. Any selection that includes the Feed (`--with feed` or `--with apps,feed`) lasts 7 days by default instead of 30; `--with apps,feed` keeps the read-only `account` listing, and `--with apps` is unchanged. A new `--expiry <number><m|h|d|w>` option sets the approval's lifetime for any selection, at most 30 days (the longest an OpenKey approval lasts); a longer or malformed value is refused before anything is created.
+
+  Details: TC-3293
+
+### Patch Changes
+
+- Updated dependencies
+  - @tinycloud/node-sdk@3.14.0-beta.1
+  - @tinycloud/operations@0.9.2-beta.0
+
 ## 1.8.0
 
 ### Minor Changes

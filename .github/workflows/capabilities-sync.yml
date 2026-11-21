@@ -45,7 +45,7 @@ env:
   ANCHOR_NODE_REV: d7f511f52256a076999ab22e0ad9fdcb69699326
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
