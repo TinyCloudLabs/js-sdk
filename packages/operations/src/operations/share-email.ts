@@ -108,7 +108,7 @@ export const shareEmailOperationDefinition: OperationDefinition<ShareEmailInput,
   version: 1,
   title: "Share a file with one email address",
   description:
-    "Encrypt a text file and share it with one email address. Only the person who proves that address through the TinyCloud OpenCredentials issuer can open it, and TinyCloud emails them the invitation. If this session cannot decrypt, the owner is first asked to approve the share's own key. The permission it needs lets the agent save, read, replace and delete files under the owner's `shares/` folder, so it can delete or change the owner's other shares and see their encrypted copies, but it can't open them; tell the owner so when you ask. Every share is recorded in the owner's share history, so `tinycloud share list` shows it and `tinycloud share revoke <id>` ends it.",
+    "Encrypt a text file and share it with one email address. Only the person who proves that address through the TinyCloud OpenCredentials issuer can open it, and TinyCloud emails them the invitation. If this session cannot decrypt, the owner is first asked to approve the share's own key. The permission it needs lets the agent save, read and delete files under the owner's `shares/` folder, so it can change or delete the owner's other shares and see their encrypted copies, but it can't open them; tell the owner so when you ask. Every share is recorded in the owner's share history, so `tinycloud share list` shows it and `tinycloud share revoke <id>` ends it.",
   input: ShareEmailInputSchema,
   output: ShareEmailOutputSchema,
   effects: ["write", "external"],
@@ -297,7 +297,7 @@ export async function executeShareEmail(
         status: "authority_required",
         missing: [{ service: "tinycloud.encryption", path: `${network}/share/`, actions: ["tinycloud.encryption/key.create", "tinycloud.encryption/decrypt"] }],
         request: { requestId: approval.requestId },
-        approval: { kind: "openkey", requestId: approval.requestId, url: approval.approvalUrl, fallback: "Ask the owner to open the approval link and approve the one-key invitation, then call this tool again with the same input. Tell them the agent's permission to share also lets it delete or change their other shares and see their encrypted copies, though not open them." },
+        approval: { kind: "openkey", requestId: approval.requestId, url: approval.approvalUrl, fallback: "Ask the owner to open the approval link and approve the one-key invitation, then call this tool again with the same input. Tell them the agent's permission to share also lets it change or delete their other shares and see their encrypted copies, though not open them." },
         requiresCallerInput: true,
       };
     }
