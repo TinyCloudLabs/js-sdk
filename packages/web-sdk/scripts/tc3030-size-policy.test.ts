@@ -29,7 +29,7 @@ test("TC-3030 records the exact canonical CI root bytes of #987 within the 800-b
     const delta = row.root.delta[format];
     expect(row.root.ceiling[format] - predecessor.root.ceiling[format]).toBe(delta);
     expect(delta).toBeLessThanOrEqual(800);
-    expect(rootCeilingFor({ ...ledger, tc3076ChildExpiryRoot: undefined, tc3168V1DefaultNodeRoot: undefined, tc3172DelegateNotBeforeRoot: undefined, tc3194NativeShareLinksRoot: undefined, tc3243SdkOwnsBusyRetryRoot: undefined, tc3285SecretTypesRoot: undefined, tc3286ShareNoDelegationActionsRoot: undefined, tc2944VaultPathClassifierRoot: undefined, tc3448OnBehalfPromptRoot: undefined, tc2490OneApprovalRoot: undefined }, format)).toEqual({ row: "tc3030FirstPartyOriginsRoot", ceiling: row.root.ceiling[format] });
+    expect(rootCeilingFor({ ...ledger, tc3076ChildExpiryRoot: undefined, tc3168V1DefaultNodeRoot: undefined, tc3172DelegateNotBeforeRoot: undefined, tc3194NativeShareLinksRoot: undefined, tc3243SdkOwnsBusyRetryRoot: undefined, tc3285SecretTypesRoot: undefined, tc3286ShareNoDelegationActionsRoot: undefined, tc2944VaultPathClassifierRoot: undefined, tc3448OnBehalfPromptRoot: undefined, tc2490OneApprovalRoot: undefined, tc3688AccountIndexGuardRoot: undefined }, format)).toEqual({ row: "tc3030FirstPartyOriginsRoot", ceiling: row.root.ceiling[format] });
   }
 
   expect(ancestryPins(ledger, false)).toContainEqual({
