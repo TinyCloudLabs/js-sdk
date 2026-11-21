@@ -319,6 +319,15 @@ async function ensureSecretsNode(
   return ensureAuthenticated(ctx, auth);
 }
 
+function secretCommandReason(action: SecretAction, name?: string): string {
+  switch (action) {
+    case "list": return "See the names of your secrets.";
+    case "get": return name ? `Read the secret ${name}.` : "Read your secrets.";
+    case "put": return name ? `Save the secret ${name}.` : "Save secrets.";
+    case "del": return name ? `Delete the secret ${name}.` : "Delete secrets.";
+  }
+}
+
 async function runSecretOperation<T>(params: {
   ctx: CLIContext;
   node: TinyCloudNode;
@@ -356,6 +365,7 @@ async function runSecretOperation<T>(params: {
       node: params.node,
       requested,
       expiryOption: undefined,
+      reason: secretCommandReason(params.action, params.name),
       force: true,
       anchorSpace: params.space ?? SECRETS_SPACE,
       openKeyAcquisition: params.openKeyAcquisition,
@@ -528,6 +538,7 @@ async function canonicalSecretGet(
       node,
       requested: first.missing as PermissionEntry[],
       expiryOption: undefined,
+      reason: secretCommandReason("get", params.name),
       force: true,
       anchorSpace: params.space ?? SECRETS_SPACE,
       openKeyAcquisition: params.openKeyAcquisition,
