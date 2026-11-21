@@ -2,7 +2,7 @@
  * TinyCloudWeb.requestPermissions when OpenKey signs the grant: OpenKey's own approval replaces the SDK's "additional
  * permissions" prompt, and the app's name reaches it as a display-only presentation on the sign request. A signer that
  * OpenKey does not stand behind (an older OpenKey client, a wallet, a custom signer that did not declare itself OpenKey)
- * keeps the SDK prompt, and OpenKey signers never get its 30-day option.
+ * keeps the SDK prompt, with its 30-day option as for any other signer.
  */
 import "./support/browserGlobalsShim";
 import { describe, expect, mock, test } from "bun:test";
@@ -95,36 +95,36 @@ describe("an OpenKey client that accepts a presentation", () => {
 });
 
 describe("an OpenKey client that does not accept a presentation", () => {
-  test("keeps the SDK prompt without its 30-day option and sends the sign request as before", async () => {
+  test("keeps the SDK prompt with its 30-day option and sends the sign request as before", async () => {
     const { signMessage, config } = openKeyConfig(undefined);
     const { tcw, showModal } = web(node(), config);
 
     await tcw.requestPermissions([ENTRY]);
 
     expect(showModal).toHaveBeenCalledTimes(1);
-    expect(showModal.mock.calls[0]![0].allowSuppression).toBe(false);
+    expect(showModal.mock.calls[0]![0].allowSuppression).toBeUndefined();
     expect(signMessage).toHaveBeenCalledWith({ message: SIWE, keyId: "key-1" }, { mode: "popup" });
   });
 
-  test("a caller's allowPromptSuppression: true does not bring the 30-day option back", async () => {
+  test("a caller's allowPromptSuppression: false still hides the 30-day option", async () => {
     const { config } = openKeyConfig(undefined);
     const { tcw, showModal } = web(node(), config);
 
-    await tcw.requestPermissions([ENTRY], { allowPromptSuppression: true });
+    await tcw.requestPermissions([ENTRY], { allowPromptSuppression: false });
 
     expect(showModal.mock.calls[0]![0].allowSuppression).toBe(false);
   });
 });
 
 describe("an OpenKey client whose connected key signs in an external wallet", () => {
-  test("keeps the SDK prompt without its 30-day option, because the wallet shows only the raw message", async () => {
+  test("keeps the SDK prompt with its 30-day option, because the wallet shows only the raw message", async () => {
     const { config } = openKeyConfig(1, false);
     const { tcw, showModal } = web(node(), config);
 
-    await tcw.requestPermissions([ENTRY], { allowPromptSuppression: true });
+    await tcw.requestPermissions([ENTRY]);
 
     expect(showModal).toHaveBeenCalledTimes(1);
-    expect(showModal.mock.calls[0]![0].allowSuppression).toBe(false);
+    expect(showModal.mock.calls[0]![0].allowSuppression).toBeUndefined();
   });
 
   test("keeps the SDK prompt when the client does not say whether its approval shows the request", async () => {

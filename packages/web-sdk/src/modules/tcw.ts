@@ -1889,7 +1889,7 @@ export class TinyCloudWeb {
       suppressPromptFor30Days: () =>
         suppressPermissionPromptFor30Days(manifest),
       grantPermissions,
-    }, openKeySigns ? { ...options, allowPromptSuppression: false } : options);
+    }, options);
     return result.approved
       ? {
           approved: true,
@@ -1930,7 +1930,7 @@ export class TinyCloudWeb {
    * Whether OpenKey's own approval shows the request, so the SDK prompt is skipped: a bound signer that declared itself
    * OpenKey passes the presentation on; the configured OpenKey client accepts one (`signMessagePresentation` is 1) and
    * reports its approval screen shows the request (`signMessageShowsApproval` is true, which an external-wallet key is not).
-   * Otherwise the SDK prompt is still shown, without its 30-day option.
+   * Otherwise the SDK prompt is shown as it is for any other signer, with its 30-day option.
    */
   private openKeyShowsApp(): boolean {
     if (this.boundRuntimeSigner() !== undefined) return true;
