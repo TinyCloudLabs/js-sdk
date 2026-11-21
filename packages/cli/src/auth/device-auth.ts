@@ -12,7 +12,7 @@ import { DEFAULT_CHAIN_ID, DEFAULT_OPENKEY_DEVICE_API_HOST, ExitCode } from "../
 import type { ProfileConfig } from "../config/types.js";
 import { CLIError } from "../output/errors.js";
 import { assertNoCaveatLimits } from "../lib/caveat-refusal.js";
-import { dedupeDeviceDecrypt, deviceRefusal, deviceRefusalMessage } from "../lib/raw-encryption.js";
+import { deviceRefusal, deviceRefusalMessage } from "../lib/raw-encryption.js";
 import { generateKey, keyToDID } from "./local-key.js";
 import { validateDelegationCallbackPayload } from "./browser-auth.js";
 import {
@@ -594,10 +594,8 @@ export async function loginWithDeviceAuthorization(input: Omit<DeviceAuthorizati
   assertNotLocalOwner(input.profileName, existing, "Device login");
   // Every profile that recorded an owner stays with that owner.
   const expectedOwner = expectedOwnerFor(input.profileName, existing, input.expectedOwner);
-  // OpenKey's device flow takes one default-network decrypt; an identical repeat from a hand-written manifest is dropped.
-  const requested = dedupeDeviceDecrypt(input.permissions);
-  validateLoginPermissions(requested);
-  const permissions = scopedLoginPermissions(requested);
+  validateLoginPermissions(input.permissions);
+  const permissions = scopedLoginPermissions(input.permissions);
   // Early refusal on the request; the commit re-checks the approved scope.
   if (input.replaceSession !== true) {
     const estimatedExpiry = new Date(Date.now() + (input.expiry?.durationMs ?? DEVICE_DELEGATION_MAX_SECONDS * 1000)).toISOString();
