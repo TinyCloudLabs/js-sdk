@@ -2,6 +2,6 @@
 "@tinycloud/web-sdk": minor
 ---
 
-When OpenKey signs a permission request, `requestPermissions` shows no SDK prompt, and OpenKey's approval shows the request. The sign request carries the app's name and, when asked for another app, that app's name (`onBehalfOf`), as display-only text beside the requesting origin; the signed message is the same. `setRuntimePermissionSigner(signer, { openKey: true })` declares a custom signer as OpenKey's and passes it that presentation as the second argument of `signMessage`. A wallet, a signer that is not declared as OpenKey, and an OpenKey client that does not accept the presentation keep the SDK prompt, which does not offer "Do not show me again for 30 days" to OpenKey users.
+When OpenKey signs a permission request, `requestPermissions` shows no SDK prompt, and OpenKey's approval screen shows the request. The sign request carries the app's name and, for a request made for another app, that app's name (`onBehalfOf`). OpenKey shows them beside the requesting site as the app's own claim, and the signed message doesn't include them. `setRuntimePermissionSigner(signer, { openKey: true })` marks a custom signer as OpenKey's and passes it that display text as the second argument of `signMessage`. Wallets, signers not marked as OpenKey, and OpenKey clients that don't accept the display text show the SDK prompt. For OpenKey users, that prompt doesn't offer "Do not show me again for 30 days".
 
 Details: TC-3704
