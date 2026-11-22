@@ -231,7 +231,12 @@ test('assertSuccessor accepts a shorter successor only when the prior outlives t
   assert.throws(() => assertSuccessor(profile, peer, record('prior', 6, ['old']), record('new', 5, [parent.cid]), parent, now), /safely renew/, 'within the limit, a shorter successor is no renewal');
 });
 
-test('the shorter grant is published once; later ticks only extend', async () => {
+test('the shorter grant is published once; later ticks only extend', async (t) => {
+  // Signed expiries are whole seconds, so a clock that crosses a second between the two ticks would let the second tick extend. Pin it mid-second.
+  const realNow = Date.now;
+  const pinned = Math.floor(realNow() / 1000) * 1000 + 500;
+  Date.now = () => pinned;
+  t.after(() => { Date.now = realNow; });
   const first = fixture({ inboundLifetime: 7 * DAY, tipEndsAt: 30 * DAY });
   assert.equal((await maintainOutbound(first.node, first.profile, first.peer, first.save, { force: true, manual: true })).state, 'renewed');
   assert.equal(first.counts.published.length, 1);
