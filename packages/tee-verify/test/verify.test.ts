@@ -5,7 +5,7 @@ import {
   PUBLISHED_TRUST,
   TeeVerifyRefused,
   jwkThumbprint,
-  openkeyIdentity,
+  checkOpenkeyIdentity,
   verifyAttestation,
   type RefusalCode,
   type Trust,
@@ -193,11 +193,33 @@ describe("OpenKey identity", () => {
     expect(jwkThumbprint(ec)).toBe("oKIywvGUpTVTyxMQ3bwIIeQUudfr_CkLMjCE19ECD-U");
   });
 
-  test("identity is the issuer and its keys' thumbprints, deduplicated and sorted", () => {
-    expect(openkeyIdentity("https://api.openkey.so/api/auth", { keys: [rsa, okp, ec, { ...okp, kid: "c" }] })).toBe(
-      "https://api.openkey.so/api/auth#NzbLsXh8uDCcd-6MNwXF4W_7noWXFZAfHkxZsRGC9Xs,kPrK_qmxVWaYVA9wwBF6Iuo3vVzz7TxHCTwXBygrS4k,oKIywvGUpTVTyxMQ3bwIIeQUudfr_CkLMjCE19ECD-U",
-    );
-    expect(() => openkeyIdentity("https://api.openkey.so/api/auth", { keys: [] })).toThrow(TeeVerifyRefused);
+  const ISSUER = "https://api.openkey.so/api/auth";
+  const RSA_T = "NzbLsXh8uDCcd-6MNwXF4W_7noWXFZAfHkxZsRGC9Xs";
+  const OKP_T = "kPrK_qmxVWaYVA9wwBF6Iuo3vVzz7TxHCTwXBygrS4k";
+  const EC_T = "oKIywvGUpTVTyxMQ3bwIIeQUudfr_CkLMjCE19ECD-U";
+  const jwks = { keys: [rsa, okp, ec, { ...okp, kid: "c" }] };
+
+  test("an identity listing the proven subset of the served keys passes and names the rest unproven", () => {
+    expect(checkOpenkeyIdentity(`${ISSUER}#${RSA_T},${OKP_T},${EC_T}`, ISSUER, jwks)).toEqual({ unprovenKeys: [] });
+    expect(checkOpenkeyIdentity(`${ISSUER}#${RSA_T},${EC_T}`, ISSUER, jwks)).toEqual({ unprovenKeys: [OKP_T] });
+  });
+
+  test("an identity with an unserved key, another issuer, no keys, or out of order is refused", () => {
+    const refusedWith = (identity: string, keys: unknown = jwks) => {
+      try {
+        checkOpenkeyIdentity(identity, ISSUER, keys);
+      } catch (error) {
+        if (error instanceof TeeVerifyRefused) return error.code;
+        throw error;
+      }
+      return "passed";
+    };
+    expect(refusedWith(`${ISSUER}#${RSA_T},${"A".repeat(43)}`)).toBe("identity");
+    expect(refusedWith(`https://evil.example/api/auth#${RSA_T}`)).toBe("identity");
+    expect(refusedWith(`${ISSUER}#`)).toBe("identity");
+    expect(refusedWith(`${ISSUER}#${EC_T},${RSA_T}`)).toBe("identity");
+    expect(refusedWith(`${ISSUER}#${RSA_T},${RSA_T}`)).toBe("identity");
+    expect(refusedWith(`${ISSUER}#${RSA_T}`, { keys: [] })).toBe("identity");
   });
 });
 

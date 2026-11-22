@@ -25,14 +25,26 @@ export function jwkThumbprint(jwk: Record<string, unknown>): string {
   return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
 
-/**
- * OpenKey's attested identity (openkey docs/tee-overview.md, TC-3842):
- * `<issuer>#<thumbprints>`, the deduplicated, sorted thumbprints of every key
- * in the issuer's JWKS, joined with ",".
- */
-export function openkeyIdentity(issuer: string, jwks: unknown): string {
+function servedThumbprints(jwks: unknown): Set<string> {
   const keys = (jwks as { keys?: unknown } | null)?.keys;
   if (!Array.isArray(keys) || keys.length === 0) refuse("identity", "OpenKey JWKS has no keys");
-  const thumbprints = [...new Set(keys.map((k) => jwkThumbprint(k as Record<string, unknown>)))].sort();
-  return `${issuer}#${thumbprints.join(",")}`;
+  return new Set(keys.map((k) => jwkThumbprint(k as Record<string, unknown>)));
+}
+
+/**
+ * Checks an attested OpenKey `identity` against the keys `<issuer>/jwks` serves.
+ * OpenKey quotes only the keys whose private half it proves it holds (openkey#706),
+ * so the identity may list a subset: non-empty, sorted, without duplicates, each
+ * one served. Returns the served keys it leaves out: unproven, so tokens they
+ * sign are not covered by the quote. The response's `excluded_keys` count is
+ * outside the key binding, so it is not used.
+ */
+export function checkOpenkeyIdentity(identity: string, issuer: string, jwks: unknown): { unprovenKeys: string[] } {
+  const served = servedThumbprints(jwks);
+  const prefix = `${issuer}#`;
+  if (!identity.startsWith(prefix)) refuse("identity", `OpenKey identity is not for issuer ${issuer}`);
+  const listed = identity.slice(prefix.length).split(",");
+  if (listed.some((t) => !served.has(t))) refuse("identity", "OpenKey identity lists a key its JWKS does not serve");
+  if (listed.join(",") !== [...new Set(listed)].sort().join(",")) refuse("identity", "OpenKey identity is not sorted and deduplicated");
+  return { unprovenKeys: [...served].filter((t) => !listed.includes(t)).sort() };
 }

@@ -1,6 +1,6 @@
 import { bytesToHex, randomBytes } from "@noble/hashes/utils";
 import { refuse } from "./errors.js";
-import { openkeyIdentity } from "./openkey.js";
+import { checkOpenkeyIdentity } from "./openkey.js";
 import type { ServiceName, Trust } from "./trust.js";
 import { serviceBinding, verifyAttestation, type Verified } from "./verify.js";
 
@@ -32,9 +32,14 @@ async function getJson(fetcher: typeof fetch, url: URL): Promise<unknown> {
 
 /**
  * Asks the service at `baseUrl` for a quote over a fresh random nonce and
- * verifies it with `verifyAttestation`.
+ * verifies it with `verifyAttestation`. For OpenKey without `identity`, the
+ * attested identity must list only keys `<url>/api/auth/jwks` serves; served
+ * keys it leaves out are returned as `unprovenKeys`.
  */
-export async function verifyService(baseUrl: string, options: VerifyServiceOptions = {}): Promise<Verified> {
+export async function verifyService(
+  baseUrl: string,
+  options: VerifyServiceOptions = {},
+): Promise<Verified & { unprovenKeys?: string[] }> {
   const service = options.service ?? "tinycloud-node";
   const fetcher = options.fetch ?? fetch;
   serviceBinding(service);
@@ -43,9 +48,10 @@ export async function verifyService(baseUrl: string, options: VerifyServiceOptio
     refuse("response", "use an https:// URL");
   }
   let identity = options.identity;
+  let jwks: unknown;
+  const issuer = new URL("/api/auth", base).href;
   if (identity === undefined && service === "openkey") {
-    const issuer = new URL("/api/auth", base).href;
-    identity = openkeyIdentity(issuer, await getJson(fetcher, new URL(`${issuer}/jwks`)));
+    jwks = await getJson(fetcher, new URL(`${issuer}/jwks`));
   } else if (identity === undefined) {
     const info = (await getJson(fetcher, new URL("/info", base))) as { nodeId?: unknown } | null;
     if (typeof info?.nodeId !== "string") refuse("response", "/info names no nodeId; pass the signer you expect");
@@ -55,5 +61,11 @@ export async function verifyService(baseUrl: string, options: VerifyServiceOptio
   const url = new URL("/attestation", base);
   url.searchParams.set("nonce", nonce);
   const response = await getJson(fetcher, url);
-  return verifyAttestation(response, { service, nonce, identity, ...(options.trust ? { trust: options.trust } : {}) });
+  const trust = options.trust ? { trust: options.trust } : {};
+  if (identity !== undefined) return verifyAttestation(response, { service, nonce, identity, ...trust });
+  // OpenKey: the binding is rebuilt from the identity it attests, which must be a subset of the served keys.
+  const attested = (response as { identity?: unknown } | null)?.identity;
+  if (typeof attested !== "string") refuse("response", "response has no identity");
+  const { unprovenKeys } = checkOpenkeyIdentity(attested, issuer, jwks);
+  return { ...(await verifyAttestation(response, { service, nonce, identity: attested, ...trust })), unprovenKeys };
 }

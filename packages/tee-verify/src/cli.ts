@@ -50,6 +50,9 @@ async function main(): Promise<number> {
           `  kms:          ${v.keyProvider.name} ${v.keyProvider.id}`,
           `  signer:       ${v.identity}`,
           `  tcb:          ${v.tcbStatus}`,
+          ...(v.unprovenKeys?.length
+            ? [`  unproven:     ${v.unprovenKeys.join(",")} (served, but not held by the measured code: do not trust tokens they sign)`]
+            : []),
           "",
         ].join("\n"),
       );

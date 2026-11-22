@@ -34,7 +34,7 @@ verified
 
 or `refused: <reason>`. Exit 0 means verified, 1 refused, 2 a usage error. Options:
 
-- `--signer <signer>`: the signer you expect. Without it, the node's `/info` `nodeId` is checked, or for OpenKey the identity computed from `<url>/api/auth/jwks`: `<issuer>#<RFC 7638 thumbprints>`.
+- `--signer <signer>`: the signer you expect, matched exactly. Without it, the node's `/info` `nodeId` is checked. For OpenKey, the attested `identity` (`<issuer>#<sorted RFC 7638 thumbprints>`) must list only keys that `<url>/api/auth/jwks` serves. OpenKey quotes only the keys it proves it holds, so served keys left out are printed as `unproven`: the quote does not cover tokens they sign. The response's `excluded_keys` count is outside the key binding and is not used.
 - `--service openkey`: verify `https://api.openkey.so` (binding domain `so.openkey/tee-key/v1`). OpenKey has no published release yet, so it is refused.
 - `--json`: machine-readable output.
 
