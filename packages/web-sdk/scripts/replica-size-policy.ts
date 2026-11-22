@@ -3773,19 +3773,19 @@ export const approvedTc3443GenericManifestRoot: LogoutRatchet = {
   "label": "a sign-in without a manifest asks only for its app's own folder (TC-3443)",
   "ruling": "size-ruling: TC-3443 row tc3443GenericManifestRoot raises the web-sdk root ceilings by CI's measured delta for the generic app-folder manifest, its warning and ownerFullAccess",
   "base": "4e4d8459a0c0f527137d2bfc359b7f97579ec2b2",
-  "sourceCommits": ["db9325c21d1377ed0f6b57b3e066b7be5c51862b"],
+  "sourceCommits": ["19cc3d058b6f5fdb436f71238634279c3bf688d0"],
   "canonicalCI": {
-    "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44920526454",
+    "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45058971922",
     "jobs": [
-      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44920526454/job/136895343968",
-      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44920526454/job/136895344270"
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45058971922/job/137320387744",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45058971922/job/137320387385"
     ]
   },
   "root": {
-    "delta": { "index.mjs": 409, "index.cjs": 151 },
-    "ceiling": { "index.mjs": 1530512, "index.cjs": 1463235 }
+    "delta": { "index.mjs": 396, "index.cjs": 151 },
+    "ceiling": { "index.mjs": 1530499, "index.cjs": 1463235 }
   },
-  "reason": "A sign-in without a manifest asks only for its app's own folder (the generic app-folder manifest and its one console warning), and owner tools opt into every action on their space with ownerFullAccess (sdk-core owner-access, node-sdk and web-sdk sign-in); sdk-core and node-sdk are bundled into the web-sdk root. Canonical Node 22/Bun 1.3.14 CI on #1099 (db9325c2, master cb3edeab merged in) measured index.mjs 1530267 and index.cjs 1463000 gzip -9 bytes: +409 and +151 over the TC-2490 ceilings 1529858 and 1462849. No other ceiling moves. Details: TC-3443"
+  "reason": "A sign-in without a manifest asks only for its app's own folder (the generic app-folder manifest and its one console warning), and owner tools opt into every action on their space with ownerFullAccess (sdk-core owner-access, node-sdk and web-sdk sign-in); sdk-core and node-sdk are bundled into the web-sdk root. Canonical Node 22/Bun 1.3.14 CI on #1099 (19cc3d05, master 4e4d8459 merged in) measured index.mjs 1530499 and index.cjs 1463235 gzip -9 bytes: +396 and +151 over the TC-3522 ceilings 1530103 and 1463084. No other ceiling moves. Details: TC-3443"
 };
 
 export const approvedLedgerRows: Record<string, unknown> = {
