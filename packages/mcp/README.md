@@ -134,14 +134,25 @@ personal-record tools, and omits local-only `tinycloud_secrets_status` and
 exact requested operation; approved delegations arrive only through that flow,
 which binds them to the requesting OpenKey account and stored request.
 
+Opening an approval URL creates an OpenKey approval request signed by the
+tenant's own key and redirects to its OpenKey link. The server collects the
+approved delegation from OpenKey's result API: in the background every 2
+seconds for the first minute and every 10 seconds after that, and before each
+call from that account. A refused approval leaves the same URL usable for a
+new attempt. `TC_OPENKEY_API_HOST` names the OpenKey API origin results are
+fetched from; it defaults to `https://api.openkey.so` when `TC_OPENKEY_HOST` is
+`https://openkey.so`, and to `TC_OPENKEY_HOST` otherwise. Results are fetched
+only from that origin. `TC_LINKS_API_ORIGIN` names the links service that holds
+the request (default `https://api.tinycloud.xyz`). Both must be `https` origins.
+
 The hosted server also serves a restricted surface with only `tinycloud_connect`
 and the four personal-record tools, for assistant directories: `/chatgpt/mcp`,
 `/claude/mcp`, `/grok/mcp` and `/muse/mcp` beside `/mcp`. Every address is its
 own OAuth resource with its own protected-resource metadata, approval route
 (`/<prefix>/connect`) and tenant state, so a token or approval for one opens no
 other. An address works only once OpenKey issues tokens for its audience and
-accepts its approval callback, and the server's token-status client is
-registered for it. The addresses list the same five tools. `/claude/mcp` also
+the server's token-status client is registered for it. The addresses list the
+same five tools. `/claude/mcp` also
 repeats each tool's `title` as `annotations.title`, where Claude's directory
 reads the listing name; the other addresses do not.
 

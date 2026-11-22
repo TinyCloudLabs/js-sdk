@@ -11,16 +11,14 @@ import {
   type AuthInfo,
   type OAuthMetadata,
 } from "@modelcontextprotocol/server";
-import { RUNTIME_DELEGATION_REJECTIONS } from "@tinycloud/node-sdk";
 
 import { WEBMCP_SCRIPT_PATH, agentDiscoveryRoutes } from "./agent-discovery.js";
 import { createOpenKeyTokenVerifier } from "./oauth.js";
 import { createTokenStatusChecker, type TokenStatusChecker, type TokenStatusConfig } from "./token-status.js";
 import { logToolCall } from "./logging.js";
 import {
-  ApprovalOwnerMismatchError,
+  ApprovalLinkUnavailableError,
   ApprovalRequestError,
-  ApprovalStageError,
   NativeGrantValidationError,
   RemoteTenantStore,
   type RemoteStoreConfig,
@@ -107,7 +105,6 @@ export function createHostedMcpApp(config: HostedMcpConfig): HostedMcpApp {
     for (const owned of [
       restrictedUrl,
       connectUrl,
-      new URL("./connect/callback", restrictedUrl),
       new URL(getOAuthProtectedResourceMetadataUrl(restrictedUrl)),
     ]) {
       restrictedByPath.set(owned.pathname, restricted);
@@ -129,7 +126,6 @@ function createHostedSurface(
   annotationTitles = false,
 ): HostedMcpApp {
   const connectPath = config.approvalPath ?? "/connect";
-  const callbackPath = `${connectPath}/callback`;
   const issuer = String(config.oauthMetadata.issuer);
   const jwksUri = String(config.oauthMetadata.jwks_uri);
   const verifier = createOpenKeyTokenVerifier({
@@ -421,16 +417,21 @@ function createHostedSurface(
       if (url.pathname === connectPath) {
         if (request.method !== "GET") return methodNotAllowed("GET");
         try {
-          const destination = await store.approvalRedirect(requiredState(url));
+          const destination = await store.approvalLink(requiredState(url));
           return Response.redirect(destination, 302);
         } catch (error) {
-          const reason = error instanceof ApprovalRequestError ? error.detail : "unknown";
+          const unavailable = error instanceof ApprovalLinkUnavailableError;
+          const reason = error instanceof ApprovalRequestError
+            ? error.detail
+            : unavailable ? "openkey_unavailable" : "unknown";
           writeDiagnostic(`connect rejected: reason=${reason} path=${connectPath}`);
           if (request.headers.get("accept")?.includes("text/html")) {
             return new Response(
-              "<!doctype html><html lang=\"en\"><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>TinyCloud approval unavailable</title><main><h1>This approval link is unavailable</h1><p>It may have expired or already been used. Go back to the assistant that sent it and ask it to connect TinyCloud again.</p><p>If you declined access, no further approval is required. Never paste passwords, codes or approval links into support messages.</p></main></html>",
+              unavailable
+                ? "<!doctype html><html lang=\"en\"><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>TinyCloud approval unavailable</title><main><h1>The approval page could not be opened</h1><p>TinyCloud could not reach the approval service. Wait a minute, then open this link again.</p><p>Never paste passwords, codes or approval links into support messages.</p></main></html>"
+                : "<!doctype html><html lang=\"en\"><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>TinyCloud approval unavailable</title><main><h1>This approval link is unavailable</h1><p>It may have expired or already been used. Go back to the assistant that sent it and ask it to connect TinyCloud again.</p><p>If you declined access, no further approval is required. Never paste passwords, codes or approval links into support messages.</p></main></html>",
               {
-                status: 400,
+                status: unavailable ? 503 : 400,
                 headers: {
                   "content-type": "text/html; charset=utf-8",
                   "cache-control": "no-store",
@@ -442,45 +443,9 @@ function createHostedSurface(
               },
             );
           }
-          return json({ error: "The approval link is invalid or expired." }, 400);
-        }
-      }
-      if (url.pathname === callbackPath) {
-        if (request.method === "OPTIONS") return callbackCors(new Response(null, { status: 204 }), config.openkeyHost);
-        if (request.method !== "POST") return methodNotAllowed("POST");
-        const originFailure = validateCallbackOrigin(request, config.openkeyHost);
-        if (originFailure !== undefined) return callbackCors(originFailure, config.openkeyHost);
-        try {
-          await store.completeApproval(requiredState(url), request);
-          return callbackCors(json({ success: true }), config.openkeyHost);
-        } catch (error) {
-          // Only fixed server-authored text reaches OpenKey; callback input is never echoed.
-          if (error instanceof ApprovalOwnerMismatchError) {
-            return callbackCors(json({ error: error.message, code: "approval_owner_mismatch" }, 403), config.openkeyHost);
-          }
-          // Stage, code, reason and detail are identifiers, never callback, delegation or node text.
-          const stage = error instanceof ApprovalStageError ? error.stage : "unknown";
-          const code = error instanceof ApprovalStageError && /^[A-Z][A-Z0-9_]{0,63}$/.test(error.code)
-            ? error.code
-            : "UNKNOWN";
-          const reason = !(error instanceof ApprovalStageError) || error.reason === undefined
-            ? undefined
-            : RUNTIME_DELEGATION_REJECTIONS.find((known) => known === error.reason) ?? "unknown";
-          // Only the server log says which state, tenant or body check failed;
-          // the response stays uniform so a caller cannot probe a state.
-          const detail = error instanceof ApprovalRequestError ? error.detail : "none";
-          writeDiagnostic(
-            `connect callback rejected: stage=${stage} code=${code}${reason === undefined ? "" : ` reason=${reason}`} detail=${detail}`,
-          );
-          return callbackCors(
-            json({
-              error: stage,
-              code,
-              ...(reason === undefined ? {} : { reason }),
-              message: "TinyCloud could not accept this delegation.",
-            }, 400),
-            config.openkeyHost,
-          );
+          return unavailable
+            ? json({ error: "The approval service is unavailable. Try the link again shortly." }, 503)
+            : json({ error: "The approval link is invalid or expired." }, 400);
         }
       }
       if (url.pathname === "/native/grant" && surface === "hosted") {
@@ -562,7 +527,10 @@ function createHostedSurface(
       const auth = await authenticate(request);
       return mcpCors(auth instanceof Response ? auth : await handler.fetch(request, { authInfo: auth }), request);
     },
-    close: () => handler.close(),
+    close: async () => {
+      await store.close();
+      await handler.close();
+    },
   };
 }
 
@@ -691,22 +659,6 @@ function mcpCors(response: Response, request: Request): Response {
     if (request.method === "OPTIONS") headers.set("access-control-allow-headers", MCP_CORS_ALLOWED_HEADERS);
   }
   return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
-}
-
-function validateCallbackOrigin(request: Request, openkeyHost: string): Response | undefined {
-  const origin = request.headers.get("origin");
-  return origin === null || origin === new URL(openkeyHost).origin
-    ? undefined
-    : json({ error: "Origin is not allowed." }, 403);
-}
-
-function callbackCors(response: Response, openkeyHost: string): Response {
-  const headers = new Headers(response.headers);
-  headers.set("access-control-allow-origin", new URL(openkeyHost).origin);
-  headers.set("access-control-allow-methods", "POST, OPTIONS");
-  headers.set("access-control-allow-headers", "content-type");
-  headers.set("vary", "Origin");
-  return new Response(response.body, { status: response.status, headers });
 }
 
 async function readBoundedBodyText(request: Request, maxBytes: number): Promise<string | undefined> {

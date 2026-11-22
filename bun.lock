@@ -256,6 +256,7 @@
         "@tinycloud/node-sdk-wasm": "1.7.9",
         "@tinycloud/operations": "0.9.2-beta.0",
         "@tinycloud/sdk-core": "3.13.0",
+        "@tinycloud/share-envelope": "1.6.0",
         "jose": "6.2.4",
       },
       "devDependencies": {
