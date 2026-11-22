@@ -75,3 +75,11 @@ updates:
           - "version-update:semver-minor"
           - "version-update:semver-patch"
     open-pull-requests-limit: 5
+  - package-ecosystem: "docker"
+    directory: "/packages/mcp"
+    schedule:
+      interval: "weekly"
+    ignore:
+      - dependency-name: "node"
+        update-types:
+          - "version-update:semver-major"
