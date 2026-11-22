@@ -105,8 +105,9 @@ export interface IDataVaultService extends IService {
    * the new copy and compare bytes, then write only if the record is
    * unchanged (`ifMatch`). A failure at any step keeps the old copy. Throws
    * unless `key` is a secret's record and `keyPath` is exactly its own key.
+   * Optional so vaults implemented outside the SDK still type-check.
    */
-  resealToKey(key: string, keyPath: string, options?: { dryRun?: boolean }): Promise<VaultResealResult>;
+  resealToKey?(key: string, keyPath: string, options?: { dryRun?: boolean }): Promise<VaultResealResult>;
 
   /**
    * Delete an encrypted key.
