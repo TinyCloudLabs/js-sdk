@@ -111,6 +111,7 @@ export {
   type CheckedApprovalResult,
   type CollectApprovalOptions,
   type CollectedApprovalResult,
+  type DiscoverApprovalOptions,
   type DiscoverResult,
   type RelayKeyPair,
 } from "./approval-client.js";

@@ -80,12 +80,14 @@ export interface ApprovalRequesterState {
   readonly record: Pick<LinkRecord, "header" | "signature">;
   /** OpenKey API origin, e.g. `https://api.openkey.so`. */
   readonly apiOrigin: string;
-  /** The Ed25519 target key (`targetPublicJwk`): signs `fetch`/`ack`, and signs `discover` for v1 requests. */
+  /** The Ed25519 target key (`targetPublicJwk`): signs `fetch`, `ack`, code-claim `discover`, and v1 `discover`. */
   readonly signingKey: Ed25519PrivateJwk;
   /**
    * The Ed25519 requester key (`header.issuer`) for v2 requests whose link issuer differs from the target key.
-   * Signs `discover` proofs only; `fetch` and `ack` always sign with `signingKey`. Required when
-   * `record.header.issuer` differs from `signingKey` (v2), and refused when it matches `signingKey` (v1).
+   * Signs non-code-claim `discover` proofs only; code-claim `discover` (`approvalCode`), `fetch`, and `ack`
+   * always sign with `signingKey`. Required on non-code-claim `discover` when `record.header.issuer` differs
+   * from `signingKey` (v2); optional on `fetch`/`ack`/code-claim `discover` (validated against `header.issuer`
+   * if supplied); refused on v1 (`header.issuer === signingKey`).
    */
   readonly requesterSigningKey?: Ed25519PrivateJwk;
 }
@@ -94,6 +96,13 @@ export interface ApprovalTransportOptions {
   readonly fetch?: typeof globalThis.fetch;
   readonly timeoutMs?: number;
   readonly signal?: AbortSignal;
+}
+
+export interface DiscoverApprovalOptions extends ApprovalTransportOptions {
+  /** Optional code-claim payload; code-claim `discover` always signs with `signingKey` (the target key), even for v2. */
+  readonly approvalCode?: string;
+  /** Claim intent header (`OpenKey-Delegation-Claim`) required alongside `approvalCode`. */
+  readonly delegationClaim?: string;
 }
 
 function pathFor(action: ApprovalAction, requestId: string, resultRef: string): string {
@@ -111,6 +120,7 @@ function validatedKeyDid(jwk: Ed25519PrivateJwk): string {
 function proofSigningKey(
   state: Pick<ApprovalRequesterState, "signingKey" | "requesterSigningKey"> & { readonly record?: Pick<LinkRecord, "header" | "signature"> },
   action: ApprovalAction,
+  isCodeClaim = false,
 ): Ed25519PrivateJwk {
   const targetDid = validatedKeyDid(state.signingKey);
   const headerIssuer = typeof state.record?.header?.issuer === "string" ? state.record.header.issuer : undefined;
@@ -122,9 +132,9 @@ function proofSigningKey(
     if (headerIssuer !== undefined && requesterDid !== headerIssuer) {
       throw new ApprovalClientError("request_binding", "requesterSigningKey does not match the approval request header issuer.");
     }
-    return action === "discover" ? state.requesterSigningKey : state.signingKey;
+    return action === "discover" && !isCodeClaim ? state.requesterSigningKey : state.signingKey;
   }
-  if (headerIssuer !== undefined && headerIssuer !== targetDid) {
+  if (action === "discover" && !isCodeClaim && headerIssuer !== undefined && headerIssuer !== targetDid) {
     throw new ApprovalClientError("request_binding", "A v2 approval request requires requesterSigningKey for discover proofs.");
   }
   return state.signingKey;
@@ -132,8 +142,9 @@ function proofSigningKey(
 
 /**
  * The `OpenKey-Session-Proof` header value: an EdDSA JWT bound to the action, the request, its body CID,
- * the result reference and the ACK id, and to the exact URL it is sent to. Signed by `requesterSigningKey`
- * for v2 `discover` calls and by `signingKey` (the target key) for `fetch`, `ack`, and v1 `discover`.
+ * the result reference and the ACK id (plus code/claim hashes when claiming an approval code), and to the
+ * exact URL it is sent to. Signed by `requesterSigningKey` for non-code-claim v2 `discover` calls and by
+ * `signingKey` (the target key) for code-claim `discover`, `fetch`, `ack`, and v1 `discover`.
  */
 export function approvalSessionProof(
   state: Pick<ApprovalRequesterState, "requestId" | "bodyCid" | "apiOrigin" | "signingKey" | "requesterSigningKey"> & {
@@ -142,13 +153,14 @@ export function approvalSessionProof(
   action: ApprovalAction,
   resultRef = "",
   ackId = "",
+  codeBinding?: readonly [string, string],
 ): string {
-  const jwk = proofSigningKey(state, action);
+  const jwk = proofSigningKey(state, action, action === "discover" && codeBinding !== undefined);
   const thumbprint = toBase64Url(sha256(utf8Bytes(JSON.stringify({ crv: "Ed25519", kty: "OKP", x: jwk.x }))));
   const header = toBase64Url(utf8Bytes(JSON.stringify({ alg: "EdDSA", kid: thumbprint, typ: "openkey-session-proof+jwt" })));
   const payload = toBase64Url(utf8Bytes(JSON.stringify({
     client_id: APPROVAL_RESULT_CLIENT_ID,
-    cred_hash: toBase64Url(sha256(utf8Bytes(JSON.stringify([action, state.requestId, state.bodyCid, resultRef, ackId])))),
+    cred_hash: toBase64Url(sha256(utf8Bytes(JSON.stringify([action, state.requestId, state.bodyCid, resultRef, ackId, ...(codeBinding ?? [])])))),
     htm: "POST",
     htu: state.apiOrigin + pathFor(action, state.requestId, resultRef),
     iat: Math.floor(Date.now() / 1000),
@@ -163,11 +175,26 @@ async function post(
   action: ApprovalAction,
   resultRef: string,
   ackId: string,
-  options: ApprovalTransportOptions,
+  options: DiscoverApprovalOptions,
 ): Promise<Response> {
-  const proof = approvalSessionProof(state, action, resultRef, ackId);
+  let codeBinding: readonly [string, string] | undefined;
+  if (action === "discover" && options.approvalCode !== undefined) {
+    if (typeof options.delegationClaim !== "string" || options.delegationClaim.length === 0) {
+      throw new ApprovalClientError("request_binding", "A delegation claim is required when discovering with approvalCode.");
+    }
+    codeBinding = [
+      toBase64Url(sha256(utf8Bytes(options.approvalCode.trim().toLowerCase()))),
+      toBase64Url(sha256(utf8Bytes(options.delegationClaim))),
+    ];
+  }
+  const proof = approvalSessionProof(state, action, resultRef, ackId, codeBinding);
   const body = action === "discover"
-    ? { bodyCid: state.bodyCid, header: state.record.header, signature: state.record.signature }
+    ? {
+        bodyCid: state.bodyCid,
+        header: state.record.header,
+        signature: state.record.signature,
+        ...(options.approvalCode === undefined ? {} : { approvalCode: options.approvalCode }),
+      }
     : { requestId: state.requestId, bodyCid: state.bodyCid, ...(action === "ack" ? { ackId } : {}) };
   const timeout = AbortSignal.timeout(options.timeoutMs ?? REQUEST_TIMEOUT_MS);
   try {
@@ -176,6 +203,7 @@ async function post(
       headers: {
         "content-type": "application/json",
         "OpenKey-Session-Proof": proof,
+        ...(codeBinding === undefined ? {} : { "OpenKey-Delegation-Claim": options.delegationClaim! }),
       },
       body: JSON.stringify(body),
       signal: options.signal ? AbortSignal.any([timeout, options.signal]) : timeout,
@@ -208,7 +236,7 @@ export type DiscoverResult =
   | { readonly status: "ready"; readonly resultRef: string; readonly expiresAt: string };
 
 /** One poll: has the owner approved yet? HTTP 202 is `pending`; a 200 carries the result reference. */
-export async function discoverApprovalResult(state: ApprovalRequesterState, options: ApprovalTransportOptions = {}): Promise<DiscoverResult> {
+export async function discoverApprovalResult(state: ApprovalRequesterState, options: DiscoverApprovalOptions = {}): Promise<DiscoverResult> {
   const response = await post(state, "discover", "", "", options);
   if (response.status === 202) return { status: "pending" };
   if (!response.ok) return refuse(response, "discover");

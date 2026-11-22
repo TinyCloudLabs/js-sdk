@@ -165,7 +165,15 @@ function makeLinkTransport() {
 function verifySessionProof(
   proof: string | undefined,
   expectedJwk: { kty: "OKP"; crv: "Ed25519"; x: string },
-  expected: { action: "discover" | "fetch" | "ack"; requestId: string; bodyCid: string; resultRef: string; ackId: string; url: string },
+  expected: {
+    action: "discover" | "fetch" | "ack";
+    requestId: string;
+    bodyCid: string;
+    resultRef: string;
+    ackId: string;
+    url: string;
+    codeBinding?: readonly [string, string];
+  },
 ): boolean {
   if (!proof) return false;
   const parts = proof.split(".");
@@ -176,7 +184,7 @@ function verifySessionProof(
     const claims = JSON.parse(Buffer.from(payloadPart, "base64url").toString("utf8")) as Record<string, unknown>;
     const jkt = createHash("sha256").update(JSON.stringify({ crv: "Ed25519", kty: "OKP", x: expectedJwk.x })).digest("base64url");
     const credHash = createHash("sha256")
-      .update(JSON.stringify([expected.action, expected.requestId, expected.bodyCid, expected.resultRef, expected.ackId]))
+      .update(JSON.stringify([expected.action, expected.requestId, expected.bodyCid, expected.resultRef, expected.ackId, ...(expected.codeBinding ?? [])]))
       .digest("base64url");
     return (
       verify(
@@ -199,10 +207,14 @@ function verifySessionProof(
 }
 
 /**
- * Models OpenKey's two-phase approval lifecycle:
+ * Models OpenKey's two-phase approval lifecycle under the PROPOSED OpenKey v2 contract:
  * - Pre-load `discover`: OpenKey has no stored record yet and verifies the proof against `header.issuer`.
  * - Browser `/load` + approve: OpenKey resolves the link and stores `{ issuer, request, resultRef, ... }`.
- * - Post-load `discover`: OpenKey verifies v2 against `record.issuer` (`header.issuer`) and v1 against `targetPublicJwk`.
+ * - Post-load `discover`: models the PROPOSED OpenKey contract — for v2 (`isApprovalRequestV2(record.request)`)
+ *   when `approvalCode` is absent, OpenKey verifies against `record.issuer` (`header.issuer`); for code-claim
+ *   `discover` (`approvalCode` + `OpenKey-Delegation-Claim`) and for v1, OpenKey verifies against
+ *   `record.request.targetPublicJwk`. Current deployed OpenKey verifies all post-load `discover` calls against
+ *   the target key (`targetPublicJwk`).
  * - `fetch` and `ack`: OpenKey always verifies against `record.request.targetPublicJwk`.
  */
 function makePhasedOpenKey(options: {
@@ -227,6 +239,7 @@ function makePhasedOpenKey(options: {
 
       if (url === `${OPENKEY_API_ORIGIN}/api/approval-requests/${options.requestId}/result`) {
         if (!loaded) {
+          if (body.approvalCode !== undefined) return Response.json({ code: "not_found" }, { status: 404 });
           // Pre-load discover: OpenKey verifies only the signed header and checks proof against header.issuer.
           const header = validateLinkHeader(body.header, { mode: "signed", audience: API_ORIGIN });
           const issuerKeyBytes = linkIssuerPublicKey(header.issuer);
@@ -250,13 +263,27 @@ function makePhasedOpenKey(options: {
           return new Response(null, { status: 202 });
         }
 
-        // Post-load discover: v2 verifies against header issuer (requester), v1 against targetPublicJwk.
-        const isV2 = isApprovalRequestV2(loaded.request);
-        const discoverKey = isV2 ? jwkOf(loaded.issuer) : loaded.request.targetPublicJwk;
+        // Post-load discover: select key strictly by isApprovalRequestV2 and mode (never accept either key).
+        const hasCode = body.approvalCode !== undefined;
+        const useHeaderIssuer = isApprovalRequestV2(loaded.request) && !hasCode;
+        const discoverKey = useHeaderIssuer ? jwkOf(loaded.issuer) : loaded.request.targetPublicJwk;
+        const claim = headers["OpenKey-Delegation-Claim"];
+        if (hasCode && !claim) return Response.json({ code: "invalid_claim" }, { status: 400 });
+        const codeBinding: readonly [string, string] | undefined = hasCode
+          ? [
+              createHash("sha256").update(String(body.approvalCode).trim().toLowerCase()).digest("base64url"),
+              createHash("sha256").update(claim!).digest("base64url"),
+            ]
+          : undefined;
         const ok = verifySessionProof(proof, discoverKey, {
           action: "discover", requestId: options.requestId, bodyCid: loaded.bodyCid, resultRef: "", ackId: "", url,
+          ...(codeBinding === undefined ? {} : { codeBinding }),
         });
-        phases.push({ phase: "discover-postload", verifiedBy: isV2 ? "header-issuer" : "target", status: ok ? (approved ? 200 : 202) : 401 });
+        phases.push({
+          phase: hasCode ? "discover-code-claim" : "discover-postload",
+          verifiedBy: useHeaderIssuer ? "header-issuer" : "target",
+          status: ok ? (approved ? 200 : 202) : 401,
+        });
         if (!ok) return Response.json({ code: "invalid_proof" }, { status: 401 });
         if (!approved) return new Response(null, { status: 202 });
         return Response.json({ resultRef: options.resultRef, expiresAt: options.resultExpiresAt });
@@ -507,7 +534,7 @@ describe("approval request v2 with distinct stable requester key", () => {
     ).toThrow(/targetDid/);
   });
 
-  test("approval client enforces requesterSigningKey contract: required for v2, refused for v1, refused on mismatch without sending HTTP", async () => {
+  test("approval client enforces requesterSigningKey on non-code-claim discover, allows fetch/ack without it, and signs code-claim discover with target key", async () => {
     const v2Transport = makeLinkTransport();
     const createdV2 = await createApprovalRequest({
       request: v2Request,
@@ -535,18 +562,21 @@ describe("approval request v2 with distinct stable requester key", () => {
 
     const found = { resultRef: "synthetic-result-reference-v2-1234", expiresAt: new Date(NOW + 600_000).toISOString() };
 
-    // v2 without requesterSigningKey is refused on discover, fetch, ack, and collect.
-    const v2MissingKey: ApprovalRequesterState = {
+    // v2 without requesterSigningKey is refused on non-code-claim discover and collect (without known resultRef).
+    const v2TargetOnly: ApprovalRequesterState = {
       requestId: createdV2.id, bodyCid: createdV2.bodyCid, record: createdV2.record, apiOrigin: OPENKEY_API_ORIGIN, signingKey: targetPrivateJwk,
     };
-    expect((await clientRefusalOf(() => discoverApprovalResult(v2MissingKey, { fetch: countingFetch }))).code).toBe("request_binding");
-    expect((await clientRefusalOf(() => fetchApprovalResult(v2MissingKey, found, { fetch: countingFetch }))).code).toBe("request_binding");
-    expect((await clientRefusalOf(() => ackApprovalResult(v2MissingKey, found.resultRef, "ack-1", { fetch: countingFetch }))).code).toBe("request_binding");
-    expect((await clientRefusalOf(() => collectApprovalResult(v2MissingKey, { fetch: countingFetch, sleep: async () => {} }))).code).toBe("request_binding");
+    expect((await clientRefusalOf(() => discoverApprovalResult(v2TargetOnly, { fetch: countingFetch }))).code).toBe("request_binding");
+    expect((await clientRefusalOf(() => collectApprovalResult(v2TargetOnly, { fetch: countingFetch, sleep: async () => {} }))).code).toBe("request_binding");
 
-    // v2 with wrong requesterSigningKey (target key or third key) is refused.
-    expect((await clientRefusalOf(() => discoverApprovalResult({ ...v2MissingKey, requesterSigningKey: targetPrivateJwk }, { fetch: countingFetch }))).code).toBe("request_binding");
-    expect((await clientRefusalOf(() => discoverApprovalResult({ ...v2MissingKey, requesterSigningKey: thirdPrivateJwk }, { fetch: countingFetch }))).code).toBe("request_binding");
+    // v2 with wrong requesterSigningKey (target key or third key) is refused on discover, fetch, and ack.
+    for (const badKey of [targetPrivateJwk, thirdPrivateJwk]) {
+      const badState: ApprovalRequesterState = { ...v2TargetOnly, requesterSigningKey: badKey };
+      expect((await clientRefusalOf(() => discoverApprovalResult(badState, { fetch: countingFetch }))).code).toBe("request_binding");
+      expect((await clientRefusalOf(() => fetchApprovalResult(badState, found, { fetch: countingFetch }))).code).toBe("request_binding");
+      expect((await clientRefusalOf(() => ackApprovalResult(badState, found.resultRef, "ack-bad-1", { fetch: countingFetch }))).code).toBe("request_binding");
+      expect((await clientRefusalOf(() => discoverApprovalResult(badState, { fetch: countingFetch, approvalCode: "abcd-efgh", delegationClaim: "claim-intent-1234567890" }))).code).toBe("request_binding");
+    }
 
     // v1 with requesterSigningKey (same key or different key) is refused.
     const v1Base: ApprovalRequesterState = {
@@ -554,8 +584,62 @@ describe("approval request v2 with distinct stable requester key", () => {
     };
     expect((await clientRefusalOf(() => discoverApprovalResult({ ...v1Base, requesterSigningKey: targetPrivateJwk }, { fetch: countingFetch }))).code).toBe("request_binding");
     expect((await clientRefusalOf(() => discoverApprovalResult({ ...v1Base, requesterSigningKey: requesterPrivateJwk }, { fetch: countingFetch }))).code).toBe("request_binding");
+    expect((await clientRefusalOf(() => fetchApprovalResult({ ...v1Base, requesterSigningKey: requesterPrivateJwk }, found, { fetch: countingFetch }))).code).toBe("request_binding");
+
+    // Code-claim discover without delegationClaim is refused before sending HTTP.
+    expect((await clientRefusalOf(() => discoverApprovalResult(v2TargetOnly, { fetch: countingFetch, approvalCode: "abcd-efgh" }))).code).toBe("request_binding");
 
     expect(calls).toBe(0);
+
+    // N2 + N1: a process holding ONLY the target key (no requesterSigningKey) can run fetch, ack,
+    // collect(known), and code-claim discover; code-claim discover signs with the target key even when requesterSigningKey is present.
+    const openkey = makePhasedOpenKey({
+      link: createdV2.link,
+      linkTransport: v2Transport,
+      requestId: createdV2.id,
+      resultRef: found.resultRef,
+      resultExpiresAt: found.expiresAt,
+      loadAfterPreLoadPolls: 1,
+    });
+    const v2WithRequester: ApprovalRequesterState = { ...v2TargetOnly, requesterSigningKey: requesterPrivateJwk };
+
+    // Drive pre-load discover with requesterSigningKey so OpenKey loads & approves the v2 request.
+    expect(await discoverApprovalResult(v2WithRequester, { fetch: openkey.fetch })).toEqual({ status: "pending" });
+
+    // Code-claim discover signs with TARGET key even when requesterSigningKey is present, and also works without requesterSigningKey.
+    const claim = "claim-intent-1234567890abcdef";
+    const code = "ABCD-2345";
+    const discoverUrl = `${OPENKEY_API_ORIGIN}/api/approval-requests/${createdV2.id}/result`;
+    const expectedCodeBinding: readonly [string, string] = [
+      createHash("sha256").update(code.trim().toLowerCase()).digest("base64url"),
+      createHash("sha256").update(claim).digest("base64url"),
+    ];
+    const codeClaimProof = approvalSessionProof(v2WithRequester, "discover", "", "", expectedCodeBinding);
+    expect(verifySessionProof(codeClaimProof, targetPublicJwk, { action: "discover", requestId: createdV2.id, bodyCid: createdV2.bodyCid, resultRef: "", ackId: "", url: discoverUrl, codeBinding: expectedCodeBinding })).toBe(true);
+    expect(verifySessionProof(codeClaimProof, requesterPublicJwk, { action: "discover", requestId: createdV2.id, bodyCid: createdV2.bodyCid, resultRef: "", ackId: "", url: discoverUrl, codeBinding: expectedCodeBinding })).toBe(false);
+
+    expect(await discoverApprovalResult(v2WithRequester, { fetch: openkey.fetch, approvalCode: code, delegationClaim: claim })).toEqual({
+      status: "ready", resultRef: found.resultRef, expiresAt: found.expiresAt,
+    });
+    expect(await discoverApprovalResult(v2TargetOnly, { fetch: openkey.fetch, approvalCode: code, delegationClaim: claim })).toEqual({
+      status: "ready", resultRef: found.resultRef, expiresAt: found.expiresAt,
+    });
+
+    // Fetch, collect(known), and ack all succeed on v2 WITHOUT requesterSigningKey.
+    expect(await fetchApprovalResult(v2TargetOnly, found, { fetch: openkey.fetch })).toEqual({ version: 1, marker: "encrypted" });
+    expect(await collectApprovalResult(v2TargetOnly, { fetch: openkey.fetch, known: found })).toEqual({
+      status: "result", resultRef: found.resultRef, expiresAt: found.expiresAt, relay: { version: 1, marker: "encrypted" },
+    });
+    expect(await ackApprovalResult(v2TargetOnly, found.resultRef, "ack-target-only-01", { fetch: openkey.fetch })).toBe("acknowledged");
+
+    expect(openkey.phases).toEqual([
+      { phase: "discover-preload", verifiedBy: "header-issuer", status: 202 },
+      { phase: "discover-code-claim", verifiedBy: "target", status: 200 },
+      { phase: "discover-code-claim", verifiedBy: "target", status: 200 },
+      { phase: "fetch", verifiedBy: "target", status: 200 },
+      { phase: "fetch", verifiedBy: "target", status: 200 },
+      { phase: "ack", verifiedBy: "target", status: 200 },
+    ]);
   });
 });
 
