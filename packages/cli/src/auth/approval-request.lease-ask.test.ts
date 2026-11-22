@@ -222,6 +222,16 @@ test("sign-in through an approval link asks for the default lease unless told ot
   expect(await leaseAsked({ expiry: `${DEFAULT_RENEWAL_LEASE_SECONDS / DAY}d` })).toBeUndefined();
 });
 
+test("a sign-in asking for decrypt or the secrets space asks for no renewal by default, and a named --renew asks for its length", async () => {
+  const decrypt = { service: "tinycloud.encryption", space: "encryption", path: `urn:tinycloud:encryption:${ownerDid}:default`, actions: ["tinycloud.encryption/decrypt"] };
+  const secret = { service: "tinycloud.kv", space: "secrets", path: "vault/secrets/KEY", actions: ["tinycloud.kv/get"] };
+  expect(await leaseAsked({ permissions: requested, expiry: "1h" })).toBe(DEFAULT_RENEWAL_LEASE_SECONDS);
+  for (const permissions of [[...requested, decrypt], [secret], [secret, decrypt]]) {
+    expect(await leaseAsked({ permissions, expiry: "1h" })).toBeUndefined();
+    expect(await leaseAsked({ permissions, expiry: "1h", renew: 7 * DAY })).toBe(7 * DAY);
+  }
+});
+
 test("a paste link never asks for a lease, and a named --renew with one is refused before OpenKey is asked", async () => {
   expect(await leaseAsked({ paste: true })).toBeUndefined();
   await expect(leaseAsked({ paste: true, renew: 90 * DAY })).rejects.toMatchObject({ code: "INVALID_ARGUMENT" });

@@ -35,6 +35,11 @@ export function isDeviceDefaultDecrypt(permission: Pick<PermissionEntry, "servic
     !permission.caveats?.length;
 }
 
+/** An entry in a secrets space: the space `secrets`, or a full space id that names it. */
+export function isSecretsSpacePermission(permission: Pick<PermissionEntry, "space">): boolean {
+  return permission.space === "secrets" || permission.space?.endsWith(":secrets") === true;
+}
+
 /**
  * The first entry OpenKey's device flow refuses: any entry in a secrets space ("secrets"), or any encryption entry
  * other than decrypt on the owner's default network. OpenKey admits exactly that one encryption entry
@@ -42,7 +47,7 @@ export function isDeviceDefaultDecrypt(permission: Pick<PermissionEntry, "servic
  */
 export function deviceRefusal(entries: readonly PermissionEntry[]): PermissionEntry | "secrets" | undefined {
   for (const entry of entries) {
-    if (entry.space === "secrets" || entry.space?.endsWith(":secrets") === true) return "secrets";
+    if (isSecretsSpacePermission(entry)) return "secrets";
     if (entry.service === ENCRYPTION_PERMISSION_SERVICE && !isDeviceDefaultDecrypt(entry)) return entry;
   }
   return undefined;

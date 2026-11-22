@@ -58,7 +58,7 @@ import { startAuthFlow } from "../auth/browser-auth.js";
 import { APPROVAL_TIMEOUT_OPTION_DESCRIPTION, parseApprovalTimeout, type ApprovalWait } from "../auth/approval-wait.js";
 import { storedGrantsCovering } from "../auth/covering-grants.js";
 import { approvalCommandIntent, approvalRenewalChoiceOf, approvalRenewalOf, approvalResultNeedsAck, commitApprovalCommand, completeApprovalResult, grantLifetimeSeconds, pendingApprovalKey, recoverApprovalCommand, trackApprovalResult } from "../auth/approval-request.js";
-import { parseRenewOption, renewalLeaseFor } from "../auth/renewal-lease.js";
+import { parseRenewOption, renewalLeaseFor, withoutDefaultRenewal } from "../auth/renewal-lease.js";
 import {
   acquireDeviceDelegation,
   loginWithDeviceAuthorization,
@@ -658,7 +658,7 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
     .option("--method <method>", "Authentication method: local or openkey")
     .option("--manifest <fileOrBase64>", `Request only this manifest's permissions (one space, plus raw encryption network entries such as a secrets decrypt grant); ${SHARE_PUBLISHING_MANIFEST_REF} covers \`${CLI_NAME} share publish\``)
     .option("--expiry <duration>", `OpenKey session lifetime, e.g. 1h or 7d (with --manifest: default 1h, or 7d for ${SHARE_PUBLISHING_MANIFEST_REF} so Share links keep their 7-day life; device login: at most 30d, default 30d)`)
-    .option("--renew <duration>", "Ask the owner to let this sign-in renew itself for up to this long after approval, e.g. 30d (default 30d, at most 365d, longer than --expiry). The owner can approve it without renewal")
+    .option("--renew <duration>", "Ask the owner to let this sign-in renew itself for up to this long after approval, for example 30d. Default 30d, or none when the sign-in asks for encryption or secrets permissions. Must be longer than --expiry and at most 365d. The owner can approve it without renewal.")
     .option("--no-renew", "Ask for a sign-in that ends at its --expiry, with no renewal")
     .option("--owner <did>", "Sign in as this owner (did:pkh:eip155:CHAIN:ADDRESS): OpenKey preselects that key, e.g. one that is not the account's primary key, and an approval by any other identity is refused. With --manifest, also names the secrets owner for a manifest's `secrets` on a profile with no recorded owner")
     .option("--replace-session", "Scoped or device login: replace this profile's live session even though the new scope would narrow, change or shorten it (prefer a new profile)")
@@ -3140,7 +3140,10 @@ export async function refreshOpenKeySession(
   if (!approvalRequestPath && typeof options.renew === "number") {
     throw new CLIError("INVALID_ARGUMENT", "--renew needs OpenKey sign-in through an approval link: it can't be used with --paste, --keys or --replication-prefix.", ExitCode.USAGE_ERROR);
   }
-  const renewalLeaseSeconds = approvalRequestPath ? renewalLeaseFor(options.renew, grantLifetimeSeconds(openKeyExpiry)) : undefined;
+  // Decrypt and secrets are never renewed by default; a named --renew asks for its length (see `withoutDefaultRenewal`).
+  const renewalLeaseSeconds = approvalRequestPath
+    ? renewalLeaseFor(options.renew ?? (withoutDefaultRenewal(permissions ?? ownerLoginPermissions(expectedOwner)) ? false : undefined), grantLifetimeSeconds(openKeyExpiry))
+    : undefined;
   if (permissions !== undefined && options.replaceSession !== true) {
     // An opted-in link lets the user pick the lifetime, so `--expiry` is not a lifetime this login will have. Do not
     // refuse before consent for "shortening" a live session on that guess: the commit re-checks with the signed expiry.
