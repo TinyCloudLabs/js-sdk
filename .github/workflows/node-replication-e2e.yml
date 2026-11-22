@@ -22,6 +22,10 @@ on:
       - "packages/sdk-services/src/vault/**"
       - "packages/cli/src/commands/secrets*"
       - "tests/cli/secrets/secrets-legacy-node.e2e.test.ts"
+      - "packages/mcp/src/**"
+      - "packages/cli/src/lib/**"
+      - "packages/operations/src/operations/secrets*"
+      - ".github/scripts/check-node-features.sh"
       - ".github/workflows/node-replication-e2e.yml"
   push:
     branches: [master]
@@ -37,6 +41,12 @@ env:
   # tinycloud-node v1.20.6, the last release without per-secret keys (encryption-named-keys-v1), pinned by digest.
   # Only the legacy-node-e2e job runs it: secrets against a node that cannot parent a grant on a secret's own key (TC-3801).
   TINYCLOUD_LEGACY_NODE_IMAGE: ghcr.io/tinycloudlabs/tinycloud-node:1.20.6@sha256:41667d3d133aaa12290a2f3a744afacd838988327552d159c60f04466e66f86f
+  # tinycloud-node 1.26.21, the first release whose nodes create a key for one exact secret (node #703), pinned by digest.
+  # Only the named-keys-node-e2e job runs it. Replace PENDING with the release image's index digest (tag 1.26.21) when
+  # it is published; until then that job fails at the extract step on purpose. 1.26.20 lists encryption-named-keys-v1
+  # but rejects the exact-key key path (key_path_invalid), so it cannot stand in.
+  TINYCLOUD_NAMED_KEYS_NODE_IMAGE: ghcr.io/tinycloudlabs/tinycloud-node:1.26.21@sha256:PENDING
+
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
@@ -301,6 +311,123 @@ jobs:
             [ -f "$pidfile" ] || continue
             kill "$(cat "$pidfile")" 2>/dev/null || true
           done
+
+      - name: Save Rust/Cargo cache
+        if: github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/')
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-${{ runner.os }}-stable-${{ github.workflow }}-${{ github.job }}-${{ hashFiles('Cargo.lock') }}
+
+  named-keys-node-e2e:
+    name: Per-secret keys on a named-keys node (CLI and MCP)
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.x
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+      - name: Cache Bun packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - name: Restore Rust/Cargo cache
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-${{ runner.os }}-stable-${{ github.workflow }}-${{ github.job }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            cargo-${{ runner.os }}-stable-${{ github.workflow }}-${{ github.job }}-
+
+      - name: Install wasm-pack
+        uses: ./.github/actions/install-wasm-pack
+
+      - name: Install locked dependencies
+        run: bun install --frozen-lockfile
+
+      # The e2e files drive the built CLI and the built MCP server (packages/cli/dist, packages/mcp/dist).
+      - name: Build the SDK, the CLI and the MCP server
+        run: |
+          bun run --cwd packages/sdk-rs build:wasm:node
+          bun run --cwd packages/sdk-rs/packages/node build
+          bun run --cwd packages/sdk-rs build:wasm:web
+          bun run --cwd packages/sdk-rs/packages/web build
+          bun run --cwd packages/bootstrap build
+          bun run --cwd packages/sdk-services build
+          bun run --cwd packages/share-envelope build
+          bun run --cwd packages/share-sdk build
+          bun run --cwd packages/sdk-core build
+          bun run --cwd packages/node-sdk build
+          bun run --cwd packages/replica build
+          bun run --cwd packages/operations build
+          bun run --cwd packages/courier build
+          bun run --cwd packages/cli build
+          bun run --cwd packages/mcp build
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract the pinned named-keys TinyCloud node
+        run: |
+          case "$TINYCLOUD_NAMED_KEYS_NODE_IMAGE" in
+            *PENDING*) echo "::error title=named-keys node::TINYCLOUD_NAMED_KEYS_NODE_IMAGE has no digest yet: pin the tinycloud-node 1.26.21 release image (exact-key key.create, node #703)"; exit 1 ;;
+          esac
+          docker pull "$TINYCLOUD_NAMED_KEYS_NODE_IMAGE"
+          container="$(docker create "$TINYCLOUD_NAMED_KEYS_NODE_IMAGE")"
+          docker cp "$container:/tinycloud" "$RUNNER_TEMP/tinycloud-named-keys"
+          docker rm "$container"
+          chmod +x "$RUNNER_TEMP/tinycloud-named-keys"
+
+      # A wrong or missing binary fails here instead of passing the suites below by accident. The feature list alone does
+      # not prove exact-key key.create (1.26.20 lists the feature and rejects the key path); the suites below do.
+      - name: Check the node is 1.26.21 and lists named keys
+        run: bash .github/scripts/check-node-features.sh "$RUNNER_TEMP/tinycloud-named-keys" 1.26.21 encryption-named-keys-v1 present
+
+      # Each suite skips itself when TC_NAMED_KEYS_E2E_NODE_BIN is unset, so a step fails on any skip or when nothing passed.
+      - name: Run the CLI per-secret keys e2e (put, get, grants, tc auth grant, secrets network grant)
+        timeout-minutes: 15
+        env:
+          TC_NAMED_KEYS_E2E_NODE_BIN: ${{ runner.temp }}/tinycloud-named-keys
+        run: |
+          set -o pipefail
+          bash "$GITHUB_WORKSPACE/.github/scripts/run-private-tests.sh" bun test --max-concurrency=1 packages/cli/src/commands/secrets-per-secret-keys.e2e.test.ts 2>&1 | tee "$RUNNER_TEMP/named-keys-cli.log"
+          if grep -Eq '^ *[1-9][0-9]* skip' "$RUNNER_TEMP/named-keys-cli.log" || ! grep -Eq '^ *6 pass' "$RUNNER_TEMP/named-keys-cli.log" || grep -Eq '^ *[1-9][0-9]* fail' "$RUNNER_TEMP/named-keys-cli.log"; then
+            echo "::error title=named-keys CLI e2e::tests were skipped, failed, or fewer than 6 passed"
+            exit 1
+          fi
+
+      - name: Run the MCP per-secret keys e2e (the agent's tinycloud_secrets_get on its own key)
+        timeout-minutes: 10
+        env:
+          TC_NAMED_KEYS_E2E_NODE_BIN: ${{ runner.temp }}/tinycloud-named-keys
+        run: |
+          set -o pipefail
+          bash "$GITHUB_WORKSPACE/.github/scripts/run-private-tests.sh" bun test --max-concurrency=1 packages/mcp/src/stdio.namedKeys.e2e.test.ts 2>&1 | tee "$RUNNER_TEMP/named-keys-mcp.log"
+          if grep -Eq '^ *[1-9][0-9]* skip' "$RUNNER_TEMP/named-keys-mcp.log" || ! grep -Eq '^ *1 pass' "$RUNNER_TEMP/named-keys-mcp.log" || grep -Eq '^ *[1-9][0-9]* fail' "$RUNNER_TEMP/named-keys-mcp.log"; then
+            echo "::error title=named-keys MCP e2e::the test was skipped, failed, or did not pass"
+            exit 1
+          fi
 
       - name: Save Rust/Cargo cache
         if: github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/')
