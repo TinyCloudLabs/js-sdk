@@ -51,12 +51,37 @@ describe("WebSecretsService.put on a node without per-secret keys", () => {
     expect(h.base.delete).toHaveBeenCalledTimes(1);
   });
 
-  it("a node that lists named keys, or one not yet known, still asks and then writes", async () => {
-    for (const supported of [true, undefined]) {
+  it("a node that lists named keys still asks and then writes", async () => {
+    const h = harness(true);
+    expect((await h.secrets.put("API_KEY", "v")).ok).toBe(true);
+    expect(h.requestPermissions).toHaveBeenCalledTimes(1);
+    expect(h.base.put).toHaveBeenCalledTimes(1);
+  });
+
+  it("a node that cannot be asked fails closed: NAMED_KEYS_CHECK_FAILED, retryable, no prompt, no write", async () => {
+    const h = harness(undefined);
+    const result = await h.secrets.put("API_KEY", "v");
+    expect(result.ok ? undefined : result.error).toMatchObject({
+      code: "NAMED_KEYS_CHECK_FAILED",
+      service: "secrets",
+      message: "Couldn't reach this TinyCloud node to check that it can save secrets. Nothing was saved. Try again in a moment.",
+      meta: { retryable: true },
+    });
+    expect(h.requestPermissions).not.toHaveBeenCalled();
+    expect(h.base.put).not.toHaveBeenCalled();
+  });
+
+  it("a name over 64 characters is refused with its length in the words, before the node is asked or any prompt opens", async () => {
+    for (const supported of [true, false, undefined]) {
       const h = harness(supported);
-      expect((await h.secrets.put("API_KEY", "v")).ok).toBe(true);
-      expect(h.requestPermissions).toHaveBeenCalledTimes(1);
-      expect(h.base.put).toHaveBeenCalledTimes(1);
+      const result = await h.secrets.put(`A${"B".repeat(64)}`, "v");
+      expect(result.ok ? undefined : result.error).toMatchObject({
+        code: "INVALID_INPUT",
+        service: "secrets",
+        message: "This secret wasn't saved: its name is 65 characters, and names can be at most 64. Choose a shorter name.",
+      });
+      expect(h.requestPermissions).not.toHaveBeenCalled();
+      expect(h.base.put).not.toHaveBeenCalled();
     }
   });
 });

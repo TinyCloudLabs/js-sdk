@@ -1921,7 +1921,8 @@ export class TinyCloudNode {
    * so on a node without it the put is refused before anything is asked or written.
    *
    * A sign-in knows the answer. A restored session (the CLI's) does not, so its host's `/info` is read
-   * once, with no credentials. `undefined` when the node cannot be asked: the put then goes its own way.
+   * once, with no credentials. `undefined` when the node cannot be asked: the put then fails closed (`NAMED_KEYS_CHECK_FAILED`,
+   * retryable), because a put on a node without named keys would ask the wallet to sign before the node refuses it.
    */
   async namedKeysSupported(): Promise<boolean | undefined> {
     const known = this.replicationNodeFeatures;

@@ -15,7 +15,7 @@ import {
 } from "@tinycloud/operations/secret-request";
 import { operationWarnings, outputError, outputJson, type ErrorOutputDetails } from "./formatter.js";
 import { safeBlock } from "./safe-text.js";
-import { authorizationVerdictOf, NAMED_KEYS_UNSUPPORTED, NAMED_KEYS_UNSUPPORTED_MESSAGE, parseCapabilityResource, SERVICE_LONG_TO_SHORT, validatedCapabilityOf } from "@tinycloud/sdk-core";
+import { authorizationVerdictOf, NAMED_KEYS_CHECK_FAILED, NAMED_KEYS_CHECK_FAILED_MESSAGE, NAMED_KEYS_UNSUPPORTED, NAMED_KEYS_UNSUPPORTED_MESSAGE, parseCapabilityResource, SERVICE_LONG_TO_SHORT, validatedCapabilityOf } from "@tinycloud/sdk-core";
 import { describeStorageRejection, storageRejection } from "./storage.js";
 import { drainWarnings, mergeWarnings } from "./warnings.js";
 import { routingFailure } from "@tinycloud/sdk-services";
@@ -90,7 +90,11 @@ export function cliErrorFromService(
 ): CLIError {
   if (error instanceof CLIError) return error;
   if (error.code === NAMED_KEYS_UNSUPPORTED) {
-    return new CLIError(NAMED_KEYS_UNSUPPORTED, NAMED_KEYS_UNSUPPORTED_MESSAGE, ExitCode.NODE_ERROR);
+    return new CLIError(NAMED_KEYS_UNSUPPORTED, NAMED_KEYS_UNSUPPORTED_MESSAGE, ExitCode.NAMED_KEYS_UNSUPPORTED);
+  }
+  if (error.code === NAMED_KEYS_CHECK_FAILED) {
+    // Retryable: the node could not be asked. Nothing was saved, so it is a network-class exit.
+    return new CLIError(NAMED_KEYS_CHECK_FAILED, NAMED_KEYS_CHECK_FAILED_MESSAGE, ExitCode.NETWORK_ERROR);
   }
   const nodeRetry = nodeRetryError(error);
   if (nodeRetry) return nodeRetry;

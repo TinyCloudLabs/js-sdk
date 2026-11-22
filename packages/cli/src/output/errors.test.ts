@@ -635,13 +635,24 @@ describe("node retry signals (TC-1413)", () => {
 });
 
 describe("cliErrorFromService: a secrets put on a node without per-secret keys", () => {
-  test("is its own code, a node-side exit code, with the service's words", () => {
+  test("is its own code with its own exit code (11, not the shared node-error 7), with the service's words", () => {
     const refused = cliErrorFromService({
       code: "NAMED_KEYS_UNSUPPORTED",
       message: "ignored: the CLI prints the shared text",
     });
-    expect(refused).toMatchObject({ code: "NAMED_KEYS_UNSUPPORTED", exitCode: 7 });
+    expect(refused).toMatchObject({ code: "NAMED_KEYS_UNSUPPORTED", exitCode: 11 });
     expect(refused.message).toContain("Nothing was saved.");
     expect(refused.message).toContain("whoever runs the node needs to upgrade it");
+  });
+});
+
+describe("cliErrorFromService: a secrets put that could not check the node", () => {
+  test("is NAMED_KEYS_CHECK_FAILED with the retry words and the network exit (6)", () => {
+    const refused = cliErrorFromService({
+      code: "NAMED_KEYS_CHECK_FAILED",
+      message: "ignored: the CLI prints the shared text",
+    });
+    expect(refused).toMatchObject({ code: "NAMED_KEYS_CHECK_FAILED", exitCode: 6 });
+    expect(refused.message).toBe("Couldn't reach this TinyCloud node to check that it can save secrets. Nothing was saved. Try again in a moment.");
   });
 });

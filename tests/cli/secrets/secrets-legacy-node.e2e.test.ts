@@ -10,7 +10,7 @@ const LEGACY_VERSION = "1.20.6";
 const E2E_TIMEOUT_MS = 180_000;
 const LEGACY_NAME = `CLI_LEGACY_${Date.now()}`;
 const LEGACY_VALUE = "legacy secret value";
-const NODE_ERROR_EXIT = 7;
+const NAMED_KEYS_UNSUPPORTED_EXIT = 11;
 /** The error object the CLI prints (pretty JSON), whichever of stdout or stderr carried it. */
 function errorOf(result: { stdout: string; stderr: string }): { code: string; message: string } {
   for (const text of [result.stderr, result.stdout]) {
@@ -48,9 +48,9 @@ describe("tc secrets against a node without per-secret keys", () => {
     await Promise.allSettled([node?.secrets.delete(LEGACY_NAME)]);
   }, E2E_TIMEOUT_MS);
 
-  test("put is refused with NAMED_KEYS_UNSUPPORTED, exit 7, and nothing is saved", async () => {
+  test("put is refused with NAMED_KEYS_UNSUPPORTED, exit 11, and nothing is saved", async () => {
     const put = await tc("secrets", "put", "CLI_LEGACY_NEW", "new value");
-    expect(put.exitCode).toBe(NODE_ERROR_EXIT);
+    expect(put.exitCode).toBe(NAMED_KEYS_UNSUPPORTED_EXIT);
     const error = errorOf(put);
     expect(error.code).toBe("NAMED_KEYS_UNSUPPORTED");
     expect(error.message).toContain("Nothing was saved.");
@@ -60,6 +60,14 @@ describe("tc secrets against a node without per-secret keys", () => {
     const listed = await tc("secrets", "list");
     expect(listed.exitCode).toBe(0);
     expect(listed.json.secrets).not.toContain("CLI_LEGACY_NEW");
+  }, E2E_TIMEOUT_MS);
+
+  // The length check comes before the node is asked, so it answers the same on any node.
+  test("put of a name over 64 characters says so in Monica's words (exit 2), not NAMED_KEYS_UNSUPPORTED", async () => {
+    const long = `A${"B".repeat(64)}`;
+    const tooLong = await tc("secrets", "put", long, "v");
+    expect(tooLong.exitCode).toBe(2);
+    expect(errorOf(tooLong).message).toBe("This secret wasn't saved: its name is 65 characters, and names can be at most 64. Choose a shorter name.");
   }, E2E_TIMEOUT_MS);
 
   test("a secret already on the node reads, lists and deletes", async () => {

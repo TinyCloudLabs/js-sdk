@@ -26,6 +26,10 @@ export interface SecretCatalogEntry {
   name: string;
   /** Omitted for the global secret namespace. */
   scope?: string;
+  /** Set when the name is over 64 characters (stored before the limit): listed, but `get`, `put` and `delete` refuse it. */
+  nameTooLong?: true;
+  /** Set when the scope is over 64 characters (stored before the limit): listed under its stored scope, but `get`, `put` and `delete` refuse it. */
+  scopeTooLong?: true;
 }
 
 export type SecretsError = VaultError | ServiceError;
