@@ -2248,7 +2248,7 @@ export async function ensureDelegationAuthority(params: {
 const OPENKEY_AGENT_MAX_LIFETIME_MS = parseRequestedExpiry(APPS_AGENT_EXPIRY).durationMs;
 
 /** An agent request is approved in OpenKey only if it covers one space and no raw authority but one secret's own key. */
-function assertOpenKeyAgentRequest(requested: PermissionEntry[]): void {
+export function assertOpenKeyAgentRequest(requested: PermissionEntry[]): void {
   // One secret's own key, decrypt only, is the only raw encryption entry OpenKey signs for an agent: never a prefix, the
   // whole network or key creation (until OpenKey's route for it is live).
   if (requested.some((permission) =>
