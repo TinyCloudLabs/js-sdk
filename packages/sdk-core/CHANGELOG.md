@@ -1,5 +1,13 @@
 # @tinycloudlabs/sdk-core
 
+## 3.14.0-beta.6
+
+### Patch Changes
+
+- 7d438ee: Account index writes are sent only when the session can write the index (`tinycloud.sql` write and schema on the account database). A session without that access skips the index writes. Account reads and writes through the registry records don't depend on that access.
+
+  Details: TC-3688
+
 ## 3.14.0-beta.5
 
 ### Minor Changes

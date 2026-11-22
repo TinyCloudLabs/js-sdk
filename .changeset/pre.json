@@ -29,6 +29,7 @@
     "@tinycloud/sdk-services-test": "21.0.5"
   },
   "changesets": [
+    "account-index-write-guard",
     "cli-keeps-30-day-login",
     "device-refuses-secrets",
     "generic-app-manifest",
