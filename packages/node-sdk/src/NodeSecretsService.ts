@@ -9,6 +9,7 @@ import {
   type Manifest,
   type PermissionEntry,
   type Result,
+  type SecretGetOptions,
   type SecretScopeOptions,
   type SecretPutOptions,
   type ServiceError,
@@ -167,9 +168,14 @@ export class NodeSecretsService implements ISecretsService {
     this.service.lock();
   }
 
+  /**
+   * Never asks for authority unless `options.requestPermission`: a read with
+   * no live grant for the secret's own key is `DECRYPT_DENIED`, without a
+   * wallet prompt, so a background read cannot sign (TC-3801).
+   */
   async get(
     name: string,
-    options?: SecretScopeOptions,
+    options?: SecretGetOptions,
   ): ReturnType<ISecretsService["get"]> {
     const permission = await this.ensurePermission(name, options, "get");
     if (!permission.ok) return permission;
@@ -180,7 +186,7 @@ export class NodeSecretsService implements ISecretsService {
 
   async getEntry(
     name: string,
-    options?: SecretScopeOptions,
+    options?: SecretGetOptions,
   ): ReturnType<ISecretsService["getEntry"]> {
     const permission = await this.ensurePermission(name, options, "get");
     if (!permission.ok) return permission;
@@ -234,9 +240,11 @@ export class NodeSecretsService implements ISecretsService {
 
   private async ensurePermission(
     name: string,
-    options: SecretScopeOptions | undefined,
+    options: SecretGetOptions | undefined,
     action: SecretAction,
   ): Promise<Result<void, ServiceError | VaultError>> {
+    // Writes and lists still ask as before; a read asks only when told to.
+    const mayAsk = action !== "get" || options?.requestPermission === true;
     const target = name || "secrets";
     let permissionEntries: PermissionEntry[];
     const networkId = action === "get" || action === "put" ? this.config.getEncryptionNetworkId?.() : undefined;
@@ -251,10 +259,11 @@ export class NodeSecretsService implements ISecretsService {
     }
     // A node that cannot sign for the secret's own key still reads a secret
     // sealed to the network before TC-3284 when it opens the whole network;
-    // that is accepted, never asked for.
+    // that is accepted, never asked for. Not under `namedKeyOnly`.
     const [kvEntry, keyEntry] = permissionEntries;
     const networkRead = action === "get" && networkId !== undefined && keyEntry !== undefined &&
-      keyEntry.path !== networkId && !this.config.canEscalate()
+      keyEntry.path !== networkId && options?.namedKeyOnly !== true &&
+      (!mayAsk || !this.config.canEscalate())
       ? [kvEntry!, { ...keyEntry, path: networkId }]
       : undefined;
 
@@ -279,6 +288,8 @@ export class NodeSecretsService implements ISecretsService {
       return ok();
     }
 
+    if (!mayAsk) return this.readDenied(name, options, escalation, keyEntry);
+
     if (!this.config.canEscalate()) {
       return secretsError(
         ErrorCodes.PERMISSION_DENIED,
@@ -292,6 +303,34 @@ export class NodeSecretsService implements ISecretsService {
     } catch (error) {
       return this.escalationError(action, target, error);
     }
+  }
+
+  /**
+   * A read that may not ask: missing decrypt on the secret's own key is
+   * `DECRYPT_DENIED` naming that key; a missing KV read stays a plain denial.
+   */
+  private readDenied(
+    name: string,
+    options: SecretGetOptions | undefined,
+    missing: PermissionEntry[],
+    keyEntry: PermissionEntry | undefined,
+  ): Result<never, ServiceError | VaultError> {
+    if (keyEntry !== undefined && missing.some((entry) => entry.service === "tinycloud.encryption")) {
+      return {
+        ok: false,
+        error: {
+          code: "DECRYPT_DENIED",
+          service: "vault",
+          key: resolveSecretPath(name, options).vaultKey,
+          message: `No live grant to decrypt ${name}; ask for permissionHint, or read with requestPermission.`,
+          permissionHint: { service: "tinycloud.encryption", path: keyEntry.path, actions: ["tinycloud.encryption/decrypt"] },
+        },
+      };
+    }
+    return secretsError(
+      ErrorCodes.PERMISSION_DENIED,
+      `No live grant to read ${name}; read with requestPermission to ask for it.`,
+    );
   }
 
   private escalationError(

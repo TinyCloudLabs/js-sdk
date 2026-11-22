@@ -29,16 +29,29 @@ function envelope(fields: { v: 1 | 2; keyPath?: string; aadKey?: string; network
   };
 }
 
-function harness(options: { keyDecryptStatus?: number } = {}) {
+function harness(options: { keyDecryptStatus?: number; reopenAs?: Uint8Array } = {}) {
   const records = new Map<string, string>();
-  const calls = { networkDecrypt: 0, keyDecrypt: 0, encrypt: [] as { keyPath: string; options: Record<string, unknown> }[] };
+  const versions = new Map<string, number>();
+  const calls = { networkDecrypt: 0, keyDecrypt: 0, encrypt: [] as { keyPath: string; options: Record<string, unknown> }[], puts: 0 };
+  /** Runs before each conditional write is checked, as a concurrent writer would. */
+  const race = { beforeWrite: undefined as (() => void) | undefined };
   const open = (e: { ciphertext: string }) => base64Decode(e.ciphertext);
+  const etag = (path: string) => `"v${versions.get(path) ?? 0}"`;
+  const write = (path: string, body: string) => {
+    records.set(path, body);
+    versions.set(path, (versions.get(path) ?? 0) + 1);
+  };
   const kv = {
     get: async (path: string) => records.has(path)
-      ? { ok: true, data: { data: records.get(path) } }
+      ? { ok: true, data: { data: records.get(path), headers: { etag: etag(path) } } }
       : { ok: false, error: { code: "KV_NOT_FOUND", message: "missing", service: "kv" } },
-    put: async (path: string, body: string) => {
-      records.set(path, body);
+    put: async (path: string, body: string, putOptions?: { ifMatch?: string }) => {
+      calls.puts++;
+      race.beforeWrite?.();
+      if (putOptions?.ifMatch !== undefined && putOptions.ifMatch !== etag(path)) {
+        return { ok: false, error: { code: "KV_PRECONDITION_FAILED", message: "etag moved", service: "kv" } };
+      }
+      write(path, body);
       return { ok: true, data: undefined };
     },
   };
@@ -72,16 +85,17 @@ function harness(options: { keyDecryptStatus?: number } = {}) {
           if (options.keyDecryptStatus !== undefined) {
             throw new NamedKeyError("NODE_ERROR", "refused", { status: options.keyDecryptStatus });
           }
-          return open(e);
+          return options.reopenAs ?? open(e);
         },
       }),
     },
     tc: { kv, did: "did:key:z6MkPrincipal", address: "0xabc", chainId: 1, hosts: ["https://tinycloud.test"] },
   } as never);
   vault.initialize(context);
-  const store = (key: string, value: unknown) => records.set(`vault/${key}`, JSON.stringify(value));
+  const store = (key: string, value: unknown) => write(`vault/${key}`, JSON.stringify(value));
   const stored = (key: string) => JSON.parse(records.get(`vault/${key}`)!) as { v: number; keyPath?: string };
-  return { vault, secrets: new SecretsService(vault), calls, store, stored };
+  const raw = (key: string) => records.get(`vault/${key}`);
+  return { vault, secrets: new SecretsService(vault), calls, store, stored, raw, race };
 }
 
 describe("secret writes seal to the secret's own key", () => {
@@ -160,6 +174,24 @@ describe("secret reads pick the key from the envelope", () => {
     expect(h.calls.keyDecrypt).toBe(0);
   });
 
+  test("a v1 envelope without AAD stays readable through the network decrypt until migrate; bound ones stay strict", async () => {
+    const h = harness();
+    const unbound = ({ v }: { v: 1 | 2 }) => {
+      const { aad: _aad, ...rest } = envelope(v === 1 ? { v } : { v, keyPath: "secrets/api_key" });
+      return rest;
+    };
+    h.store("secrets/API_KEY", unbound({ v: 1 }));
+    expect((await read(h)).status).toBe("ok");
+    expect(await h.secrets.get("API_KEY")).toEqual({ ok: true, data: "v" });
+    expect(h.calls).toMatchObject({ networkDecrypt: 2, keyDecrypt: 0 });
+
+    h.store("secrets/API_KEY", envelope({ v: 1, aadKey: "secrets/OTHER_KEY" }));
+    expect(await read(h)).toEqual({ status: "aad_mismatch" });
+    h.store("secrets/API_KEY", unbound({ v: 2 }));
+    expect(await read(h)).toEqual({ status: "aad_mismatch" });
+    expect(h.calls).toMatchObject({ networkDecrypt: 2, keyDecrypt: 0 });
+  });
+
   test("namedKeyOnly refuses a network-sealed record before any decrypt", async () => {
     const h = harness();
     h.store("secrets/API_KEY", envelope({ v: 1 }));
@@ -176,6 +208,28 @@ describe("secret reads pick the key from the envelope", () => {
       status: "permission_required",
       hint: { service: "tinycloud.encryption", path: `${NETWORK_ID}/secrets/api_key`, actions: ["tinycloud.encryption/decrypt"] },
     });
+  });
+
+  test("get, secrets.get and getEntry keep a refused grant apart from a failed decrypt", async () => {
+    const hint = { service: "tinycloud.encryption", path: `${NETWORK_ID}/secrets/api_key`, actions: ["tinycloud.encryption/decrypt"] };
+    for (const status of [401, 403]) {
+      const h = harness({ keyDecryptStatus: status });
+      h.store("secrets/API_KEY", envelope({ v: 2, keyPath: "secrets/api_key" }));
+      for (const result of [
+        await h.vault.get("secrets/API_KEY", { expectAad: true, keyPath: "secrets/api_key" }),
+        await h.secrets.get("API_KEY"),
+        await h.secrets.getEntry("API_KEY"),
+      ]) {
+        expect(result.ok ? undefined : result.error).toMatchObject({ code: "DECRYPT_DENIED", key: "secrets/API_KEY", permissionHint: hint });
+      }
+    }
+
+    const failed = harness({ keyDecryptStatus: 500 });
+    failed.store("secrets/API_KEY", envelope({ v: 2, keyPath: "secrets/api_key" }));
+    for (const result of [await failed.secrets.get("API_KEY"), await failed.secrets.getEntry("API_KEY")]) {
+      expect(result.ok ? undefined : result.error.code).toBe("DECRYPTION_FAILED");
+      expect(result.ok ? undefined : "permissionHint" in result.error).toBe(false);
+    }
   });
 });
 
@@ -206,5 +260,74 @@ describe("secretKeyPath and the exact read grant", () => {
       { service: "tinycloud.kv", space: SPACE_ID, path: "vault/secrets/scoped/my-app/API_KEY", actions: ["tinycloud.kv/get"], skipPrefix: true },
       { service: "tinycloud.encryption", path: `${NETWORK_ID}/secrets/scoped/my-app/api_key`, actions: ["tinycloud.encryption/decrypt"] },
     ]);
+  });
+});
+
+describe("resealToKey verifies before it writes", () => {
+  const KEY = "secrets/API_KEY";
+  const KEY_PATH = "secrets/api_key";
+  const withoutAad = (e: Record<string, unknown>) => {
+    const { aad: _aad, ...rest } = e;
+    return rest;
+  };
+
+  test("moves a v1 copy, with or without AAD, onto its own key and binds the AAD", async () => {
+    for (const old of [envelope({ v: 1 }), withoutAad(envelope({ v: 1 }))]) {
+      const h = harness();
+      h.store(KEY, old);
+      expect(await h.vault.resealToKey(KEY, KEY_PATH)).toEqual({ status: "moved" });
+      expect(h.stored(KEY)).toMatchObject({ v: 2, keyPath: KEY_PATH });
+      expect(new TextDecoder().decode(h.calls.encrypt[0]!.options.aad as Uint8Array)).toBe(`tinycloud.vault:${SPACE_ID}:${KEY}`);
+      expect(await h.secrets.get("API_KEY")).toEqual({ ok: true, data: "v" });
+    }
+  });
+
+  test("a copy already on its own key is left alone; a dry run reports what would move", async () => {
+    const h = harness();
+    h.store(KEY, envelope({ v: 2, keyPath: KEY_PATH }));
+    expect(await h.vault.resealToKey(KEY, KEY_PATH)).toEqual({ status: "already" });
+    expect(await h.vault.resealToKey(KEY, KEY_PATH, { dryRun: true })).toEqual({ status: "already" });
+
+    h.store(KEY, envelope({ v: 1 }));
+    const before = h.raw(KEY);
+    expect(await h.vault.resealToKey(KEY, KEY_PATH, { dryRun: true })).toEqual({ status: "pending" });
+    expect(h.raw(KEY)).toBe(before);
+    expect(h.calls).toMatchObject({ puts: 0, networkDecrypt: 0, keyDecrypt: 0, encrypt: [] });
+  });
+
+  test("a new copy that does not open to the same bytes is never written", async () => {
+    const h = harness({ reopenAs: utf8Encode("something else") });
+    h.store(KEY, envelope({ v: 1 }));
+    const before = h.raw(KEY);
+    expect(await h.vault.resealToKey(KEY, KEY_PATH)).toEqual({ status: "skipped", reason: "verify_failed" });
+    expect(h.raw(KEY)).toBe(before);
+    expect(h.calls.puts).toBe(0);
+  });
+
+  test("a write lost to a concurrent change rereads once, then gives up and keeps the newer copy", async () => {
+    const once = harness();
+    once.store(KEY, envelope({ v: 1 }));
+    once.race.beforeWrite = () => {
+      once.race.beforeWrite = undefined;
+      once.store(KEY, envelope({ v: 1, value: { value: "newer", createdAt: "t", updatedAt: "t" } }));
+    };
+    expect(await once.vault.resealToKey(KEY, KEY_PATH)).toEqual({ status: "moved" });
+    expect(once.stored(KEY)).toMatchObject({ v: 2, keyPath: KEY_PATH });
+    expect(await once.secrets.get("API_KEY")).toEqual({ ok: true, data: "newer" });
+
+    const always = harness();
+    always.store(KEY, envelope({ v: 1 }));
+    always.race.beforeWrite = () => always.store(KEY, envelope({ v: 1, value: { value: "racer", createdAt: "t", updatedAt: "t" } }));
+    expect(await always.vault.resealToKey(KEY, KEY_PATH)).toEqual({ status: "skipped", reason: "conflict" });
+    expect(always.calls.puts).toBe(2);
+    expect(always.stored(KEY)).toMatchObject({ v: 1 });
+  });
+
+  test("a missing record, or one bound to another key, is skipped without a write", async () => {
+    const h = harness();
+    expect(await h.vault.resealToKey(KEY, KEY_PATH)).toEqual({ status: "skipped", reason: "not_found" });
+    h.store(KEY, envelope({ v: 1, aadKey: "secrets/OTHER_KEY" }));
+    expect(await h.vault.resealToKey(KEY, KEY_PATH)).toEqual({ status: "skipped", reason: "aad_mismatch" });
+    expect(h.calls).toMatchObject({ puts: 0, encrypt: [] });
   });
 });

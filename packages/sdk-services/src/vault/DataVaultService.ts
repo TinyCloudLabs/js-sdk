@@ -42,6 +42,7 @@ import {
   VaultGrantOptions,
   VaultEntry,
   VaultNetworkReadResult,
+  VaultResealResult,
   VaultError,
   VaultErrorInput,
   VaultHeaders,
@@ -286,6 +287,24 @@ function checkEnvelopeAad(
 }
 
 /**
+ * The AAD check a read asks for. A secret read (`keyPath` given) still accepts
+ * a v1 envelope carrying no AAD until migrate reseals it (TC-3801); a v1 one
+ * carrying AAD, every v2 one, and a plain `expectAad` read stay strict.
+ */
+function checkReadAad(
+  envelope: unknown,
+  spaceId: string,
+  key: string,
+  options: VaultGetOptions<unknown> | undefined,
+): "ok" | "corrupt" | "mismatch" {
+  if (options?.expectAad !== true && options?.keyPath === undefined) return "ok";
+  const verdict = checkEnvelopeAad(envelope, spaceId, key);
+  if (verdict !== "mismatch" || options?.keyPath === undefined) return verdict;
+  const { keyPath, aad } = envelope as Record<string, unknown>;
+  return keyPath === undefined && aad === undefined ? "ok" : verdict;
+}
+
+/**
  * HTTP statuses after which a write may still have been applied. Same set as
  * the account index's `AMBIGUOUS_WRITE_STATUSES` (sdk-core `AccountService`):
  * a gateway or proxy can answer for a write the node committed.
@@ -377,6 +396,18 @@ function kvWriteError(
 type StoredDecrypt =
   | { ok: true; data: Uint8Array }
   | { ok: false; error: { code: string; message: string; permissionHint?: PermissionHint } };
+
+/** A failed network read, message-free. */
+type VaultNetworkReadFailure = Exclude<VaultNetworkReadResult<never>, { status: "ok" }>;
+
+/** Why a reseal skipped a record it could not read or open. */
+function resealReadReason(status: VaultNetworkReadFailure["status"]): "not_found" | "permission_required" | "read_failed" | "aad_mismatch" {
+  return status === "not_found" || status === "permission_required" || status === "aad_mismatch" ? status : "read_failed";
+}
+
+function bytesEqual(a: Uint8Array, b: Uint8Array): boolean {
+  return a.length === b.length && a.every((byte, index) => byte === b[index]);
+}
 
 /**
  * Data Vault service implementation.
@@ -907,26 +938,27 @@ export class DataVaultService extends BaseService implements IDataVaultService {
       const envelope = (
         typeof rawEnvelope === "string" ? JSON.parse(rawEnvelope) : rawEnvelope
       ) as InlineEncryptedEnvelope;
-      if (options?.expectAad === true || options?.keyPath !== undefined) {
-        const verdict = checkEnvelopeAad(envelope, this.vaultConfig.spaceId, key);
-        if (verdict === "corrupt") {
-          return vaultError({ code: "DECRYPTION_FAILED", message: "envelope is malformed" });
-        }
-        if (verdict === "mismatch") {
-          return vaultError({
-            code: "AAD_MISMATCH",
-            key,
-            message: `Envelope at ${key} is not bound to this space and key`,
-          });
-        }
+      const verdict = checkReadAad(envelope, this.vaultConfig.spaceId, key, options);
+      if (verdict === "corrupt") {
+        return vaultError({ code: "DECRYPTION_FAILED", message: "envelope is malformed" });
+      }
+      if (verdict === "mismatch") {
+        return vaultError({
+          code: "AAD_MISMATCH",
+          key,
+          message: `Envelope at ${key} is not bound to this space and key`,
+        });
       }
       const plaintextResult = await this.decryptStored(envelope, options);
       if (!plaintextResult.ok) {
         const routing = routingFailure(plaintextResult.error);
         if (routing) return vaultError(routing);
-        return vaultError(plaintextResult.error.code === "LEGACY_ENVELOPE"
-          ? { code: "LEGACY_ENVELOPE", key, message: plaintextResult.error.message }
-          : { code: "DECRYPTION_FAILED", message: plaintextResult.error.message });
+        const { code, message, permissionHint } = plaintextResult.error;
+        return vaultError(code === "LEGACY_ENVELOPE"
+          ? { code, key, message }
+          : code === "DECRYPT_DENIED" && permissionHint !== undefined
+            ? { code, key, message, permissionHint }
+            : { code: "DECRYPTION_FAILED", message });
       }
 
       const metadata: Record<string, string> = envelope.metadata ?? {};
@@ -970,6 +1002,107 @@ export class DataVaultService extends BaseService implements IDataVaultService {
     key: string,
     options?: VaultGetOptions<T>,
   ): Promise<VaultNetworkReadResult<T>> {
+    const fetched = await this.fetchNetworkEnvelope(key);
+    if (fetched.status !== "fetched") return fetched;
+    const { envelope, etag } = fetched;
+
+    const verdict = checkReadAad(envelope, this.vaultConfig.spaceId, key, options);
+    if (verdict !== "ok") {
+      return { status: verdict === "corrupt" ? "corrupt_envelope" : "aad_mismatch" };
+    }
+
+    const opened = await this.openStored(envelope, options);
+    if (opened.status !== "opened") return opened;
+
+    try {
+      const metadata: Record<string, string> = envelope.metadata ?? {};
+      const contentType =
+        metadata[VaultHeaders.CONTENT_TYPE] ?? "application/json";
+      const keyId =
+        metadata[VaultHeaders.KEY_ID] ??
+        envelope.encryptedSymmetricKeyHash.slice(0, 16);
+      const value = this.deserializeValue<T>(
+        opened.plaintext,
+        contentType,
+        options,
+      );
+      return {
+        status: "ok",
+        entry: { value, metadata, keyId, ...(etag === undefined ? {} : { etag }) },
+      };
+    } catch {
+      return { status: "invalid_payload" };
+    }
+  }
+
+  async resealToKey(
+    key: string,
+    keyPath: string,
+    options?: { dryRun?: boolean },
+  ): Promise<VaultResealResult> {
+    const config = this.networkEncryption;
+    if (!config || !this.requireAuth()) return { status: "skipped", reason: "read_failed" };
+    const aad = `tinycloud.vault:${this.vaultConfig.spaceId}:${key}`;
+
+    // One reread after a lost `ifMatch` race; a second loss is a conflict.
+    for (let attempt = 0; ; attempt++) {
+      const fetched = await this.fetchNetworkEnvelope(key);
+      if (fetched.status !== "fetched") return { status: "skipped", reason: resealReadReason(fetched.status) };
+      const { envelope, etag } = fetched;
+
+      // A secret read's AAD rule: a v1 copy written without AAD still moves.
+      const verdict = checkReadAad(envelope, this.vaultConfig.spaceId, key, { keyPath });
+      if (verdict !== "ok") {
+        return { status: "skipped", reason: verdict === "corrupt" ? "read_failed" : "aad_mismatch" };
+      }
+      if (envelope.keyPath === keyPath && (envelope.v as number) === 2 &&
+          canonicalAadSpaceId(String(envelope.networkId)) === canonicalAadSpaceId(config.networkId)) {
+        return { status: "already" };
+      }
+      if (options?.dryRun === true) return { status: "pending" };
+      if (etag === undefined) return { status: "skipped", reason: "write_failed" };
+
+      const opened = await this.openStored(envelope, { keyPath });
+      if (opened.status !== "opened") return { status: "skipped", reason: resealReadReason(opened.status) };
+
+      let keys: Pick<NamedKeyClient, "encrypt" | "decrypt">;
+      let resealed: NamedKeyEnvelope;
+      try {
+        keys = await this.namedKeys();
+        resealed = await keys.encrypt(keyPath, opened.plaintext, {
+          networkId: config.networkId, aad: toBytes(aad), metadata: envelope.metadata ?? {}, ensureKey: true,
+        });
+      } catch (error) {
+        if (routingFailure(error)) throw error;
+        const { status } = error as { status?: unknown };
+        return { status: "skipped", reason: status === 401 || status === 403 ? "permission_required" : "write_failed" };
+      }
+      try {
+        if (!bytesEqual(await keys.decrypt(resealed), opened.plaintext)) return { status: "skipped", reason: "verify_failed" };
+      } catch (error) {
+        if (routingFailure(error)) throw error;
+        return { status: "skipped", reason: "verify_failed" };
+      }
+
+      let written: Awaited<ReturnType<IKVService["put"]>>;
+      try {
+        written = await this.tc.kv.put(`vault/${key}`, JSON.stringify(resealed), { ifMatch: etag });
+      } catch (error) {
+        if (routingFailure(error)) throw error;
+        return { status: "skipped", reason: "write_failed" };
+      }
+      if (written.ok) return { status: "moved" };
+      if (routingFailure(written.error)) throw written.error;
+      if (written.error.code !== ErrorCodes.KV_PRECONDITION_FAILED) return { status: "skipped", reason: "write_failed" };
+      if (attempt > 0) return { status: "skipped", reason: "conflict" };
+    }
+  }
+
+  /** Fetch a record's envelope from the network, with its ETag; message-free failures. */
+  private async fetchNetworkEnvelope(key: string): Promise<
+    | { status: "fetched"; envelope: InlineEncryptedEnvelope; etag: string | undefined }
+    | VaultNetworkReadFailure
+  > {
     const config = this.networkEncryption;
     if (!config || !this.requireAuth()) {
       return { status: "read_failed" };
@@ -1009,23 +1142,22 @@ export class DataVaultService extends BaseService implements IDataVaultService {
       return { status: "read_failed" };
     }
 
-    let envelope: InlineEncryptedEnvelope;
     try {
       const rawEnvelope = unwrapKVData<string>(valueResult.data);
-      envelope = (
+      const envelope = (
         typeof rawEnvelope === "string" ? JSON.parse(rawEnvelope) : rawEnvelope
       ) as InlineEncryptedEnvelope;
+      return { status: "fetched", envelope, etag: valueResult.data.headers?.etag };
     } catch {
       return { status: "corrupt_envelope" };
     }
+  }
 
-    if (options?.expectAad === true || options?.keyPath !== undefined) {
-      const verdict = checkEnvelopeAad(envelope, this.vaultConfig.spaceId, key);
-      if (verdict !== "ok") {
-        return { status: verdict === "corrupt" ? "corrupt_envelope" : "aad_mismatch" };
-      }
-    }
-
+  /** {@link decryptStored} with message-free failures; typed routing failures reject. */
+  private async openStored(
+    envelope: InlineEncryptedEnvelope,
+    options: VaultGetOptions<unknown> | undefined,
+  ): Promise<{ status: "opened"; plaintext: Uint8Array } | VaultNetworkReadFailure> {
     let plaintextResult: StoredDecrypt;
     try {
       plaintextResult = await this.decryptStored(envelope, options);
@@ -1034,46 +1166,24 @@ export class DataVaultService extends BaseService implements IDataVaultService {
       return { status: "decrypt_failed" };
     }
 
-    if (!plaintextResult.ok) {
-      if (routingFailure(plaintextResult.error)) throw plaintextResult.error;
-      const permissionHint = parsePermissionHint(
-        (plaintextResult.error as { permissionHint?: unknown }).permissionHint,
-      );
-      if (plaintextResult.error.code === "DECRYPT_DENIED" && permissionHint !== undefined) {
-        return { status: "permission_required", hint: permissionHint };
-      }
-      if (plaintextResult.error.code === "INVALID_ENVELOPE") {
-        return { status: "corrupt_envelope" };
-      }
-      if (plaintextResult.error.code === "LEGACY_ENVELOPE") {
-        return { status: "legacy_envelope" };
-      }
-      if (plaintextResult.error.code === "NODE_NOT_RESPONDING" || plaintextResult.error.code === "TRANSPORT_ERROR") {
-        return { status: "node_unreachable" };
-      }
-      return { status: "decrypt_failed" };
+    if (plaintextResult.ok) return { status: "opened", plaintext: plaintextResult.data };
+    if (routingFailure(plaintextResult.error)) throw plaintextResult.error;
+    const permissionHint = parsePermissionHint(
+      (plaintextResult.error as { permissionHint?: unknown }).permissionHint,
+    );
+    if (plaintextResult.error.code === "DECRYPT_DENIED" && permissionHint !== undefined) {
+      return { status: "permission_required", hint: permissionHint };
     }
-
-    try {
-      const metadata: Record<string, string> = envelope.metadata ?? {};
-      const contentType =
-        metadata[VaultHeaders.CONTENT_TYPE] ?? "application/json";
-      const keyId =
-        metadata[VaultHeaders.KEY_ID] ??
-        envelope.encryptedSymmetricKeyHash.slice(0, 16);
-      const value = this.deserializeValue<T>(
-        plaintextResult.data,
-        contentType,
-        options,
-      );
-      const etag = valueResult.data.headers?.etag;
-      return {
-        status: "ok",
-        entry: { value, metadata, keyId, ...(etag === undefined ? {} : { etag }) },
-      };
-    } catch {
-      return { status: "invalid_payload" };
+    if (plaintextResult.error.code === "INVALID_ENVELOPE") {
+      return { status: "corrupt_envelope" };
     }
+    if (plaintextResult.error.code === "LEGACY_ENVELOPE") {
+      return { status: "legacy_envelope" };
+    }
+    if (plaintextResult.error.code === "NODE_NOT_RESPONDING" || plaintextResult.error.code === "TRANSPORT_ERROR") {
+      return { status: "node_unreachable" };
+    }
+    return { status: "decrypt_failed" };
   }
 
   private async headNetworkEncrypted(

@@ -24,6 +24,7 @@ export {
   type VaultGrantOptions,
   type VaultEntry,
   type VaultNetworkReadResult,
+  type VaultResealResult,
   type VaultError,
 } from "./types";
 

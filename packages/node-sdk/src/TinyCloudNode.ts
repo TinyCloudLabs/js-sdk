@@ -279,6 +279,8 @@ const DEFAULT_HOST = "https://node.tinycloud.xyz";
 const DEFAULT_ENCRYPTION_NETWORK_NAME = "default";
 const NETWORK_CREATE_ACTION = ENCRYPTION.NETWORK_CREATE;
 const DECRYPT_ACTION = ENCRYPTION.DECRYPT;
+/** An encryption URN's owner part; its address is the only case-insensitive piece. */
+const ENCRYPTION_URN_OWNER = /^urn:tinycloud:encryption:did:pkh:eip155:\d+:0x[0-9a-fA-F]{40}(?=:)/;
 export const BOOTSTRAP_COMPLETION_MARKER_KEY = "system/bootstrap/complete";
 export const BOOTSTRAP_COMPLETION_MARKER_VERSION = 1;
 export const ACCEPTED_MARKER_VERSIONS: readonly number[] = [BOOTSTRAP_COMPLETION_MARKER_VERSION];
@@ -7461,7 +7463,8 @@ export class TinyCloudNode {
         grantPermissions: (additional) => this.grantRuntimePermissions(additional),
         uncoveredEntries: (permissions) =>
           permissions.filter((entry) => !this.hasRuntimePermissions([entry])),
-        canEscalate: () => this.signer !== undefined && this.tc !== undefined,
+        // `signer` is null on a session-only node, never undefined.
+        canEscalate: () => this.signer != null && this.tc !== undefined,
         getEncryptionNetworkId: () => this.getEncryptionNetworkIdForSpace(resolvedSpace),
         resolveSpace: (space) => space.startsWith("tinycloud:") ? space : this.ownedSpaceId(space),
         getUnlockSigner: () => this.signer ?? undefined,
@@ -7488,11 +7491,7 @@ export class TinyCloudNode {
       {
         expectAad: true,
         ...(resolved.keyPath === undefined ? {} : { keyPath: resolved.keyPath }),
-        namedKeyOnly: !this.hasRuntimePermissions([{
-          service: "tinycloud.encryption",
-          path: this.getEncryptionNetworkIdForSpace(targetSpace),
-          actions: ["tinycloud.encryption/decrypt"],
-        }]),
+        namedKeyOnly: !this.decryptsWithNetwork(this.getEncryptionNetworkIdForSpace(targetSpace)),
       },
     );
 
@@ -7500,6 +7499,19 @@ export class TinyCloudNode {
     // A file that fails to load is a failed read: readSecret never rejects after the read, and nothing here caches the failure.
     const loaded = await import("./secret-read.js").catch(() => undefined);
     return loaded ? loaded.secretReadResult(result, parsePermissionHint) : { status: "read_failed" };
+  }
+
+  /**
+   * Whether the signed session or any installed grant decrypts with this
+   * network's root key. Unlike `hasRuntimePermissions`, no signed session is
+   * needed: a delegate profile holds only its imported delegations.
+   */
+  private decryptsWithNetwork(networkId: string): boolean {
+    const session = this.currentTinyCloudSession();
+    const entry = { service: "tinycloud.encryption", path: networkId, actions: [DECRYPT_ACTION] };
+    if (session !== undefined && this.sessionCoversPermissionEntries(session, [entry])) return true;
+    if (!this.runtimePermissionGrants?.length) return false;
+    return this.findGrantForOperation({ resource: networkId, service: "encryption", path: networkId, action: DECRYPT_ACTION }) !== undefined;
   }
 
   private getBaseSecrets(spaceId: string): ISecretsService {
@@ -9234,12 +9246,23 @@ export class TinyCloudNode {
     );
     const missing = requested.filter((entry) => {
       const raw = this.isEncryptionPermissionEntry(entry) || this.isRawRevocationPermissionEntry(entry);
+      // A requested owner spelled in another case takes the signed spelling:
+      // key and prefix resources parse only with the canonical (EIP-55) owner.
       const comparable = raw && this.isEncryptionPermissionEntry(entry)
-        ? { ...entry, space: "encryption" }
+        ? { ...entry, space: "encryption", path: this.signedOwnerSpelling(entry.path, rawGranted) }
         : entry;
       return !isCapabilitySubset([comparable], raw ? rawGranted : spaceGranted).subset;
     });
     return { subset: missing.length === 0, missing };
+  }
+
+  private signedOwnerSpelling(path: string, granted: readonly PermissionEntry[]): string {
+    const owner = ENCRYPTION_URN_OWNER.exec(path)?.[0];
+    if (owner === undefined) return path;
+    const signed = granted
+      .map((entry) => ENCRYPTION_URN_OWNER.exec(entry.path)?.[0])
+      .find((candidate) => candidate !== undefined && candidate.toLowerCase() === owner.toLowerCase());
+    return signed === undefined ? path : `${signed}${path.slice(owner.length)}`;
   }
 
   private sessionCoversPermissionEntries(
@@ -9588,8 +9611,8 @@ export class TinyCloudNode {
     if (granted.resource !== undefined || requested.resource !== undefined) {
       return granted.resource !== undefined &&
         requested.resource !== undefined &&
-        granted.resource === requested.resource &&
-        this.pathContains(granted.path, requested.path);
+        this.normalizeEncryptionUrn(granted.resource) === this.normalizeEncryptionUrn(requested.resource) &&
+        this.pathContains(this.normalizeEncryptionUrn(granted.path), this.normalizeEncryptionUrn(requested.path));
     }
 
     return granted.spaceId !== undefined &&
@@ -9608,6 +9631,13 @@ export class TinyCloudNode {
   private normalizeSpaceAddress(space: string): string {
     const match = /^(tinycloud:pkh:eip155:\d+:)(0x[0-9a-fA-F]{40})(:.+)$/.exec(space);
     return match === null ? space : `${match[1]}${match[2]!.toLowerCase()}${match[3]}`;
+  }
+
+  // Encryption URNs (resource and path) embed their owner's DID; a space id's
+  // lowercase address and a signed recap's EIP-55 one name the same network or
+  // key. Only that address is compared without case sensitivity.
+  private normalizeEncryptionUrn(urn: string): string {
+    return urn.replace(ENCRYPTION_URN_OWNER, (owner) => owner.toLowerCase());
   }
 
   private actionContains(grantedAction: string, requestedAction: string): boolean {

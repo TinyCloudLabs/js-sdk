@@ -118,7 +118,7 @@ import {
   BrowserSessionStorage,
   type BrowserSessionLoadResult,
 } from "../adapters/BrowserSessionStorage";
-import { isPanelResourceSet, rememberRuntimeGrants, reuseRuntimeGrants, serializeRuntimeGrantMutation, type RuntimeGrantStore } from "./runtimeGrantPersistence";
+import { isPanelResourceSet, isSecretKeyGrant, isSecretKeyResourceSet, rememberRuntimeGrants, reuseRuntimeGrants, serializeRuntimeGrantMutation, type RuntimeGrantStore } from "./runtimeGrantPersistence";
 import { RPCProviders, ClientConfig, Extension as ExtensionType } from "../providers";
 import { resolveSpaceCreationHandler } from "../authorization/WebSpaceCreationHandler";
 import { resolveOpenKeySigningKey, type OpenKeyConnection } from "../openkey-signing-key";
@@ -1119,8 +1119,9 @@ export class TinyCloudWeb {
             activateValidatedRuntimeDelegationOnNode(node, grant, {
               host: node.hosts[0]!,
               authorize: (permissions) => {
-                if (!isPanelResourceSet(permissions.map((entry) => ({ ...entry, space: entry.space ?? "" })), owner)) {
-                  throw new RuntimeDelegationRejectedError("authority_invalid", "Stored grant is not a panel grant.");
+                const resources = permissions.map((entry) => ({ ...entry, space: entry.space ?? "" }));
+                if (!isPanelResourceSet(resources, owner) && !isSecretKeyResourceSet(resources, owner)) {
+                  throw new RuntimeDelegationRejectedError("authority_invalid", "Stored grant is not a panel or secret-key grant.");
                 }
                 return true;
               },
@@ -1837,6 +1838,7 @@ export class TinyCloudWeb {
     options?: RequestPermissionsOptions,
   ): Promise<RequestPermissionsResult> {
     validateAdditionalPermissions(additional);
+    const signOuts = this.signOutCount;
 
     const manifest = Array.isArray(this._manifest)
       ? this._manifest[0]
@@ -1878,15 +1880,17 @@ export class TinyCloudWeb {
         suppressPermissionPromptFor30Days(manifest),
       grantPermissions,
     }, options);
-    return result.approved
-      ? {
-          approved: true,
-          session: this.session(),
-          ...(result.delegations !== undefined
-            ? { delegations: result.delegations }
-            : {}),
-        }
-      : result;
+    if (!result.approved) return result;
+    // A grant of the owner's own secrets' keys survives a reload (TC-3284); the app's other grants stay in memory.
+    const address = this._node?.address;
+    if (result.delegations !== undefined && address !== undefined) {
+      await this.rememberGrants(result.delegations.filter((grant) => isSecretKeyGrant(grant, address)), signOuts);
+    }
+    return {
+      approved: true,
+      session: this.session(),
+      ...(result.delegations !== undefined ? { delegations: result.delegations } : {}),
+    };
   }
 
   /**
@@ -1973,20 +1977,19 @@ export class TinyCloudWeb {
     await this.restoredNetworkWork?.grants;
     const signOuts = this.signOutCount;
     const result = await this.requestPermissions(entries, options);
+    if (result.approved && result.delegations !== undefined) await this.rememberGrants(result.delegations, signOuts);
+    return { approved: result.approved };
+  }
+
+  /** Stores `grants` with the session record unless the user signed out since `signOuts` was read. */
+  private async rememberGrants(grants: readonly PortableDelegation[], signOuts: number): Promise<void> {
     const address = this._node?.address;
     const store = this.runtimeGrantStore();
-    if (
-      result.approved &&
-      result.delegations !== undefined &&
-      store !== undefined &&
-      address !== undefined &&
-      this.signOutCount === signOuts &&
-      this.signOutInFlight === 0
-    ) {
-      await rememberRuntimeGrants(store, address, result.delegations,
+    if (grants.length > 0 && store !== undefined && address !== undefined &&
+        this.signOutCount === signOuts && this.signOutInFlight === 0) {
+      await rememberRuntimeGrants(store, address, grants,
         () => this.signOutCount === signOuts && this.signOutInFlight === 0 && this._node?.address === address);
     }
-    return { approved: result.approved };
   }
 
   private runtimeGrantStore(): RuntimeGrantStore | undefined {

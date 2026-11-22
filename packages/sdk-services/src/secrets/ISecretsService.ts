@@ -2,7 +2,7 @@ import type { IDataVaultService } from "../vault/IDataVaultService";
 import type { VaultError } from "../vault/types";
 import type { Result, ServiceError } from "../types";
 import type { SecretType } from "./secretTypes";
-import type { SecretPutOptions, SecretScopeOptions } from "./paths";
+import type { SecretGetOptions, SecretPutOptions, SecretScopeOptions } from "./paths";
 
 export interface SecretPayload {
   value: string;
@@ -37,12 +37,12 @@ export interface ISecretsService {
   readonly isUnlocked: boolean;
   get(
     name: string,
-    options?: SecretScopeOptions,
+    options?: SecretGetOptions,
   ): Promise<Result<string, SecretsError>>;
   /** Like `get`, with the secret's type and timestamps. */
   getEntry(
     name: string,
-    options?: SecretScopeOptions,
+    options?: SecretGetOptions,
   ): Promise<Result<SecretEntry, SecretsError>>;
   put(
     name: string,

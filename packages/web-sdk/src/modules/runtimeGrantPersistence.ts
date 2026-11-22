@@ -1,5 +1,6 @@
 /*
- * Runtime grants requested from the panel, kept across a page reload. They are stored beside the session record
+ * Runtime grants requested from the panel, and an app's grants of its owner's secrets' own keys, kept across a page
+ * reload. They are stored beside the session record
  * (`BrowserSessionStorage.saveRuntimeGrants`), with the same lifecycle: a new sign-in, a sign-out and the session's
  * expiry remove them. A restore activates each one again through the SDK's validated activation, which recomputes the
  * CID from the signed bytes and reads expiry, audience and abilities from the signed grant, not from stored fields.
@@ -7,6 +8,7 @@
  */
 import type { PermissionEntry } from "@tinycloud/sdk-core";
 import type { PortableDelegation } from "@tinycloud/node-sdk/core";
+import { parseSecretKeyPath } from "@tinycloud/sdk-services";
 
 import { TAB_PERMISSION } from "../ui/data/authority";
 
@@ -76,9 +78,41 @@ export function isPanelGrant(grant: PortableDelegation, address: string): boolea
   );
 }
 
+const SECRET_KEY_ACTIONS = ["tinycloud.encryption/decrypt", "tinycloud.encryption/key.create"];
+
 /**
- * Stores the panel's own grants among `grants` for `address`, replacing a stored grant with the same cid. Other
- * delegations (an app's larger grant that already covered the request) are never stored.
+ * True when every resource is the exact key of one of this owner's secrets on the owner's default network
+ * (`secrets/<name>` or `secrets/scoped/<scope>/<name>`, as `secretKeyPath` derives it), with decrypt and/or
+ * key.create only and no caveats (TC-3284). One resource that is anything else (a prefix, another network or owner,
+ * another key, any other service) refuses the whole set.
+ */
+export function isSecretKeyResourceSet(
+  resources: readonly Resource[],
+  owner: { readonly address: string; readonly chainId: number },
+): boolean {
+  const network = `urn:tinycloud:encryption:did:pkh:eip155:${owner.chainId}:${owner.address}:default/`.toLowerCase();
+  return resources.length > 0 && resources.every((resource) =>
+    longService(resource.service) === "tinycloud.encryption" &&
+    (resource.space === "encryption" || resource.space === "") &&
+    (resource.caveats?.length ?? 0) === 0 &&
+    resource.path.slice(0, network.length).toLowerCase() === network &&
+    parseSecretKeyPath(resource.path.slice(network.length)) !== undefined &&
+    resource.actions.length > 0 &&
+    resource.actions.every((action) => SECRET_KEY_ACTIONS.includes(action)));
+}
+
+/** True when `grant` is exactly a grant of the session owner's own secrets' keys (see `isSecretKeyResourceSet`). */
+export function isSecretKeyGrant(grant: PortableDelegation, address: string): boolean {
+  return (
+    grant.ownerAddress.toLowerCase() === address.toLowerCase() &&
+    grant.resources !== undefined &&
+    isSecretKeyResourceSet(grant.resources, { address: grant.ownerAddress, chainId: grant.chainId })
+  );
+}
+
+/**
+ * Stores the panel's own grants and the owner's secret-key grants among `grants` for `address`, replacing a stored
+ * grant with the same cid. Other delegations (an app's larger grant that already covered the request) are never stored.
  */
 export async function rememberRuntimeGrants(
   store: RuntimeGrantStore,
@@ -86,7 +120,7 @@ export async function rememberRuntimeGrants(
   grants: readonly PortableDelegation[],
   isCurrent: () => boolean = () => true,
 ): Promise<void> {
-  const own = grants.filter((grant) => isPanelGrant(grant, address));
+  const own = grants.filter((grant) => isPanelGrant(grant, address) || isSecretKeyGrant(grant, address));
   if (own.length === 0) return;
   await serializeRuntimeGrantMutation(store, async () => {
     const known = await store.loadRuntimeGrants(address);

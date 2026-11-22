@@ -77,13 +77,30 @@ describe.skipIf(!nodeBinary)(
       node = await startLocalNode(nodeBinary!, "/var/tmp/delegated-encryption-node-");
       host = node.host;
 
+      // Delegating a secret's own key needs it in the owner's signed session,
+      // asked for explicitly as Secret Manager does (TC-3284): the plain
+      // defaults plus the `secrets/` keys. Imported in place: the TC-3801
+      // test ruling confines this edit to the sign-in lines.
+      const privateKey = randomBytes(32).toString("hex");
+      const { PrivateKeySigner } = await import("./signers/PrivateKeySigner");
+      const { composeManifestRequest } = await import("@tinycloud/sdk-core");
+      const ownerNetwork = `urn:tinycloud:encryption:did:pkh:eip155:1:${await new PrivateKeySigner(privateKey).getAddress()}:default`;
+      const capabilityRequest = composeManifestRequest([{
+        app_id: "delegated-encryption.test", name: "Delegated encryption e2e", prefix: "", space: "default", defaults: "all",
+        permissions: [{ service: "tinycloud.kv", space: "secrets", path: "vault/secrets/", actions: ["get", "put", "del", "list", "metadata"] }],
+      }]);
+      capabilityRequest.resources.push(
+        { service: "tinycloud.encryption", space: "encryption", path: ownerNetwork, actions: ["tinycloud.encryption/decrypt"], skipPrefix: true },
+        { service: "tinycloud.encryption", space: "encryption", path: `${ownerNetwork}/secrets/`, actions: ["tinycloud.encryption/decrypt", "tinycloud.encryption/key.create"], skipPrefix: true },
+      );
       owner = new TinyCloudNode({
         host,
         tinycloudRegistryUrl: registry.url.origin,
-        privateKey: randomBytes(32).toString("hex"),
+        privateKey,
         wasmBindings: new NodeWasmBindings(),
         domain: "delegated-encryption.test",
         autoCreateSpace: true,
+        capabilityRequest,
       });
       await owner.signIn();
       await owner.waitForAccountRegistrySync();
@@ -191,7 +208,7 @@ describe.skipIf(!nodeBinary)(
       });
     }, 120_000);
 
-    test("an exact-key grant refuses a network-sealed secret without a network decrypt; the owner reads both", async () => {
+    test("an exact-key grant refuses a network-sealed secret without a network decrypt; the wallet owner reads both", async () => {
       // A record an older client sealed to the network key. `getBaseVault` is
       // private; only a vault write without a key path can make one now.
       const ownerVaults = owner as unknown as {
@@ -207,8 +224,54 @@ describe.skipIf(!nodeBinary)(
       ]);
       expect(await access.readSecret({ name: "LEGACY_KEY" })).toEqual({ status: "legacy_envelope" });
 
+      // The wallet owner's get asks for API_KEY's own key; the network one opens LEGACY_KEY.
       for (const [name, value] of [["API_KEY", "secrets-space-value"], ["LEGACY_KEY", "legacy-value"]] as const) {
-        expect(await owner.readSecret({ space: secretsSpace, name })).toEqual({ status: "ok", value });
+        expect(await owner.secretsForSpace(secretsSpace).get(name)).toEqual({ ok: true, data: value });
+      }
+    }, 120_000);
+
+    test("an owner without a secret's own key: reads ask for exactly that key, and only an opted-in get signs", async () => {
+      const hint = { service: "tinycloud.encryption", path: `${networkId}/secrets/other_key`, actions: ["tinycloud.encryption/decrypt"] };
+      const signer = (owner as unknown as { signer: NonNullable<ConstructorParameters<typeof TinyCloudNode>[0]["signer"]> }).signer;
+      // The same wallet with the plain sign-in: the network decrypt only, never a
+      // secrets/ key (that comes only from an explicit capability request).
+      const plain = new TinyCloudNode({
+        host,
+        tinycloudRegistryUrl: registry.url.origin,
+        signer,
+        wasmBindings: new NodeWasmBindings(),
+        domain: "delegated-encryption.test",
+      });
+      await plain.signIn();
+      expect(await plain.readSecret({ space: secretsSpace, name: "OTHER_KEY" })).toEqual({ status: "permission_required", hint });
+
+      // A background get (no opt-in) never signs: DECRYPT_DENIED naming the key, from the wallet node too.
+      const signMessage = signer.signMessage;
+      let signatures = 0;
+      signer.signMessage = (message) => {
+        signatures++;
+        return signMessage.call(signer, message);
+      };
+      try {
+        const background = await plain.secretsForSpace(secretsSpace).get("OTHER_KEY");
+        expect(background.ok ? undefined : background.error).toMatchObject({ code: "DECRYPT_DENIED", key: "secrets/OTHER_KEY", permissionHint: hint });
+        expect(signatures).toBe(0);
+
+        // The same session restored without a signer cannot ask for more.
+        const restored = sessionOnlyChild();
+        await restored.restoreSession({ ...plain.restorableSession!, tinycloudHosts: [host] });
+        expect(restored.isSessionOnly).toBe(true);
+        const denied = await restored.secretsForSpace(secretsSpace).get("OTHER_KEY", { requestPermission: true });
+        expect(denied.ok ? undefined : denied.error).toMatchObject({ code: "DECRYPT_DENIED", key: "secrets/OTHER_KEY", permissionHint: hint });
+        const put = await restored.secretsForSpace(secretsSpace).put("OTHER_KEY", "overwritten");
+        expect(put.ok ? undefined : put.error.code).toBe("PERMISSION_DENIED");
+        expect(signatures).toBe(0);
+
+        // An opted-in get asks the wallet for the key and reads it; the value was never overwritten.
+        expect(await plain.secretsForSpace(secretsSpace).get("OTHER_KEY", { requestPermission: true })).toEqual({ ok: true, data: "other-value" });
+        expect(signatures).toBeGreaterThan(0);
+      } finally {
+        signer.signMessage = signMessage;
       }
     }, 120_000);
 
