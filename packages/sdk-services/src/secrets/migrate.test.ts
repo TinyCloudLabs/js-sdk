@@ -1,9 +1,10 @@
 import { describe, expect, test } from "bun:test";
 
+import type { VaultResealResult } from "../vault/types";
 import type { ISecretsService, SecretCatalogEntry } from "./ISecretsService";
-import { migrateSecrets, type VaultResealResult } from "./migrate";
+import { migrateSecrets } from "./migrate";
 
-// Stand-in for S1's `IDataVaultService.resealToKey` until it lands; it records what migrate asked for.
+// A vault whose `resealToKey` answers from a table; it records what migrate asked for.
 function service(catalog: SecretCatalogEntry[], outcomes: Record<string, VaultResealResult> = {}) {
   const calls: { key: string; keyPath: string; dryRun?: boolean }[] = [];
   const vault = {

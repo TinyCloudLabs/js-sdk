@@ -1594,7 +1594,8 @@ export function registerSecretsCommand(
             scopeOptions,
             space: spaceUri,
             label: `Checking secret ${name}...`,
-            operation: () => secrets.get(name, { ...scopeOptions, source: "network" }),
+            // The user ran doctor on this secret: a missing read grant is asked for, as for `secrets get` (TC-3801).
+            operation: () => secrets.get(name, { ...scopeOptions, source: "network", requestPermission: true }),
           });
 
           if (result.ok) {

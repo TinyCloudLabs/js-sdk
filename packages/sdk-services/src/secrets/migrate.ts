@@ -1,20 +1,7 @@
 import { ErrorCodes, err, type Result } from "../types";
-import type { IDataVaultService } from "../vault/IDataVaultService";
+import type { VaultResealResult } from "../vault/types";
 import type { ISecretsService, SecretsError } from "./ISecretsService";
 import { canonicalizeSecretScope, resolveSecretPath, SECRET_NAME_RE } from "./paths";
-
-// TODO(S1 merge): replace with `VaultResealResult` / `IDataVaultService.resealToKey` from vault/types.ts.
-export type VaultResealResult =
-  | { status: "moved" }
-  | { status: "already" }
-  | { status: "pending" }
-  | {
-    status: "skipped";
-    reason: "not_found" | "permission_required" | "read_failed" | "aad_mismatch" | "verify_failed" | "conflict" | "write_failed";
-  };
-type ResealingVault = IDataVaultService & {
-  resealToKey(key: string, keyPath: string, options?: { dryRun?: boolean }): Promise<VaultResealResult>;
-};
 
 export type SecretMigrateSkipReason = Extract<VaultResealResult, { status: "skipped" }>["reason"];
 
@@ -74,7 +61,7 @@ export async function migrateSecrets(
     report.total += unmatched;
     report.skipped.not_found = unmatched;
   }
-  const vault = secrets.vault as ResealingVault;
+  const vault = secrets.vault;
   for (const entry of selected) {
     const { vaultKey, keyPath } = resolveSecretPath(entry.name, entry.scope === undefined ? {} : { scope: entry.scope });
     if (keyPath === undefined) {
