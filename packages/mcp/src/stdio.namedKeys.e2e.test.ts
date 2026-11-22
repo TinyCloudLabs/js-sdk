@@ -9,8 +9,7 @@ import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/client";
 import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
 import { assertPrivateTestEnvironment } from "../../operations/test-support/private-home.mjs";
-import { startUnregisteredLocationRegistry } from "../../node-sdk/src/test-support/unregistered-location-registry";
-import type { UnregisteredLocationRegistry } from "../../node-sdk/src/test-support/unregistered-location-registry";
+import { REGISTRY_NOT_FOUND_BODY } from "@tinycloud/sdk-core";
 
 // TC-3284 ruling 4 / TC-3852: a real tinycloud-node with per-secret keys (`named_keys_v1`), and a delegate that reads
 // a secret on its own key through the MCP server: the agent's `tinycloud_secrets_get` asks for what it needs, the owner
@@ -24,9 +23,26 @@ const mcpCliPath = join(packageDirectory, "dist/cli.js");
 const tinycloudCliPath = join(packageDirectory, "../cli/dist/index.js");
 const nodeBinary = process.env.NODE_BINARY ?? "node";
 
+type LocationRegistry = Bun.Server<undefined>;
+
+/** A new owner has no location record, so the registry answers "not found" and the public registry is never consulted. */
+function startUnregisteredLocationRegistry(): LocationRegistry {
+  return Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    fetch(request) {
+      const { pathname } = new URL(request.url);
+      if (request.method === "GET" && /^\/v[12]\/locations\/[^/]+$/.test(pathname)) {
+        return new Response(REGISTRY_NOT_FOUND_BODY, { status: 404, headers: { "content-type": "application/json" } });
+      }
+      return new Response("unexpected registry request", { status: 400 });
+    },
+  });
+}
+
 function privateEnvironment(home: string): Record<string, string | undefined> {
   const bootstrap = new URL("../../operations/test-support/test-bootstrap.mjs", import.meta.url).href;
-  const environment = {
+  const environment: Record<string, string | undefined> = {
     ...process.env,
     HOME: home,
     TC_HOME: home,
@@ -63,7 +79,7 @@ describe.skipIf(!NODE_BIN)("MCP reads a secret on its own key against a real nod
   const root = join(tmpdir(), `tc-mcp-named-keys-${randomBytes(6).toString("hex")}`);
   const home = join(root, "home");
   let node: ChildProcess | undefined;
-  let registry: UnregisteredLocationRegistry;
+  let registry: LocationRegistry;
   let host: string;
   const open: ConnectedClient[] = [];
 

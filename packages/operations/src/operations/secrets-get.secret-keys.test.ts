@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { MAX_SECRET_NAME_LENGTH, MAX_SECRET_SCOPE_LENGTH } from "@tinycloud/sdk-services";
+import type { PermissionEntry } from "@tinycloud/sdk-core";
 
 import { evaluateOperationAuthority } from "../authority.js";
 import type { CapabilityRequirement, OperationContext, RuntimeOperationContext } from "../contract.js";
@@ -59,10 +60,15 @@ describe("tinycloud.secrets.get per-secret keys", () => {
   });
 
   test("a held exact key satisfies the plan whatever the case of its owner address", () => {
-    expect(evaluateOperationAuthority([decrypt(KEY)], [decrypt(KEY)]).satisfied).toBe(true);
-    expect(evaluateOperationAuthority([decrypt(KEY.toLowerCase())], [decrypt(KEY)]).satisfied).toBe(true);
-    expect(evaluateOperationAuthority([decrypt(NETWORK)], [decrypt(KEY)]).satisfied).toBe(false);
-    expect(evaluateOperationAuthority([decrypt(`${NETWORK}/secrets/other`)], [decrypt(KEY)]).satisfied).toBe(false);
+    const entry = (path: string): PermissionEntry => ({
+      service: "tinycloud.encryption",
+      path,
+      actions: ["tinycloud.encryption/decrypt"],
+    });
+    expect(evaluateOperationAuthority([entry(KEY)], [entry(KEY)]).satisfied).toBe(true);
+    expect(evaluateOperationAuthority([entry(KEY.toLowerCase())], [entry(KEY)]).satisfied).toBe(true);
+    expect(evaluateOperationAuthority([entry(NETWORK)], [entry(KEY)]).satisfied).toBe(false);
+    expect(evaluateOperationAuthority([entry(`${NETWORK}/secrets/other`)], [entry(KEY)]).satisfied).toBe(false);
   });
 
   test("a secret still in the older format reports SECRET_LEGACY_ENVELOPE with the network decrypt to approve", async () => {
