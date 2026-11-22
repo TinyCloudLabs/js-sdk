@@ -3,7 +3,7 @@ import {
   isCapabilitySubset,
   type PermissionEntry,
 } from "@tinycloud/sdk-core";
-import { canonicalizeAddress } from "@tinycloud/node-sdk";
+import * as nodeSdk from "@tinycloud/node-sdk";
 
 /**
  * A capability in the canonical form persisted in a v1 request artifact.
@@ -115,7 +115,7 @@ function withChecksummedKeyOwner(permission: PermissionEntry): PermissionEntry {
   if (permission.service !== "tinycloud.encryption") return permission;
   const match = permission.path.match(/^urn:tinycloud:encryption:did:pkh:eip155:(\d+):(0x[0-9a-fA-F]{40})(:[^/:]+\/.+)$/);
   if (!match) return permission;
-  return { ...permission, path: `urn:tinycloud:encryption:did:pkh:eip155:${match[1]}:${canonicalizeAddress(match[2]!)}${match[3]}` };
+  return { ...permission, path: `urn:tinycloud:encryption:did:pkh:eip155:${match[1]}:${nodeSdk.canonicalizeAddress(match[2]!)}${match[3]}` };
 }
 
 /**
