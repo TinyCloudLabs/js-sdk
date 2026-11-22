@@ -35,6 +35,7 @@
     "tc-2490-one-approval",
     "tc-3293-with-feed-narrow",
     "tc-3485-courier-revoke-renewal-fence",
+    "tc-3522-renewal-lease-ask",
     "tc-3639-recap-decode-without-buffer",
     "tc-3661-share-link-host",
     "tinycloud-one-naming"
