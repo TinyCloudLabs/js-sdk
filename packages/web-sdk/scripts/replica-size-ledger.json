@@ -3436,10 +3436,28 @@
     },
     "reason": "TinyCloudNode accepts a signed session grant spanning several of the owner's spaces, keeps each resource's own space in portable grants, and picks a manifest sign-in's primary space among its own requested spaces; node-sdk is bundled into the web-sdk root. Canonical Node 22/Bun 1.3.14 CI on #1060 (53e4dc78, master c5a7f854 merged in) measured index.mjs 1529858 and index.cjs 1462849 gzip -9 bytes: +186 and +180 over the TC-3448 ceilings 1529672 and 1462669. No other ceiling moves. Details: TC-2490"
   },
+  "tc3661ShareLinkHostRoot": {
+    "label": "a share link's host is used when the owner has no registry record (TC-3661)",
+    "ruling": "size-ruling: TC-3661 row tc3661ShareLinkHostRoot index.mjs 1530053 (+195), index.cjs 1462997 (+148) gzip bytes over the tc2490 ceilings, CI's canonical figure. Details: TC-3661",
+    "base": "cb3edeab4f66ae2fc7f84243c7b8fdc3a15fc812",
+    "sourceCommits": ["d648dd280c96c43dee992e6339cf153f64fa5c34"],
+    "canonicalCI": {
+      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44919854667",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44919854667/job/136893305938",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44919854667/job/136893305988"
+      ]
+    },
+    "root": {
+      "delta": { "index.mjs": 195, "index.cjs": 148 },
+      "ceiling": { "index.mjs": 1530053, "index.cjs": 1462997 }
+    },
+    "reason": "TinyCloudNode takes a share link's host as the destination when the owner has no registry record and the host is a known TinyCloud node (SharingService receivedHostHintTransport, isKnownTinyCloudNode); node-sdk is bundled into the web-sdk root. Canonical Node 22/Bun 1.3.14 CI on #1114 (d648dd28, master cb3edeab) measured index.mjs 1530053 and index.cjs 1462997 gzip -9 bytes: +195 and +148 over the TC-2490 ceilings 1529858 and 1462849. No other ceiling moves. Details: TC-3661"
+  },
   "tc3443GenericManifestRoot": {
     "label": "a sign-in without a manifest asks only for its app's own folder (TC-3443)",
     "ruling": "size-ruling: TC-3443 row tc3443GenericManifestRoot raises the web-sdk root ceilings by CI's measured delta for the generic app-folder manifest, its warning and ownerFullAccess",
-    "base": "cb3edeab4f66ae2fc7f84243c7b8fdc3a15fc812",
+    "base": "628be3c4bd1c633bb7f676f6c32c761cf8b596df",
     "sourceCommits": ["db9325c21d1377ed0f6b57b3e066b7be5c51862b"],
     "canonicalCI": {
       "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44920526454",
@@ -3450,7 +3468,7 @@
     },
     "root": {
       "delta": { "index.mjs": 409, "index.cjs": 151 },
-      "ceiling": { "index.mjs": 1530267, "index.cjs": 1463000 }
+      "ceiling": { "index.mjs": 1530462, "index.cjs": 1463148 }
     },
     "reason": "A sign-in without a manifest asks only for its app's own folder (the generic app-folder manifest and its one console warning), and owner tools opt into every action on their space with ownerFullAccess (sdk-core owner-access, node-sdk and web-sdk sign-in); sdk-core and node-sdk are bundled into the web-sdk root. Canonical Node 22/Bun 1.3.14 CI on #1099 (db9325c2, master cb3edeab merged in) measured index.mjs 1530267 and index.cjs 1463000 gzip -9 bytes: +409 and +151 over the TC-2490 ceilings 1529858 and 1462849. No other ceiling moves. Details: TC-3443"
   }

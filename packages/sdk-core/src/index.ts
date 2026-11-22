@@ -1038,6 +1038,7 @@ export {
   createLocalStorageLocalNodeIdentityStore,
   discoverLocalTinyCloudNode,
   exactHttpOrigin,
+  isKnownTinyCloudNode,
   fetchLocationRecord,
   httpUrlToMultiaddr,
   locationPayloadForRecord,
