@@ -247,7 +247,7 @@ export interface Config extends ClientConfig {
    */
   spaceCreationTimeoutMs?: number;
 
-  /** Session expiration time in milliseconds (default: 30 days, `EXPIRY.SESSION_MS`) */
+  /** Session expiration time in milliseconds (default: 7 days, `EXPIRY.SESSION_MS`) */
   sessionExpirationMs?: number;
 
   /** Persist browser sessions so signIn() can restore before prompting. Default true. */
@@ -277,6 +277,10 @@ export interface Config extends ClientConfig {
    * manifest's `name` and `icon` to title the permission modal. The
    * manifest is forwarded into the underlying {@link TinyCloudNode}
    * so `signIn()` drives its SIWE recap from it directly.
+   *
+   * Without this or `capabilityRequest`, `signIn()` asks only for the app's
+   * own folder (`applications/<reversed host>/`, KV and SQL, 7 days) and
+   * logs a console warning.
    */
   manifest?: Manifest | Manifest[];
   /** Pre-composed manifest request. Takes precedence over `manifest`. */

@@ -27,6 +27,8 @@ import {
   DEFAULT_MANIFEST_SPACE,
   ENCRYPTION_PERMISSION_SERVICE,
   composeManifestRequest,
+  genericAppManifest,
+  genericAppManifestWarning,
   principalDidEquals,
   resourceCapabilitiesToAbilitiesMap,
   resourceCapabilitiesToSpaceAbilitiesMap,
@@ -67,10 +69,6 @@ import {
   ACCOUNT_REGISTRY_SPACE,
   ACCOUNT_MANIFEST_PERMISSIONS,
   KV,
-  SQL,
-  DUCKDB,
-  CAPABILITIES,
-  HOOKS,
   ENCRYPTION,
   publicJwk,
   type CapabilityPresentationEnvelopeV1,
@@ -277,9 +275,14 @@ export interface NodeUserAuthorizationConfig {
   statement?: string;
   /** Space prefix for new sessions */
   spacePrefix?: string;
-  /** Default actions for sessions */
+  /**
+   * Plain-session actions on the primary space, for owner tools that need
+   * every action there: pass `ownerFullAccess(space).defaultActions`. There
+   * is no built-in table: when neither this, `manifest` nor
+   * `capabilityRequest` is set, sign-in uses {@link genericAppManifest}.
+   */
   defaultActions?: Record<string, Record<string, string[]>>;
-  /** Session expiration time in milliseconds (default: 30 days, `EXPIRY.SESSION_MS`) */
+  /** Session expiration time in milliseconds (default: 7 days, `EXPIRY.SESSION_MS`) */
   sessionExpirationMs?: number;
   /** Automatically create space if it doesn't exist (default: false) */
   autoCreateSpace?: boolean;
@@ -344,6 +347,11 @@ export interface NodeUserAuthorizationConfig {
   /** Optional SIWE configuration overrides (e.g., nonce for server-provided nonces) */
   siweConfig?: SiweConfig;
   /**
+   * Host that names the generic manifest's app folder when nothing is
+   * declared. Default: the SIWE domain. `null`: no web address (`node.app`).
+   */
+  genericAppHost?: string | null;
+  /**
    * App manifest used to drive the SIWE recap at sign-in.
    *
    * When set, `signIn` resolves the manifest (via
@@ -358,8 +366,9 @@ export interface NodeUserAuthorizationConfig {
    * sub-delegation via the session-key UCAN path without a wallet
    * prompt.
    *
-   * When omitted, `signIn` falls back to `defaultActions` for
-   * backwards compatibility.
+   * Without a manifest, `capabilityRequest` or `defaultActions`, sign-in
+   * asks only for the app's own folder ({@link genericAppManifest}) and
+   * logs {@link genericAppManifestWarning} once per sign-in.
    */
   manifest?: Manifest | Manifest[];
   /** Pre-composed manifest request. Takes precedence over `manifest`. */
@@ -439,7 +448,10 @@ export class NodeUserAuthorization implements IUserAuthorization {
   private readonly uri: string;
   private readonly statement?: string;
   private readonly spacePrefix: string;
-  private readonly defaultActions: Record<string, Record<string, string[]>>;
+  private readonly defaultActions?: Record<string, Record<string, string[]>>;
+  private readonly genericAppHost: string | null;
+  /** The generated request, while sign-in is using the generic manifest. */
+  private genericRequest?: { request: ComposedManifestRequest; manifest: Manifest };
   private readonly sessionExpirationMs: number;
   private readonly autoCreateSpace: boolean;
   private readonly spaceCreationHandler?: ISpaceCreationHandler;
@@ -523,31 +535,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
     this.uri = config.uri ?? `https://${config.domain}`;
     this.statement = config.statement;
     this.spacePrefix = config.spacePrefix ?? "default";
-    this.defaultActions = config.defaultActions ?? {
-      kv: {
-        "": [KV.PUT, KV.GET, KV.DEL, KV.LIST, KV.METADATA],
-      },
-      sql: {
-        "": [SQL.READ, SQL.WRITE, SQL.SCHEMA, SQL.ADMIN, SQL.EXPORT],
-      },
-      duckdb: {
-        "": [
-          DUCKDB.READ,
-          DUCKDB.WRITE,
-          DUCKDB.ADMIN,
-          DUCKDB.DESCRIBE,
-          DUCKDB.EXPORT,
-          DUCKDB.IMPORT,
-          DUCKDB.EXECUTE,
-        ],
-      },
-      capabilities: {
-        "": [CAPABILITIES.READ],
-      },
-      hooks: {
-        "": [HOOKS.SUBSCRIBE, HOOKS.REGISTER, HOOKS.LIST, HOOKS.UNREGISTER],
-      },
-    };
+    this.defaultActions = config.defaultActions;
     this.sessionExpirationMs = config.sessionExpirationMs ?? EXPIRY.SESSION_MS;
     this.autoCreateSpace = config.autoCreateSpace ?? false;
     this.spaceCreationHandler = config.spaceCreationHandler;
@@ -573,6 +561,9 @@ export class NodeUserAuthorization implements IUserAuthorization {
     this.enablePublicSpace = config.enablePublicSpace ?? true;
     this.nonce = config.nonce;
     this.siweConfig = config.siweConfig;
+    this.genericAppHost = config.genericAppHost === undefined
+      ? config.siweConfig?.domain ?? config.domain ?? null
+      : config.genericAppHost;
     this.includeAccountRegistryPermissions =
       config.includeAccountRegistryPermissions ?? true;
     this.includeImplicitCapabilitiesRead = config.includeImplicitCapabilitiesRead !== false;
@@ -1001,10 +992,11 @@ export class NodeUserAuthorization implements IUserAuthorization {
    * delegations via the session key (no wallet prompt): the session's
    * own recap already covers every action those delegations need.
    *
-   * When no manifest is installed, we fall back to the
-   * {@link defaultActions} table so existing callers see no change.
+   * Without a manifest or `capabilityRequest`, this returns `undefined`
+   * when the caller set explicit {@link defaultActions}, and otherwise the
+   * generic own-folder request ({@link genericAppManifest}).
    *
-   * This is a pure function of `this._manifest` + `this.defaultActions`
+   * This is a pure function of `this._manifest`
    * — the manifest resolution performs no I/O and throws a
    * {@link ManifestValidationError} on structural problems (missing
    * id/name, unparseable expiry, etc), which will surface at sign-in
@@ -1017,7 +1009,16 @@ export class NodeUserAuthorization implements IUserAuthorization {
       return this._capabilityRequest;
     }
     if (this._manifest === undefined) {
-      return undefined;
+      if (this.defaultActions !== undefined) return undefined;
+      const manifest = genericAppManifest(this.genericAppHost);
+      // The generic folder never carries account rows.
+      const request = composeManifestRequest([manifest], {
+        includeAccountRegistryPermissions: false,
+        includeImplicitCapabilitiesRead: this.includeImplicitCapabilitiesRead,
+      });
+      this.genericRequest = { request, manifest };
+      this._capabilityRequest = request;
+      return request;
     }
     this._capabilityRequest = composeManifestRequest(
       Array.isArray(this._manifest) ? this._manifest : [this._manifest],
@@ -1028,6 +1029,14 @@ export class NodeUserAuthorization implements IUserAuthorization {
       }
     );
     return this._capabilityRequest;
+  }
+
+  /** One console line per sign-in that falls back to the generic manifest. */
+  private warnIfGenericManifest(): void {
+    const request = this.getCapabilityRequest();
+    if (request !== undefined && request === this.genericRequest?.request) {
+      console.warn(genericAppManifestWarning(this.genericRequest.manifest));
+    }
   }
 
   private async refreshNamedKeyFeatureForSignIn(address: string, chainId: number): Promise<void> {
@@ -1075,18 +1084,19 @@ export class NodeUserAuthorization implements IUserAuthorization {
   }
 
   /**
-   * The plain-session primary abilities: `defaultActions` (the shared table)
-   * unless the primary space IS the account space, where account-registry
-   * permissions merge into a private clone so the shared table is never
-   * mutated. Shared between `resolveSignInCapabilities` and
-   * `signInPermissionInputs` so sign-in and `replicationSignInEntries`
-   * can't disagree (§4.6).
+   * The plain-session primary abilities: the caller's `defaultActions`
+   * (empty on a restore without them) unless the primary space IS the
+   * account space, where account-registry permissions merge into a private
+   * clone so the caller's table is never mutated. Shared between
+   * `resolveSignInCapabilities` and `signInPermissionInputs` so sign-in and
+   * `replicationSignInEntries` can't disagree (§4.6).
    */
   private primaryActionsForSignIn(): AbilitiesMap {
+    const defaultActions = this.defaultActions ?? {};
     const primaryActions =
       this.includeAccountRegistryPermissions && this.spacePrefix === ACCOUNT_REGISTRY_SPACE
-        ? cloneAbilitiesMap(this.defaultActions)
-        : this.defaultActions;
+        ? cloneAbilitiesMap(defaultActions)
+        : defaultActions;
     if (this.includeAccountRegistryPermissions && this.spacePrefix === ACCOUNT_REGISTRY_SPACE) {
       const accountAbilities = resourceCapabilitiesToAbilitiesMap(
         ACCOUNT_MANIFEST_PERMISSIONS,
@@ -1289,7 +1299,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
       // Replication augmentation (TC-858 §4.1): one {get, sync} entry per
       // configured prefix the plain request already covers with an
       // unrestricted get. Merged into a copy — `primaryActions` may be the
-      // shared `defaultActions` table.
+      // caller's `defaultActions` table.
       const mergedPrimary = this.mergeReplicationEntries(
         spaceAbilities,
         primarySpaceId,
@@ -1909,6 +1919,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
    * @param options - Optional per-call SIWE overrides for this sign-in only
    */
   async signIn(options?: SignInOptions): Promise<ClientSession> {
+    this.warnIfGenericManifest();
     refuseCaveated(this.getCapabilityRequest()?.manifests);
     const generation = this.sessionGeneration;
     // Get signer address and chain ID
@@ -1946,7 +1957,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
     // When a manifest is installed, `resolveSignInAbilities()` returns
     // the union of app permissions + every manifest-declared
     // delegation's permissions in the shape `prepareSession` accepts.
-    // Otherwise it returns `defaultActions` unchanged (legacy path).
+    // Otherwise it returns the caller's explicit `defaultActions`.
     const prepared = this.prepareSessionWithResources({
       abilities: capabilityPlan.abilities,
       ...(capabilityPlan.spaceAbilities !== undefined
@@ -2124,6 +2135,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
     address: string;
     chainId: number;
   }> {
+    this.warnIfGenericManifest();
     refuseCaveated(this.getCapabilityRequest()?.manifests);
     const address = canonicalizeAddress(identity?.address ?? await this.signer.getAddress());
     const chainId = identity?.chainId ?? await this.signer.getChainId();
@@ -2152,7 +2164,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
     // When a manifest is installed, `resolveSignInAbilities()` returns
     // the union of app permissions + every manifest-declared
     // delegation's permissions in the shape `prepareSession` accepts.
-    // Otherwise it returns `defaultActions` unchanged (legacy path).
+    // Otherwise it returns the caller's explicit `defaultActions`.
     const prepared = this.prepareSessionWithResources({
       abilities: capabilityPlan.abilities,
       ...(capabilityPlan.spaceAbilities !== undefined

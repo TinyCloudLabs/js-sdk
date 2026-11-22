@@ -24,6 +24,7 @@ import { afterAll, describe, expect, mock, spyOn, test } from "bun:test";
 
 import {
   REGISTRY_NOT_FOUND_BODY,
+  ownerFullAccess,
   type IWasmBindings,
   type ISessionManager,
   type Manifest,
@@ -642,7 +643,7 @@ describe("TinyCloudNode.signIn — manifest-driven recap", () => {
       prepareSession: prepareSessionSpy as any,
     });
 
-    const node = makeNodeWithSigner(wasm);
+    const node = makeNodeWithSigner(wasm, ownerFullAccess());
     stubAuthNetworkCalls(node);
 
     // Replace checkNodeInfo via the global fetch — the simplest path

@@ -78,7 +78,8 @@ export interface AuthFlowOptions {
   expiryChangeable?: boolean;
   /**
    * Ask the owner for a renewal lease of at most this many seconds with the signed approval request. The result's
-   * lease is verified and admitted at the node before the login saves it. No command sets this yet.
+   * lease is verified and admitted at the node before the login saves it. Set by `refreshOpenKeySession` on the
+   * approval-request path only (see `renewalLeaseFor`); a paste link or device login never carries one.
    */
   renewalLeaseSeconds?: number;
 }

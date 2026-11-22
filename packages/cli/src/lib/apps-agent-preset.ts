@@ -1,8 +1,8 @@
-import { DEFAULT_EXPIRY, parseExpiry, SERVICE_LONG_TO_SHORT, VAULT_PERMISSION_SERVICE } from "@tinycloud/sdk-core";
+import { parseExpiry, SERVICE_LONG_TO_SHORT, VAULT_PERMISSION_SERVICE } from "@tinycloud/sdk-core";
 import { CLI_NAME } from "@tinycloud/operations/cli-name";
 import type { PermissionEntry } from "@tinycloud/node-sdk";
 
-import { ExitCode } from "../config/constants.js";
+import { CLI_DEFAULT_SESSION_EXPIRY_MS, ExitCode } from "../config/constants.js";
 import { CLIError } from "../output/errors.js";
 import { safeClipped, safeClippedList, safeInline } from "../output/safe-text.js";
 import { isRawEncryptionPermission } from "./raw-encryption.js";
@@ -262,7 +262,7 @@ export function resolveAppsAgentRequest(options: AppsAgentRequestOptions): AppsA
 /** A `requestedExpiry` (or an entry's `expiry`) in milliseconds; `undefined` when it is not a duration. */
 function lifetimeMs(value: string | number | undefined): number | undefined {
   try {
-    if (value === undefined) return parseExpiry(DEFAULT_EXPIRY);
+    if (value === undefined) return CLI_DEFAULT_SESSION_EXPIRY_MS;
     if (typeof value === "number") return Number.isFinite(value) && value > 0 ? value : undefined;
     return /^\d+$/.test(value.trim()) ? Number(value.trim()) : parseExpiry(value);
   } catch {

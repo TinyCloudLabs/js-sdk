@@ -1,5 +1,56 @@
 # @tinycloud/courier
 
+## 0.8.0-beta.5
+
+### Patch Changes
+
+- Updated dependencies [2cb453f]
+  - @tinycloud/sdk-core@3.14.0-beta.5
+  - @tinycloud/node-sdk@3.14.0-beta.5
+
+## 0.8.0-beta.4
+
+### Minor Changes
+
+- 4e4d845: OpenKey sign-in through an approval link asks the owner to let the grant renew itself.
+  - `tc auth login` asks for a 30-day renewal by default. A sign-in that asks for any encryption permission (decrypt included) or for the secrets space asks for no renewal unless `--renew` names one. `--renew <duration>` asks for another length (longer than `--expiry` and at most 365d) and `--no-renew` asks for none. `tc status` shows when a renewing sign-in stops renewing.
+  - `courier init --request` and `courier init --wait` ask for a 90-day renewal by default. `--renew <duration>` asks for another length and `--renew off` asks for none.
+  - The owner can approve with or without renewal. A saved request is resumed only by a run that asks for the same renewal.
+  - A renewing Courier grant keeps its peers' access going past the grant's signed end, up to the end the node has renewed it to.
+  - `TinyCloudNode.sessionEnd` gives when the session's authority ends. After `restoreSessionWithRenewal` it is the renewed end the node reported, and `delegateTo` can delegate up to it.
+
+  Details: TC-3522
+
+### Patch Changes
+
+- Updated dependencies [4e4d845]
+  - @tinycloud/node-sdk@3.14.0-beta.4
+
+## 0.7.1-beta.3
+
+### Patch Changes
+
+- Updated dependencies [628be3c]
+  - @tinycloud/sdk-core@3.14.0-beta.3
+  - @tinycloud/node-sdk@3.14.0-beta.3
+
+## 0.7.1-beta.2
+
+### Patch Changes
+
+- Updated dependencies [18a0e38]
+- Updated dependencies [81884ce]
+  - @tinycloud/sdk-core@3.14.0-beta.2
+  - @tinycloud/node-sdk@3.14.0-beta.2
+
+## 0.7.1-beta.1
+
+### Patch Changes
+
+- 13853a9: Revoking a Courier pairing while it is being renewed also ends the access the renewal grants.
+
+  Details: TC-3485
+
 ## 0.7.1-beta.0
 
 ### Patch Changes

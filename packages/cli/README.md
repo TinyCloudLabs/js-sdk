@@ -155,7 +155,7 @@ tinycloud space create
 tinycloud delegation create --to did:pkh:eip155:1:0x...
 ```
 
-## Home feed
+## TinyCloud One feed
 
 `tinycloud feed` uses separate owner-provisioned SQLite databases for each agent's
 cards/handling and the owner's append-only responses. Owner registry and view
@@ -210,7 +210,7 @@ tinycloud --profile feed-agent feed watch --agent writer --recipient agent-runti
 ```
 
 Run `watch` in the agent terminal, then save `response.json` from the owner
-profile in another terminal, or answer the card through Home.
+profile in another terminal, or answer the card in TinyCloud One.
 
 Without `--runner`, `watch` prints each new response as one JSON line on stdout.
 With `--once`, it exits after the first batch of new responses, which wakes an
@@ -427,7 +427,7 @@ History reads use the existing output read capability and perform no DDL or writ
 
 ### Raw owner-only source export
 
-`feed export` captures raw KV source bytes, not resolved Home cards or a restore plan.
+`feed export` captures raw KV source bytes, not resolved TinyCloud One feed cards or a restore plan.
 Supply the full approved source space, a space-relative namespace ending in `/`,
 and an unused output path. There is no installed-legacy or production default:
 
@@ -502,7 +502,7 @@ evaluate legacy expiry, restore state, or dispatch pending responses.
 | `tinycloud sql query <sql>` | Run a SQLite SELECT query |
 | `tinycloud sql execute <sql>` | Run a SQLite write or schema statement |
 | `tinycloud sql export` | Export a SQLite database file |
-| `tinycloud feed` | Connect an agent, publish cards, save responses, record handling, and watch for runtime handoff; see [Home feed](#home-feed) |
+| `tinycloud feed` | Connect an agent, publish cards, save responses, record handling, and watch for runtime handoff; see [TinyCloud One feed](#tinycloud-one-feed) |
 | `tinycloud space list` | List your spaces |
 | `tinycloud space create` | Create a new space |
 | `tinycloud delegation create` | Grant access to another user |
@@ -517,7 +517,7 @@ evaluate legacy expiry, restore state, or dispatch pending responses.
 | `tinycloud secrets` | Manage network-encrypted secrets |
 | `tinycloud secrets network show` | Show a secrets decryption network |
 | `tinycloud secrets network init` | Create or fetch the default secrets network |
-| `tinycloud secrets network grant` | Grant `tinycloud.encryption/decrypt` on a secrets network |
+| `tinycloud secrets network grant` | Let someone read every secret in an encryption network (`tinycloud.encryption/decrypt` on the whole network) |
 | `tinycloud secrets run` | Run a command with secrets in its environment |
 | `tinycloud secrets request` | Print a Secret Manager link asking the owner to add secrets (offline) |
 | `tinycloud secrets wait` | Wait until secrets exist and are readable (never signs in; needs a stored session; exit 8 pending, 130 interrupted) |
@@ -530,8 +530,9 @@ evaluate legacy expiry, restore state, or dispatch pending responses.
 Secret names are env-style uppercase identifiers such as `FIREFLIES_API_KEY`.
 `tinycloud secrets network show` accepts either a short network name or a full
 `urn:tinycloud:encryption:<ownerDid>:<network>` identifier. `tinycloud secrets
-network grant` takes the short name, resolves the network, and grants
-`tinycloud.encryption/decrypt`.
+network grant` takes the short network name, resolves the network, and grants
+`tinycloud.encryption/decrypt` on the whole network: every secret in it,
+including secrets added later. The JSON output carries `"scope":"whole-network"`.
 
 `tinycloud apps install` re-creates the pinned views on every run (reported as
 `viewsRecreated`). Knowledge notes whose bytes differ from the pinned version

@@ -17,10 +17,13 @@ The TinyCloud Web SDK provides a simple way to authenticate users using Ethereum
 Authentication is handled by the `UserAuthorization` module, which is automatically initialized when you create a TinyCloudWeb instance:
 
 ```typescript
-import { TinyCloudWeb } from '@tinycloud/web-sdk';
+import { TinyCloudWeb, type Manifest } from '@tinycloud/web-sdk';
+
+const manifest: Manifest = { app_id: 'com.example.notes', name: 'Notes' };
 
 // Initialize the SDK
 const tc = new TinyCloudWeb({
+  manifest,
   siweConfig: {
     domain: 'example.com',
     statement: 'Sign in to Example App',
@@ -74,12 +77,15 @@ Use `@openkey/sdk` 0.12.2 or later (`0.12.2-beta.0` on the beta channel). Pass t
 
 ```typescript
 import { OpenKey, OpenKeyProvider } from '@openkey/sdk';
-import { TinyCloudWeb } from '@tinycloud/web-sdk';
+import { TinyCloudWeb, type Manifest } from '@tinycloud/web-sdk';
+
+const manifest: Manifest = { app_id: 'com.example.notes', name: 'Notes' };
 
 const openkey = new OpenKey({ appName: 'Example App' });
 const account = await openkey.connect();
 const tc = await TinyCloudWeb.create({
   provider: new OpenKeyProvider(openkey, account),
+  manifest,
   openkey: { client: openkey },
 });
 
@@ -146,7 +152,9 @@ Only the instance that set up the account holds its setup keys. After a reload, 
 You can customize the authorization process with additional configuration:
 
 ```typescript
+const manifest = { app_id: 'com.example.notes', name: 'Notes' };
 const tc = new TinyCloudWeb({
+  manifest,
   siweConfig: {
     domain: 'example.com',
     statement: 'Sign in to Example App with your Ethereum account.',

@@ -126,7 +126,7 @@ export interface Manifest {
   icon?: string;
   /** App version string. Optional. */
   appVersion?: string;
-  /** Default expiry for permissions. ms-format ("30d", "2h", "1y"). Default "30d". */
+  /** Default expiry for permissions. ms-format ("7d", "2h", "1y"). Default "7d". */
   expiry?: string;
   /** Space name or full space URI. Optional, defaults to "applications". */
   space?: string;
@@ -187,7 +187,7 @@ export interface ResolvedDelegate {
   did: string;
   /** Informational display name. Optional. */
   name?: string;
-  /** Expiry in milliseconds (per-delegation > manifest default > 30 days). */
+  /** Expiry in milliseconds (per-delegation > manifest default > 7 days). */
   expiryMs: number;
   /** Fully resolved permissions. */
   permissions: ResourceCapability[];
@@ -262,14 +262,14 @@ export class ManifestValidationError extends Error {
 
 /**
  * Default expiry when neither the manifest, delegation, nor permission
- * specifies one. APP tier — see `expiry.ts`. Spec: 30 days.
+ * specifies one. APP tier — see `expiry.ts`. 7 days.
  *
  * Kept as an ms-format string because the manifest schema stores expiry
  * as a string and the parser is shared between this default and
  * caller-provided values; converting `EXPIRY.APP_MS` back to a string
- * here would duplicate that same `30d` literal in another form.
+ * here would duplicate that same `7d` literal in another form.
  */
-export const DEFAULT_EXPIRY = "30d";
+export const DEFAULT_EXPIRY = "7d";
 
 /**
  * Default `defaults` value when the manifest omits it. Spec: standard tier.
