@@ -80,7 +80,7 @@ export class SecretsService implements ISecretsService {
     // copy, and only when bound to this space and name (TC-3284).
     const result = await this.vault.get<SecretPayload>(secretPath.vaultKey, {
       expectAad: true,
-      ...(secretPath.keyPath === undefined ? {} : { keyPath: secretPath.keyPath }),
+      keyPath: secretPath.keyPath,
       ...(options?.source === undefined ? {} : { source: options.source }),
       ...(options?.namedKeyOnly === true ? { namedKeyOnly: true } : {}),
     });
@@ -136,9 +136,6 @@ export class SecretsService implements ISecretsService {
     } satisfies SecretPayload;
     // Always sealed to the secret's own key (TC-3284), so a write never puts
     // a network-wrapped copy over one already on its own key.
-    if (secretPath.keyPath === undefined) {
-      return invalidSecretInput("Secret name and scope must each be at most 64 bytes.");
-    }
     return this.vault.put(secretPath.vaultKey, payload, {
       keyPath: secretPath.keyPath,
       ...(options?.ifAbsent === true ? { ifNoneMatch: "*" } : {}),

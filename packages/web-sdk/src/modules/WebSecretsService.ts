@@ -7,14 +7,17 @@ import {
   type Manifest,
   type PermissionEntry,
   type Result,
+  type SecretGetOptions,
   type SecretScopeOptions,
   type SecretPutOptions,
   type ServiceError,
 } from "@tinycloud/sdk-core";
 import type { VaultError } from "@tinycloud/sdk-core";
+import type { RequestPermissionsOptions } from "./requestPermissionsCore";
 
 type RequestPermissions = (
   additional: PermissionEntry[],
+  options?: RequestPermissionsOptions,
 ) => Promise<{ approved: boolean; delegations?: readonly unknown[] }>;
 
 const SECRETS_SPACE = "secrets";
@@ -41,6 +44,42 @@ function secretsError(
 
 function displayActionUrn(action: "put" | "del"): string {
   return action === "put" ? "tinycloud.kv/put" : "tinycloud.kv/del";
+}
+
+/** A secret-key ask lasts 1 h (the node caps it at 7 d and the session's end) and always shows the prompt (TC-3801). */
+const SECRET_KEY_ASK: RequestPermissionsOptions = { expiryMs: 60 * 60_000, allowPromptSuppression: false };
+
+/** The did:pkh address in an encryption network URN, the only part compared without case. */
+const PKH_ADDRESS = /^(urn:tinycloud:encryption:did:pkh:eip155:\d+:)(0x[0-9a-fA-F]{40})(?=:)/;
+
+function foldAddressCase(path: string): string {
+  return path.replace(PKH_ADDRESS, (_match, prefix: string, address: string) => prefix + address.toLowerCase());
+}
+
+/**
+ * The decrypt entry for this secret's own key, `<networkId>/<keyPath>`, when a
+ * read was refused with a hint naming exactly that key (address case aside);
+ * undefined for any other failure, path, owner or network.
+ */
+function missingKeyDecrypt(
+  error: unknown,
+  name: string,
+  options: SecretScopeOptions | undefined,
+  networkId: string | undefined,
+): PermissionEntry | undefined {
+  const { code, permissionHint } = (error ?? {}) as {
+    code?: unknown;
+    permissionHint?: { service?: unknown; path?: unknown };
+  };
+  const path = permissionHint?.path;
+  if (code !== "DECRYPT_DENIED" || permissionHint?.service !== "tinycloud.encryption" ||
+    typeof path !== "string" || networkId === undefined) {
+    return undefined;
+  }
+  // Only a read that resolved its name gets this far, so this cannot throw.
+  const expected = `${networkId}/${resolveSecretPath(name, options).keyPath}`;
+  if (foldAddressCase(path) !== foldAddressCase(expected)) return undefined;
+  return { service: "tinycloud.encryption", path: expected, actions: ["decrypt"], skipPrefix: true };
 }
 
 function kvActionUrn(action: "put" | "del"): string {
@@ -91,6 +130,8 @@ export interface WebSecretsServiceConfig {
   space?: string;
   getManifest: () => Manifest | Manifest[] | undefined;
   requestPermissions: RequestPermissions;
+  /** The encryption network of this secrets space; an opted-in read asks only for a key on it. */
+  getEncryptionNetworkId?: () => string | undefined;
   resolveSpace?: (space: string) => string;
   getUnlockSigner?: () => unknown;
 }
@@ -130,22 +171,43 @@ export class WebSecretsService implements ISecretsService {
     this.service.lock();
   }
 
+  /** With `requestPermission: true`, a read missing its own key's decrypt asks for exactly that key once, then reads again. */
   get(
     name: string,
-    options?: SecretScopeOptions,
+    options?: SecretGetOptions,
   ): ReturnType<ISecretsService["get"]> {
-    return options === undefined
-      ? this.service.get(name)
-      : this.service.get(name, options);
+    return this.read(name, options, (n, o) => o === undefined ? this.service.get(n) : this.service.get(n, o));
   }
 
+  /** As {@link get}. */
   getEntry(
     name: string,
-    options?: SecretScopeOptions,
+    options?: SecretGetOptions,
   ): ReturnType<ISecretsService["getEntry"]> {
-    return options === undefined
-      ? this.service.getEntry(name)
-      : this.service.getEntry(name, options);
+    return this.read(name, options, (n, o) => o === undefined ? this.service.getEntry(n) : this.service.getEntry(n, o));
+  }
+
+  /**
+   * The ask goes through this page's permission prompt, never the node's own
+   * escalation, so the node reads without `requestPermission`. A declined or
+   * failed ask is PERMISSION_DENIED, as for a put; nothing is remembered, so
+   * the next opted-in read asks again.
+   */
+  private async read<T>(
+    name: string,
+    options: SecretGetOptions | undefined,
+    call: (name: string, options?: SecretGetOptions) => Promise<Result<T, ServiceError | VaultError>>,
+  ): Promise<Result<T, ServiceError | VaultError>> {
+    if (options?.requestPermission !== true) return call(name, options);
+    const { requestPermission: _asked, ...rest } = options;
+    const forwarded = Object.keys(rest).length > 0 ? rest : undefined;
+    const first = await call(name, forwarded);
+    const entry = first.ok ? undefined : missingKeyDecrypt(
+      (first as { error?: unknown }).error, name, forwarded, this.config.getEncryptionNetworkId?.());
+    if (entry === undefined) return first;
+    const asked = await this.ask([entry], "tinycloud.encryption/decrypt", name, SECRET_KEY_ASK);
+    if (!asked.ok) return asked as Result<never, ServiceError | VaultError>;
+    return call(name, forwarded);
   }
 
   async put(
@@ -218,12 +280,23 @@ export class WebSecretsService implements ISecretsService {
       return ok();
     }
 
+    return this.ask(permissionEntries, displayActionUrn(action), name);
+  }
+
+  private async ask(
+    entries: PermissionEntry[],
+    action: string,
+    name: string,
+    options?: RequestPermissionsOptions,
+  ): Promise<Result<void, ServiceError | VaultError>> {
     try {
-      const result = await this.config.requestPermissions(permissionEntries);
+      const result = options === undefined
+        ? await this.config.requestPermissions(entries)
+        : await this.config.requestPermissions(entries, options);
       if (!result.approved) {
         return secretsError(
           ErrorCodes.PERMISSION_DENIED,
-          `Permission request for ${displayActionUrn(action)} on ${name} was declined.`,
+          `Permission request for ${action} on ${name} was declined.`,
         );
       }
       return this.restoreUnlockAfterEscalation();
@@ -232,7 +305,7 @@ export class WebSecretsService implements ISecretsService {
         ErrorCodes.PERMISSION_DENIED,
         error instanceof Error
           ? error.message
-          : `Permission request for ${displayActionUrn(action)} on ${name} failed.`,
+          : `Permission request for ${action} on ${name} failed.`,
         error instanceof Error ? error : undefined,
       );
     }

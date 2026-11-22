@@ -33,6 +33,7 @@ import type {
 import type { NamedKeyClient, NamedKeyEnvelope } from "../encryption/namedKeys";
 import type { PermissionHint } from "../types";
 import { base64Decode as envelopeBase64Decode } from "../encryption/canonical";
+import { parseSecretCatalogKey, secretKeyPath } from "../secrets/paths";
 import type { IDataVaultService } from "./IDataVaultService";
 import {
   DataVaultConfig,
@@ -1040,6 +1041,12 @@ export class DataVaultService extends BaseService implements IDataVaultService {
     keyPath: string,
     options?: { dryRun?: boolean },
   ): Promise<VaultResealResult> {
+    // Only the secret's own key: `key` must be a secret's record and `keyPath`
+    // exactly the key `secretKeyPath` derives for it (TC-3801).
+    const secret = key.startsWith("secrets/") ? parseSecretCatalogKey(key.slice("secrets/".length)) : undefined;
+    if (secret === undefined || secretKeyPath(secret.name, secret.scope) !== keyPath) {
+      throw new Error(`resealToKey: ${JSON.stringify(keyPath)} is not the own key of ${JSON.stringify(key)}`);
+    }
     const config = this.networkEncryption;
     if (!config || !this.requireAuth()) return { status: "skipped", reason: "read_failed" };
     const aad = `tinycloud.vault:${this.vaultConfig.spaceId}:${key}`;

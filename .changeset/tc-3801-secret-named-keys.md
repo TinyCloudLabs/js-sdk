@@ -11,8 +11,10 @@ Each secret is sealed to its own key, `secrets/<name>` (or `secrets/scoped/<scop
 
 Breaking for node-sdk: `secrets.get` and `secrets.getEntry` no longer ask the wallet for missing authority. Pass `requestPermission: true` for a read the user started. Without a live grant on the secret's own key the read is `DECRYPT_DENIED` with `permissionHint` naming that key, and a node refusing that key gives the same code. `namedKeyOnly: true` opens only a copy sealed to the secret's own key. Both are on the new `SecretGetOptions`. `put`, `delete` and `list` still ask as before.
 
-web-sdk keeps approved grants for one secret's own key across reloads, like panel grants. A node-sdk node restored without a signer no longer reports that it can ask for authority.
+web-sdk keeps approved grants for one secret's own key across reloads, like panel grants. In web-sdk, `secrets.get` and `secrets.getEntry` with `requestPermission: true` ask the page's permission prompt for exactly that key on the space's own network, then read once more. That prompt always shows, even after "don't ask for 30 days". A declined or closed prompt returns `PERMISSION_DENIED`, and the next opted-in read asks again. Without the flag they never ask. A node-sdk node restored without a signer no longer reports that it can ask for authority.
 
-`delegateTo` of a secret's key needs that key in the signed session: sign in with an explicit `capabilityRequest` that includes `<network>/secrets/` (decrypt, key.create). The default sign-in does not include it.
+A runtime grant on a secret's own key lasts 1 hour unless an expiry is asked, is capped at 7 days, and still ends with the session. Secret names and scopes are limited to 64 characters (`MAX_SECRET_NAME_LENGTH`, `MAX_SECRET_SCOPE_LENGTH`); a longer one is `INVALID_INPUT`. `resealToKey` throws unless `keyPath` is the record's own secret key.
+
+`delegateTo` of a secret's key needs that key in the signed session: sign in with an explicit `capabilityRequest` that includes `<network>/secrets/` (decrypt, key.create). The default sign-in does not include it. `delegateTo` refuses any `secrets` path that is not one secret's exact key.
 
 Details: TC-3801

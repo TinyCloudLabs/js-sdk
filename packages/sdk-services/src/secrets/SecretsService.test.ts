@@ -67,6 +67,7 @@ class MockVault implements IDataVaultService {
     data: { keys: [], truncated: false },
   }));
   readNetworkEncrypted = mock(async () => ({ status: "not_found" as const }));
+  resealToKey = mock(async () => ({ status: "already" as const }));
   head = mock(
     async (): Promise<Result<Record<string, string>, VaultError>> => ({
       ok: true,
@@ -133,11 +134,15 @@ describe("SecretsService", () => {
         createdAt: expect.any(String),
         updatedAt: expect.any(String),
       }),
+      { keyPath: "secrets/anthropic_api_key" },
     );
 
     const getResult = await secrets.get("ANTHROPIC_API_KEY");
     expect(getResult).toEqual({ ok: true, data: "stored-value" });
-    expect(vault.get).toHaveBeenCalledWith("secrets/ANTHROPIC_API_KEY");
+    expect(vault.get).toHaveBeenCalledWith("secrets/ANTHROPIC_API_KEY", {
+      expectAad: true,
+      keyPath: "secrets/anthropic_api_key",
+    });
 
     const deleteResult = await secrets.delete("ANTHROPIC_API_KEY");
     expect(deleteResult.ok).toBe(true);
@@ -154,12 +159,14 @@ describe("SecretsService", () => {
     expect(vault.put).toHaveBeenCalledWith(
       "secrets/scoped/food-tracker/ANTHROPIC_API_KEY",
       expect.objectContaining({ value: "secret" }),
+      { keyPath: "secrets/scoped/food-tracker/anthropic_api_key" },
     );
 
     const getResult = await secrets.get("ANTHROPIC_API_KEY", options);
     expect(getResult).toEqual({ ok: true, data: "stored-value" });
     expect(vault.get).toHaveBeenCalledWith(
       "secrets/scoped/food-tracker/ANTHROPIC_API_KEY",
+      { expectAad: true, keyPath: "secrets/scoped/food-tracker/anthropic_api_key" },
     );
     const deleteResult = await secrets.delete("ANTHROPIC_API_KEY", options);
     expect(deleteResult.ok).toBe(true);
@@ -168,7 +175,7 @@ describe("SecretsService", () => {
     );
   });
 
-  it("forwards ifAbsent as ifNoneMatch and keeps the 2-argument call without it", async () => {
+  it("forwards ifAbsent as ifNoneMatch, and every put names the secret's own key", async () => {
     const vault = new MockVault();
     const secrets = new SecretsService(vault);
 
@@ -176,14 +183,14 @@ describe("SecretsService", () => {
     expect(vault.put).toHaveBeenLastCalledWith(
       "secrets/scoped/app/API_KEY",
       expect.objectContaining({ value: "secret" }),
-      { ifNoneMatch: "*" },
+      { ifNoneMatch: "*", keyPath: "secrets/scoped/app/api_key" },
     );
 
     expect((await secrets.put("API_KEY", "secret", { scope: "app" })).ok).toBe(true);
-    expect(vault.put.mock.calls.at(-1)).toHaveLength(2);
+    expect(vault.put.mock.calls.at(-1)?.[2]).toEqual({ keyPath: "secrets/scoped/app/api_key" });
 
     expect((await secrets.put("API_KEY", "secret", { ifAbsent: false })).ok).toBe(true);
-    expect(vault.put.mock.calls.at(-1)).toHaveLength(2);
+    expect(vault.put.mock.calls.at(-1)?.[2]).toEqual({ keyPath: "secrets/api_key" });
   });
 
   it("validates env-style names before calling the vault", async () => {

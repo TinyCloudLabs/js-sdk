@@ -93,6 +93,23 @@ const vault = new DataVaultService({
         },
       }),
     } as never,
+    // A secret is sealed to its own key (TC-3284); the stubbed node then
+    // refuses the KV write.
+    namedKeys: async () => ({
+      encrypt: async (keyPath: string) => ({
+        v: 2,
+        networkId,
+        keyPath,
+        alg: "x25519-aes256gcm/v1",
+        keyVersion: 1,
+        encryptedSymmetricKey: "AQID",
+        encryptedSymmetricKeyHash: "a".repeat(64),
+        ciphertext: "AQID",
+      }),
+      decrypt: async () => {
+        throw new Error("no secret is read in this harness");
+      },
+    }),
   },
   tc: {
     kv,

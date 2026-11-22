@@ -84,6 +84,11 @@ export interface RuntimeGrantRequest {
   options: RuntimePermissionGrantOptions | undefined;
 }
 
+/** A grant on any secret's own key (or under `secrets`) lasts 1 h unless asked, and never over 7 d (TC-3801). */
+const SECRET_KEY_GRANT_DEFAULT_MS = 60 * 60_000;
+const SECRET_KEY_GRANT_MAX_MS = 7 * 24 * 60 * 60_000;
+const SECRET_KEY_RESOURCE = /^urn:tinycloud:encryption:[^/]+\/secrets(?:\/|$)/;
+
 /**
  * The signing and activation half of `TinyCloudNode.grantRuntimePermissions`.
  * @internal
@@ -133,7 +138,10 @@ export async function issueRuntimeGrants<Operation>(
   }
 
   const now = new Date();
-  const requestedExpiryMs = lib.expiryMs(options?.expiry);
+  const secretKeys = expanded.some((entry) => ports.isEncryption(entry) && SECRET_KEY_RESOURCE.test(entry.path));
+  const requestedExpiryMs = secretKeys
+    ? Math.min(options?.expiry === undefined ? SECRET_KEY_GRANT_DEFAULT_MS : lib.expiryMs(options.expiry), SECRET_KEY_GRANT_MAX_MS)
+    : lib.expiryMs(options?.expiry);
   let expiresAt = new Date(now.getTime() + requestedExpiryMs);
   if (sessionExpiry !== undefined && sessionExpiry < expiresAt) {
     // At the session's expiry, to the whole second: the node compares a child's expiry with its parent's.

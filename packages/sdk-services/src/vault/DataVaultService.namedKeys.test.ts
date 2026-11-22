@@ -330,4 +330,22 @@ describe("resealToKey verifies before it writes", () => {
     expect(await h.vault.resealToKey(KEY, KEY_PATH)).toEqual({ status: "skipped", reason: "aad_mismatch" });
     expect(h.calls).toMatchObject({ puts: 0, encrypt: [] });
   });
+
+  test("a keyPath other than the record's own secret key throws before any read or write", async () => {
+    const h = harness();
+    h.store(KEY, envelope({ v: 1 }));
+    for (const [key, keyPath] of [
+      [KEY, "secrets/other_key"],
+      [KEY, "secrets/API_KEY"],
+      [KEY, "secrets/"],
+      [KEY, "secrets/scoped/food/api_key"],
+      ["secrets/scoped/food/API_KEY", KEY_PATH],
+      ["notes/API_KEY", KEY_PATH],
+    ]) {
+      await expect(h.vault.resealToKey(key!, keyPath!)).rejects.toThrow("is not the own key of");
+      await expect(h.vault.resealToKey(key!, keyPath!, { dryRun: true })).rejects.toThrow("is not the own key of");
+    }
+    expect(h.calls).toMatchObject({ networkDecrypt: 0, keyDecrypt: 0, puts: 0, encrypt: [] });
+    expect(h.stored(KEY)).toMatchObject({ v: 1 });
+  });
 });

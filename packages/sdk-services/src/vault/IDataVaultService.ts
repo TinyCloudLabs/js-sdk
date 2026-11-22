@@ -103,7 +103,8 @@ export interface IDataVaultService extends IService {
    * Move one record onto its own key, verifying before it writes: read it from
    * the network with its ETag, seal it to `keyPath` (creating the key), open
    * the new copy and compare bytes, then write only if the record is
-   * unchanged (`ifMatch`). A failure at any step keeps the old copy.
+   * unchanged (`ifMatch`). A failure at any step keeps the old copy. Throws
+   * unless `key` is a secret's record and `keyPath` is exactly its own key.
    */
   resealToKey(key: string, keyPath: string, options?: { dryRun?: boolean }): Promise<VaultResealResult>;
 

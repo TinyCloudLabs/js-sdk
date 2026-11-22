@@ -14,6 +14,7 @@ export {
   appSecretScope,
   SECRET_SCOPE_RE,
   MAX_SECRET_SCOPE_LENGTH,
+  MAX_SECRET_NAME_LENGTH,
   TC832_RESERVED_SCOPES,
   parseSecretCatalogKey,
   resolveSecretListPrefix,

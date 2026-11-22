@@ -55,6 +55,18 @@ describe("a secret read asks only when told to", () => {
     ]);
   });
 
+  test("a declined ask is PERMISSION_DENIED, and the next opted-in read asks again", async () => {
+    const h = setup(kvOnly);
+    h.grantPermissions.mockImplementationOnce(async () => {
+      throw new Error("declined");
+    });
+    const declined = await h.secrets.get("API_KEY", { requestPermission: true });
+    expect(declined.ok ? undefined : declined.error).toMatchObject({ code: "PERMISSION_DENIED", message: "declined" });
+    expect(h.get).not.toHaveBeenCalled();
+    expect(await h.secrets.get("API_KEY", { requestPermission: true })).toEqual({ ok: true, data: "stored" });
+    expect(h.grantPermissions).toHaveBeenCalledTimes(2);
+  });
+
   test("a network decrypt reads without asking, unless namedKeyOnly", async () => {
     const h = setup(kvAndNetwork);
     expect(await h.secrets.get("API_KEY")).toEqual({ ok: true, data: "stored" });

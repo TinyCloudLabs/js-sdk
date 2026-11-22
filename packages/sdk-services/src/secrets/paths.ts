@@ -1,6 +1,10 @@
 import type { SecretType } from "./secretTypes";
 
-export const SECRET_NAME_RE = /^[A-Z][A-Z0-9_]*$/;
+/** Longest secret name: one key-path segment on the node, 64 bytes (TC-3801). */
+export const MAX_SECRET_NAME_LENGTH = 64;
+
+/** Secret names; at most {@link MAX_SECRET_NAME_LENGTH} characters. */
+export const SECRET_NAME_RE = /^[A-Z][A-Z0-9_]{0,63}$/;
 
 const SECRET_PREFIX = "secrets/";
 const SCOPED_SECRET_PREFIX = "secrets/scoped/";
@@ -16,7 +20,7 @@ export interface SecretScopeOptions {
 /** Canonical secret scope grammar shared with the TC-832 `/request` link. */
 export const SECRET_SCOPE_RE = /^[a-z0-9]+(-[a-z0-9]+)*$/;
 
-/** Longest scope the TC-832 `/request` link accepts. */
+/** Longest scope: the TC-832 `/request` link's limit and one key-path segment on the node. */
 export const MAX_SECRET_SCOPE_LENGTH = 64;
 
 /** Scopes the TC-832 `/request` link refuses. */
@@ -92,16 +96,9 @@ export interface ResolvedSecretPath {
   permissionPaths: {
     vault: string;
   };
-  /**
-   * Named key the secret is sealed to ({@link secretKeyPath}); absent when the
-   * name or scope is longer than one key segment (64 bytes). Such a secret
-   * can't be written, and only its old network-wrapped copy can be read.
-   */
-  keyPath?: string;
+  /** Named key the secret is sealed to ({@link secretKeyPath}). */
+  keyPath: string;
 }
-
-/** Longest secret name or scope that fits one key-path segment. */
-const MAX_KEY_SEGMENT = 64;
 
 /**
  * The named key a secret is sealed to (TC-3284): `secrets/<lower(NAME)>`, or
@@ -110,8 +107,8 @@ const MAX_KEY_SEGMENT = 64;
  * never normalised. Throws for a name or scope over 64 bytes.
  */
 export function secretKeyPath(name: string, scope?: string): string {
-  if (!SECRET_NAME_RE.test(name) || name.length > MAX_KEY_SEGMENT ||
-      (scope !== undefined && (!SECRET_SCOPE_RE.test(scope) || scope.length > MAX_KEY_SEGMENT))) {
+  if (!SECRET_NAME_RE.test(name) ||
+      (scope !== undefined && (!SECRET_SCOPE_RE.test(scope) || scope.length > MAX_SECRET_SCOPE_LENGTH))) {
     throw new Error("A secret's key needs a name and scope of at most 64 bytes, scope in canonical form");
   }
   return `${scope === undefined ? SECRET_PREFIX : `${SCOPED_SECRET_PREFIX}${scope}/`}${name.toLowerCase()}`;
@@ -184,6 +181,11 @@ export function canonicalizeSecretScope(
       `Secret scope ${JSON.stringify(scope)} is reserved; omit scope for global secrets.`,
     );
   }
+  if (canonical.length > MAX_SECRET_SCOPE_LENGTH) {
+    throw new Error(
+      `Secret scope ${JSON.stringify(canonical)} is longer than ${MAX_SECRET_SCOPE_LENGTH} characters.`,
+    );
+  }
 
   return canonical;
 }
@@ -193,6 +195,12 @@ export function resolveSecretPath(
   options: SecretScopeOptions = {},
 ): ResolvedSecretPath {
   const normalizedName = name.trim();
+  // The node's key segment limit: a longer name has no key of its own (TC-3801).
+  if (normalizedName.length > MAX_SECRET_NAME_LENGTH) {
+    throw new Error(
+      `Secret name ${JSON.stringify(normalizedName)} is longer than ${MAX_SECRET_NAME_LENGTH} characters.`,
+    );
+  }
   if (!SECRET_NAME_RE.test(normalizedName)) {
     throw new Error(
       `Invalid secret name ${JSON.stringify(name)}. Secret names must match ${SECRET_NAME_RE.source}.`,
@@ -212,9 +220,7 @@ export function resolveSecretPath(
     permissionPaths: {
       vault: `vault/${vaultKey}`,
     },
-    ...(normalizedName.length > MAX_KEY_SEGMENT || (scope?.length ?? 0) > MAX_KEY_SEGMENT
-      ? {}
-      : { keyPath: secretKeyPath(normalizedName, scope) }),
+    keyPath: secretKeyPath(normalizedName, scope),
   };
 }
 

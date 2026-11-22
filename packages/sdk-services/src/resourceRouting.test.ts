@@ -173,7 +173,12 @@ describe("signed resource routing", () => {
       const vault = new DataVaultService({
         spaceId: space,
         crypto: { encrypt: unusedCrypto, decrypt: unusedCrypto, deriveKey: unusedCrypto, x25519FromSeed: unusedCrypto, x25519Dh: unusedCrypto, randomBytes: unusedCrypto, sha256: unusedCrypto },
-        encryption: { networkId: "urn:tinycloud:encryption:did:pkh:eip155:1:0x0000000000000000000000000000000000000001:default", service: encryption },
+        encryption: {
+          networkId: "urn:tinycloud:encryption:did:pkh:eip155:1:0x0000000000000000000000000000000000000001:default",
+          service: encryption,
+          // A secret's own key resolves the network's node the same way (TC-3284).
+          namedKeys: async () => ({ encrypt: refuseRoute, decrypt: refuseRoute }),
+        },
         tc: { kv, publicKV: kv, ensurePublicSpace: async () => unusedCrypto(), readPublicSpace: async () => unusedCrypto(), makePublicSpaceId: unusedCrypto, did: "did:key:test", address: "", chainId: 1, hosts: [box.url] },
       });
       vault.initialize(ctx);

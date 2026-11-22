@@ -126,18 +126,35 @@ describe.skipIf(!nodeBinary)(
       registry?.stop(true);
     });
 
-    test("a session-only child decrypts and reads a secret with only the delegation", async () => {
+    test("a session-only child decrypts a secret on its own key with only the delegation, and is refused a raw network decrypt", async () => {
       const recipient = sessionOnlyChild();
       expect(recipient.isSessionOnly).toBe(true);
       const { access } = await grant(recipient, secretsEntries());
 
+      // The stored record is sealed to API_KEY's own key, never to the network.
+      const record = await access.kv.get<unknown>("vault/secrets/API_KEY");
+      if (!record.ok) throw new Error(JSON.stringify(record.error));
+      const raw = record.data.data;
+      const stored = (typeof raw === "string" ? JSON.parse(raw) : raw) as Record<string, unknown>;
+      expect({ v: stored.v, keyPath: stored.keyPath, networkId: stored.networkId }).toEqual({
+        v: 2,
+        keyPath: "secrets/api_key",
+        networkId,
+      });
+
+      // Opening it is one decrypt on exactly that key, under the delegation.
       expect(await access.readSecret({ name: "API_KEY" })).toEqual({
         status: "ok",
         value: "secrets-space-value",
       });
+
+      // The delegation names one secret's key, not the network: the node
+      // refuses a raw network decrypt.
       const decrypted = await decrypt(access);
-      expect(decrypted.ok, JSON.stringify(decrypted.ok ? undefined : decrypted.error)).toBe(true);
-      expect(decrypted.ok && new TextDecoder().decode(decrypted.data)).toBe("delegated plaintext");
+      expect(decrypted.ok ? undefined : decrypted.error).toMatchObject({
+        code: "DECRYPT_DENIED",
+        permissionHint: { service: "tinycloud.encryption", path: networkId, actions: ["tinycloud.encryption/decrypt"] },
+      });
       // The child never became signed in: nothing outside the access gained authority.
       expect(recipient.isSessionOnly).toBe(true);
       expect(recipient.restorableSession).toBeUndefined();
@@ -157,8 +174,6 @@ describe.skipIf(!nodeBinary)(
       const receipt = await owner.revokeDelegation(delegation.cid);
       expect(receipt.ok, JSON.stringify(receipt.ok ? undefined : receipt.error)).toBe(true);
 
-      const decrypted = await decrypt(access);
-      expect(decrypted.ok).toBe(false);
       expect((await access.readSecret({ name: "API_KEY" })).status).not.toBe("ok");
     }, 120_000);
 
@@ -301,9 +316,77 @@ describe.skipIf(!nodeBinary)(
       // A real wait: the node checks expiry against its own wall clock, in
       // whole seconds, which fake timers in this process cannot move.
       await Bun.sleep(access.delegation.expiry.getTime() - Date.now() + 2_000);
-      const decrypted = await decrypt(access);
-      expect(decrypted.ok).toBe(false);
       expect((await access.readSecret({ name: "API_KEY" })).status).not.toBe("ok");
+    }, 120_000);
+
+    // Non-secret data still opens on the network itself (TC-3801): a delegation
+    // naming the network decrypts, and stops at revoke and at expiry. It also
+    // carries the secrets kv get the owner holds, as the pre-TC-3801 grant did:
+    // this node refuses to revoke an encryption-only delegation (403
+    // Unauthorized Revoker). The kv get reads only ciphertext.
+    const networkDecrypt = () => [
+      secretsEntries()[0]!,
+      { service: "tinycloud.encryption", path: networkId, actions: ["tinycloud.encryption/decrypt"] },
+    ];
+    const expectDecrypts = async (access: DelegatedAccess) => {
+      const opened = await decrypt(access);
+      if (!opened.ok) throw new Error(JSON.stringify(opened.error));
+      expect(new TextDecoder().decode(opened.data)).toBe("delegated plaintext");
+    };
+
+    test("a network decrypt delegation opens non-secret network data, and stops once revoked", async () => {
+      const { delegation, access } = await grant(sessionOnlyChild(), networkDecrypt());
+      await expectDecrypts(access);
+
+      const receipt = await owner.revokeDelegation(delegation.cid);
+      expect(receipt.ok, JSON.stringify(receipt.ok ? undefined : receipt.error)).toBe(true);
+
+      expect((await decrypt(access)).ok).toBe(false);
+    }, 120_000);
+
+    test("a network decrypt delegation stops decrypting once it expires", async () => {
+      const { access } = await grant(sessionOnlyChild(), networkDecrypt(), 5_000);
+      await expectDecrypts(access);
+
+      // A real wait, as above: the node checks expiry on its own clock.
+      await Bun.sleep(access.delegation.expiry.getTime() - Date.now() + 2_000);
+      expect((await decrypt(access)).ok).toBe(false);
+    }, 120_000);
+
+    // Naomi 13:35:53Z: the 64-byte cap is inclusive. A 64-byte name in a
+    // 64-byte scope is sealed to and read from its own key on the real node;
+    // 65 is refused before anything is asked, written or read through the root.
+    test("a 64-byte name in a 64-byte scope writes and reads on its own key; 65 is refused with nothing written", async () => {
+      const name = `A${"B".repeat(63)}`;
+      const scope = "s".repeat(64);
+      const secrets = owner.secretsForSpace(secretsSpace);
+
+      const put = await secrets.put(name, "longest-value", { scope });
+      expect(put.ok, JSON.stringify(put.ok ? undefined : put.error)).toBe(true);
+      const record = await owner.kvForSpace(secretsSpace).get<unknown>(`vault/secrets/scoped/${scope}/${name}`);
+      if (!record.ok) throw new Error(JSON.stringify(record.error));
+      const raw = record.data.data;
+      const stored = (typeof raw === "string" ? JSON.parse(raw) : raw) as Record<string, unknown>;
+      expect({ v: stored.v, keyPath: stored.keyPath }).toEqual({ v: 2, keyPath: `secrets/scoped/${scope}/${name.toLowerCase()}` });
+      expect(await secrets.get(name, { scope, requestPermission: true })).toEqual({ ok: true, data: "longest-value" });
+
+      const refusals = [
+        [`${name}C`, {}, `Secret name "${name}C" is longer than 64 characters.`],
+        [name, { scope: `${scope}s` }, `Secret scope "${scope}s" is longer than 64 characters.`],
+      ] as const;
+      for (const [refusedName, options, message] of refusals) {
+        for (const result of [
+          await secrets.put(refusedName, "x", options),
+          await secrets.get(refusedName, { ...options, requestPermission: true }),
+          await secrets.get(refusedName, options),
+        ]) {
+          expect(result.ok ? undefined : { code: result.error.code, message: result.error.message })
+            .toEqual({ code: "INVALID_INPUT", message });
+        }
+      }
+      const listed = await secrets.vault.list({ prefix: "secrets/", removePrefix: true, source: "network" });
+      if (!listed.ok) throw new Error(JSON.stringify(listed.error));
+      expect(listed.data.filter((key) => key.endsWith(`${name}C`) || key.includes(`${scope}s/`))).toEqual([]);
     }, 120_000);
   },
 );

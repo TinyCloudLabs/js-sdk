@@ -1129,7 +1129,11 @@ export interface DelegateToResult {
  * Options for runtime permission escalation.
  */
 export interface RuntimePermissionGrantOptions {
-  /** Override expiry. ms-format string ("7d", "1h") or raw milliseconds. */
+  /**
+   * Override expiry. ms-format string ("7d", "1h") or raw milliseconds. A grant
+   * that includes a secret's own key defaults to 1 h and is capped at 7 d.
+   * Every grant ends by the session's expiry.
+   */
   expiry?: string | number;
   /**
    * Signs the prepared SIWE and returns the EIP-191 signature, in place of the connected signer's `signMessage`.
@@ -7490,7 +7494,7 @@ export class TinyCloudNode {
       resolved.vaultKey,
       {
         expectAad: true,
-        ...(resolved.keyPath === undefined ? {} : { keyPath: resolved.keyPath }),
+        keyPath: resolved.keyPath,
         namedKeyOnly: !this.decryptsWithNetwork(this.getEncryptionNetworkIdForSpace(targetSpace)),
       },
     );
