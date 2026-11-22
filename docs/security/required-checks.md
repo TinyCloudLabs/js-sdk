@@ -8,7 +8,7 @@ was taken with `gh api` on 2026-11-22.
 
 | Check (context) | Workflow | Runs on | What fails it |
 |---|---|---|---|
-| `gitleaks` | `.github/workflows/secret-scan.yml` | every PR (PR commits only), every push to master (whole history against `.gitleaksignore`) | a secret-shaped value not in the reviewed baseline |
+| `gitleaks` | `.github/workflows/secret-scan.yml` | every PR (PR commits only, against the BASE commit's `.gitleaksignore`/`.gitleaks.toml`, `gitleaks:allow` ignored), every push to master (whole history against `.gitleaksignore`) | a secret-shaped value not in the reviewed baseline; a new baseline entry lands in its own baseline-only PR |
 | `dependency-review` | `.github/workflows/dependency-review.yml` | every PR | a PR that adds or upgrades to a dependency version with a high or critical advisory |
 | `Major release sign-off` | `.github/workflows/major-release-guard.yml` (existing) | every PR | a major changeset or major bump without an `approve-major-release:` commit |
 
@@ -176,10 +176,12 @@ first.
 
 - The six publish jobs declare `environment: production` (the last workflow
   commit of this PR). They then run only from `master`; a dispatch from another
-  branch is refused by the branch policy before any step runs. Behaviour
-  change: `raw-publish.yml` last ran from `fix/cli-1.7.0-release-base`
-  (2026-11-19). That is no longer possible; a branch release goes through
-  master, or needs an explicit, temporary branch-policy exception from Bobbie.
+  branch is refused by the branch policy before any step runs. This is
+  intended (Bobbie, 10:20Z): `raw-publish.yml` last ran from
+  `fix/cli-1.7.0-release-base` (2026-11-19), and that is no longer possible. A
+  branch release becomes a master release, or Naomi grants an explicit
+  exception that adds the branch to the `production` branch policy for that
+  release and removes it afterwards.
 - Environment `production` (exists: `master` only, no reviewers; keep it so)
   holds, in addition to today's secrets:
   - `NPM_TOKEN`: a new npm granular token, publish rights on the `@tinycloud`
@@ -191,12 +193,12 @@ first.
 - No repository secrets remain: `GH_TOKEN`, `RELEASE_DEPLOY_KEY`,
   `TC_MCP_INTROSPECTION_CLIENT_ID`, `TC_MCP_INTROSPECTION_CLIENT_SECRET`
   deleted (the last two are already shadowed by `production`). Old deploy key
-  166801705 removed; old npm token revoked.
-- js-sdk loses access to the organization secrets `NPM_TOKEN`,
-  `NPM_CONFIG_TOKEN` and `DISPATCH_TOKEN`. `NPM_TOKEN` is visibility `all`, so
-  narrowing it means switching it to `selected` with every other repository
-  that needs it, which re-enters its value: an org-wide change for Bobbie to
-  approve, best done with the npm token rotation.
+  166801705 removed.
+- Organization secrets: no change in this plan. Org `NPM_TOKEN` stays
+  visibility `all` for now; changing its visibility needs its value, so it is
+  folded into the GO BH new-token step (Naomi and Sam). Once that step has
+  narrowed it, the `production` environment secret is the only `NPM_TOKEN`
+  js-sdk reads.
 
 ### Order (Naomi, 2026-11-22 10:12Z)
 
@@ -233,9 +235,9 @@ Amos; values are entered at the prompt or from a file and never echoed.
    gh secret delete TC_MCP_INTROSPECTION_CLIENT_SECRET -R "$R"
    gh repo deploy-key delete 166801705 -R "$R"
    ```
-   Revoke the old npm token and the old `GH_TOKEN` at their issuers. Narrow the
-   organization secrets (previous section) with Bobbie's approval. Then add the
-   required checks (ruleset section above).
+   Revoke the old `GH_TOKEN` at its issuer. The old npm token and the org
+   `NPM_TOKEN` visibility belong to the GO BH new-token step, not to this
+   plan. Then add the required checks (ruleset section above).
 
 ### Undo
 
@@ -247,6 +249,6 @@ Amos; values are entered at the prompt or from a file and never echoed.
 - After step 4: revert the `environment: production` commit, recreate the
   repository secrets (`gh secret set <NAME> -R "$R"`): `GH_TOKEN` with the step 2
   token, `RELEASE_DEPLOY_KEY` with a fresh deploy key pair made as in step 2
-  (its private half was not kept), and add js-sdk back to the organization
-  secrets' repository access. The revoked old values are not restored. The
-  environment secrets can stay; only jobs that name the environment read them.
+  (its private half was not kept). The revoked old values are not restored.
+  The environment secrets can stay; only jobs that name the environment read
+  them.
