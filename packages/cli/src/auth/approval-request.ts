@@ -556,7 +556,9 @@ export async function acquireApprovalRequest(_did: string, options: AuthFlowOpti
   const spec = context
     ? buildShareInvitationApprovalSpec({ targetDid: signer.did, targetPublicJwk, nodeOrigin: options.host, context, now: Date.now() })
     : { issuer: signer.did, requestVersion: 1 as const, targetDid: signer.did,
-      targetPublicJwk, nodeOrigin: options.host, permissions: options.permissions as OpenKeyApprovalRequestV1["permissions"],
+      targetPublicJwk, nodeOrigin: options.host,
+      // `skipPrefix` tells the local SDK not to prefix a path; the signed request is strict and its paths are final.
+      permissions: options.permissions!.map(({ skipPrefix: _skipPrefix, ...entry }) => entry) as OpenKeyApprovalRequestV1["permissions"],
       ...(options.reason ? { reason: options.reason } : {}), grantLifetimeSeconds: grantLifetimeSeconds(options.expiry),
       ...(options.renewalLeaseSeconds === undefined ? {} : { renewal: { version: 1 as const, leaseLifetimeSeconds: options.renewalLeaseSeconds } }) };
   if (options.commandIntent !== undefined && !/^auth-grant:[0-9a-f]{64}$/.test(options.commandIntent)) {

@@ -11,6 +11,11 @@ export interface SecretMigrateOptions {
   scope?: string;
   /** Count what would move without encrypting or writing anything. */
   dryRun?: boolean;
+  /**
+   * Called once, before anything moves and never on a dry run, with the exact key path of every selected secret that
+   * has one, so a caller can get decrypt and key creation on exactly those keys. A throw stops the migration.
+   */
+  authorizeKeys?: (keyPaths: readonly string[]) => Promise<void>;
 }
 
 /** Counts only: a migration report never names a secret or carries a value. */
@@ -62,12 +67,17 @@ export async function migrateSecrets(
     report.skipped.not_found = unmatched;
   }
   const vault = secrets.vault;
+  const moves: { vaultKey: string; keyPath: string }[] = [];
   for (const entry of selected) {
     const { vaultKey, keyPath } = resolveSecretPath(entry.name, entry.scope === undefined ? {} : { scope: entry.scope });
     if (keyPath === undefined) {
       report.staysOnNetwork += 1;
-      continue;
+    } else {
+      moves.push({ vaultKey, keyPath });
     }
+  }
+  if (!dryRun && moves.length > 0) await options.authorizeKeys?.(moves.map((move) => move.keyPath));
+  for (const { vaultKey, keyPath } of moves) {
     const result = await vault.resealToKey(vaultKey, keyPath, { dryRun });
     if (result.status === "skipped") {
       report.skipped[result.reason] = (report.skipped[result.reason] ?? 0) + 1;

@@ -132,17 +132,27 @@ async function runCli(command: string[], args: string[]): Promise<{ exitCode: nu
   return { exitCode, stdout, stderr };
 }
 
-/** The one stored grant, with its proof and its `cli-grant` binding. */
-async function storedGrant(profile: string): Promise<string> {
+const ROOT = () => `urn:tinycloud:encryption:${hermetic.ownerDid}:default`;
+const SECRET_KEY = () => `${ROOT()}/secrets/${SECRET.toLowerCase()}`;
+
+/**
+ * The stored grants, each with its proof and its `cli-grant` binding, whose decrypt resources are exactly `decrypt`
+ * (TC-3802 ruling: a secret in the older format read on the owner path stores its exact key and the network root).
+ */
+async function storedGrant(profile: string, decrypt: readonly string[] = [ROOT()]): Promise<string> {
   const stored = await readAdditionalDelegations<{
     delegation: { cid: string; siweProof?: unknown };
-    authorityRequest?: { requestId?: unknown; requested?: Array<{ service: string; space?: string }> };
+    authorityRequest?: { requestId?: unknown; requested?: Array<{ service: string; space?: string; path?: string }> };
   }>(profile);
-  expect(stored).toHaveLength(1);
-  const [record] = stored;
-  expect(record!.delegation.siweProof).toEqual({ siwe: expect.any(String), signature: expect.any(String) });
-  expect(record!.authorityRequest?.requestId).toBe(`cli-grant:${record!.delegation.cid}`);
-  return record!.delegation.cid;
+  expect(stored).toHaveLength(decrypt.length);
+  for (const record of stored) {
+    expect(record.delegation.siweProof).toEqual({ siwe: expect.any(String), signature: expect.any(String) });
+    expect(record.authorityRequest?.requestId).toBe(`cli-grant:${record.delegation.cid}`);
+  }
+  expect(stored.flatMap((record) => (record.authorityRequest?.requested ?? [])
+    .filter((permission) => permission.service === "tinycloud.encryption")
+    .map((permission) => permission.path)).sort()).toEqual([...decrypt].sort());
+  return stored.map((record) => record.delegation.cid).join();
 }
 
 /**
@@ -150,11 +160,11 @@ async function storedGrant(profile: string): Promise<string> {
  * it, the read would fail or (on a local owner, which escalates without a
  * prompt) store a second grant.
  */
-async function expectFreshReadUsesStoredGrant(command: string[], profile: string, cid: string): Promise<void> {
+async function expectFreshReadUsesStoredGrant(command: string[], profile: string, cid: string, decrypt?: readonly string[]): Promise<void> {
   const read = await runCli(command, ["--json", "--profile", profile, "secrets", "get", SECRET]);
   expect({ exitCode: read.exitCode, stderr: read.stderr }).toEqual({ exitCode: 0, stderr: "" });
   expect(JSON.parse(read.stdout)).toEqual({ name: SECRET, value: CANARY });
-  expect(await storedGrant(profile)).toBe(cid);
+  expect(await storedGrant(profile, decrypt)).toBe(cid);
 }
 
 test.each(cliRuntimes)("under %s, auth request --grant stores a local raw-decrypt-only grant a fresh process installs", async (runtime, command) => {
@@ -180,7 +190,7 @@ test.each(cliRuntimes)("under %s, a local owner's secret read escalates to a sto
 
   expect({ exitCode: first.exitCode, stderr: first.stderr }).toEqual({ exitCode: 0, stderr: "" });
   expect(JSON.parse(first.stdout)).toEqual({ name: SECRET, value: CANARY });
-  await expectFreshReadUsesStoredGrant(command, profile, await storedGrant(profile));
+  await expectFreshReadUsesStoredGrant(command, profile, await storedGrant(profile, [SECRET_KEY(), ROOT()]), [SECRET_KEY(), ROOT()]);
 }, CLI_TIMEOUT_MS);
 
 test("an OpenKey owner's decrypt-only escalation is stored and installed in a fresh process", async () => {
@@ -213,7 +223,9 @@ test("an OpenKey owner's decrypt-only escalation is stored and installed in a fr
   }
 
   expect(JSON.parse(stdout)).toEqual({ name: SECRET, value: CANARY });
-  // The request was decrypt only, so OpenKey signed it anchored in the secrets space.
-  expect(openKey.requests).toHaveLength(1);
-  await expectFreshReadUsesStoredGrant(cliRuntimes[0]![1], profile, await storedGrant(profile));
+  // Two approvals, in order: the secret's own key, then (it is in the older format) the network root.
+  expect(openKey.requests.map((request) => request
+    .filter((permission) => permission.service === "tinycloud.encryption")
+    .map((permission) => permission.path))).toEqual([[SECRET_KEY()], [ROOT()]]);
+  await expectFreshReadUsesStoredGrant(cliRuntimes[0]![1], profile, await storedGrant(profile, [SECRET_KEY(), ROOT()]), [SECRET_KEY(), ROOT()]);
 }, CLI_TIMEOUT_MS);

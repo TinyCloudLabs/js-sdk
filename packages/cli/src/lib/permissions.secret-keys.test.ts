@@ -20,7 +20,7 @@ function manifestSource(manifest: Record<string, unknown>): string {
   return `base64:${Buffer.from(JSON.stringify(manifest)).toString("base64")}`;
 }
 
-const encryption = (permissions: { service: string }[]) =>
+const encryption = <T extends { service: string }>(permissions: T[]) =>
   permissions.filter((permission) => permission.service === "tinycloud.encryption");
 
 describe("per-secret keys in CLI manifests", () => {
@@ -88,9 +88,8 @@ describe("signed per-secret key grants", () => {
     expect(rawEncryptionOwnerMatches(key(OWNER_DID, "default/apps/x/k"), OWNER_DID)).toBe(false);
   });
 
-  test("the whole secrets/ prefix is admitted only when the CLI asked for it", () => {
+  test("a signed secrets/ prefix is never the signer's: no CLI flow asks for one", () => {
     expect(rawEncryptionOwnerMatches(key(OWNER_DID, "default/secrets/"), OWNER_DID)).toBe(false);
-    expect(rawEncryptionOwnerMatches(key(OWNER_DID, "default/secrets/"), OWNER_DID, { secretsPrefix: true })).toBe(true);
-    expect(rawEncryptionOwnerMatches(key(OWNER_DID, "default/secrets/scoped/feed/"), OWNER_DID, { secretsPrefix: true })).toBe(false);
+    expect(rawEncryptionOwnerMatches(key(OWNER_DID, "default/secrets/scoped/feed/"), OWNER_DID)).toBe(false);
   });
 });

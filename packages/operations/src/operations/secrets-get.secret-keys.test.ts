@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 
 import { evaluateOperationAuthority } from "../authority.js";
 import type { CapabilityRequirement, OperationContext, RuntimeOperationContext } from "../contract.js";
+import { redactOperationError } from "../redaction.js";
 import { secretsGetOperationDefinition } from "./secrets-get.js";
 
 // TC-3284: a secret read asks for the secret's own key; the network decrypt is only for a session that already reads
@@ -80,5 +81,14 @@ describe("tinycloud.secrets.get per-secret keys", () => {
       input,
     );
     expect(outcome).toMatchObject({ status: "authority_required", missing: [decrypt(KEY)] });
+  });
+
+  test("the decrypt to approve crosses the result boundary; anything else in details does not", () => {
+    for (const [code, path] of [["SECRET_LEGACY_ENVELOPE", NETWORK], ["SECRET_KEY_GRANT_REQUIRED", KEY]] as const) {
+      const error = { code, message: "m", retryable: false, details: { names: ["API_KEY"], scope: "my-app", decrypt: path, value: "leak" } };
+      expect(redactOperationError(secretsGetOperationDefinition, error).details).toEqual({ names: ["API_KEY"], scope: "my-app", decrypt: path });
+      const odd = { ...error, details: { names: ["API_KEY"], decrypt: "https://example.test/steal" } };
+      expect(redactOperationError(secretsGetOperationDefinition, odd).details).toEqual({ names: ["API_KEY"] });
+    }
   });
 });

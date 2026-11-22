@@ -18,6 +18,11 @@ export function isVerifiedRawEncryptionPermission(permission: Pick<PermissionEnt
     (permission.space === undefined || permission.space === "encryption");
 }
 
+/** A raw encryption resource under a network's `secrets/` keys: one secret's key, or (refused everywhere) a prefix. */
+export function isSecretsKeyResource(path: string): boolean {
+  return /^urn:tinycloud:encryption:did:[^/]+\/secrets(?:\/|$)/.test(path);
+}
+
 /**
  * The built-in Share publishing decrypt entry names the approving account's
  * `default/share/` encryption prefix before owner resolution.

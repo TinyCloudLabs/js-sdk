@@ -1,5 +1,5 @@
 import { parseSecretCatalogKey, secretKeyPath } from "@tinycloud/sdk-services";
-import { formatKeyResource, formatPrefixResource } from "@tinycloud/sdk-services/encryption/resource";
+import { formatKeyResource } from "@tinycloud/sdk-services/encryption/resource";
 
 const VAULT_PREFIX = "vault/secrets/";
 
@@ -21,7 +21,7 @@ export function secretKeyResourceForVaultPath(networkId: string, vaultPath: stri
   return formatKeyResource(networkId, keyPath);
 }
 
-/** The owner's whole `secrets/` key prefix on `networkId`: requested only by an owner `tc secrets migrate`. */
-export function secretsKeyPrefixResource(networkId: string): string {
-  return formatPrefixResource(networkId, "secrets");
+/** The exact key resource of one secret key path (`secrets/…`) on `networkId`. */
+export function secretKeyResource(networkId: string, keyPath: string): string {
+  return formatKeyResource(networkId, keyPath);
 }

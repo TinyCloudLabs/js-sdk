@@ -127,19 +127,25 @@ test("an approved escalation authorizes secrets get in the same process and in a
     else Reflect.deleteProperty(process.stderr, "isTTY");
   }
 
-  // One approval, then the immediate canonical retry read the value.
-  expect(acquisitions).toBe(1);
+  // Two approvals (the secret's own key, then the network root for a secret in the older format), then the
+  // immediate canonical retry read the value.
+  expect(acquisitions).toBe(2);
   expect(JSON.parse(stdout)).toEqual({ name: SECRET, value: CANARY });
   const stored = await readAdditionalDelegations<{
     delegation: { cid: string; siweProof?: unknown };
     authorityRequest?: { requestId?: unknown };
     authorityRequestAudit?: unknown;
   }>("owner");
-  expect(stored).toHaveLength(1);
-  // The signed proof replay verifies the grant from, and the request binding
+  expect(stored).toHaveLength(2);
+  // The signed proof replay verifies each grant from, and the request binding
   // replay holds a signed-login record to.
-  expect(stored[0]!.delegation.siweProof).toEqual({ siwe: expect.any(String), signature: expect.any(String) });
-  expect(stored[0]!.authorityRequest?.requestId).toBe(`cli-grant:${stored[0]!.delegation.cid}`);
+  for (const record of stored) {
+    expect(record.delegation.siweProof).toEqual({ siwe: expect.any(String), signature: expect.any(String) });
+    expect(record.authorityRequest?.requestId).toBe(`cli-grant:${record.delegation.cid}`);
+  }
+  // The root grant (decrypt only, no KV) is the one copied stale below; the key grant carries the KV read.
+  const rootGrant = stored.find((record) => !JSON.stringify(record).includes("tinycloud.kv"))!;
+  expect(rootGrant).toBeDefined();
 
   // A new process has only the stored grant; it must replay it, not ask again.
   const freshRead = async () => {
@@ -190,18 +196,18 @@ test("an approved escalation authorizes secrets get in the same process and in a
   listGrant = listRecord;
   // A copy left by an earlier release, with neither its proof nor a binding,
   // is skipped; the read still succeeds and stderr stays machine-readable.
-  const { siweProof: _proof, ...proofless } = stored[0]!.delegation;
-  const { authorityRequest: _binding, authorityRequestAudit: _audit, ...unbound } = stored[0]!;
-  activeGrant = stored[0]!;
+  const { siweProof: _proof, ...proofless } = rootGrant.delegation;
+  const { authorityRequest: _binding, authorityRequestAudit: _audit, ...unbound } = rootGrant;
+  activeGrants = stored;
   staleGrant = { ...unbound, delegation: proofless };
-  await writeJsonAtomic(additionalDelegationsPath("owner"), [activeGrant, listGrant, staleGrant]);
+  await writeJsonAtomic(additionalDelegationsPath("owner"), [...activeGrants, listGrant, staleGrant]);
   const upgraded = await freshRead();
   expect(upgraded.exitCode).toBe(0);
   expect(JSON.parse(upgraded.stdout)).toEqual({ name: SECRET, value: CANARY });
   expect(JSON.parse(upgraded.stderr)).toEqual({
-    warnings: [{ code: "STORED_GRANT_SKIPPED", reason: "proof_missing", grantCid: stored[0]!.delegation.cid }],
+    warnings: [{ code: "STORED_GRANT_SKIPPED", reason: "proof_missing", grantCid: rootGrant.delegation.cid }],
   });
-  staleGrantCid = stored[0]!.delegation.cid;
+  staleGrantCid = rootGrant.delegation.cid;
 });
 
 // Set by the test above, which leaves a stale copy of the grant beside the real one.
@@ -211,7 +217,7 @@ type TestGrantRecord = {
   authorityRequest?: { requestId?: unknown };
   authorityRequestAudit?: unknown;
 };
-let activeGrant: TestGrantRecord;
+let activeGrants: TestGrantRecord[];
 let staleGrant: TestGrantRecord;
 let listGrant: TestGrantRecord;
 const staleWarning = () => ({ code: "STORED_GRANT_SKIPPED", reason: "proof_missing", grantCid: staleGrantCid });
@@ -330,8 +336,8 @@ test.each(cliRuntimes)("under %s, fresh KV get and secrets list succeed with one
 }, 30_000);
 
 test("an approval after a refused replay merges canonical and CLI warnings at maximum multiplicity", async () => {
-  const malformedOne = { ...activeGrant, delegation: { ...activeGrant.delegation, cid: "free-text-cid-one" } };
-  const malformedTwo = { ...activeGrant, delegation: { ...activeGrant.delegation, cid: "free-text-cid-two" } };
+  const malformedOne = { ...activeGrants[0]!, delegation: { ...activeGrants[0]!.delegation, cid: "free-text-cid-one" } };
+  const malformedTwo = { ...activeGrants[0]!, delegation: { ...activeGrants[0]!.delegation, cid: "free-text-cid-two" } };
   await writeJsonAtomic(additionalDelegationsPath("owner"), [staleGrant, malformedOne, malformedTwo]);
   const openKey = openKeyDelegate({
     wasm, signer: new PrivateKeySigner(hermetic.ownerPrivateKey), sessionKey, sessionDid,
@@ -360,9 +366,9 @@ test("an approval after a refused replay merges canonical and CLI warnings at ma
     err.write = previousErr;
     if (stderrTTY) Object.defineProperty(process.stderr, "isTTY", stderrTTY);
     else Reflect.deleteProperty(process.stderr, "isTTY");
-    await writeJsonAtomic(additionalDelegationsPath("owner"), [activeGrant, listGrant, staleGrant]);
+    await writeJsonAtomic(additionalDelegationsPath("owner"), [...activeGrants, listGrant, staleGrant]);
   }
-  expect(acquisitions).toBe(1);
+  expect(acquisitions).toBe(2);
   expect(JSON.parse(stdout)).toEqual({ name: SECRET, value: CANARY });
   expect(JSON.parse(stderr)).toEqual({ warnings: [
     staleWarning(),

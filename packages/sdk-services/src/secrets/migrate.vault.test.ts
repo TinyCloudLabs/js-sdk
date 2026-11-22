@@ -183,4 +183,28 @@ describe("migrateSecrets on a vault", () => {
     expect(h.stored(SCOPED)).toMatchObject({ v: 1 });
     expect(h.raw("secrets/MISSING_KEY")).toBeUndefined();
   });
+
+  test("asks the caller once for exactly the selected secrets' own keys, before anything moves; a dry run never asks", async () => {
+    const h = seeded();
+    const asked: (readonly string[])[] = [];
+    const authorizeKeys = async (keyPaths: readonly string[]) => {
+      expect(h.calls.puts).toBe(0);
+      asked.push(keyPaths);
+    };
+
+    await migrateSecrets(h.secrets, { dryRun: true, authorizeKeys });
+    expect(asked).toEqual([]);
+
+    await migrateSecrets(h.secrets, { scope: "my-app", authorizeKeys });
+    expect(asked).toEqual([["secrets/scoped/my-app/other_key"]]);
+  });
+
+  test("a refused key approval stops the migration before any write", async () => {
+    const h = seeded();
+    const before = [API_KEY, SCOPED].map(h.raw);
+
+    await expect(migrateSecrets(h.secrets, { authorizeKeys: async () => { throw new Error("refused"); } })).rejects.toThrow("refused");
+    expect([API_KEY, SCOPED].map(h.raw)).toEqual(before);
+    expect(h.calls.puts).toBe(0);
+  });
 });

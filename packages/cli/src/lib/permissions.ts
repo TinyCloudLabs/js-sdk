@@ -43,7 +43,7 @@ import { ProfileManager } from "../config/profiles.js";
 import { CLIError } from "../output/errors.js";
 import { ExitCode } from "../config/constants.js";
 import { resolveSpaceUri } from "./space.js";
-import { deviceRefusal, deviceRefusalMessage, isDeviceDefaultDecrypt, isRawEncryptionPermission, isSharePublishingPrefixDecrypt } from "./raw-encryption.js";
+import { deviceRefusal, deviceRefusalMessage, isDeviceDefaultDecrypt, isRawEncryptionPermission, isSecretsKeyResource, isSharePublishingPrefixDecrypt } from "./raw-encryption.js";
 import { canonicalOwnerDid } from "./owner-did.js";
 import { assertNoCaveatLimits } from "./caveat-refusal.js";
 import { SHARE_PUBLISHING_MANIFEST, SHARE_PUBLISHING_MANIFEST_REF } from "../share/publishing-manifest.js";
@@ -711,7 +711,9 @@ export async function resolvePermissionSpaces(
     if (isRawEncryptionPermission({ service, path: entry.path })) {
       // A network URN is never prefixed; send OpenKey the contract shape.
       const { skipPrefix: _skipPrefix, ...raw } = entry;
-      resolved.push({ ...raw, service, space: ENCRYPTION_MANIFEST_SPACE, actions });
+      // A `secrets/` key is checked as a manifest's is: one secret's exact key, never a prefix (TC-3284).
+      const checked = isSecretsKeyResource(entry.path) ? rawEncryptionEntry(entry.path, actions) : { path: entry.path, actions };
+      resolved.push({ ...raw, service, space: ENCRYPTION_MANIFEST_SPACE, ...checked });
       continue;
     }
     // The built-in Share manifest's default/share/ decrypt is a raw encryption prefix,
