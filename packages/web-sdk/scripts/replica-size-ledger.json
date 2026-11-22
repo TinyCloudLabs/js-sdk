@@ -3453,5 +3453,23 @@
       "ceiling": { "index.mjs": 1530053, "index.cjs": 1462997 }
     },
     "reason": "TinyCloudNode takes a share link's host as the destination when the owner has no registry record and the host is a known TinyCloud node (SharingService receivedHostHintTransport, isKnownTinyCloudNode); node-sdk is bundled into the web-sdk root. Canonical Node 22/Bun 1.3.14 CI on #1114 (d648dd28, master cb3edeab) measured index.mjs 1530053 and index.cjs 1462997 gzip -9 bytes: +195 and +148 over the TC-2490 ceilings 1529858 and 1462849. No other ceiling moves. Details: TC-3661"
+  },
+  "tc3522LeaseAskRoot": {
+    "label": "a renewed session delegates up to the end the node renewed it to (TC-3522)",
+    "ruling": "size-ruling: TC-3522 row tc3522LeaseAskRoot index.mjs 1530103 (+50), index.cjs 1463084 (+87) gzip bytes over the tc3661 ceilings, CI's canonical figure, within the ruled +100 B / +100 B. Details: TC-3522",
+    "base": "628be3c4bd1c633bb7f676f6c32c761cf8b596df",
+    "sourceCommits": ["e4913f37af9b5fef23f6874895a160bae5d08ee8"],
+    "canonicalCI": {
+      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45054824553",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45054824553/job/137307609390",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45054824553/job/137307609492"
+      ]
+    },
+    "root": {
+      "delta": { "index.mjs": 50, "index.cjs": 87 },
+      "ceiling": { "index.mjs": 1530103, "index.cjs": 1463084 }
+    },
+    "reason": "TinyCloudNode.sessionEnd gives the end the node renewed a session to after restoreSessionWithRenewal, and delegateTo and planDelegation delegate up to it; node-sdk is bundled into the web-sdk root. Canonical Node 22/Bun 1.3.14 CI on #1123 (e4913f37, master 628be3c4 merged in) measured index.mjs 1530103 and index.cjs 1463084 gzip -9 bytes: +50 and +87 over the TC-3661 ceilings 1530053 and 1462997. No other ceiling moves. Details: TC-3522"
   }
 }

@@ -2,7 +2,7 @@ import { deserializeDelegation, serializeDelegation } from '@tinycloud/node-sdk'
 import type { AccountDelegationRecord, PermissionEntry, PortableDelegation, TinyCloudNode } from '@tinycloud/node-sdk';
 import { canonicalizeRecapCaveats, parseCanonicalRecapResource, parseSignedCompactUcanAttenuation } from '@tinycloud/sdk-core';
 import { canonicalJson } from './canonical.js';
-import { bareDid, CLOCK_SKEW_MS, siweTimes } from './authority.js';
+import { bareDid, CLOCK_SKEW_MS } from './authority.js';
 import { CourierError } from './errors.js';
 import { cmd } from './program.js';
 import { k, peerReadPermissions } from './keys.js';
@@ -150,7 +150,7 @@ export function peerLimitNote(peer: Pick<StoredPeer, 'inbound'>, now = Date.now(
 
 function parentOf(node: TinyCloudNode, profile: Profile, now: number): { cid: string; end: number } {
   const session = node.restorableSession;
-  const end = session && siweTimes(session.siwe).expiresAt?.getTime();
+  const end = session && node.sessionEnd?.getTime();
   if (!session?.delegationCid || !end || !Number.isFinite(end) || end <= now || node.credentialHolderDid !== profile.courierDid) {
     throw new CourierError('grant-expired', `Courier needs your approval again. Run \`${cmd('init --request')}\` to request it.`);
   }

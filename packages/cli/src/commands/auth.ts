@@ -57,7 +57,8 @@ function resolveOpenKeyHost(profile: ProfileConfig): string {
 import { startAuthFlow } from "../auth/browser-auth.js";
 import { APPROVAL_TIMEOUT_OPTION_DESCRIPTION, parseApprovalTimeout, type ApprovalWait } from "../auth/approval-wait.js";
 import { storedGrantsCovering } from "../auth/covering-grants.js";
-import { approvalCommandIntent, approvalRenewalOf, approvalResultNeedsAck, commitApprovalCommand, completeApprovalResult, pendingApprovalKey, recoverApprovalCommand, trackApprovalResult } from "../auth/approval-request.js";
+import { approvalCommandIntent, approvalRenewalChoiceOf, approvalRenewalOf, approvalResultNeedsAck, commitApprovalCommand, completeApprovalResult, grantLifetimeSeconds, pendingApprovalKey, recoverApprovalCommand, trackApprovalResult } from "../auth/approval-request.js";
+import { parseRenewOption, renewalLeaseFor, withoutDefaultRenewal } from "../auth/renewal-lease.js";
 import {
   acquireDeviceDelegation,
   loginWithDeviceAuthorization,
@@ -657,6 +658,8 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
     .option("--method <method>", "Authentication method: local or openkey")
     .option("--manifest <fileOrBase64>", `Request only this manifest's permissions (one space, plus raw encryption network entries such as a secrets decrypt grant); ${SHARE_PUBLISHING_MANIFEST_REF} covers \`${CLI_NAME} share publish\``)
     .option("--expiry <duration>", `OpenKey session lifetime, e.g. 1h or 7d (with --manifest: default 1h, or 7d for ${SHARE_PUBLISHING_MANIFEST_REF} so Share links keep their 7-day life; device login: at most 30d, default 30d)`)
+    .option("--renew <duration>", "Ask the owner to let this sign-in renew itself for up to this long after approval, for example 30d. Default 30d, or none when the sign-in asks for encryption or secrets permissions. Must be longer than --expiry and at most 365d. The owner can approve it without renewal.")
+    .option("--no-renew", "Ask for a sign-in that ends at its --expiry, with no renewal")
     .option("--owner <did>", "Sign in as this owner (did:pkh:eip155:CHAIN:ADDRESS): OpenKey preselects that key, e.g. one that is not the account's primary key, and an approval by any other identity is refused. With --manifest, also names the secrets owner for a manifest's `secrets` on a profile with no recorded owner")
     .option("--replace-session", "Scoped or device login: replace this profile's live session even though the new scope would narrow, change or shorten it (prefer a new profile)")
     .option("--force", "Replica-enabled OpenKey login: replace the stored session key even when recorded shares could not be checked or hold unexpired shares that need the current key")
@@ -667,6 +670,10 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
       try {
         if (options.device && options.paste) {
           throw new CLIError("INVALID_ARGUMENT", "--device and --paste are mutually exclusive.", ExitCode.USAGE_ERROR);
+        }
+        const renew: number | false | undefined = options.renew === undefined || options.renew === false ? options.renew : parseRenewOption(options.renew);
+        if (typeof renew === "number" && (options.device || options.paste || options.method === "local")) {
+          throw new CLIError("INVALID_ARGUMENT", "--renew needs OpenKey sign-in through an approval link: it can't be used with --device, --paste or --method local.", ExitCode.USAGE_ERROR);
         }
         const scoped = options.device || options.manifest || options.expiry || options.owner;
         if (scoped && options.method === "local") {
@@ -756,7 +763,10 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
         } else if (options.keys !== undefined) {
           method = (profileConfig?.authMethod === "openkey" || options.paste || options.owner) ? "openkey" : "local";
         } else {
-          method = scoped ? "openkey" : await promptAuthMethod();
+          method = scoped || typeof renew === "number" ? "openkey" : await promptAuthMethod();
+        }
+        if (method === "local" && typeof renew === "number") {
+          throw new CLIError("INVALID_ARGUMENT", "--renew needs OpenKey sign-in through an approval link: it can't be used with --method local.", ExitCode.USAGE_ERROR);
         }
         if (method === "openkey" && (options.keys !== undefined || replicationOptions.prefixes.length > 0) &&
           !options.paste && options.popup !== false && !process.stdin.isTTY && !process.stderr.isTTY) {
@@ -793,6 +803,7 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
             persistHost,
             force: options.force === true,
             keys: options.keys,
+            ...(renew === undefined ? {} : { renew }),
             ...(created === undefined ? {} : { createdProfile: { previousDefaultProfile: created.previousDefaultProfile } }),
           });
           if (!preparedCommitted) await persistReplicationLogin(ctx.profile, replicationOptions);
@@ -2789,6 +2800,8 @@ interface OpenKeyLoginOptions {
   createdProfile?: CreatedProfile;
   /** `auth rotate`: the new session key; key.json keeps the old key until the approval is verified and committed. */
   rotation?: { jwk: object; did: string };
+  /** `--renew` / `--no-renew`: the renewal lease in seconds, `false` for none; unset asks for the default lease (see `renewalLeaseFor`). */
+  renew?: number | false;
 }
 
 /** Only a fresh SDK-prepared, OpenKey-signed owner session may establish replica consent. */
@@ -3121,6 +3134,16 @@ export async function refreshOpenKeySession(
   // Only the plain paste link below carries the expiryChangeable opt-in. The prepared logins (replica, --keys) use a
   // prepared handoff and the non-paste login uses a signed approval request; both keep the --expiry ceiling.
   const plainPasteLink = options.paste === true && replication.prefixes.length === 0 && options.keys === undefined;
+  // A renewal lease is asked for only in the signed approval request: a paste link and the prepared hand-offs (--keys,
+  // replication) cannot carry the owner's lease, so they ask for none, and a named --renew there is refused.
+  const approvalRequestPath = options.paste !== true && replication.prefixes.length === 0 && options.keys === undefined;
+  if (!approvalRequestPath && typeof options.renew === "number") {
+    throw new CLIError("INVALID_ARGUMENT", "--renew needs OpenKey sign-in through an approval link: it can't be used with --paste, --keys or --replication-prefix.", ExitCode.USAGE_ERROR);
+  }
+  // Decrypt and secrets are never renewed by default; a named --renew asks for its length (see `withoutDefaultRenewal`).
+  const renewalLeaseSeconds = approvalRequestPath
+    ? renewalLeaseFor(options.renew ?? (withoutDefaultRenewal(permissions ?? ownerLoginPermissions(expectedOwner)) ? false : undefined), grantLifetimeSeconds(openKeyExpiry))
+    : undefined;
   if (permissions !== undefined && options.replaceSession !== true) {
     // An opted-in link lets the user pick the lifetime, so `--expiry` is not a lifetime this login will have. Do not
     // refuse before consent for "shortening" a live session on that guess: the commit re-checks with the signed expiry.
@@ -3173,6 +3196,7 @@ export async function refreshOpenKeySession(
     // The plain paste link lets the user pick the lifetime; the signed result has no `--expiry` ceiling.
     ...(plainPasteLink ? { expiryChangeable: true } : {}),
     ...(permissions && options.reason ? { reason: options.reason } : {}),
+    ...(renewalLeaseSeconds === undefined ? {} : { renewalLeaseSeconds }),
   });
   seen.result = delegationData;
 
@@ -3233,7 +3257,11 @@ export async function refreshOpenKeySession(
   return { delegationData, sanitizedSession, verifiedOwner, ownerKeyPrimary, updatedProfile, declined, legacyNested };
   });
   // Committed: nothing below is a refusal of the owner's approval.
+  const renewalChoice = approvalRenewalChoiceOf(committed.delegationData);
   await completeApprovalResult(profileName, committed.delegationData);
+  if (renewalChoice === "finite") {
+    process.stderr.write(`The owner approved this sign-in without renewal, so it ends at ${String(committed.sanitizedSession.expiresAt)}. Sign in again after that.\n`);
+  }
   warnIfNotPrimaryKey(committed.verifiedOwner, committed.ownerKeyPrimary);
   announceFirstOwner(profileName, expectedOwner, committed.verifiedOwner);
 

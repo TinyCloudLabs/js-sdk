@@ -1433,6 +1433,8 @@ export class TinyCloudNode {
   private wasmBindings: IWasmBindings;
   private sessionManager: ISessionManager;
   private _serviceGraph!: ServiceGraphLifetime;
+  /** The node-verified renewed end recorded by {@link restoreSessionWithRenewal}, for the service graph it restored. */
+  private renewedSessionEnd?: { graph: ServiceGraphLifetime; end: Date };
   private readonly _requestLog?: RequestLog;
   private _serviceContext?: ServiceContext;
   private _kv?: KVService;
@@ -2805,6 +2807,7 @@ export class TinyCloudNode {
       }
       this.assertSessionEpoch(epoch, "Session renewal restore");
       await this.restoreSessionInternal(sessionData, { allowExpired: true, effectiveExpiry: effectiveExpiryDate });
+      this.renewedSessionEnd = { graph: this._serviceGraph, end: effectiveExpiryDate };
     } finally {
       candidate._serviceGraph.retire();
       (candidate.tc as { retireServices?: () => void } | null)?.retireServices?.();
@@ -3027,6 +3030,22 @@ export class TinyCloudNode {
    */
   get restorableSession(): TinyCloudSession | undefined {
     return this.currentTinyCloudSession();
+  }
+
+  /**
+   * When the current session's authority ends: after {@link restoreSessionWithRenewal}, the renewed end the node
+   * reported at that restore; otherwise the signed expiry. Undefined without a session or a signed expiry.
+   * Delegations from this session end by it.
+   */
+  get sessionEnd(): Date | undefined {
+    const session = this.currentTinyCloudSession();
+    return session ? this.sessionAuthorityEnd(session) : undefined;
+  }
+
+  private sessionAuthorityEnd(session: TinyCloudSession): Date | undefined {
+    const signed = extractSiweExpiration(session.siwe);
+    const renewed = this.renewedSessionEnd;
+    return renewed && renewed.graph === this._serviceGraph && signed && renewed.end > signed ? renewed.end : signed;
   }
 
   /** The active, verified replica stamp. Undefined when the replica is refused or the session has ended. */
@@ -8404,7 +8423,7 @@ export class TinyCloudNode {
     if (!session) {
       throw new SessionExpiredError(new Date(0));
     }
-    const sessionExpiry = extractSiweExpiration(session.siwe);
+    const sessionExpiry = this.sessionAuthorityEnd(session);
     if (sessionExpiry !== undefined) {
       const now = Date.now();
       const marginMs = TinyCloudNode.SESSION_EXPIRY_SAFETY_MARGIN_MS;
@@ -8646,7 +8665,7 @@ export class TinyCloudNode {
       return { refused: "SESSION_EXPIRING", expiredAt: new Date(0) };
     }
     const nowMs = Date.now();
-    const sessionExpiry = extractSiweExpiration(session.siwe);
+    const sessionExpiry = this.sessionAuthorityEnd(session);
     if (
       sessionExpiry !== undefined &&
       sessionExpiry.getTime() <= nowMs + TinyCloudNode.SESSION_EXPIRY_SAFETY_MARGIN_MS
