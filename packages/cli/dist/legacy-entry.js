@@ -2928,21 +2928,20 @@ function deviceRefusal(entries) {
   }
   return void 0;
 }
-function deviceRefusalMessage(refused, subject, next) {
+function deviceRefusalMessage(refused, next) {
+  if (refused === "secrets") return DEVICE_SECRETS_REFUSAL;
   const allowed = `The only encryption permission --device can ask for is ${DEVICE_DECRYPT_ALLOWED}.`;
-  if (refused === "secrets") {
-    return `--device can't authorize the secrets space, and ${subject} asks for it. ${allowed} ${next}`;
-  }
   const actions = refused.actions.slice(0, 5).map((action) => safeClipped(action)).join(", ") || "no actions";
   return `--device can't ask for ${actions} on space "${safeClipped(refused.space ?? "")}", path "${safeClipped(refused.path)}"${refused.caveats?.length ? " with extra limits" : ""}. ${allowed} ${next}`;
 }
-var DEVICE_DECRYPT_ALLOWED;
+var DEVICE_DECRYPT_ALLOWED, DEVICE_SECRETS_REFUSAL;
 var init_raw_encryption = __esm({
   "src/lib/raw-encryption.ts"() {
     "use strict";
     init_manifest();
     init_safe_text();
     DEVICE_DECRYPT_ALLOWED = 'tinycloud.encryption/decrypt on the default network (space "default", path "")';
+    DEVICE_SECRETS_REFUSAL = "--device can't read secrets yet. Use tinycloud auth login --paste instead.";
   }
 });
 
@@ -3312,14 +3311,14 @@ async function loadManifestPermissions(source, profile, options = {}) {
   if (options.device && typeof manifest.app_id === "string") {
     const refused = manifest.secrets !== void 0 || manifest.space === "secrets" || typeof manifest.space === "string" && manifest.space.endsWith(":secrets") ? "secrets" : deviceRefusal(appManifestEntries(manifest));
     if (refused !== void 0) {
-      throw new CLIError("DEVICE_AUTH_UNSUPPORTED_SCOPE", deviceRefusalMessage(refused, "this manifest", DEVICE_MANIFEST_NEXT), ExitCode.USAGE_ERROR);
+      throw new CLIError("DEVICE_AUTH_UNSUPPORTED_SCOPE", deviceRefusalMessage(refused, DEVICE_MANIFEST_NEXT), ExitCode.USAGE_ERROR);
     }
   }
   if (typeof manifest.id === "string") {
     const resolved = resolveManifest(manifest);
     const refused = options.device ? deviceRefusal(resolved.resources) : void 0;
     if (refused !== void 0) {
-      throw new CLIError("DEVICE_AUTH_UNSUPPORTED_SCOPE", deviceRefusalMessage(refused, "this manifest", DEVICE_MANIFEST_NEXT), ExitCode.USAGE_ERROR);
+      throw new CLIError("DEVICE_AUTH_UNSUPPORTED_SCOPE", deviceRefusalMessage(refused, DEVICE_MANIFEST_NEXT), ExitCode.USAGE_ERROR);
     }
     return resolvePermissionSpaces(resolved.resources, profile, options);
   }
@@ -19908,7 +19907,7 @@ async function acquireDeviceDelegation(input) {
   if (refused !== void 0) {
     throw new CLIError(
       "DEVICE_AUTH_UNSUPPORTED_SCOPE",
-      deviceRefusalMessage(refused, "this request", "Use another OpenKey approval method for this request."),
+      deviceRefusalMessage(refused, "Use another OpenKey approval method for this request."),
       ExitCode.USAGE_ERROR
     );
   }
@@ -38574,7 +38573,7 @@ async function finishProfileLogout(ctx, options = {}) {
 function registerAuthCommand(program, options) {
   const auth = program.command("auth").description("Authentication management");
   registerAuthGrantsCommand(auth, { openKeyAcquisition: options?.openKeyAcquisition });
-  auth.command("login").description("Authenticate with TinyCloud").option("--device", "Approve on another device (e.g. a phone) through OpenKey device authorization; requires a KV-scoped --manifest (SQL and secret decrypt need browser or --paste login)").option("--paste", "Use manual paste mode; OpenKey return codes expire after 5 minutes").option("--no-popup", "Print the OpenKey URL without opening a browser").option("--method <method>", "Authentication method: local or openkey").option("--manifest <fileOrBase64>", `Request only this manifest's permissions (one space, plus raw encryption network entries such as a secrets decrypt grant); ${SHARE_PUBLISHING_MANIFEST_REF} covers \`${CLI_NAME21} share publish\``).option("--expiry <duration>", `OpenKey session lifetime, e.g. 1h or 7d (with --manifest: default 1h, or 7d for ${SHARE_PUBLISHING_MANIFEST_REF} so Share links keep their 7-day life; device login: at most 30d, default 30d)`).option("--owner <did>", "Sign in as this owner (did:pkh:eip155:CHAIN:ADDRESS): OpenKey preselects that key, e.g. one that is not the account's primary key, and an approval by any other identity is refused. With --manifest, also names the secrets owner for a manifest's `secrets` on a profile with no recorded owner").option("--replace-session", "Scoped or device login: replace this profile's live session even though the new scope would narrow, change or shorten it (prefer a new profile)").option("--force", "Replica-enabled OpenKey login: replace the stored session key even when recorded shares could not be checked or hold unexpired shares that need the current key").option("--keys <folder>", "Also let this sign-in create and use encryption keys in this folder (for example `qa`). The node must support named keys. With OpenKey, the first time on a profile also needs `--owner`.").option("--replication-prefix <prefix>", "Add replication get+sync authority for a folder prefix ending in /, or root (repeatable)", (prefix, values = []) => [...values, prefix]).option("--replication-allow-secrets", "Allow replication of secret material (network-wide decrypt warning)").action(async (options2, cmd) => {
+  auth.command("login").description("Authenticate with TinyCloud").option("--device", "Approve on another device, such as a phone, through OpenKey. Needs a KV-scoped --manifest. It can ask for decrypt on the default network, which covers every encrypted item in it. Secrets and SQL need browser or --paste login.").option("--paste", "Use manual paste mode; OpenKey return codes expire after 5 minutes").option("--no-popup", "Print the OpenKey URL without opening a browser").option("--method <method>", "Authentication method: local or openkey").option("--manifest <fileOrBase64>", `Request only this manifest's permissions (one space, plus raw encryption network entries such as a secrets decrypt grant); ${SHARE_PUBLISHING_MANIFEST_REF} covers \`${CLI_NAME21} share publish\``).option("--expiry <duration>", `OpenKey session lifetime, e.g. 1h or 7d (with --manifest: default 1h, or 7d for ${SHARE_PUBLISHING_MANIFEST_REF} so Share links keep their 7-day life; device login: at most 30d, default 30d)`).option("--owner <did>", "Sign in as this owner (did:pkh:eip155:CHAIN:ADDRESS): OpenKey preselects that key, e.g. one that is not the account's primary key, and an approval by any other identity is refused. With --manifest, also names the secrets owner for a manifest's `secrets` on a profile with no recorded owner").option("--replace-session", "Scoped or device login: replace this profile's live session even though the new scope would narrow, change or shorten it (prefer a new profile)").option("--force", "Replica-enabled OpenKey login: replace the stored session key even when recorded shares could not be checked or hold unexpired shares that need the current key").option("--keys <folder>", "Also let this sign-in create and use encryption keys in this folder (for example `qa`). The node must support named keys. With OpenKey, the first time on a profile also needs `--owner`.").option("--replication-prefix <prefix>", "Add replication get+sync authority for a folder prefix ending in /, or root (repeatable)", (prefix, values = []) => [...values, prefix]).option("--replication-allow-secrets", "Allow replication of secret material (network-wide decrypt warning)").action(async (options2, cmd) => {
     try {
       if (options2.device && options2.paste) {
         throw new CLIError("INVALID_ARGUMENT", "--device and --paste are mutually exclusive.", ExitCode.USAGE_ERROR);
@@ -42576,7 +42575,7 @@ function registerFeedCommand(program) {
   const feed = program.command("feed").description("SQLite agent cards, owner responses and durable runtime handoff").addHelpText("after", `
 Owner connection provisions separate output and response databases and activates one
 bundled delegation. Agent labels and tokens select resources, never confer authority.
-Home's owner grant uses ${FEED_PREFIX2}/ (trailing slash namespace); agent grants
+TinyCloud One's owner grant uses ${FEED_PREFIX2}/ (trailing slash namespace); agent grants
 name exact output, response and response-hook resources. No agent schema or response write.
 
 publish/respond/message/handling read JSON files carrying full card/revision/issuance
@@ -45914,6 +45913,10 @@ function assertOwnerApprovalPossible(profileName2, profile, action, name, missin
 function scopedSecretLoginHint(profileName2) {
   return `Have the owner approve a scoped login whose manifest names the secret: ${CLI_NAME34} --profile ${profileName2} auth login --method openkey --paste --manifest <manifest.json>. Pass the owner's code on stdin, newline-terminated.`;
 }
+function networkGrantNotice(recipientDid, networkName, expiry) {
+  const until = expiry instanceof Date && Number.isFinite(expiry.getTime()) ? `until ${expiry.toISOString().slice(0, 16).replace("T", " ")} UTC` : "for as long as this grant lasts";
+  return `${safeInline(recipientDid)} can read every secret in the "${safeInline(networkName)}" network, including secrets added later, ${until}.`;
+}
 async function runSecretOperationAttempt(label, operation) {
   try {
     return await withSpinner(label, operation);
@@ -46920,7 +46923,7 @@ function registerSecretsCommand(program, openKeyAcquisition) {
       return handleError(error);
     }
   });
-  network.command("grant <recipientDid> [name]").description("Grant decrypt permission for a secrets encryption network").option("--private-key <hex>", "Ethereum private key override (or set TC_PRIVATE_KEY)").action(async (recipientDid, name, options, cmd) => {
+  network.command("grant").argument("<recipientDid>").argument("[name]", "network name (default: default)").description("Let someone read every secret in an encryption network").option("--private-key <hex>", "Ethereum private key override (or set TC_PRIVATE_KEY)").action(async (recipientDid, name, options, cmd) => {
     try {
       const globalOpts = cmd.optsWithGlobals();
       const ctx = await ProfileManager.resolveContext(globalOpts);
@@ -46936,16 +46939,18 @@ function registerSecretsCommand(program, openKeyAcquisition) {
         actions: ["decrypt"]
       };
       const result = await withSpinner(
-        `Granting decrypt permission to ${recipientDid}...`,
+        `Granting ${safeInline(recipientDid)} access to read secrets...`,
         () => node.delegateTo(recipientDid, [permission2])
       );
+      process.stderr.write(networkGrantNotice(recipientDid, networkName, result.delegation.expiry) + "\n");
       outputJson({
         networkId: descriptor.networkId,
         recipientDid,
         cid: result.delegation.cid,
         prompted: result.prompted,
         path: result.delegation.path,
-        actions: result.delegation.actions
+        actions: result.delegation.actions,
+        scope: "whole-network"
       });
     } catch (error) {
       return handleError(error);
