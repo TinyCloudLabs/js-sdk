@@ -3886,21 +3886,21 @@ export const approvedTc3704OpenKeyPromptRoot: LogoutRatchet = {
 /** The exact TC-3731 manifest owner token root allowance from canonical CI. */
 export const approvedTc3731ManifestOwnerRoot: LogoutRatchet = {
   "label": "a manifest permission path can hold the token {owner} (TC-3731)",
-  "ruling": "size-ruling: TC-3731 row tc3731ManifestOwnerRoot index.mjs 1534495 (+580), index.cjs 1466054 (+488) gzip bytes over the tc3704OpenKeyPromptRoot ceilings, CI's canonical figure. Details: TC-3731",
+  "ruling": "size-ruling: TC-3731 row tc3731ManifestOwnerRoot index.mjs 1534530 (+615), index.cjs 1466077 (+511) gzip bytes over the tc3704OpenKeyPromptRoot ceilings, CI's canonical figure (2026-11-22). Details: TC-3731",
   "base": "895bfdc72d6d4e70f5bac72f39b373e2195e7dcd",
   "sourceCommits": ["a877975473564b71c9999c885b353e10220a2924"],
   "canonicalCI": {
-    "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44959865721",
+    "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45078405861",
     "jobs": [
-      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44959865721/job/137016147784",
-      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44959865721/job/137016147621"
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45078405861/job/137380725081",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45078405861/job/137380725327"
     ]
   },
   "root": {
-    "delta": { "index.mjs": 580, "index.cjs": 488 },
-    "ceiling": { "index.mjs": 1534495, "index.cjs": 1466054 }
+    "delta": { "index.mjs": 615, "index.cjs": 511 },
+    "ceiling": { "index.mjs": 1534530, "index.cjs": 1466077 }
   },
-  "reason": "TinyCloudNode and NodeUserAuthorization bind the signer's did:pkh owner into manifest permission paths that hold {owner}, and a restored web session resolves the token with its own address and chain id; sdk-core and node-sdk are bundled into the web-sdk root. Canonical Node 22/Bun 1.3.14 CI on #1121 (a8779754) measured index.mjs 1530438 and index.cjs 1463337 gzip -9 bytes: +580 and +488 over the TC-2490 ceilings 1529858 and 1462849. No other ceiling moves. Details: TC-3731"
+  "reason": "TinyCloudNode and NodeUserAuthorization bind the signer's did:pkh owner into manifest permission paths that hold {owner}, and a restored web session resolves the token with its own address and chain id; sdk-core and node-sdk are bundled into the web-sdk root. Canonical Node 22/Bun 1.3.14 CI on #1121 (c3425b3a, master 895bfdc7 merged in) measured index.mjs 1534530 and index.cjs 1466077 gzip -9 bytes: +615 and +511 over the tc3704OpenKeyPromptRoot ceilings 1533915 and 1465566. No other ceiling moves. Details: TC-3731"
 };
 
 export const approvedLedgerRows: Record<string, unknown> = {
