@@ -30,9 +30,11 @@
   },
   "changesets": [
     "account-index-write-guard",
+    "bootstrap-grants-private",
     "cli-keeps-30-day-login",
     "device-refuses-secrets",
     "generic-app-manifest",
+    "generic-folder-port",
     "permission-prompt-on-behalf-of",
     "secrets-network-grant-whole-network",
     "tc-2490-one-approval",
