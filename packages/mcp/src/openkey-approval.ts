@@ -23,6 +23,7 @@ import {
   type LinkRecord,
   type OpenKeyApprovalRequestV1,
 } from "@tinycloud/share-envelope/links";
+import { boundedResponseBytes } from "@tinycloud/sdk-core/registry-publication";
 import type { PermissionEntry } from "@tinycloud/node-sdk";
 
 /** Where approval requests are stored and where their results are collected. */
@@ -57,6 +58,21 @@ export interface OpenKeyRequestState {
 
 /** A short pause before a link's request ends, so an approval started near its end can finish. */
 const MIN_REQUEST_LIFE_MS = 180_000;
+/** The largest OpenKey result-API reply read; a larger one is read as empty, so its result is refused. */
+export const MAX_RESULT_REPLY_BYTES = 256 * 1024;
+
+/**
+ * `fetch` for OpenKey's result API that reads at most `MAX_RESULT_REPLY_BYTES` of a reply. It carries
+ * the global `fetch`'s own properties so it is a `typeof fetch`.
+ */
+const boundedFetch = Object.assign(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+  const response = await fetch(input, init);
+  const bytes = await boundedResponseBytes(response, MAX_RESULT_REPLY_BYTES);
+  return new Response(bytes === null || bytes.byteLength === 0 ? null : bytes, {
+    status: response.status,
+    statusText: response.statusText,
+  });
+}, globalThis.fetch);
 
 export async function createOpenKeyRequest(
   endpoints: OpenKeyEndpoints,
@@ -66,6 +82,8 @@ export async function createOpenKeyRequest(
     readonly permissions: readonly PermissionEntry[];
     readonly reason: string;
     readonly grantLifetimeSeconds: number;
+    /** Ask the owner for a renewal lease of this many seconds; absent asks for none. */
+    readonly leaseLifetimeSeconds?: number;
     readonly expiresAt: Date;
   },
 ): Promise<OpenKeyRequestState> {
@@ -82,6 +100,9 @@ export async function createOpenKeyRequest(
     reason: input.reason,
     grantLifetimeSeconds: input.grantLifetimeSeconds,
     resultEncryptionPublicJwk: relay.publicJwk,
+    ...(input.leaseLifetimeSeconds === undefined
+      ? {}
+      : { renewal: { version: 1, leaseLifetimeSeconds: input.leaseLifetimeSeconds } }),
   };
   const expiresAt = new Date(Math.max(input.expiresAt.getTime(), Date.now() + MIN_REQUEST_LIFE_MS));
   const created = await createApprovalRequest({
@@ -122,14 +143,14 @@ export async function collectOpenKeyResult(
 ): Promise<OpenKeyCollection> {
   const requester = requesterState(state, jwk);
   if (state.resultRef === undefined || state.resultExpiresAt === undefined) {
-    const discovered = await discoverApprovalResult(requester, { timeoutMs });
+    const discovered = await discoverApprovalResult(requester, { timeoutMs, fetch: boundedFetch });
     if (discovered.status === "pending") return discovered;
     return { status: "discovered", resultRef: discovered.resultRef, resultExpiresAt: discovered.expiresAt };
   }
   const relay = await fetchApprovalResult(
     requester,
     { resultRef: state.resultRef, expiresAt: state.resultExpiresAt },
-    { timeoutMs },
+    { timeoutMs, fetch: boundedFetch },
   );
   const opened = await openRelayResult(relay, state.requestId, state.relayPrivateKey);
   return {
@@ -149,7 +170,7 @@ export async function ackOpenKeyResult(
   timeoutMs: number,
 ): Promise<void> {
   if (state.resultRef === undefined) return;
-  await ackApprovalResult(requesterState(state, jwk), state.resultRef, state.ackId, { timeoutMs });
+  await ackApprovalResult(requesterState(state, jwk), state.resultRef, state.ackId, { timeoutMs, fetch: boundedFetch });
 }
 
 /** Parse a delegation lifetime such as `30d`, `1h` or `90s` into seconds. */

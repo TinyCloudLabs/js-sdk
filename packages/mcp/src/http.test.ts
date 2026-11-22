@@ -1,6 +1,6 @@
 import "../../operations/test-support/test-bootstrap.mjs";
 import { afterEach, expect, spyOn, test } from "bun:test";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -587,6 +587,11 @@ test("an address no assistant was given is not a resource", async () => {
   for (const path of ["/gemini/mcp", "/.well-known/oauth-protected-resource/gemini/mcp", "/claude", "/claude/mcp/extra"]) {
     expect((await app.fetch(request(path, { method: path.endsWith("/mcp") ? "POST" : "GET" }))).status, path).toBe(404);
   }
+  // Approval results are collected from OpenKey; no address receives them.
+  for (const prefix of ["", "/chatgpt", "/claude", "/grok", "/muse"]) {
+    const path = `${prefix}/connect/callback`;
+    expect((await app.fetch(request(path, { method: "POST", body: "{}" }))).status, path).toBe(404);
+  }
 });
 
 test("invalid browser approvals return an inert page without reflecting state", async () => {
@@ -705,6 +710,10 @@ test("a refused approval names its stage and code without echoing the approval",
     expect(opened.status).toBe(302);
     const { id } = await openkey.approve(opened.headers.get("location")!, delegation, { ownerDid: requester });
     outcomes.push(await openkey.delivery(id));
+    await expect(access(join(store.tenantStateRoot("openkey-user-a"), ".tinycloud/profiles/agent/session.json")))
+      .rejects.toThrow();
+    expect(openkey.acknowledged(id)).toBe(false);
+    expect(openkey.fetches(id)).toBe(1);
   }
 
   expect(outcomes).toEqual([

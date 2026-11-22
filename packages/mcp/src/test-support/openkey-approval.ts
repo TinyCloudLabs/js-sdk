@@ -1,13 +1,19 @@
-import { createCipheriv, createECDH, createHmac, randomBytes } from "node:crypto";
+import { createCipheriv, createECDH, createHash, createHmac, createPublicKey, generateKeyPairSync, randomBytes, verify } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import {
+  APPROVAL_RESULT_CLIENT_ID,
+  linkIssuerPublicKey,
   openLinkRecord,
   parseLink,
+  type ApprovalRenewal,
   type LinkRecord,
   type OpenKeyApprovalRequestV1,
 } from "@tinycloud/share-envelope/links";
+import { didKeyFromEd25519PublicKey } from "@tinycloud/share-envelope";
+import { parseSignedSiweCacao } from "@tinycloud/sdk-core";
+import { MAX_RESULT_REPLY_BYTES } from "../openkey-approval.js";
 import {
   NodeWasmBindings,
   PrivateKeySigner,
@@ -132,6 +138,101 @@ export async function openKeyDelegation(options: {
   };
 }
 
+/** The renewer a node advertises at `/.well-known/tinycloud/node-keys`. */
+export interface RenewerIdentity {
+  readonly nodeDid: string;
+  readonly renewerDid: string;
+  readonly renewerPublicKey: string;
+  readonly renewerEpoch: number;
+}
+
+/** A fresh renewer key at `renewerEpoch`, as a node advertises it. */
+export function renewerIdentity(renewerEpoch = 0): RenewerIdentity {
+  const x = generateKeyPairSync("ed25519").publicKey.export({ format: "jwk" }).x!;
+  const renewerDid = didKeyFromEd25519PublicKey(Buffer.from(x, "base64url"));
+  return { nodeDid: renewerDid, renewerDid, renewerPublicKey: x, renewerEpoch };
+}
+
+/**
+ * The renewal OpenKey returns with a leased approval: a lease `privateKey`
+ * signs that lets `identity`'s renewer renew `original` for `lifetimeSeconds`.
+ */
+export async function ownerRenewalLease(options: {
+  readonly privateKey: string;
+  readonly original: Record<string, unknown>;
+  readonly identity: RenewerIdentity;
+  readonly lifetimeSeconds: number;
+}): Promise<ApprovalRenewal> {
+  const signer = new PrivateKeySigner(options.privateKey);
+  const address = await signer.getAddress();
+  const chainId = await signer.getChainId();
+  const issuedAt = new Date(Date.now() - 1000).toISOString();
+  const end = new Date(Date.now() + options.lifetimeSeconds * 1000 - 60_000);
+  end.setUTCMilliseconds(0);
+  const expiresAt = end.toISOString();
+  const resource = `urn:cid:${String(options.original.delegationCid)}`;
+  const recap = `urn:recap:${Buffer.from(JSON.stringify({ att: { [resource]: { "tinycloud.delegation/renew": [{}] } }, prf: [] })).toString("base64url")}`;
+  const statement = "I further authorize the stated URI to perform the following actions on my behalf:" +
+    ` (1) 'tinycloud.delegation': 'renew' for '${resource}'.`;
+  // The EIP-4361 text the CACAO payload below reconstructs to.
+  const message = [
+    `localhost wants you to sign in with your Ethereum account:\n${address}\n\n${statement}\n`,
+    `URI: ${options.identity.renewerDid}`,
+    "Version: 1",
+    `Chain ID: ${chainId}`,
+    "Nonce: 12345678",
+    `Issued At: ${issuedAt}`,
+    `Expiration Time: ${expiresAt}`,
+    `Resources:\n- ${recap}`,
+  ].join("\n");
+  const signature = await signer.signMessage(message);
+  const leaseAuthorization = canonicalCbor({
+    h: { t: "eip4361" },
+    p: {
+      domain: "localhost", iss: `did:pkh:eip155:${chainId}:${address}`, aud: options.identity.renewerDid, version: 1,
+      nonce: "12345678", iat: issuedAt, exp: expiresAt, statement, resources: [recap],
+    },
+    s: { t: "eip191", s: Buffer.from(signature.slice(2), "hex") },
+  }).toString("base64url");
+  const lease = await parseSignedSiweCacao(leaseAuthorization);
+  return {
+    version: 1,
+    approvedAt: new Date(Date.now() - 500).toISOString(),
+    approvedLeaseLifetimeSeconds: options.lifetimeSeconds,
+    receipt: {
+      originalCid: String(options.original.delegationCid),
+      leaseCid: lease.cid,
+      leaseAuthorization,
+      leaseExpiresAt: expiresAt,
+      leaseGeneration: 1,
+      nodeIdentity: { ...options.identity },
+    },
+  };
+}
+
+/** Canonical DAG-CBOR for the strings, small integers, byte strings, arrays and maps a CACAO holds. */
+function canonicalCbor(value: unknown): Buffer {
+  const head = (major: number, length: number): Buffer => {
+    if (length < 24) return Buffer.from([(major << 5) | length]);
+    if (length < 0x100) return Buffer.from([(major << 5) | 24, length]);
+    const bytes = Buffer.alloc(length < 0x10000 ? 3 : 5);
+    bytes[0] = (major << 5) | (length < 0x10000 ? 25 : 26);
+    if (length < 0x10000) bytes.writeUInt16BE(length, 1); else bytes.writeUInt32BE(length, 1);
+    return bytes;
+  };
+  if (typeof value === "number") return head(0, value);
+  if (typeof value === "string") {
+    const bytes = Buffer.from(value, "utf8");
+    return Buffer.concat([head(3, bytes.length), bytes]);
+  }
+  if (value instanceof Uint8Array) return Buffer.concat([head(2, value.length), value]);
+  if (Array.isArray(value)) return Buffer.concat([head(4, value.length), ...value.map(canonicalCbor)]);
+  if (typeof value !== "object" || value === null) throw new Error("Unsupported CBOR value.");
+  const entries = Object.entries(value).sort(([left], [right]) =>
+    left.length - right.length || (left < right ? -1 : left > right ? 1 : 0));
+  return Buffer.concat([head(5, entries.length), ...entries.flatMap(([key, item]) => [canonicalCbor(key), canonicalCbor(item)])]);
+}
+
 /**
  * Approve a request the way OpenKey does: sign exactly the requested
  * permissions, all in one space, which OpenKey re-derives from the signer's
@@ -195,6 +296,10 @@ export class FakeOpenKey {
   readonly diagnostics: string[] = [];
   /** HTTP status the links API answers a create with; 201 stores it. */
   linksStatus = 201;
+  /** How the result API replies to a fetch: the sealed result, cut short, or padded past the server's bound. */
+  resultReply: "sealed" | "truncated" | "oversize" = "sealed";
+  /** How long every result-API reply is held back; an aborted request gets none. */
+  replyDelayMs = 0;
   readonly #records = new Map<string, LinkRecord>();
   readonly #results = new Map<string, StoredResult>();
   readonly #byRef = new Map<string, { readonly requestId: string; readonly bodyCid: string }>();
@@ -249,11 +354,13 @@ export class FakeOpenKey {
    * Approve a request with `delegation`, sealing the result to the request's
    * relay key. `ownerDid` is the owner OpenKey names; it defaults to the
    * delegation's signer. A string `delegation` stands for a malformed result.
+   * For a request that asks for a renewal lease, `renewal` is the approved
+   * lease; without it the owner chose a finite grant.
    */
   async approve(
     link: string | URL,
     delegation: Record<string, unknown> | string,
-    options: { readonly ownerDid?: string } = {},
+    options: { readonly ownerDid?: string; readonly renewal?: ApprovalRenewal } = {},
   ): Promise<StoredApprovalRequest> {
     const stored = await this.requestFor(link);
     this.#marks.set(stored.id, this.diagnostics.length);
@@ -270,6 +377,11 @@ export class FakeOpenKey {
       ownerDid: owner,
       delegationExpiresAt: new Date(expiry).toISOString(),
       delegation,
+      ...(request.renewal === undefined
+        ? {}
+        : options.renewal === undefined
+          ? { renewalChoice: "finite" }
+          : { renewalChoice: "leased", renewal: options.renewal }),
     });
     const resultRef = randomBytes(24).toString("base64url");
     this.#results.set(stored.id, {
@@ -333,15 +445,17 @@ export class FakeOpenKey {
       this.#records.set(id, record);
       return Response.json({ id, expiresAt: record.header.expiresAt }, { status: 201 });
     }
-    if (request.headers.get("openkey-session-proof") === null || body === null) {
-      return Response.json({ code: "invalid_proof" }, { status: 401 });
-    }
+    if (body === null) return Response.json({ code: "invalid_request" }, { status: 400 });
+    await this.#holdReply(request.signal);
     const discover = /^\/api\/approval-requests\/([a-z2-7]{26})\/result$/.exec(url.pathname);
     if (discover !== null) {
       const requestId = discover[1]!;
       const record = this.#records.get(requestId);
       if (record === undefined || body.bodyCid !== record.header.bodyCid) {
         return Response.json({ code: "not_found" }, { status: 404 });
+      }
+      if (!sessionProofValid(request, record, ["discover", requestId, record.header.bodyCid, "", ""])) {
+        return Response.json({ code: "invalid_proof" }, { status: 401 });
       }
       const result = this.#results.get(requestId);
       if (result === undefined) return new Response(null, { status: 202 });
@@ -353,16 +467,27 @@ export class FakeOpenKey {
     if (action === null || owner === undefined || body.requestId !== owner.requestId || body.bodyCid !== owner.bodyCid) {
       return Response.json({ code: "not_found" }, { status: 404 });
     }
+    const ackId = action[2] === "ack" && typeof body.ackId === "string" ? body.ackId : "";
+    const record = this.#records.get(owner.requestId)!;
+    if (!sessionProofValid(request, record, [action[2]!, owner.requestId, owner.bodyCid, action[1]!, ackId])) {
+      return Response.json({ code: "invalid_proof" }, { status: 401 });
+    }
     const result = this.#results.get(owner.requestId)!;
     if (Date.parse(result.expiresAt) <= Date.now()) return Response.json({ code: "expired_result" }, { status: 410 });
     if (action[2] === "fetch") {
-      return Response.json({
+      const reply = {
         requestId: owner.requestId,
         bodyCid: owner.bodyCid,
         resultRef: result.resultRef,
         expiresAt: result.expiresAt,
         relay: result.relay,
-      });
+      };
+      if (this.resultReply === "truncated") {
+        return new Response(JSON.stringify(reply).slice(0, -16), { headers: { "content-type": "application/json" } });
+      }
+      // An extra field the reply schema ignores: only the size bound refuses this reply.
+      if (this.resultReply === "oversize") return Response.json({ ...reply, padding: "x".repeat(MAX_RESULT_REPLY_BYTES) });
+      return Response.json(reply);
     }
     if (typeof body.ackId !== "string") return Response.json({ code: "invalid_request" }, { status: 400 });
     if (result.ackId !== undefined && result.ackId !== body.ackId) {
@@ -371,6 +496,39 @@ export class FakeOpenKey {
     result.ackId = body.ackId;
     return Response.json({ ackId: body.ackId, status: "acknowledged" });
   }
+
+  async #holdReply(signal: AbortSignal): Promise<void> {
+    if (this.replyDelayMs === 0) return;
+    const { promise, resolve, reject } = Promise.withResolvers<void>();
+    const timer = setTimeout(resolve, this.replyDelayMs);
+    signal.addEventListener("abort", () => {
+      clearTimeout(timer);
+      reject(signal.reason);
+    }, { once: true });
+    await promise;
+  }
+}
+
+/**
+ * Whether a request carries the `OpenKey-Session-Proof` the request's issuer key signed for this exact
+ * URL and binding (`[action, requestId, bodyCid, resultRef, ackId]`), as OpenKey checks it.
+ */
+function sessionProofValid(request: Request, record: LinkRecord, binding: readonly string[]): boolean {
+  const [header, payload, signature] = (request.headers.get("openkey-session-proof") ?? "").split(".");
+  const issuerKey = linkIssuerPublicKey(record.header.issuer);
+  if (!header || !payload || !signature || issuerKey === null) return false;
+  const publicKey = createPublicKey({
+    key: { kty: "OKP", crv: "Ed25519", x: Buffer.from(issuerKey).toString("base64url") },
+    format: "jwk",
+  });
+  if (!verify(null, Buffer.from(`${header}.${payload}`), publicKey, Buffer.from(signature, "base64url"))) return false;
+  const claims: unknown = JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
+  if (typeof claims !== "object" || claims === null) return false;
+  const url = new URL(request.url);
+  return Reflect.get(claims, "client_id") === APPROVAL_RESULT_CLIENT_ID &&
+    Reflect.get(claims, "htm") === "POST" &&
+    Reflect.get(claims, "htu") === `${url.origin}${url.pathname}` &&
+    Reflect.get(claims, "cred_hash") === createHash("sha256").update(JSON.stringify(binding)).digest("base64url");
 }
 
 /** Install a fake OpenKey for the caller's test; `restore` it when the test ends. */
