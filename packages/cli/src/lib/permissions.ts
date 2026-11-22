@@ -496,7 +496,7 @@ export async function loadManifestPermissions(
       ? "secrets"
       : deviceRefusal(appManifestEntries(manifest));
     if (refused !== undefined) {
-      throw new CLIError("DEVICE_AUTH_UNSUPPORTED_SCOPE", deviceRefusalMessage(refused, "this manifest", DEVICE_MANIFEST_NEXT), ExitCode.USAGE_ERROR);
+      throw new CLIError("DEVICE_AUTH_UNSUPPORTED_SCOPE", deviceRefusalMessage(refused, DEVICE_MANIFEST_NEXT), ExitCode.USAGE_ERROR);
     }
   }
 
@@ -504,7 +504,7 @@ export async function loadManifestPermissions(
     const resolved = resolveManifest(manifest as Parameters<typeof resolveManifest>[0]);
     const refused = options.device ? deviceRefusal(resolved.resources) : undefined;
     if (refused !== undefined) {
-      throw new CLIError("DEVICE_AUTH_UNSUPPORTED_SCOPE", deviceRefusalMessage(refused, "this manifest", DEVICE_MANIFEST_NEXT), ExitCode.USAGE_ERROR);
+      throw new CLIError("DEVICE_AUTH_UNSUPPORTED_SCOPE", deviceRefusalMessage(refused, DEVICE_MANIFEST_NEXT), ExitCode.USAGE_ERROR);
     }
     return resolvePermissionSpaces(resolved.resources, profile, options);
   }

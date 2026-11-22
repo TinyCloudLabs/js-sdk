@@ -11,9 +11,9 @@ import {
 test("TC-3731 records the exact canonical CI root bytes of #1121 within the ruled +600/+500 cap", () => {
   validateLedger(ledger);
   const row = ledger.tc3731ManifestOwnerRoot;
-  const predecessor = ledger.tc2490OneApprovalRoot;
+  const predecessor = ledger.tc3704OpenKeyPromptRoot;
   expect(row).toEqual(approvedTc3731ManifestOwnerRoot);
-  expect(row.base).toBe("cb3edeab4f66ae2fc7f84243c7b8fdc3a15fc812");
+  expect(row.base).toBe("895bfdc72d6d4e70f5bac72f39b373e2195e7dcd");
   expect(row.canonicalCI).toEqual({
     run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44959865721",
     jobs: [
@@ -22,7 +22,7 @@ test("TC-3731 records the exact canonical CI root bytes of #1121 within the rule
     ],
   });
   expect(row.sourceCommits).toEqual(["a877975473564b71c9999c885b353e10220a2924"]);
-  expect(row.root.ceiling).toEqual({ "index.mjs": 1530438, "index.cjs": 1463337 });
+  expect(row.root.ceiling).toEqual({ "index.mjs": 1534495, "index.cjs": 1466054 });
   expect(row.root.delta).toEqual({ "index.mjs": 580, "index.cjs": 488 });
 
   const cap = { "index.mjs": 600, "index.cjs": 500 } as const;
@@ -42,7 +42,7 @@ test("TC-3731 records the exact canonical CI root bytes of #1121 within the rule
   ]);
 });
 
-test("TC-3731 refuses mutation, removal, or a missing TC-2490 predecessor", () => {
+test("TC-3731 refuses mutation, removal, or a missing TC-3704 predecessor", () => {
   const row = ledger.tc3731ManifestOwnerRoot;
   validateTc3731ManifestOwnerRootTransition(undefined, row);
   validateTc3731ManifestOwnerRootTransition(row, structuredClone(row));
@@ -60,5 +60,5 @@ test("TC-3731 refuses mutation, removal, or a missing TC-2490 predecessor", () =
   }
 
   expect(() => validateTc3731ManifestOwnerRootTransition(row, undefined)).toThrow("TC-3731");
-  expect(() => validateLedger({ ...ledger, tc2490OneApprovalRoot: undefined })).toThrow("TC-3731");
+  expect(() => validateLedger({ ...ledger, tc3704OpenKeyPromptRoot: undefined })).toThrow("TC-3731");
 });

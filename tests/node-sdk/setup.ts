@@ -1,4 +1,4 @@
-import { TinyCloudNode } from "@tinycloud/node-sdk";
+import { TinyCloudNode, ownerFullAccess } from "@tinycloud/node-sdk";
 import { Wallet } from "ethers";
 
 const SERVER_URL = process.env.TC_TEST_SERVER ?? "http://localhost:9000";
@@ -29,7 +29,7 @@ export function createClient(name: string, key?: string): TinyCloudNode {
   return new TinyCloudNode({
     privateKey: k,
     host: SERVER_URL,
-    prefix: `sdk-test-${name}`,
+    ...ownerFullAccess(`sdk-test-${name}`),
     autoCreateSpace: true,
   });
 }

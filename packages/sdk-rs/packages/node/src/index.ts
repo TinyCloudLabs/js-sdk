@@ -17,6 +17,7 @@ export {
   completeSessionSetup,
   validatePersistedSession,
   validateSessionGrant,
+  validateSessionRoot,
   invoke,
   invokeAny,
   computeCid,

@@ -709,7 +709,7 @@ test("signOut() ends the session on the TinyCloudWeb instance", async () => {
     expect(() => tcw.kv).toThrow("Not signed in");
     const stale = await kv.put("notes/b", "after sign-out").catch(() => ({ ok: false }));
     expect(stale.ok).toBe(false);
-    expect(requests.length).toBe(signedInRequests);
+    expect(requests.slice(signedInRequests).filter((url) => !/\/(session\/retire|info)$/.test(url))).toEqual([]);
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -1220,7 +1220,7 @@ test("signOut() cannot retain web authority when node key rotation fails", async
     expect(() => tcw.kv).toThrow("Not signed in");
     const stale = await retainedKv.put("notes/b", "after failed sign-out").catch(() => ({ ok: false }));
     expect(stale.ok).toBe(false);
-    expect(requests.length).toBe(before);
+    expect(requests.slice(before).filter((url) => !/\/(session\/retire|info)$/.test(url))).toEqual([]);
   } finally {
     globalThis.fetch = originalFetch;
   }

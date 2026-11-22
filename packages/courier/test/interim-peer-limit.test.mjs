@@ -103,6 +103,7 @@ function fixture({ inboundLifetime, tipEndsAt = 3 * DAY, parentEndsAt = 40 * DAY
   const node = {
     credentialHolderDid: courierDid,
     restorableSession: { delegationCid: parent.cid, siwe: `courier.test wants you to sign in with your Ethereum account:\n0x1111111111111111111111111111111111111111\n\nCourier renewal test.\n\nURI: did:key:issuer\nVersion: 1\nChain ID: 1\nNonce: abcdefgh\nIssued At: ${new Date(at - DAY).toISOString()}\nExpiration Time: ${new Date(parent.end).toISOString()}` },
+    get sessionEnd() { return new Date(/Expiration Time: (.+)/.exec(this.restorableSession.siwe)[1]); },
     computeDelegationCid: authorization => records.find(item => portable(item, item.cid === 'prior' ? 'old-owner-grant' : parent.cid).delegationHeader.Authorization === authorization)?.cid,
     delegationManager: {
       queryAllIssued: async () => ({ ok: true, data: structuredClone(records) }),
@@ -231,7 +232,16 @@ test('assertSuccessor accepts a shorter successor only when the prior outlives t
   assert.throws(() => assertSuccessor(profile, peer, record('prior', 6, ['old']), record('new', 5, [parent.cid]), parent, now), /safely renew/, 'within the limit, a shorter successor is no renewal');
 });
 
-test('the shorter grant is published once; later ticks only extend', async () => {
+// Signed expiries are whole seconds, so a clock that crosses a second between two ticks would let the second tick extend. Pin it mid-second.
+function pinClockMidSecond(t) {
+  const realNow = Date.now;
+  const pinned = Math.floor(realNow() / 1000) * 1000 + 500;
+  Date.now = () => pinned;
+  t.after(() => { Date.now = realNow; });
+}
+
+test('the shorter grant is published once; later ticks only extend', async (t) => {
+  pinClockMidSecond(t);
   const first = fixture({ inboundLifetime: 7 * DAY, tipEndsAt: 30 * DAY });
   assert.equal((await maintainOutbound(first.node, first.profile, first.peer, first.save, { force: true, manual: true })).state, 'renewed');
   assert.equal(first.counts.published.length, 1);
@@ -290,7 +300,8 @@ test('a signed nbf is bounded: not in the future, lifetime above 0 and at most 3
   assert.equal(peerRenewalLimitMs({ inbound }), sign7, 'expiry before nbf');
 });
 
-test('a later over-long tip is repaired once more, never twice for the same tip', async () => {
+test('a later over-long tip is repaired once more, never twice for the same tip', async (t) => {
+  pinClockMidSecond(t);
   const f = fixture({ inboundLifetime: 7 * DAY, tipEndsAt: 30 * DAY });
   const options = { force: true, manual: true };
   // 1. 7-day peer, 30-day tip: shortened once; the marker names the tip it replaced.

@@ -1,5 +1,78 @@
 # @tinycloud/server
 
+## 2.6.0-beta.7
+
+### Patch Changes
+
+- Updated dependencies [fbdbaa7]
+- Updated dependencies [fbdbaa7]
+  - @tinycloud/node-sdk@3.14.0-beta.8
+  - @tinycloud/sdk-core@3.14.0-beta.8
+
+## 2.6.0-beta.6
+
+### Patch Changes
+
+- Updated dependencies [d382af8]
+  - @tinycloud/node-sdk@3.14.0-beta.7
+  - @tinycloud/sdk-core@3.14.0-beta.7
+
+## 2.6.0-beta.5
+
+### Patch Changes
+
+- Updated dependencies [7d438ee]
+  - @tinycloud/sdk-core@3.14.0-beta.6
+  - @tinycloud/node-sdk@3.14.0-beta.6
+
+## 2.6.0-beta.4
+
+### Minor Changes
+
+- 2cb453f: A sign-in that declares no `manifest`, `capabilityRequest` or `defaultActions` asks only for the app's own folder: KV (get, put, del, list, metadata) and SQL (read, write) under `applications/<app id>/`, plus capabilities read on `applications`, for 7 days. The app id is the sign-in domain reversed (`notes.example.com` → `com.example.notes`), or `node.app` for a Node client without a `domain`. It doesn't get the whole primary space, the secrets vault, account registry entries, the public space or the encryption network, and it logs one console warning per sign-in. `@tinycloud/server`'s `createServerIdentity` without a `manifest` gets the same folder.
+
+  Sessions, app delegations and bootstrap sessions default to 7 days, with or without a manifest. A manifest's `expiry` doesn't set the session length; set `sessionExpirationMs` for a longer session.
+
+  Upgrading: the default was 30 days. Apps that relied on it, including apps with a manifest such as Share's library sign-in, set `sessionExpirationMs` to keep 30 days.
+
+  Owner tools that need every action on their own space pass `...ownerFullAccess(space)` (new, from `@tinycloud/sdk-core` and `@tinycloud/node-sdk`) in the `TinyCloudNode` config; `defaultActions` is a `TinyCloudNode` option.
+
+  A wallet-mode `TinyCloudNode` runs its calls on its own session from the first sign-in: the sessions it signs to set up a new account are used only for that setup, so the manifest bounds what the app can do.
+
+  `createEncryptionNetwork` returns a network that already exists without asking to create it, so calling it for the network account setup created needs no `network.create` in the manifest.
+
+  Details: TC-3443
+
+### Patch Changes
+
+- Updated dependencies [2cb453f]
+  - @tinycloud/sdk-core@3.14.0-beta.5
+  - @tinycloud/node-sdk@3.14.0-beta.5
+
+## 2.5.22-beta.3
+
+### Patch Changes
+
+- Updated dependencies [4e4d845]
+  - @tinycloud/node-sdk@3.14.0-beta.4
+
+## 2.5.22-beta.2
+
+### Patch Changes
+
+- Updated dependencies [628be3c]
+  - @tinycloud/sdk-core@3.14.0-beta.3
+  - @tinycloud/node-sdk@3.14.0-beta.3
+
+## 2.5.22-beta.1
+
+### Patch Changes
+
+- Updated dependencies [18a0e38]
+- Updated dependencies [81884ce]
+  - @tinycloud/sdk-core@3.14.0-beta.2
+  - @tinycloud/node-sdk@3.14.0-beta.2
+
 ## 2.5.22-beta.0
 
 ### Patch Changes
