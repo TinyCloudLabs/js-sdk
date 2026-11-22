@@ -151,14 +151,14 @@ export function verifyRenewalHistory(input: VerifyRenewalHistoryInput): Verified
   for (const entry of history) {
     if (entry.lease_cid !== leaseCid) continue;
     if (stampsByPrevious.size >= MAX_RENEWAL_HISTORY_STAMPS) {
-      throw new Error("Renewal history is missing or too large");
+      throw new RenewalHistoryInvalidError("Renewal history is missing or too large");
     }
     if (stampsByPrevious.has(entry.previous_stamp_cid)) {
-      throw new Error("Renewal history chain is invalid");
+      throw new RenewalHistoryInvalidError("Renewal history chain is invalid");
     }
     stampsByPrevious.set(entry.previous_stamp_cid, entry);
   }
-  if (stampsByPrevious.size === 0) throw new Error("Renewal history is missing or too large");
+  if (stampsByPrevious.size === 0) throw new RenewalNotStampedError();
 
   let previousStampCid = leaseCid;
   let previousGeneration = 0;
@@ -166,7 +166,7 @@ export function verifyRenewalHistory(input: VerifyRenewalHistoryInput): Verified
   let latest: RenewalStampHistoryEntry | undefined;
   while (stampsByPrevious.size > 0) {
     const entry = stampsByPrevious.get(previousStampCid);
-    if (!entry) throw new Error("Renewal history chain is invalid");
+    if (!entry) throw new RenewalHistoryInvalidError("Renewal history chain is invalid");
     stampsByPrevious.delete(previousStampCid);
     if (
       !entry.cid || !Number.isSafeInteger(entry.generation) || entry.generation <= previousGeneration
@@ -175,18 +175,18 @@ export function verifyRenewalHistory(input: VerifyRenewalHistoryInput): Verified
       || entry.new_end > leaseExpiresAt
       || (ancestorEffectiveExpiry !== undefined && entry.new_end > ancestorEffectiveExpiry)
     ) {
-      throw new Error("Renewal history chain is invalid");
+      throw new RenewalHistoryInvalidError("Renewal history chain is invalid");
     }
     const bytes = decodeBase64Url(entry.signed_bytes);
     const signature = decodeBase64Url(entry.signature);
     if (bytes.length === 0 || signature.length !== 64 || stampCid(bytes) !== entry.cid) {
-      throw new Error("Renewal stamp bytes are invalid");
+      throw new RenewalHistoryInvalidError("Renewal stamp bytes are invalid");
     }
     if (!ed25519.verify(signature, bytes, publicKey, { zip215: false })) {
-      throw new Error("Renewal stamp signature is invalid");
+      throw new RenewalHistoryInvalidError("Renewal stamp signature is invalid");
     }
     const outer = record(decodeCanonicalDagCbor(bytes), "Renewal stamp", ["domain", "unsigned"]);
-    if (outer.domain !== STAMP_DOMAIN) throw new Error("Renewal stamp domain is invalid");
+    if (outer.domain !== STAMP_DOMAIN) throw new RenewalHistoryInvalidError("Renewal stamp domain is invalid");
     const unsigned = record(outer.unsigned, "Renewal stamp payload", [
       "type", "newEnd", "nodeDid", "version", "leaseCid", "originalCid",
       "renewerEpoch", "leaseGeneration", "previousStampCid",
@@ -200,7 +200,7 @@ export function verifyRenewalHistory(input: VerifyRenewalHistoryInput): Verified
       || unsigned.leaseGeneration !== entry.generation || unsigned.previousStampCid !== previousStampCid
       || parseCanonicalExpiry(unsigned.newEnd) !== entry.new_end
     ) {
-      throw new Error("Renewal stamp binding is invalid");
+      throw new RenewalHistoryInvalidError("Renewal stamp binding is invalid");
     }
     previousGeneration = entry.generation;
     previousEnd = entry.new_end;
@@ -208,7 +208,8 @@ export function verifyRenewalHistory(input: VerifyRenewalHistoryInput): Verified
     latest = entry;
   }
 
-  if (!latest || latest.new_end <= now) throw new Error("Renewal authority has expired");
+  // The node's latest stamp for this lease has ended: no live renewal remains.
+  if (!latest || latest.new_end <= now) throw new RenewalAuthorityInactiveError();
   return {
     effectiveExpiry: Math.min(latest.new_end, leaseExpiresAt, ancestorEffectiveExpiry ?? Number.MAX_SAFE_INTEGER),
     latestStampCid: latest.cid,
@@ -349,4 +350,19 @@ export const RENEWAL_RENEWER_CHANGED = "RENEWAL_RENEWER_CHANGED";
 export class RenewalRenewerChangedError extends Error {
   readonly code = RENEWAL_RENEWER_CHANGED;
   constructor() { super("Renewal node identity changed"); this.name = "RenewalRenewerChangedError"; }
+}
+/**
+ * The node holds no renewal stamp for this lease yet. Before the grant's signed end that is normal: the node
+ * stamps on its own schedule. Past the signed end, the grant was never renewed.
+ */
+export const RENEWAL_NOT_STAMPED = "RENEWAL_NOT_STAMPED";
+export class RenewalNotStampedError extends Error {
+  readonly code = RENEWAL_NOT_STAMPED;
+  constructor() { super("Node holds no renewal stamp for this lease"); this.name = "RenewalNotStampedError"; }
+}
+/** The node's renewal stamps for this lease do not verify against the lease, the grant and the node's renewer key. */
+export const RENEWAL_HISTORY_INVALID = "RENEWAL_HISTORY_INVALID";
+export class RenewalHistoryInvalidError extends Error {
+  readonly code = RENEWAL_HISTORY_INVALID;
+  constructor(message: string) { super(message); this.name = "RenewalHistoryInvalidError"; }
 }

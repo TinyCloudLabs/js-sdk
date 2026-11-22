@@ -380,6 +380,7 @@ describe("TinyCloudNode renewal lease registration", () => {
     let renewerOnNode = { did: renewerDid, publicKey: renewerPublicKey };
     let status: Record<string, unknown> = { exists: false };
     const statusCids: string[] = [];
+    let statusDown = false;
     const originalFetch = globalThis.fetch;
     const originalNow = Date.now;
     globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -405,6 +406,7 @@ describe("TinyCloudNode renewal lease registration", () => {
         return Response.json({ activated: [proof.spaceId], skipped: [] });
       }
       if (url.pathname === "/delegation/status" && request.method === "POST") {
+        if (statusDown) return new Response("unavailable", { status: 503 });
         const body = await request.json() as { cid?: unknown };
         if (typeof body.cid === "string") statusCids.push(body.cid);
         return Response.json(status);
@@ -493,6 +495,41 @@ describe("TinyCloudNode renewal lease registration", () => {
       expect(node.getRuntimePermissionDelegations()).toEqual([]);
 
       renewerOnNode = { did: renewerDid, publicKey: renewerPublicKey };
+      // Revoked on its own: the node reports it revoked, not expired.
+      status = { ...renewed, status: "revoked", active: false, revoked: true };
+      await expect(activate({ leaseAuthorization })).rejects.toMatchObject({ reason: "expired" });
+      // Past the signed end with no stamp for this lease: the renewal never ran.
+      status = { ...renewed, renewal_history: [] };
+      await expect(activate({ leaseAuthorization })).rejects.toMatchObject({ reason: "expired" });
+      // A stamp the node's renewer did not sign.
+      status = {
+        ...renewed,
+        renewal_history: [{
+          ...renewed.renewal_history[0]!,
+          signature: Buffer.from(ed25519.sign(signedBytes, crypto.getRandomValues(new Uint8Array(32)))).toString("base64url"),
+        }],
+      };
+      await expect(activate({ leaseAuthorization })).rejects.toMatchObject({ reason: "authority_invalid" });
+      // The account grant's lease, swapped onto the scoped record, names another CID.
+      status = renewed;
+      const accountLease = await node.createOwnerDelegation({
+        delegateDid: renewerDid,
+        spaceId: proof.spaceId,
+        expiresAt: new Date(delegation.expiry.getTime() + 4 * 60 * 60_000),
+        permissions: [{
+          service: "tinycloud.delegation",
+          path: `urn:cid:${proof.delegationCid}`,
+          actions: ["tinycloud.delegation/renew"],
+        }],
+      });
+      await expect(activate({ leaseAuthorization: accountLease.delegation.authHeader! }))
+        .rejects.toMatchObject({ reason: "authority_invalid" });
+      // The node cannot answer: an outage, never a refusal.
+      statusDown = true;
+      await expect(activate({ leaseAuthorization })).rejects.toMatchObject({ reason: "activation_unavailable" });
+      statusDown = false;
+      expect(node.getRuntimePermissionDelegations()).toEqual([]);
+
       const activated = await activate({ leaseAuthorization });
       expect(activated.expiry.getTime()).toBe(stampEnd * 1000);
       expect(node.getRuntimePermissionDelegations().map(({ cid, expiry }) => ({ cid, end: expiry.getTime() })))

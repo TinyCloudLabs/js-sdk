@@ -2751,7 +2751,8 @@ export class TinyCloudNode {
       || typeof caveats[0] !== "object" || caveats[0] === null
       || Array.isArray(caveats[0]) || Object.keys(caveats[0]).length !== 0
     ) {
-      throw new Error("Renewal lease does not authorize only this delegation");
+      const { OwnerRenewalMismatchError } = await import("@tinycloud/sdk-core/delegations/renewal-receipt");
+      throw new OwnerRenewalMismatchError("Renewal lease does not authorize only this delegation");
     }
     // The lease names the renewer it was issued to; a node that rotated its renewer never renews it.
     if (lease.audience !== identity.renewerDid) throw new RenewalRenewerChangedError();

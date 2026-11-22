@@ -861,18 +861,27 @@ export async function activateValidatedRuntimeDelegation(
   };
 }
 
-/** node-sdk's coded refusals for a renewal that ended, was stopped, or names a renewer the node no longer runs. */
-const RENEWAL_ENDED: Record<string, true> = {
-  RENEWAL_LEASE_EXPIRED: true,
-  RENEWAL_AUTHORITY_INACTIVE: true,
-  RENEWAL_LEASE_ORIGINAL_EXPIRED: true,
-  RENEWAL_RENEWER_CHANGED: true,
+/**
+ * How node-sdk's coded renewal refusals refuse a grant past its signed end. A
+ * renewal that ended, was stopped, names a renewer the node no longer runs or
+ * was never stamped is `expired`; a lease that does not bind this grant or a
+ * stamp history that does not verify is `authority_invalid`.
+ */
+const RENEWAL_REFUSALS: Record<string, "expired" | "authority_invalid"> = {
+  RENEWAL_LEASE_EXPIRED: "expired",
+  RENEWAL_AUTHORITY_INACTIVE: "expired",
+  RENEWAL_LEASE_ORIGINAL_EXPIRED: "expired",
+  RENEWAL_RENEWER_CHANGED: "expired",
+  RENEWAL_NOT_STAMPED: "expired",
+  RENEWAL_LEASE_MISMATCH: "authority_invalid",
+  RENEWAL_HISTORY_INVALID: "authority_invalid",
 };
 
 /**
  * The end a CACAO grant past its signed expiry has under the owner's renewal
- * lease, from the node's live status and verified renewal stamps. A renewal
- * that ended is `expired`; a node that cannot answer is `activation_unavailable`.
+ * lease, from the node's live status and verified renewal stamps. Coded
+ * refusals map through {@link RENEWAL_REFUSALS}; any other failure, such as an
+ * unreachable node, is `activation_unavailable`.
  */
 async function renewedExpiry(
   node: RuntimeDelegationActivator,
@@ -889,10 +898,14 @@ async function renewedExpiry(
     effectiveSeconds = await node.getDelegationRenewalEffectiveExpiry({ cid, authorization }, renewal.leaseAuthorization);
   } catch (error) {
     const code = typeof error === "object" && error !== null && "code" in error ? error.code : undefined;
-    if (typeof code === "string" && RENEWAL_ENDED[code]) {
-      reject("expired", "Runtime delegation's renewal has ended or was stopped.");
-    }
-    reject("activation_unavailable", error instanceof Error ? error.message : String(error));
+    const refusal = typeof code === "string" ? RENEWAL_REFUSALS[code] : undefined;
+    if (refusal === "expired") reject("expired", "Runtime delegation's renewal has ended or was stopped.");
+    if (refusal === "authority_invalid") reject("authority_invalid", "Runtime delegation's renewal does not verify.");
+    // A node status failure arrives as a coded error record, not an Error.
+    const message = typeof error === "object" && error !== null && "message" in error && typeof error.message === "string"
+      ? error.message
+      : String(error);
+    reject("activation_unavailable", message);
   }
   const end = new Date(effectiveSeconds * 1000);
   if (!(end.getTime() > Date.now())) reject("expired", "Runtime delegation is expired.");
