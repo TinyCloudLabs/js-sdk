@@ -232,7 +232,12 @@ export {
   BOOTSTRAP_COMPLETION_MARKER_VERSION,
   ACCEPTED_MARKER_VERSIONS,
 } from "./TinyCloudNode";
-export { extractSiweExpiration } from "./delegateToHelpers";
+export {
+  extractSiweExpiration,
+  SECRET_KEY_GRANT_DEFAULT_MS,
+  SECRET_KEY_GRANT_MAX_MS,
+  secretKeyGrantExpiryMs,
+} from "./delegateToHelpers";
 export type { OwnerDelegationPermission } from "@tinycloud/sdk-core";
 
 export { AccountService } from "./account/AccountService";

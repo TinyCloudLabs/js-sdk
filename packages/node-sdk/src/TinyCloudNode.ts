@@ -262,7 +262,9 @@ import { DelegatedAccess, type DelegatedEncryptionFactory } from "./DelegatedAcc
 import { WasmKeyProvider } from "./keys/WasmKeyProvider";
 import {
   legacyParamsToPermissionEntries,
+  isSecretKeyEntry,
   resolveExpiryMs,
+  secretKeyGrantExpiryMs,
   extractSiweExpiration,
   wholeSecondExpiry,
 } from "./delegateToHelpers";
@@ -1079,7 +1081,11 @@ function resolveNotBeforeSecs(notBefore: Date | undefined, expiration: Date, now
  * `forceWalletSign`, whose wallet path activates as part of signing.
  */
 export interface DelegateToOptions {
-  /** Override expiry. ms-format string ("7d", "1h") or raw milliseconds. */
+  /**
+   * Override expiry. ms-format string ("7d", "1h") or raw milliseconds. Default 30 d (the session tier). When any entry is
+   * an encryption grant on a secret's key (or keys under `secrets`), the default is 1 h and an expiry over 7 d is capped to
+   * 7 d (TC-3801); the returned `delegation.expiry` is the expiry signed.
+   */
   expiry?: string | number;
   /**
    * Sign the delegation with this not-before (`nbf`), to the whole second, so a delegation can be backdated to cover an
@@ -8028,6 +8034,8 @@ export class TinyCloudNode {
         parseSpaceUri,
         verifySignature: verifyEip191MessageSignature,
         expiryMs: resolveExpiryMs,
+        isSecretKey: isSecretKeyEntry,
+        secretKeyExpiryMs: secretKeyGrantExpiryMs,
         wholeSecond: wholeSecondExpiry,
         assertExpiry: assertExpiryWithinTechnicalLimit,
         describeFailure: describeHostFailure,
@@ -8465,11 +8473,15 @@ export class TinyCloudNode {
 
     // 4. Compute expiration. `options.expiry` overrides the default
     //    (DEFAULT_DELEGATION_EXPIRY_MS); ms-format ("7d") or a raw
-    //    millisecond count are both accepted. Cap at the session's own
-    //    expiry so we never emit a UCAN whose validity exceeds the parent
-    //    chain, which makes the default the longest the session allows.
+    //    millisecond count are both accepted. A grant on any secret's key
+    //    gets N1's lifetime instead: 1 h unless asked, capped at 7 d
+    //    (TC-3801). Cap at the session's own expiry so we never emit a UCAN
+    //    whose validity exceeds the parent chain, which makes the default
+    //    the longest the session allows.
     const now = new Date();
-    const expiryMs = resolveExpiryMs(options?.expiry);
+    const expiryMs = expandedEntries.some(isSecretKeyEntry)
+      ? secretKeyGrantExpiryMs(options?.expiry)
+      : resolveExpiryMs(options?.expiry);
     const expirationTime = new Date(now.getTime() + expiryMs);
     let effectiveExpiration = expirationTime;
     if (sessionExpiry !== undefined && sessionExpiry < expirationTime) {
