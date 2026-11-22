@@ -10,7 +10,7 @@ import {
 } from "@tinycloud/node-sdk";
 // Namespace-shaped so tests that mock @tinycloud/node-sdk partially still load this module.
 import * as nodeSdk from "@tinycloud/node-sdk";
-import { appSecretScope, MAX_SECRET_NAME_LENGTH, MAX_SECRET_SCOPE_LENGTH, SECRET_TYPES, secretNameTooLongRefusal } from "@tinycloud/sdk-core";
+import { appSecretScope, MAX_SECRET_NAME_LENGTH, SECRET_TYPES, secretNameTooLongRefusal } from "@tinycloud/sdk-core";
 import { invokeOperation } from "@tinycloud/operations";
 import { isLocalOwnerProfile, liveStoredLease, ownerSessionLacksProof } from "@tinycloud/operations/profile";
 import {
@@ -56,7 +56,7 @@ import { runProbeChild, type ProbeRequest } from "../lib/probe-child.js";
 import { runCommand, type CommandOutcome } from "../lib/run-command.js";
 import { safeInline } from "../output/safe-text.js";
 import { abortableSleep, DEFAULT_WAIT_TIMEOUT, parseWaitTimeout, runSecretsWait } from "../lib/secrets-wait.js";
-import { secretKeyResource, secretKeyResourceForVaultPath, unreadableSecretNote } from "../lib/secret-keys.js";
+import { secretKeyResource, secretKeyResourceForVaultPath, isOverlongStoredScope, unreadableSecretNote } from "../lib/secret-keys.js";
 import { canonicalNetworkUrn } from "../lib/owner-did.js";
 import { migrateSecrets } from "@tinycloud/sdk-services";
 import { resolveProfilePosture, type CLIContext, type ProfileConfig } from "../config/types.js";
@@ -1714,7 +1714,7 @@ export function registerSecretsCommand(
         const secretNames = Array.isArray(result.data) ? result.data : [];
         // A name or scope stored before the 64-character cap is listed, never hidden, with a note that says why this
         // version can't read or delete it.
-        const scopeTooLong = (scopeOptions?.scope?.length ?? 0) > MAX_SECRET_SCOPE_LENGTH;
+        const scopeTooLong = isOverlongStoredScope(scopeOptions?.scope);
         const unreadable = secretNames.flatMap((name) => {
           const note = unreadableSecretNote({ nameTooLong: name.length > MAX_SECRET_NAME_LENGTH, scopeTooLong });
           return note === undefined ? [] : [{ name, note }];

@@ -1,4 +1,4 @@
-import { parseSecretCatalogKey, secretKeyPath } from "@tinycloud/sdk-services";
+import { MAX_SECRET_SCOPE_LENGTH, parseSecretCatalogKey, SECRET_SCOPE_RE, secretKeyPath } from "@tinycloud/sdk-services";
 import { formatKeyResource } from "@tinycloud/sdk-services/encryption/resource";
 
 const VAULT_PREFIX = "vault/secrets/";
@@ -35,4 +35,14 @@ export function unreadableSecretNote(flags: { nameTooLong: boolean; scopeTooLong
   if (flags.nameTooLong) return `Name is longer than 64 characters, ${cannot} Rename it with ${cli}`;
   if (flags.scopeTooLong) return `Scope is longer than 64 characters, ${cannot} Move it to a shorter scope with ${cli}`;
   return undefined;
+}
+
+/**
+ * Whether the scope a `secrets list` asks for is one stored before the 64-character cap, by the test the SDK's own
+ * `list` makes: the trimmed text is already canonical and over the cap. Any other text is canonicalized first (spaces
+ * and case fold, so padded or mixed-case input that comes to 64 or fewer characters is an ordinary scope).
+ */
+export function isOverlongStoredScope(rawScope: string | undefined): boolean {
+  const trimmed = rawScope?.trim();
+  return trimmed !== undefined && trimmed.length > MAX_SECRET_SCOPE_LENGTH && SECRET_SCOPE_RE.test(trimmed);
 }

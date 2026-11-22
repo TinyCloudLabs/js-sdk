@@ -114,3 +114,24 @@ test("a list with nothing over the cap has no unreadable entries", async () => {
 
   expect(outputs).toEqual([{ secrets: ["API_KEY", EXACT_NAME], count: 2 }]);
 });
+
+test("a padded, mixed-case scope that is 64 characters or fewer once canonicalised has no note, however long it is typed", async () => {
+  const typed = `  ${Array.from({ length: 20 }, () => "AB").join("   ")}  `;
+  expect(typed.trim().length).toBeGreaterThan(MAX_SECRET_SCOPE_LENGTH);
+  stored[typed] = ["API_KEY"];
+
+  await list("--scope", typed);
+
+  expect(errors).toEqual([]);
+  expect(outputs).toEqual([{ secrets: ["API_KEY"], count: 1, scope: typed }]);
+});
+
+test("a scope over 64 characters typed with padding is still noted: the SDK lists it as stored", async () => {
+  const typed = `  ${LONG_SCOPE}  `;
+  stored[typed] = ["API_KEY"];
+
+  await list("--scope", typed);
+
+  expect(errors).toEqual([]);
+  expect(outputs[0]).toMatchObject({ unreadable: [{ name: "API_KEY", note: SCOPE_ONLY }] });
+});

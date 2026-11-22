@@ -44,6 +44,38 @@ async function snapshotTree(dir: string): Promise<Map<string, { sha: string; tex
   return files;
 }
 
+const SIWE_PHRASE = "wants you to sign in with your Ethereum account";
+
+/**
+ * What a file holds of a signed session: a sign-in message, or a private OKP key (an object with `kty: "OKP"` and `d`).
+ * The file is parsed as JSON where it can be, and every string value is parsed again, so a key stringified inside
+ * another document (the shape a persisted session is written in) is found at any depth.
+ */
+function sessionMaterialIn(text: string): string[] {
+  const found: string[] = [];
+  const visit = (value: unknown, depth: number): void => {
+    if (depth > 8) return;
+    if (typeof value === "string") {
+      if (value.includes(SIWE_PHRASE)) found.push("sign-in message");
+      const trimmed = value.trim();
+      if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
+        try { visit(JSON.parse(trimmed), depth + 1); } catch { /* not JSON */ }
+      }
+    } else if (Array.isArray(value)) {
+      for (const item of value) visit(item, depth + 1);
+    } else if (value !== null && typeof value === "object") {
+      const record = value as Record<string, unknown>;
+      if (record.kty === "OKP" && typeof record.d === "string") found.push("private OKP key");
+      for (const item of Object.values(record)) visit(item, depth + 1);
+    }
+  };
+  // The raw text also catches the phrase in escaped form and a file that is not one JSON document.
+  if (text.includes(SIWE_PHRASE)) found.push("sign-in message");
+  if (/kty\\*"\s*:\s*\\*"OKP/.test(text) && /\\*"d\\*"\s*:\s*\\*"/.test(text)) found.push("private OKP key (raw)");
+  try { visit(JSON.parse(text), 0); } catch { /* not one JSON document */ }
+  return [...new Set(found)];
+}
+
 async function freePort(): Promise<number> {
   const { promise, resolve, reject } = Promise.withResolvers<number>();
   const server = createServer();
@@ -251,15 +283,15 @@ describe.skipIf(!NODE_BIN)("per-secret keys against a real node", () => {
     const granted = await tc(["--profile", "owner", "auth", "grant", requestFile]);
     expect({ exitCode: granted.exitCode, stderr: granted.stderr.slice(-300) }).toMatchObject({ exitCode: 0 });
     // The one-use session is never written: the owner's stored session and profile are byte-for-byte unchanged, and no
-    // file anywhere under the home holds a signed sign-in message or a private key that was not there before.
+    // file anywhere under the home holds a signed sign-in message or a private key that was not there before. A
+    // before/after snapshot cannot see a write that is deleted before the command ends.
     const treeAfter = await snapshotTree(home);
     for (const stable of [sessionPath("owner"), profileConfigPath("owner")]) {
       expect(treeAfter.get(stable)?.sha).toBe(treeBefore.get(stable)?.sha);
     }
     for (const [path, file] of treeAfter) {
       if (treeBefore.get(path)?.sha === file.sha) continue;
-      expect({ path, signedSignIn: /wants you to sign in with your Ethereum account/.test(file.text) }).toEqual({ path, signedSignIn: false });
-      expect({ path, privateJwk: /"kty"\s*:\s*"OKP"[^}]*"d"\s*:/.test(file.text) || /"d"\s*:[^}]*"kty"\s*:\s*"OKP"/.test(file.text) }).toEqual({ path, privateJwk: false });
+      expect({ path, found: sessionMaterialIn(file.text) }).toEqual({ path, found: [] });
     }
     const grant = JSON.parse(granted.stdout) as { delegation: { path: string }; expiry: string };
     expect(grant.delegation.path).toBe(request.requested[0]!.path);

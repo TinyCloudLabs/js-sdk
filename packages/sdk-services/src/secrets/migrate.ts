@@ -53,6 +53,12 @@ export async function migrateSecrets(
     if (!SECRET_NAME_RE.test(name)) return invalid(`Invalid secret name ${JSON.stringify(name)}.`);
   }
 
+  // `resealToKey` is optional on the interface: a vault built outside the SDK may not have it. Refuse before reading
+  // the catalog (`listAll` can prompt) or asking for any key, so a vault that cannot move secrets never prompts.
+  const vault = secrets.vault;
+  const reseal = vault.resealToKey?.bind(vault);
+  if (reseal === undefined) return invalid("This vault cannot move secrets onto their own keys.");
+
   const catalog = await secrets.listAll();
   if (!catalog.ok) return catalog;
   const selected = catalog.data.filter((entry) =>
@@ -66,7 +72,6 @@ export async function migrateSecrets(
     report.total += unmatched;
     report.skipped.not_found = unmatched;
   }
-  const vault = secrets.vault;
   const moves: { vaultKey: string; keyPath: string }[] = [];
   for (const entry of selected) {
     // A name or scope over 64 bytes has no key of its own, and one such secret must not stop the others moving.
@@ -83,10 +88,6 @@ export async function migrateSecrets(
     }
   }
   if (moves.length === 0) return { ok: true, data: report };
-  // `resealToKey` is optional on the interface: a vault built outside the SDK may not have it. Refuse before asking
-  // for any key, so a vault that cannot move secrets never prompts for them.
-  const reseal = vault.resealToKey?.bind(vault);
-  if (reseal === undefined) return invalid("This vault cannot move secrets onto their own keys.");
   if (!dryRun) await options.authorizeKeys?.(moves.map((move) => move.keyPath));
   for (const { vaultKey, keyPath } of moves) {
     const result = await reseal(vaultKey, keyPath, { dryRun });
