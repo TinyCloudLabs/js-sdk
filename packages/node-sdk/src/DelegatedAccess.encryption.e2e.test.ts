@@ -370,13 +370,18 @@ describe.skipIf(!nodeBinary)(
       expect({ v: stored.v, keyPath: stored.keyPath }).toEqual({ v: 2, keyPath: `secrets/scoped/${scope}/${name.toLowerCase()}` });
       expect(await secrets.get(name, { scope, requestPermission: true })).toEqual({ ok: true, data: "longest-value" });
 
+      // Naomi 14:56:25Z (TC-3801): a put of a name over 64 is refused with Monica's words; the gets, the scope row and
+      // "nothing written" are unchanged.
+      const tooLongPut = `This secret wasn't saved: its name is ${name.length + 1} characters, and names can be at most 64. Choose a shorter name.`;
       const refusals = [
-        [`${name}C`, {}, `Secret name "${name}C" is longer than 64 characters.`],
-        [name, { scope: `${scope}s` }, `Secret scope "${scope}s" is longer than 64 characters.`],
+        [`${name}C`, {}, `Secret name "${name}C" is longer than 64 characters.`, tooLongPut],
+        [name, { scope: `${scope}s` }, `Secret scope "${scope}s" is longer than 64 characters.`, `Secret scope "${scope}s" is longer than 64 characters.`],
       ] as const;
-      for (const [refusedName, options, message] of refusals) {
+      for (const [refusedName, options, message, putMessage] of refusals) {
+        const put = await secrets.put(refusedName, "x", options);
+        expect(put.ok ? undefined : { code: put.error.code, message: put.error.message })
+          .toEqual({ code: "INVALID_INPUT", message: putMessage });
         for (const result of [
-          await secrets.put(refusedName, "x", options),
           await secrets.get(refusedName, { ...options, requestPermission: true }),
           await secrets.get(refusedName, options),
         ]) {
