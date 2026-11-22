@@ -9,7 +9,7 @@ import { parseDuration } from "../lib/duration.js";
 import { normalizePkhIdentifier } from "../lib/space.js";
 import { ENCRYPTION_MANIFEST_SPACE } from "../../../sdk-core/src/manifest.js";
 import { isDeviceDefaultDecrypt, isRawEncryptionPermission, isVerifiedRawEncryptionPermission } from "../lib/raw-encryption.js";
-import { canonicalNetworkUrn, canonicalOwnerDid, rawEncryptionOwnerMatches } from "../lib/owner-did.js";
+import { canonicalNetworkUrn, canonicalOwnerDid, isSecretsKeyPrefix, rawEncryptionOwnerMatches } from "../lib/owner-did.js";
 import { assertNoCaveatLimits } from "../lib/caveat-refusal.js";
 import { markClockDependent } from "./refusal.js";
 import { keyAbilitiesFor, parseKeysPrefix, partialKeysGrantError, type ProfileNamedKeys } from "../lib/named-keys.js";
@@ -658,9 +658,11 @@ export function verifyScopedLogin(
   for (const permission of keyRowRest) {
     (isLegacyNestedDecrypt(permission, requested, signed.ownerDid, spaceId) ? legacyNested : approved).push(permission);
   }
+  // The whole `secrets/` key prefix is admitted only when this CLI asked for it (owner `tc secrets migrate`).
+  const secretsPrefix = requested.some((permission) => isRawEncryptionPermission(permission) && isSecretsKeyPrefix(permission.path));
   for (const permission of keyRowRest) {
     if (isVerifiedRawEncryptionPermission(permission) &&
-      !rawEncryptionOwnerMatches(permission.path, signed.ownerDid)) {
+      !rawEncryptionOwnerMatches(permission.path, signed.ownerDid, { secretsPrefix })) {
       throw new CLIError("OPENKEY_SCOPE_MISMATCH", `OpenKey signed decrypt for a network not owned by the approving identity. ${notStored}`, ExitCode.PERMISSION_DENIED);
     }
   }

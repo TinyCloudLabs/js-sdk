@@ -54,6 +54,7 @@ import { runProbeChild, type ProbeRequest } from "../lib/probe-child.js";
 import { runCommand, type CommandOutcome } from "../lib/run-command.js";
 import { safeInline } from "../output/safe-text.js";
 import { abortableSleep, DEFAULT_WAIT_TIMEOUT, parseWaitTimeout, runSecretsWait } from "../lib/secrets-wait.js";
+import { secretKeyResourceForVaultPath } from "../lib/secret-keys.js";
 import { resolveProfilePosture, type CLIContext, type ProfileConfig } from "../config/types.js";
 import {
   ensureDelegationAuthority,
@@ -1112,12 +1113,19 @@ function secretKvAbility(action: SecretAction): SecretKvAbility {
   return SECRET_KV_ABILITIES[action];
 }
 
+/**
+ * What an owner approves for one secret command. A read asks to decrypt that secret's own key; a write asks to
+ * create it (the key's descriptor carries the public key the value is sealed to). A secret with no key of its own
+ * (a name or scope over 64 characters, or a non-default network) is read with the network decrypt, as is a secret
+ * still in the older format (`networkDecrypt`).
+ */
 function secretPermissionEntries(params: {
   action: SecretAction;
   name?: string;
   options?: SecretScopeOptions;
   space?: string;
   node: TinyCloudNode;
+  networkDecrypt?: boolean;
 }): PermissionEntry[] {
   const path = params.action === "list"
     ? resolveSecretListPrefix(params.options)
@@ -1129,12 +1137,22 @@ function secretPermissionEntries(params: {
     actions: [secretKvAbility(params.action)],
     skipPrefix: true,
   }];
+  if (params.action !== "get" && params.action !== "put") return permissions;
 
-  if (params.action === "get") {
-    const networkId = "getEncryptionNetworkIdForSpace" in params.node &&
-      typeof params.node.getEncryptionNetworkIdForSpace === "function"
-      ? params.node.getEncryptionNetworkIdForSpace(params.space ?? SECRETS_SPACE)
-      : params.node.getDefaultEncryptionNetworkId();
+  const networkId = "getEncryptionNetworkIdForSpace" in params.node &&
+    typeof params.node.getEncryptionNetworkIdForSpace === "function"
+    ? params.node.getEncryptionNetworkIdForSpace(params.space ?? SECRETS_SPACE)
+    : params.node.getDefaultEncryptionNetworkId();
+  const key = networkId.endsWith(":default") ? secretKeyResourceForVaultPath(networkId, path) : undefined;
+  if (key !== undefined) {
+    permissions.push({
+      service: "tinycloud.encryption",
+      path: key,
+      actions: [params.action === "get" ? SECRET_DECRYPT_CAPABILITY : SECRET_KEY_CREATE_CAPABILITY],
+      skipPrefix: true,
+    });
+  }
+  if (params.action === "get" && (key === undefined || params.networkDecrypt === true)) {
     permissions.push({
       service: "tinycloud.encryption",
       path: networkId,
@@ -1142,9 +1160,10 @@ function secretPermissionEntries(params: {
       skipPrefix: true,
     });
   }
-
   return permissions;
 }
+
+const SECRET_KEY_CREATE_CAPABILITY = "tinycloud.encryption/key.create";
 
 function formatSecretScopeFlag(options: SecretScopeOptions | undefined): string {
   return options?.scope ? ` --scope ${JSON.stringify(options.scope)}` : "";

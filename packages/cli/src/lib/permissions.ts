@@ -25,8 +25,11 @@ import {
   ENCRYPTION_MANIFEST_SPACE,
   ENCRYPTION_PERMISSION_SERVICE,
   expandActionShortNames,
+  expandPermissionEntry,
+  ManifestValidationError,
   resolveManifest,
 } from "../../../sdk-core/src/manifest.js";
+import { secretKeyResourceForVaultPath } from "./secret-keys.js";
 import { isCapabilitySubset } from "../../../sdk-core/src/capabilities.js";
 import {
   type AuthRequestArtifact,
@@ -543,7 +546,7 @@ function appManifestEntry(entry: Record<string, unknown>, manifest: Record<strin
   // A raw encryption network URN is owner-scoped, not a path in the
   // manifest's space (sdk-core resolveManifest keeps it the same way).
   if (isRawEncryptionPermission({ service, path })) {
-    return { service, space: ENCRYPTION_MANIFEST_SPACE, path, actions };
+    return { service, space: ENCRYPTION_MANIFEST_SPACE, ...rawEncryptionEntry(path, actions) };
   }
   const encryption = service === ENCRYPTION_PERMISSION_SERVICE;
   const ownSpace = encryption && typeof entry.space === "string" ? entry.space : undefined;
@@ -554,6 +557,24 @@ function appManifestEntry(entry: Record<string, unknown>, manifest: Record<strin
     actions,
     ...(Array.isArray(entry.caveats) ? { caveats: entry.caveats as PermissionEntry["caveats"] } : {}),
   };
+}
+
+/**
+ * A raw encryption entry as requested. A named key (a path after the network, other than Share's) goes through the
+ * SDK manifest validator: only one secret's exact key on the owner's default network passes, with its owner in
+ * EIP-55 form. Every other named key or prefix is refused here, before any sign-in.
+ */
+function rawEncryptionEntry(path: string, actions: string[]): { path: string; actions: string[] } {
+  const slash = path.indexOf("/");
+  const rest = slash === -1 ? "" : path.slice(slash);
+  if (rest === "" || /^\/share\/(?:[0-9a-f]{32})?$/.test(rest)) return { path, actions };
+  try {
+    const [entry] = expandPermissionEntry({ service: ENCRYPTION_PERMISSION_SERVICE, path, actions, skipPrefix: true });
+    return { path: entry!.path, actions: entry!.actions };
+  } catch (error) {
+    if (!(error instanceof ManifestValidationError)) throw error;
+    throw new CLIError("INVALID_MANIFEST", `Manifest encryption entry ${JSON.stringify(path)} is not allowed: ${error.message}.`, ExitCode.USAGE_ERROR);
+  }
 }
 
 async function secretPermissionsFromAppManifest(
@@ -578,16 +599,20 @@ async function secretPermissionsFromAppManifest(
     resource.path.startsWith("vault/secrets/")
   );
 
-  const needsDecrypt = permissions.some((permission) =>
-    permission.actions.includes("tinycloud.kv/get")
-  );
-  if (needsDecrypt) {
-    permissions.push({
-      service: ENCRYPTION_PERMISSION_SERVICE,
-      space: ENCRYPTION_MANIFEST_SPACE,
-      path: await defaultSecretsNetworkId(profile, requestedOwner),
-      actions: ["tinycloud.encryption/decrypt"],
-    });
+  // Each readable secret gets its own key's decrypt. Only a secret with no key of its own (a name or scope over 64
+  // characters, or a whole-scope read) needs the network decrypt, which opens every secret.
+  const reads = permissions.filter((permission) => permission.actions.includes("tinycloud.kv/get"));
+  if (reads.length > 0) {
+    const network = await defaultSecretsNetworkId(profile, requestedOwner);
+    const keys = reads.map((permission) => secretKeyResourceForVaultPath(network, permission.path));
+    for (const key of new Set(keys)) {
+      permissions.push({
+        service: ENCRYPTION_PERMISSION_SERVICE,
+        space: ENCRYPTION_MANIFEST_SPACE,
+        path: key ?? network,
+        actions: ["tinycloud.encryption/decrypt"],
+      });
+    }
   }
 
   return permissions;
