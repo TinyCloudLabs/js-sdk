@@ -2921,28 +2921,30 @@ function isSharePublishingPrefixDecrypt(permission2) {
 function isDeviceDefaultDecrypt(permission2) {
   return permission2.service === ENCRYPTION_PERMISSION_SERVICE && permission2.space === "default" && permission2.path === "" && permission2.actions.length === 1 && permission2.actions[0] === "tinycloud.encryption/decrypt" && !permission2.caveats?.length;
 }
+function isSecretsSpacePermission(permission2) {
+  return permission2.space === "secrets" || permission2.space?.endsWith(":secrets") === true;
+}
 function deviceRefusal(entries) {
   for (const entry of entries) {
-    if (entry.space === "secrets" || entry.space?.endsWith(":secrets") === true) return "secrets";
+    if (isSecretsSpacePermission(entry)) return "secrets";
     if (entry.service === ENCRYPTION_PERMISSION_SERVICE && !isDeviceDefaultDecrypt(entry)) return entry;
   }
   return void 0;
 }
-function deviceRefusalMessage(refused, subject, next) {
+function deviceRefusalMessage(refused, next) {
+  if (refused === "secrets") return DEVICE_SECRETS_REFUSAL;
   const allowed = `The only encryption permission --device can ask for is ${DEVICE_DECRYPT_ALLOWED}.`;
-  if (refused === "secrets") {
-    return `--device can't authorize the secrets space, and ${subject} asks for it. ${allowed} ${next}`;
-  }
   const actions = refused.actions.slice(0, 5).map((action) => safeClipped(action)).join(", ") || "no actions";
   return `--device can't ask for ${actions} on space "${safeClipped(refused.space ?? "")}", path "${safeClipped(refused.path)}"${refused.caveats?.length ? " with extra limits" : ""}. ${allowed} ${next}`;
 }
-var DEVICE_DECRYPT_ALLOWED;
+var DEVICE_DECRYPT_ALLOWED, DEVICE_SECRETS_REFUSAL;
 var init_raw_encryption = __esm({
   "src/lib/raw-encryption.ts"() {
     "use strict";
     init_manifest();
     init_safe_text();
     DEVICE_DECRYPT_ALLOWED = 'tinycloud.encryption/decrypt on the default network (space "default", path "")';
+    DEVICE_SECRETS_REFUSAL = "--device can't read secrets yet. Use tinycloud auth login --paste instead.";
   }
 });
 
@@ -3312,14 +3314,14 @@ async function loadManifestPermissions(source, profile, options = {}) {
   if (options.device && typeof manifest.app_id === "string") {
     const refused = manifest.secrets !== void 0 || manifest.space === "secrets" || typeof manifest.space === "string" && manifest.space.endsWith(":secrets") ? "secrets" : deviceRefusal(appManifestEntries(manifest));
     if (refused !== void 0) {
-      throw new CLIError("DEVICE_AUTH_UNSUPPORTED_SCOPE", deviceRefusalMessage(refused, "this manifest", DEVICE_MANIFEST_NEXT), ExitCode.USAGE_ERROR);
+      throw new CLIError("DEVICE_AUTH_UNSUPPORTED_SCOPE", deviceRefusalMessage(refused, DEVICE_MANIFEST_NEXT), ExitCode.USAGE_ERROR);
     }
   }
   if (typeof manifest.id === "string") {
     const resolved = resolveManifest(manifest);
     const refused = options.device ? deviceRefusal(resolved.resources) : void 0;
     if (refused !== void 0) {
-      throw new CLIError("DEVICE_AUTH_UNSUPPORTED_SCOPE", deviceRefusalMessage(refused, "this manifest", DEVICE_MANIFEST_NEXT), ExitCode.USAGE_ERROR);
+      throw new CLIError("DEVICE_AUTH_UNSUPPORTED_SCOPE", deviceRefusalMessage(refused, DEVICE_MANIFEST_NEXT), ExitCode.USAGE_ERROR);
     }
     return resolvePermissionSpaces(resolved.resources, profile, options);
   }
@@ -19908,7 +19910,7 @@ async function acquireDeviceDelegation(input) {
   if (refused !== void 0) {
     throw new CLIError(
       "DEVICE_AUTH_UNSUPPORTED_SCOPE",
-      deviceRefusalMessage(refused, "this request", "Use another OpenKey approval method for this request."),
+      deviceRefusalMessage(refused, "Use another OpenKey approval method for this request."),
       ExitCode.USAGE_ERROR
     );
   }
@@ -20348,6 +20350,7 @@ __export(approval_request_exports, {
   acquireApprovalRequest: () => acquireApprovalRequest,
   approvalCommandIntent: () => approvalCommandIntent,
   approvalHoldsKey: () => approvalHoldsKey,
+  approvalRenewalChoiceOf: () => approvalRenewalChoiceOf,
   approvalRenewalOf: () => approvalRenewalOf,
   approvalResultNeedsAck: () => approvalResultNeedsAck,
   approvalSessionProof: () => approvalSessionProof2,
@@ -20355,6 +20358,7 @@ __export(approval_request_exports, {
   completeApprovalResult: () => completeApprovalResult,
   dropApprovalsHoldingKey: () => dropApprovalsHoldingKey,
   dropRefusedApproval: () => dropRefusedApproval,
+  grantLifetimeSeconds: () => grantLifetimeSeconds,
   invitationGrantOf: () => invitationGrantOf,
   pendingApprovalKey: () => pendingApprovalKey,
   pendingInvitationContext: () => pendingInvitationContext,
@@ -20377,6 +20381,10 @@ function trackApprovalResult(source, verified) {
 }
 function approvalRenewalOf(delegation) {
   return renewals.get(delegation);
+}
+function approvalRenewalChoiceOf(delegation) {
+  if (!acquisitions.get(delegation)?.request.renewal) return void 0;
+  return renewals.has(delegation) ? "leased" : "finite";
 }
 function approvalResultNeedsAck(delegation) {
   return acquisitions.has(delegation);
@@ -36698,6 +36706,41 @@ function storedGrantsCovering(stored, requested, ownerDid, now = Date.now()) {
 
 // src/commands/auth.ts
 init_approval_request();
+
+// src/auth/renewal-lease.ts
+init_links();
+init_manifest();
+init_constants();
+init_raw_encryption();
+init_errors();
+init_scoped_login();
+var DEFAULT_RENEWAL_LEASE_SECONDS = 30 * 86400;
+function withoutDefaultRenewal(permissions) {
+  return permissions.some((entry) => entry.service === ENCRYPTION_PERMISSION_SERVICE || entry.service === "encryption" || isSecretsSpacePermission(entry));
+}
+function parseRenewOption(value4) {
+  let durationMs;
+  try {
+    durationMs = parseRequestedExpiry(value4).durationMs;
+  } catch {
+    throw new CLIError("INVALID_RENEW", `Invalid --renew "${value4}". Use a duration such as 30d or 12w.`, ExitCode.USAGE_ERROR);
+  }
+  const seconds = Math.floor(durationMs / 1e3);
+  if (!Number.isSafeInteger(seconds) || seconds <= 0 || seconds > MAX_APPROVAL_LEASE_SECONDS) {
+    throw new CLIError("INVALID_RENEW", "--renew must be a duration of at most one year (365d).", ExitCode.USAGE_ERROR);
+  }
+  return seconds;
+}
+function renewalLeaseFor(choice, grantSeconds) {
+  if (choice === false) return void 0;
+  if (choice === void 0) return grantSeconds < DEFAULT_RENEWAL_LEASE_SECONDS ? DEFAULT_RENEWAL_LEASE_SECONDS : void 0;
+  if (choice <= grantSeconds) {
+    throw new CLIError("INVALID_RENEW", "--renew must be longer than the sign-in's --expiry: a renewal counts from the approval, so a shorter one adds no time.", ExitCode.USAGE_ERROR);
+  }
+  return choice;
+}
+
+// src/commands/auth.ts
 init_device_auth();
 
 // src/auth/space-setup.ts
@@ -38574,10 +38617,14 @@ async function finishProfileLogout(ctx, options = {}) {
 function registerAuthCommand(program, options) {
   const auth = program.command("auth").description("Authentication management");
   registerAuthGrantsCommand(auth, { openKeyAcquisition: options?.openKeyAcquisition });
-  auth.command("login").description("Authenticate with TinyCloud").option("--device", "Approve on another device (e.g. a phone) through OpenKey device authorization; requires a KV-scoped --manifest (SQL and secret decrypt need browser or --paste login)").option("--paste", "Use manual paste mode; OpenKey return codes expire after 5 minutes").option("--no-popup", "Print the OpenKey URL without opening a browser").option("--method <method>", "Authentication method: local or openkey").option("--manifest <fileOrBase64>", `Request only this manifest's permissions (one space, plus raw encryption network entries such as a secrets decrypt grant); ${SHARE_PUBLISHING_MANIFEST_REF} covers \`${CLI_NAME21} share publish\``).option("--expiry <duration>", `OpenKey session lifetime, e.g. 1h or 7d (with --manifest: default 1h, or 7d for ${SHARE_PUBLISHING_MANIFEST_REF} so Share links keep their 7-day life; device login: at most 30d, default 30d)`).option("--owner <did>", "Sign in as this owner (did:pkh:eip155:CHAIN:ADDRESS): OpenKey preselects that key, e.g. one that is not the account's primary key, and an approval by any other identity is refused. With --manifest, also names the secrets owner for a manifest's `secrets` on a profile with no recorded owner").option("--replace-session", "Scoped or device login: replace this profile's live session even though the new scope would narrow, change or shorten it (prefer a new profile)").option("--force", "Replica-enabled OpenKey login: replace the stored session key even when recorded shares could not be checked or hold unexpired shares that need the current key").option("--keys <folder>", "Also let this sign-in create and use encryption keys in this folder (for example `qa`). The node must support named keys. With OpenKey, the first time on a profile also needs `--owner`.").option("--replication-prefix <prefix>", "Add replication get+sync authority for a folder prefix ending in /, or root (repeatable)", (prefix, values = []) => [...values, prefix]).option("--replication-allow-secrets", "Allow replication of secret material (network-wide decrypt warning)").action(async (options2, cmd) => {
+  auth.command("login").description("Authenticate with TinyCloud").option("--device", "Approve on another device, such as a phone, through OpenKey. Needs a KV-scoped --manifest. It can ask for decrypt on the default network, which covers every encrypted item in it. Secrets and SQL need browser or --paste login.").option("--paste", "Use manual paste mode; OpenKey return codes expire after 5 minutes").option("--no-popup", "Print the OpenKey URL without opening a browser").option("--method <method>", "Authentication method: local or openkey").option("--manifest <fileOrBase64>", `Request only this manifest's permissions (one space, plus raw encryption network entries such as a secrets decrypt grant); ${SHARE_PUBLISHING_MANIFEST_REF} covers \`${CLI_NAME21} share publish\``).option("--expiry <duration>", `OpenKey session lifetime, e.g. 1h or 7d (with --manifest: default 1h, or 7d for ${SHARE_PUBLISHING_MANIFEST_REF} so Share links keep their 7-day life; device login: at most 30d, default 30d)`).option("--renew <duration>", "Ask the owner to let this sign-in renew itself for up to this long after approval, for example 30d. Default 30d, or none when the sign-in asks for encryption or secrets permissions. Must be longer than --expiry and at most 365d. The owner can approve it without renewal.").option("--no-renew", "Ask for a sign-in that ends at its --expiry, with no renewal").option("--owner <did>", "Sign in as this owner (did:pkh:eip155:CHAIN:ADDRESS): OpenKey preselects that key, e.g. one that is not the account's primary key, and an approval by any other identity is refused. With --manifest, also names the secrets owner for a manifest's `secrets` on a profile with no recorded owner").option("--replace-session", "Scoped or device login: replace this profile's live session even though the new scope would narrow, change or shorten it (prefer a new profile)").option("--force", "Replica-enabled OpenKey login: replace the stored session key even when recorded shares could not be checked or hold unexpired shares that need the current key").option("--keys <folder>", "Also let this sign-in create and use encryption keys in this folder (for example `qa`). The node must support named keys. With OpenKey, the first time on a profile also needs `--owner`.").option("--replication-prefix <prefix>", "Add replication get+sync authority for a folder prefix ending in /, or root (repeatable)", (prefix, values = []) => [...values, prefix]).option("--replication-allow-secrets", "Allow replication of secret material (network-wide decrypt warning)").action(async (options2, cmd) => {
     try {
       if (options2.device && options2.paste) {
         throw new CLIError("INVALID_ARGUMENT", "--device and --paste are mutually exclusive.", ExitCode.USAGE_ERROR);
+      }
+      const renew = options2.renew === void 0 || options2.renew === false ? options2.renew : parseRenewOption(options2.renew);
+      if (typeof renew === "number" && (options2.device || options2.paste || options2.method === "local")) {
+        throw new CLIError("INVALID_ARGUMENT", "--renew needs OpenKey sign-in through an approval link: it can't be used with --device, --paste or --method local.", ExitCode.USAGE_ERROR);
       }
       const scoped = options2.device || options2.manifest || options2.expiry || options2.owner;
       if (scoped && options2.method === "local") {
@@ -38656,7 +38703,10 @@ function registerAuthCommand(program, options) {
       } else if (options2.keys !== void 0) {
         method = profileConfig?.authMethod === "openkey" || options2.paste || options2.owner ? "openkey" : "local";
       } else {
-        method = scoped ? "openkey" : await promptAuthMethod();
+        method = scoped || typeof renew === "number" ? "openkey" : await promptAuthMethod();
+      }
+      if (method === "local" && typeof renew === "number") {
+        throw new CLIError("INVALID_ARGUMENT", "--renew needs OpenKey sign-in through an approval link: it can't be used with --method local.", ExitCode.USAGE_ERROR);
       }
       if (method === "openkey" && (options2.keys !== void 0 || replicationOptions.prefixes.length > 0) && !options2.paste && options2.popup !== false && !process.stdin.isTTY && !process.stderr.isTTY) {
         throw new CLIError(
@@ -38688,6 +38738,7 @@ function registerAuthCommand(program, options) {
           persistHost,
           force: options2.force === true,
           keys: options2.keys,
+          ...renew === void 0 ? {} : { renew },
           ...created === void 0 ? {} : { createdProfile: { previousDefaultProfile: created.previousDefaultProfile } }
         });
         if (!preparedCommitted) await persistReplicationLogin(ctx.profile, replicationOptions);
@@ -40483,6 +40534,11 @@ async function refreshOpenKeySession(profileName2, host, options = {}) {
     assertNotLocalOwner(profileName2, profile, "Scoped browser login");
   }
   const plainPasteLink = options.paste === true && replication.prefixes.length === 0 && options.keys === void 0;
+  const approvalRequestPath = options.paste !== true && replication.prefixes.length === 0 && options.keys === void 0;
+  if (!approvalRequestPath && typeof options.renew === "number") {
+    throw new CLIError("INVALID_ARGUMENT", "--renew needs OpenKey sign-in through an approval link: it can't be used with --paste, --keys or --replication-prefix.", ExitCode.USAGE_ERROR);
+  }
+  const renewalLeaseSeconds = approvalRequestPath ? renewalLeaseFor(options.renew ?? (withoutDefaultRenewal(permissions ?? ownerLoginPermissions(expectedOwner)) ? false : void 0), grantLifetimeSeconds(openKeyExpiry)) : void 0;
   if (permissions !== void 0 && options.replaceSession !== true) {
     const estimatedExpiry = expiry === void 0 || plainPasteLink ? void 0 : new Date(Date.now() + expiry.durationMs).toISOString();
     assertSessionReplaceable(profileName2, snapshot, expectedOwner, permissions, estimatedExpiry);
@@ -40532,7 +40588,8 @@ async function refreshOpenKeySession(profileName2, host, options = {}) {
       expiry: openKeyExpiry,
       // The plain paste link lets the user pick the lifetime; the signed result has no `--expiry` ceiling.
       ...plainPasteLink ? { expiryChangeable: true } : {},
-      ...permissions && options.reason ? { reason: options.reason } : {}
+      ...permissions && options.reason ? { reason: options.reason } : {},
+      ...renewalLeaseSeconds === void 0 ? {} : { renewalLeaseSeconds }
     });
     seen.result = delegationData;
     let sanitizedSession;
@@ -40578,7 +40635,12 @@ async function refreshOpenKeySession(profileName2, host, options = {}) {
     });
     return { delegationData, sanitizedSession, verifiedOwner, ownerKeyPrimary, updatedProfile, declined, legacyNested };
   });
+  const renewalChoice = approvalRenewalChoiceOf(committed.delegationData);
   await completeApprovalResult(profileName2, committed.delegationData);
+  if (renewalChoice === "finite") {
+    process.stderr.write(`The owner approved this sign-in without renewal, so it ends at ${String(committed.sanitizedSession.expiresAt)}. Sign in again after that.
+`);
+  }
   warnIfNotPrimaryKey(committed.verifiedOwner, committed.ownerKeyPrimary);
   announceFirstOwner(profileName2, expectedOwner, committed.verifiedOwner);
   return { profile: committed.updatedProfile, delegationData: committed.sanitizedSession, declined: committed.declined, legacyNested: committed.legacyNested };
@@ -42576,7 +42638,7 @@ function registerFeedCommand(program) {
   const feed = program.command("feed").description("SQLite agent cards, owner responses and durable runtime handoff").addHelpText("after", `
 Owner connection provisions separate output and response databases and activates one
 bundled delegation. Agent labels and tokens select resources, never confer authority.
-Home's owner grant uses ${FEED_PREFIX2}/ (trailing slash namespace); agent grants
+TinyCloud One's owner grant uses ${FEED_PREFIX2}/ (trailing slash namespace); agent grants
 name exact output, response and response-hook resources. No agent schema or response write.
 
 publish/respond/message/handling read JSON files carrying full card/revision/issuance
@@ -45914,6 +45976,10 @@ function assertOwnerApprovalPossible(profileName2, profile, action, name, missin
 function scopedSecretLoginHint(profileName2) {
   return `Have the owner approve a scoped login whose manifest names the secret: ${CLI_NAME34} --profile ${profileName2} auth login --method openkey --paste --manifest <manifest.json>. Pass the owner's code on stdin, newline-terminated.`;
 }
+function networkGrantNotice(recipientDid, networkName, expiry) {
+  const until = expiry instanceof Date && Number.isFinite(expiry.getTime()) ? `until ${expiry.toISOString().slice(0, 16).replace("T", " ")} UTC` : "for as long as this grant lasts";
+  return `${safeInline(recipientDid)} can read every secret in the "${safeInline(networkName)}" network, including secrets added later, ${until}.`;
+}
 async function runSecretOperationAttempt(label, operation) {
   try {
     return await withSpinner(label, operation);
@@ -46920,7 +46986,7 @@ function registerSecretsCommand(program, openKeyAcquisition) {
       return handleError(error);
     }
   });
-  network.command("grant <recipientDid> [name]").description("Grant decrypt permission for a secrets encryption network").option("--private-key <hex>", "Ethereum private key override (or set TC_PRIVATE_KEY)").action(async (recipientDid, name, options, cmd) => {
+  network.command("grant").argument("<recipientDid>").argument("[name]", "network name (default: default)").description("Let someone read every secret in an encryption network").option("--private-key <hex>", "Ethereum private key override (or set TC_PRIVATE_KEY)").action(async (recipientDid, name, options, cmd) => {
     try {
       const globalOpts = cmd.optsWithGlobals();
       const ctx = await ProfileManager.resolveContext(globalOpts);
@@ -46936,16 +47002,18 @@ function registerSecretsCommand(program, openKeyAcquisition) {
         actions: ["decrypt"]
       };
       const result = await withSpinner(
-        `Granting decrypt permission to ${recipientDid}...`,
+        `Granting ${safeInline(recipientDid)} access to read secrets...`,
         () => node.delegateTo(recipientDid, [permission2])
       );
+      process.stderr.write(networkGrantNotice(recipientDid, networkName, result.delegation.expiry) + "\n");
       outputJson({
         networkId: descriptor.networkId,
         recipientDid,
         cid: result.delegation.cid,
         prompted: result.prompted,
         path: result.delegation.path,
-        actions: result.delegation.actions
+        actions: result.delegation.actions,
+        scope: "whole-network"
       });
     } catch (error) {
       return handleError(error);
@@ -49608,13 +49676,15 @@ async function inspectProfile(params) {
   const storedDelegations = await readDelegations(params.name, issues);
   const sessionPermissions = session ? sessionPermissionsFromRecap(session) : [];
   const signedExpiry = session ? extractSessionExpiry(session) : null;
-  const lease = session && signedExpiry !== null && signedExpiry.getTime() <= Date.now() ? liveStoredLease4(session) : void 0;
+  const liveLease = session ? liveStoredLease4(session) : void 0;
+  const lease = signedExpiry !== null && signedExpiry.getTime() <= Date.now() ? liveLease : void 0;
   const sessionExpiry = lease !== void 0 ? new Date(lease.expiresAt) : signedExpiry;
   const sessionExpired = sessionExpiry === null ? null : sessionExpiry.getTime() <= Date.now();
   const statusSession = {
     present: session !== null,
     expired: session === null ? null : sessionExpired,
     expiresAt: sessionExpiry?.toISOString() ?? null,
+    renewsUntil: liveLease === void 0 ? null : new Date(liveLease.expiresAt).toISOString(),
     permissions: sessionPermissions,
     permissionsCompact: compactPermissions(sessionPermissions)
   };
@@ -49894,9 +49964,12 @@ function formatSession(session) {
     return `${theme.warn("expired")}${formatExpiresAt(session.expiresAt)}`;
   }
   if (session.expired === false) {
-    return `${theme.success("active")}${formatExpiresAt(session.expiresAt)}`;
+    return `${theme.success("active")}${formatExpiresAt(session.expiresAt)}${formatRenewsUntil(session)}`;
   }
-  return `${theme.success("present")}${formatExpiresAt(session.expiresAt)}`;
+  return `${theme.success("present")}${formatExpiresAt(session.expiresAt)}${formatRenewsUntil(session)}`;
+}
+function formatRenewsUntil(session) {
+  return session.renewsUntil !== null && session.renewsUntil !== session.expiresAt ? `, renews until ${session.renewsUntil}` : "";
 }
 function formatDelegation2(delegation) {
   const state2 = delegation.expired === true ? theme.warn("expired") : theme.success("active");

@@ -289,7 +289,7 @@ describe("bootstrap gate — non-interactive config (autoBootstrapAccount=false)
 // ---------------------------------------------------------------------------
 
 describe("bootstrap gate — OpenKey auto-sign strategy", () => {
-  test("selects the widened request unless account permissions are explicitly disabled", () => {
+  test("without a manifest signs in with the generic app-folder request, never the widened bootstrap request", () => {
     const openKeyStrategy = createOpenKeyCallbackSigningStrategy({
       endpoint: "https://openkey.test/api/delegate/sign",
     });
@@ -303,11 +303,19 @@ describe("bootstrap gate — OpenKey auto-sign strategy", () => {
         : { includeAccountRegistryPermissions }),
     });
 
-    expect(Reflect.get(Reflect.get(makeNode(), "auth"), "capabilityRequest")).toBe(BOOTSTRAP_SESSION_REQUESTS.default);
-    expect(Reflect.get(Reflect.get(makeNode(true), "auth"), "capabilityRequest")).toBe(BOOTSTRAP_SESSION_REQUESTS.default);
-    expect(Reflect.get(Reflect.get(makeNode(false), "auth"), "capabilityRequest")).toBe(
-      BOOTSTRAP_DEFAULT_ONLY_SESSION_REQUEST,
-    );
+    for (const includeAccountRegistryPermissions of [undefined, true, false]) {
+      const request = Reflect.get(Reflect.get(makeNode(includeAccountRegistryPermissions), "auth"), "capabilityRequest");
+      expect(request).not.toBe(BOOTSTRAP_SESSION_REQUESTS.default);
+      expect(request).not.toBe(BOOTSTRAP_DEFAULT_ONLY_SESSION_REQUEST);
+      expect(request.manifests.map((manifest: { app_id: string }) => manifest.app_id)).toEqual(["node.app"]);
+      expect(request.resources.map(({ service, space, path, actions }: { service: string; space: string; path: string; actions: string[] }) =>
+        `${service} ${space} ${path} ${[...actions].sort().join(",")}`).sort()).toEqual([
+        "tinycloud.capabilities applications  tinycloud.capabilities/read",
+        "tinycloud.kv applications node.app/ tinycloud.kv/del,tinycloud.kv/get,tinycloud.kv/list,tinycloud.kv/metadata,tinycloud.kv/put",
+        "tinycloud.sql applications node.app/ tinycloud.sql/read,tinycloud.sql/write",
+      ]);
+      expect(request.expiryMs).toBe(7 * 24 * 60 * 60 * 1000);
+    }
   });
 
   test("does not skip bootstrap on fresh account", async () => {

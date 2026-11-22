@@ -93,6 +93,15 @@ const api = {
       autoCreateSpace: true,
       persistSession: true,
       sessionStorageKeyPrefix: "tc1888-purge",
+      // A sign-in without a manifest gets only the app's own folder; the page reads the boot prefix.
+      manifest: {
+        app_id: "tc1888-purge",
+        name: "TC-1888 purge",
+        defaults: false,
+        includePublicSpace: false,
+        prefix: "",
+        permissions: [{ service: "tinycloud.kv", space: "default", path: options.prefix, actions: ["get", "put", "del", "list", "metadata"] }],
+      },
       replication: {
         enabled: true,
         prefixes: [options.prefix],

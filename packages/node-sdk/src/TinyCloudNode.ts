@@ -134,7 +134,6 @@ import {
   UnsupportedFeatureError,
   makePublicSpaceId,
   ACCOUNT_REGISTRY_SPACE,
-  BOOTSTRAP_DEFAULT_ONLY_SESSION_REQUEST,
   BOOTSTRAP_SESSION_REQUESTS,
   SECRET_RECORDS_SCHEMA,
   SECRETS_SPACE,
@@ -183,6 +182,7 @@ import {
   resolveRegistryResource,
   warnRegistryDefaultNode,
   NodeNotFoundError,
+  isKnownTinyCloudNode,
   exactHttpOrigin,
   createInMemoryRegistrySequenceStore,
   createInMemoryRegistryCacheStore,
@@ -955,7 +955,7 @@ export interface TinyCloudNodeConfig {
   domain?: string;
   /** SIWE URI (default: `https://<domain>`). web-sdk defaults it to the page origin when domain is derived from the window. */
   uri?: string;
-  /** Session expiration time in milliseconds (default: 30 days, `EXPIRY.SESSION_MS`) */
+  /** Session expiration time in milliseconds (default: 7 days, `EXPIRY.SESSION_MS`) */
   sessionExpirationMs?: number;
   /** Whether to automatically create space if it doesn't exist (default: false) */
   autoCreateSpace?: boolean;
@@ -985,19 +985,25 @@ export interface TinyCloudNodeConfig {
    *
    * When set, `signIn()` resolves the manifest, unions the app's own
    * permissions with every manifest-declared delegation's permissions,
-   * and uses that union as the session's granted capabilities — NOT
-   * the legacy `defaultActions` table. This is what makes
+   * and uses that union as the session's granted capabilities. This is
+   * what makes
    * `delegateTo(manifestDeclaredDid, permissions)` work without a
    * wallet prompt: the session key's recap already covers the
    * delegation target's needs at sign-in time.
    *
-   * When omitted, `signIn()` falls back to `defaultActions` for
-   * backwards compatibility with callers that pre-date the manifest
-   * flow.
+   * Without a manifest, `capabilityRequest` or `defaultActions`, `signIn()`
+   * asks only for the app's own folder (`applications/<reversed domain>/`,
+   * or `applications/node.app/` without a `domain`; KV and SQL, 7 days) and
+   * logs a console warning.
    */
   manifest?: Manifest | Manifest[];
   /** Pre-composed manifest request. Takes precedence over `manifest`. */
   capabilityRequest?: ComposedManifestRequest;
+  /**
+   * Plain owner-session actions on the primary space (`prefix`). Owner tools
+   * pass `...ownerFullAccess(space)`; apps declare a `manifest` instead.
+   */
+  defaultActions?: Record<string, Record<string, string[]>>;
   /** Include implicit account bootstrap authority. Default true; autoBootstrapAccount:false always disables it. */
   includeAccountRegistryPermissions?: boolean;
   /** Run canonical account bootstrap. Default true; false also omits implicit account and space capabilities-read grants. */
@@ -1059,7 +1065,7 @@ function resolveNotBeforeSecs(notBefore: Date | undefined, expiration: Date, now
  *
  * `expiry` accepts either an ms-format duration string (e.g. `"7d"`, `"1h"`)
  * or a raw number of milliseconds. When omitted, the default is
- * `EXPIRY.SESSION_MS` (30 days), still capped at the session's own expiry.
+ * `EXPIRY.SESSION_MS` (7 days), still capped at the session's own expiry.
  *
  * `forceWalletSign` bypasses the derivability check and sends the
  * delegation through the legacy wallet-signed SIWE path, which always
@@ -1432,6 +1438,8 @@ export class TinyCloudNode {
   private wasmBindings: IWasmBindings;
   private sessionManager: ISessionManager;
   private _serviceGraph!: ServiceGraphLifetime;
+  /** The node-verified renewed end recorded by {@link restoreSessionWithRenewal}, for the service graph it restored. */
+  private renewedSessionEnd?: { graph: ServiceGraphLifetime; end: Date };
   private readonly _requestLog?: RequestLog;
   private _serviceContext?: ServiceContext;
   private _kv?: KVService;
@@ -2178,6 +2186,7 @@ export class TinyCloudNode {
       createPlacement: this.config.sharePlacementSigner || this.config.privateKey
         ? share => this.createPlacementForShare(receiveOnlyGraph, share) : undefined,
       receivedPlacementTransport: share => this.transportForPlacedShare(receiveOnlyGraph, share),
+      receivedHostHintTransport: host => this.transportForShareHost(receiveOnlyGraph, host),
       hosts: [this.config.host!],
       // session: undefined - not needed for receive()
       invoke: receiveOnlyGraph.invoke,
@@ -2217,7 +2226,6 @@ export class TinyCloudNode {
    * @internal
    */
   private setupAuth(config: TinyCloudNodeConfig): void {
-    const useBootstrapSignInRequest = this.shouldUseBootstrapSignInRequest(config);
     this.auth = new NodeUserAuthorization({
       signer: this.signer!,
       signStrategy: config.signStrategy ?? { type: "auto-sign" },
@@ -2239,20 +2247,16 @@ export class TinyCloudNode {
       localLinkName: config.localLinkName,
       expectedNodeDid: config.expectedNodeDid,
       localNodeIdentityStore: config.localNodeIdentityStore,
-      autoCreateSpace: useBootstrapSignInRequest ? false : config.autoCreateSpace,
+      autoCreateSpace: config.autoCreateSpace,
       enablePublicSpace: config.enablePublicSpace ?? true,
-      spaceCreationHandler: useBootstrapSignInRequest
-        ? undefined
-        : config.spaceCreationHandler,
+      spaceCreationHandler: config.spaceCreationHandler,
       nonce: config.nonce,
       siweConfig: config.siweConfig,
-      manifest: useBootstrapSignInRequest ? undefined : config.manifest,
-      capabilityRequest: useBootstrapSignInRequest
-        ? config.includeAccountRegistryPermissions === false
-          ? BOOTSTRAP_DEFAULT_ONLY_SESSION_REQUEST
-          : BOOTSTRAP_SESSION_REQUESTS.default
-        : config.capabilityRequest,
-      includeAccountRegistryPermissions: useBootstrapSignInRequest || config.autoBootstrapAccount === false
+      genericAppHost: config.siweConfig?.domain ?? config.domain ?? null,
+      manifest: config.manifest,
+      capabilityRequest: config.capabilityRequest,
+      ...(config.defaultActions === undefined ? {} : { defaultActions: config.defaultActions }),
+      includeAccountRegistryPermissions: config.autoBootstrapAccount === false
         ? false
         : config.includeAccountRegistryPermissions,
       includeImplicitCapabilitiesRead: config.autoBootstrapAccount !== false,
@@ -2274,14 +2278,6 @@ export class TinyCloudNode {
       telemetry: config.telemetry,
       retryPolicy: config.retryPolicy,
     });
-  }
-
-  private shouldUseBootstrapSignInRequest(config: TinyCloudNodeConfig): boolean {
-    return config.autoBootstrapAccount !== false &&
-      config.manifest === undefined &&
-      config.capabilityRequest === undefined &&
-      (config.prefix ?? "default") === "default" &&
-      isOpenKeyAutoSignStrategy(config.signStrategy);
   }
 
   /** Sanitized developer request events; undefined unless the node was built with `requestLog: true`. */
@@ -2436,8 +2432,19 @@ export class TinyCloudNode {
     return this.createResourceTransport(graph, undefined, { record, parent });
   }
 
+  /**
+   * A received v1 share's own host as the no-record destination. Only a known
+   * node (production, or one the recipient configured) is accepted; the
+   * registry record still decides whenever the owner has one.
+   */
+  private transportForShareHost(graph: ServiceGraphLifetime, host: string): ResourceTransport | undefined {
+    const { newUserHost, tinycloudFallbackHosts } = this.config;
+    if (!isKnownTinyCloudNode(host, [this.explicitHost, newUserHost, ...(tinycloudFallbackHosts ?? [])])) return undefined;
+    return this.createResourceTransport(graph, undefined, undefined, [host]);
+  }
+
   private createResourceTransport(graph: ServiceGraphLifetime, session?: ServiceSession,
-    placement?: { record: SharePlacement; parent: SharePlacementParent }): ResourceTransport {
+    placement?: { record: SharePlacement; parent: SharePlacementParent }, noEntryHosts?: readonly string[]): ResourceTransport {
     const rawFetch = this.fetchForGraph(graph);
     return async (resources, send, options) => {
       graph.assertActive();
@@ -2450,7 +2457,7 @@ export class TinyCloudNode {
               cacheStore: this.config.registryCacheStore, registryChainId: this.config.registryChainId,
               fetch: rawFetch as typeof fetch,
             }).then((destinations) => endToEnd ? destinations.map((destination) => ({ ...destination, url: endToEndNodeHost(destination.url) })) : destinations)
-            : await this.routingDestinations(requestedResource, requestedAccess, undefined, dataRead, endToEnd);
+            : await this.routingDestinations(requestedResource, requestedAccess, noEntryHosts, dataRead, endToEnd);
           graph.assertActive();
           return targets;
         },
@@ -2792,6 +2799,7 @@ export class TinyCloudNode {
       }
       this.assertSessionEpoch(epoch, "Session renewal restore");
       await this.restoreSessionInternal(sessionData, { allowExpired: true, effectiveExpiry: effectiveExpiryDate });
+      this.renewedSessionEnd = { graph: this._serviceGraph, end: effectiveExpiryDate };
     } finally {
       candidate._serviceGraph.retire();
       (candidate.tc as { retireServices?: () => void } | null)?.retireServices?.();
@@ -3015,6 +3023,22 @@ export class TinyCloudNode {
    */
   get restorableSession(): TinyCloudSession | undefined {
     return this.currentTinyCloudSession();
+  }
+
+  /**
+   * When the current session's authority ends: after {@link restoreSessionWithRenewal}, the renewed end the node
+   * reported at that restore; otherwise the signed expiry. Undefined without a session or a signed expiry.
+   * Delegations from this session end by it.
+   */
+  get sessionEnd(): Date | undefined {
+    const session = this.currentTinyCloudSession();
+    return session ? this.sessionAuthorityEnd(session) : undefined;
+  }
+
+  private sessionAuthorityEnd(session: TinyCloudSession): Date | undefined {
+    const signed = extractSiweExpiration(session.siwe);
+    const renewed = this.renewedSessionEnd;
+    return renewed && renewed.graph === this._serviceGraph && signed && renewed.end > signed ? renewed.end : signed;
   }
 
   /** The active, verified replica stamp. Undefined when the replica is refused or the session has ended. */
@@ -3499,6 +3523,14 @@ export class TinyCloudNode {
 
     const bootstrapped = await this.bootstrapAccountIfNeeded();
     this.assertSessionEpoch(epoch, "Sign-in");
+    // Setup grants end with setup: from here the app's calls run on its own
+    // session, bounded by its manifest. A restored session never had them.
+    this.runtimePermissionGrants = this.runtimePermissionGrants.filter(
+      (grant) => grant.provenance !== "bootstrap" && grant.provenance !== "primary",
+    );
+    // Bootstrap has now hosted the spaces this session's first activation
+    // skipped, so the primary grant can cover them.
+    if (primarySession) this.registerPrimarySessionGrant(primarySession);
 
     await this.ensureRequestedEncryptionNetworks();
     this.assertSessionEpoch(epoch, "Sign-in");
@@ -3895,6 +3927,7 @@ export class TinyCloudNode {
         BOOTSTRAP_SESSION_REQUESTS[step.space],
         rawAbilitiesBySpace.get(step.space),
       );
+      this.hostedOwnedSpaceIds.add(step.spaceId);
     }
 
     for (const step of steps) {
@@ -4127,6 +4160,7 @@ export class TinyCloudNode {
     const operations = this.recapOperationsFromSession(session).filter(
       (operation) =>
         operation.spaceId === undefined ||
+        this.hostedOwnedSpaceIds.has(operation.spaceId) ||
         !skipped.some((spaceId) => this.spaceIdsEqual(spaceId, operation.spaceId!)),
     );
     if (operations.length === 0) {
@@ -5516,6 +5550,7 @@ export class TinyCloudNode {
       createPlacement: this.config.sharePlacementSigner || this.config.privateKey
         ? share => this.createPlacementForShare(graph, share) : undefined,
       receivedPlacementTransport: share => this.transportForPlacedShare(graph, share),
+      receivedHostHintTransport: host => this.transportForShareHost(graph, host),
       hosts: [input.host],
       invoke: graph.invoke,
       fetch: graph.fetch,
@@ -5906,8 +5941,6 @@ export class TinyCloudNode {
     this.signer = TinyCloudNode.nodeDefaults.createSigner(privateKey);
 
     // Create authorization handler
-    const authConfig = { ...this.config, prefix };
-    const useBootstrapSignInRequest = this.shouldUseBootstrapSignInRequest(authConfig);
     this.auth = new NodeUserAuthorization({
       signer: this.signer,
       signStrategy: this.config.signStrategy ?? { type: "auto-sign" },
@@ -5928,22 +5961,16 @@ export class TinyCloudNode {
       localLinkName: this.config.localLinkName,
       expectedNodeDid: this.config.expectedNodeDid,
       localNodeIdentityStore: this.config.localNodeIdentityStore,
-      autoCreateSpace: useBootstrapSignInRequest ? false : this.config.autoCreateSpace,
+      autoCreateSpace: this.config.autoCreateSpace,
       enablePublicSpace: this.config.enablePublicSpace ?? true,
-      spaceCreationHandler: useBootstrapSignInRequest
-        ? undefined
-        : this.config.spaceCreationHandler,
+      spaceCreationHandler: this.config.spaceCreationHandler,
       nonce: this.config.nonce,
       siweConfig: this.config.siweConfig,
-      manifest: useBootstrapSignInRequest ? undefined : this.config.manifest,
-      capabilityRequest: useBootstrapSignInRequest
-        ? this.config.includeAccountRegistryPermissions === false
-          ? BOOTSTRAP_DEFAULT_ONLY_SESSION_REQUEST
-          : BOOTSTRAP_SESSION_REQUESTS.default
-        : this.config.capabilityRequest,
-      includeAccountRegistryPermissions: useBootstrapSignInRequest
-        ? false
-        : this.config.includeAccountRegistryPermissions,
+      genericAppHost: this.config.siweConfig?.domain ?? this.config.domain ?? null,
+      manifest: this.config.manifest,
+      capabilityRequest: this.config.capabilityRequest,
+      ...(this.config.defaultActions === undefined ? {} : { defaultActions: this.config.defaultActions }),
+      includeAccountRegistryPermissions: this.config.includeAccountRegistryPermissions,
       replication: this.config.replication?.enabled === true
         ? {
             enabled: true,
@@ -5987,8 +6014,6 @@ export class TinyCloudNode {
 
     this.signer = signer;
 
-    const authConfig = { ...this.config, prefix };
-    const useBootstrapSignInRequest = this.shouldUseBootstrapSignInRequest(authConfig);
     this.auth = new NodeUserAuthorization({
       signer: this.signer,
       signStrategy: this.config.signStrategy ?? { type: "auto-sign" },
@@ -6009,22 +6034,16 @@ export class TinyCloudNode {
       localLinkName: this.config.localLinkName,
       expectedNodeDid: this.config.expectedNodeDid,
       localNodeIdentityStore: this.config.localNodeIdentityStore,
-      autoCreateSpace: useBootstrapSignInRequest ? false : this.config.autoCreateSpace,
+      autoCreateSpace: this.config.autoCreateSpace,
       enablePublicSpace: this.config.enablePublicSpace ?? true,
-      spaceCreationHandler: useBootstrapSignInRequest
-        ? undefined
-        : this.config.spaceCreationHandler,
+      spaceCreationHandler: this.config.spaceCreationHandler,
       nonce: this.config.nonce,
       siweConfig: this.config.siweConfig,
-      manifest: useBootstrapSignInRequest ? undefined : this.config.manifest,
-      capabilityRequest: useBootstrapSignInRequest
-        ? this.config.includeAccountRegistryPermissions === false
-          ? BOOTSTRAP_DEFAULT_ONLY_SESSION_REQUEST
-          : BOOTSTRAP_SESSION_REQUESTS.default
-        : this.config.capabilityRequest,
-      includeAccountRegistryPermissions: useBootstrapSignInRequest
-        ? false
-        : this.config.includeAccountRegistryPermissions,
+      genericAppHost: this.config.siweConfig?.domain ?? this.config.domain ?? null,
+      manifest: this.config.manifest,
+      capabilityRequest: this.config.capabilityRequest,
+      ...(this.config.defaultActions === undefined ? {} : { defaultActions: this.config.defaultActions }),
+      includeAccountRegistryPermissions: this.config.includeAccountRegistryPermissions,
       replication: this.config.replication?.enabled === true
         ? {
             enabled: true,
@@ -6728,6 +6747,7 @@ export class TinyCloudNode {
       createPlacement: this.config.sharePlacementSigner || this.config.privateKey
         ? share => this.createPlacementForShare(graph, share) : undefined,
       receivedPlacementTransport: share => this.transportForPlacedShare(graph, share),
+      receivedHostHintTransport: host => this.transportForShareHost(graph, host),
       hosts: [this.config.host!],
       session: serviceSession,
       invoke: graph.invoke,
@@ -6785,7 +6805,7 @@ export class TinyCloudNode {
    * @internal
    */
   private getSessionExpiry(): Date {
-    // Default to the SESSION tier (30 days) if not explicitly set
+    // Default to the SESSION tier (7 days) if not explicitly set
     const expirationMs = this.config.sessionExpirationMs ?? DEFAULT_SESSION_EXPIRATION_MS;
     return new Date(Date.now() + expirationMs);
   }
@@ -7347,8 +7367,24 @@ export class TinyCloudNode {
     );
   }
 
+  /**
+   * Create one of this user's encryption networks. A network that already
+   * exists is returned as it is: it is read without signing, and no
+   * `network.create` is sent for it.
+   */
   async createEncryptionNetwork(
     name = DEFAULT_ENCRYPTION_NETWORK_NAME,
+  ): Promise<NetworkDescriptor> {
+    const graph = this._serviceGraph;
+    graph.assertActive();
+    this.requireEncryptionSession();
+    const existing = await this.getEncryptionNetwork(this.getDefaultEncryptionNetworkId(name));
+    graph.assertActive();
+    return existing ?? this.submitEncryptionNetworkCreate(name);
+  }
+
+  private async submitEncryptionNetworkCreate(
+    name: string,
   ): Promise<NetworkDescriptor> {
     const graph = this._serviceGraph;
     graph.assertActive();
@@ -7443,7 +7479,7 @@ export class TinyCloudNode {
         `Cannot create encryption network ${networkId}: owner ${parsed.ownerDid} does not match signed-in DID ${this.did}`,
       );
     }
-    return this.createEncryptionNetwork(parsed.name);
+    return this.submitEncryptionNetworkCreate(parsed.name);
   }
 
   /**
@@ -8414,7 +8450,7 @@ export class TinyCloudNode {
     if (!session) {
       throw new SessionExpiredError(new Date(0));
     }
-    const sessionExpiry = extractSiweExpiration(session.siwe);
+    const sessionExpiry = this.sessionAuthorityEnd(session);
     if (sessionExpiry !== undefined) {
       const now = Date.now();
       const marginMs = TinyCloudNode.SESSION_EXPIRY_SAFETY_MARGIN_MS;
@@ -8656,7 +8692,7 @@ export class TinyCloudNode {
       return { refused: "SESSION_EXPIRING", expiredAt: new Date(0) };
     }
     const nowMs = Date.now();
-    const sessionExpiry = extractSiweExpiration(session.siwe);
+    const sessionExpiry = this.sessionAuthorityEnd(session);
     if (
       sessionExpiry !== undefined &&
       sessionExpiry.getTime() <= nowMs + TinyCloudNode.SESSION_EXPIRY_SAFETY_MARGIN_MS

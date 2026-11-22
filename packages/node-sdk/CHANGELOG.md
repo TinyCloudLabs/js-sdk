@@ -1,5 +1,37 @@
 # @tinycloudlabs/node-sdk
 
+## 3.14.0-beta.4
+
+### Minor Changes
+
+- 4e4d845: OpenKey sign-in through an approval link asks the owner to let the grant renew itself.
+  - `tc auth login` asks for a 30-day renewal by default. A sign-in that asks for any encryption permission (decrypt included) or for the secrets space asks for no renewal unless `--renew` names one. `--renew <duration>` asks for another length (longer than `--expiry` and at most 365d) and `--no-renew` asks for none. `tc status` shows when a renewing sign-in stops renewing.
+  - `courier init --request` and `courier init --wait` ask for a 90-day renewal by default. `--renew <duration>` asks for another length and `--renew off` asks for none.
+  - The owner can approve with or without renewal. A saved request is resumed only by a run that asks for the same renewal.
+  - A renewing Courier grant keeps its peers' access going past the grant's signed end, up to the end the node has renewed it to.
+  - `TinyCloudNode.sessionEnd` gives when the session's authority ends. After `restoreSessionWithRenewal` it is the renewed end the node reported, and `delegateTo` can delegate up to it.
+
+  Details: TC-3522
+
+## 3.14.0-beta.3
+
+### Patch Changes
+
+- Updated dependencies [628be3c]
+  - @tinycloud/sdk-core@3.14.0-beta.3
+
+## 3.14.0-beta.2
+
+### Patch Changes
+
+- 81884ce: A share link's host is used when the owner has no registry record and the host is a known TinyCloud node: a production node, or a host the recipient configured (`host`, `newUserHost` or `tinycloudFallbackHosts`). Share links to owners without a registry record open from recipients that have no `newUserHost`, including `TinyCloudWeb.receiveShare`. The owner's registry record decides whenever it exists, and v2 shares and receives that delegate to the current session don't use the link host. `@tinycloud/sdk-core` exports `isKnownTinyCloudNode`, and `SharingService` takes an optional `receivedHostHintTransport` callback that `TinyCloudNode` supplies.
+
+  Details: TC-3661
+
+- Updated dependencies [18a0e38]
+- Updated dependencies [81884ce]
+  - @tinycloud/sdk-core@3.14.0-beta.2
+
 ## 3.14.0-beta.1
 
 ### Minor Changes

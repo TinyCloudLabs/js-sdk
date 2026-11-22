@@ -11,9 +11,9 @@ import {
 test("TC-3688 records the exact canonical CI root bytes of #1116 within the ruled +150/+150 cap", () => {
   validateLedger(ledger);
   const row = ledger.tc3688AccountIndexGuardRoot;
-  const predecessor = ledger.tc2490OneApprovalRoot;
+  const predecessor = ledger.tc3443GenericManifestRoot;
   expect(row).toEqual(approvedTc3688AccountIndexGuardRoot);
-  expect(row.base).toBe("cb3edeab4f66ae2fc7f84243c7b8fdc3a15fc812");
+  expect(row.base).toBe("2cb453f6523219d12bce66489fc2625782e970fa");
   expect(row.canonicalCI).toEqual({
     run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44934457098",
     jobs: [
@@ -22,7 +22,7 @@ test("TC-3688 records the exact canonical CI root bytes of #1116 within the rule
     ],
   });
   expect(row.sourceCommits).toEqual(["5cf63dddaa8aa4eaf98d75d01133f4e6c63f3c9f"]);
-  expect(row.root.ceiling).toEqual({ "index.mjs": 1529972, "index.cjs": 1462961 });
+  expect(row.root.ceiling).toEqual({ "index.mjs": 1530613, "index.cjs": 1463347 });
   expect(row.root.delta).toEqual({ "index.mjs": 114, "index.cjs": 112 });
 
   const cap = { "index.mjs": 150, "index.cjs": 150 } as const;
@@ -42,7 +42,7 @@ test("TC-3688 records the exact canonical CI root bytes of #1116 within the rule
   ]);
 });
 
-test("TC-3688 refuses mutation, removal, or a missing TC-2490 predecessor", () => {
+test("TC-3688 refuses mutation, removal, or a missing TC-3443 predecessor", () => {
   const row = ledger.tc3688AccountIndexGuardRoot;
   validateTc3688AccountIndexGuardRootTransition(undefined, row);
   validateTc3688AccountIndexGuardRootTransition(row, structuredClone(row));
@@ -60,5 +60,5 @@ test("TC-3688 refuses mutation, removal, or a missing TC-2490 predecessor", () =
   }
 
   expect(() => validateTc3688AccountIndexGuardRootTransition(row, undefined)).toThrow("TC-3688");
-  expect(() => validateLedger({ ...ledger, tc2490OneApprovalRoot: undefined })).toThrow("TC-3688");
+  expect(() => validateLedger({ ...ledger, tc3443GenericManifestRoot: undefined })).toThrow("TC-3688");
 });
