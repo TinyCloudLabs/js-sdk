@@ -252,3 +252,43 @@ Amos; values are entered at the prompt or from a file and never echoed.
   (its private half was not kept). The revoked old values are not restored.
   The environment secrets can stay; only jobs that name the environment read
   them.
+
+## Org level (not applied): a PR editing the check itself
+
+On `pull_request`, GitHub runs `secret-scan.yml` and
+`.github/actions/install-gitleaks` from the PR head, so a PR can edit the
+check and pass `gitleaks`. The edit is visible in the diff; the threat model
+is accidental leaks, so this is low priority (Bobbie, 10:31Z). Two options,
+either or both. TinyCloudLabs is on the GitHub Team plan (5 seats), which has
+both.
+
+**A. Org ruleset, "Require workflows to pass before merging".** On Team since
+[2025-06-16](https://github.blog/changelog/2025-06-16-organization-rulesets-now-available-for-github-team-plans/).
+The ruleset names a source repository, workflow path and ref (pin a SHA); GitHub
+runs that copy on every PR into the targeted branches, so the PR cannot edit it.
+- Org: one public source repository (e.g. `TinyCloudLabs/.github`) holds the
+  scan workflow; an org ruleset targets each repo's default branch. A public
+  source workflow can run in public and private repositories.
+- Each repo: nothing to add; its own `secret-scan.yml` can stay or go. Changes
+  to the scan become PRs to the source repository plus a ref bump in the
+  ruleset.
+- Catches: the rule blocks direct pushes to the targeted branch. The release
+  jobs push version commits to master with the deploy key, so the org ruleset
+  needs a bypass that covers them (repo rulesets bypass `DeployKey`; check that
+  the org ruleset offers the same before enforcing, or start in "Evaluate"
+  mode). The workflow's `paths`/`branches` filters are ignored.
+
+**B. CODEOWNERS plus "Require review from Code Owners".** Available on Team
+for public and private repositories.
+- Each repo: `.github/CODEOWNERS` lines such as
+  `/.github/ @TinyCloudLabs/security` and `/.gitleaksignore @TinyCloudLabs/security`
+  (the team needs write access), and `require_code_owner_review: true` in its
+  ruleset's `pull_request` rule (js-sdk today: `false`, 0 approvals), or one
+  org ruleset that sets it for every repo.
+- Consequence: every PR touching `.github/` (workflows, release scripts) or
+  the baseline waits for a code owner's approval, and the approver must be a
+  different account from the PR author. With agents opening PRs, that is a
+  human or a separate reviewer account on every CI change.
+
+A protects the check without slowing PRs; B also covers the release scripts
+and the baseline file, at the cost of a review on every CI change.
