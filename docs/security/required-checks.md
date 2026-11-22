@@ -144,14 +144,24 @@ master-limited `production` environments.
 
 ### After
 
+**Where #1130 expects `NPM_TOKEN`: an environment secret named `NPM_TOKEN`
+in the `production` environment of TinyCloudLabs/js-sdk.** Not a repository
+secret and not an organization secret. The workflows keep reading
+`secrets.NPM_TOKEN`; with `environment: production` on the job, GitHub
+resolves the environment secret first. The same holds for `RELEASE_DEPLOY_KEY`
+and `GH_TOKEN`.
+
 - The six jobs above declare `environment: production` (the last commit of
   this PR). They then run only from `master`; a dispatch from another branch is
   refused by the environment's branch policy before any step runs.
-- Environment `production` additionally holds `NPM_TOKEN` (a new npm granular
-  token, publish rights on the `@tinycloud` scope only), `RELEASE_DEPLOY_KEY`
-  (a new deploy key pair: the public half added as a write deploy key, the
-  private half here) and `GH_TOKEN` (a new token, only if `manual-release.yml`
-  is kept).
+- Environment `production` (exists today: branch policy `master` only, no
+  required reviewers; keep it that way) additionally holds these environment
+  secrets:
+  - `NPM_TOKEN`: the new npm granular token, publish rights on the
+    `@tinycloud` scope only;
+  - `RELEASE_DEPLOY_KEY`: a new deploy key pair, the public half added as a
+    write deploy key, the private half here;
+  - `GH_TOKEN`: a new token, only if `manual-release.yml` is kept.
 - Repository secrets `GH_TOKEN`, `RELEASE_DEPLOY_KEY`,
   `TC_MCP_INTROSPECTION_CLIENT_ID` and `TC_MCP_INTROSPECTION_CLIENT_SECRET`
   deleted (the last two already exist in `production`, which is the only place
@@ -163,18 +173,23 @@ master-limited `production` environments.
   it to `selected` with every other repository that needs it: an org-wide
   change for Bobbie to approve.
 
-### Order
+### Order (Naomi, 2026-11-22 10:12Z)
 
-1. Merge this PR, including the `environment: production` commit. It is safe
-   now: `production` exists and allows `master`, and until step 2 the jobs still
-   resolve the repository and organization secrets as before.
-2. Create the new `production` environment secrets (`NPM_TOKEN`,
-   `RELEASE_DEPLOY_KEY` with its new deploy key, `GH_TOKEN`). Environment secrets
-   take precedence over repository and organization secrets of the same name.
-3. Run one beta release (or `Release` with `resume: beta`) and confirm it
-   publishes and pushes with the environment secrets.
-4. Delete the repository secrets and the old deploy key, revoke the old npm
-   token, and narrow the organization secrets' repository access.
+The publish path (tarball audit, environment) and the npm credential must not
+change at once, so this PR stays open until step 2.
+
+1. With master as it is today, the new `NPM_TOKEN` is used for the first
+   successful beta publish (`@tinycloud/cli` 1.9.0-beta.0 / SDK
+   3.14.0-beta.1). On today's master the jobs have no environment, so that run
+   reads the repository or organization `NPM_TOKEN`.
+2. Amos confirms the `production` environment (master only, no reviewers) and
+   adds the environment secrets above, with `NPM_TOKEN` holding the same new
+   token as step 1.
+3. Merge this PR. The next beta run publishes with the `production`
+   environment's `NPM_TOKEN` and `RELEASE_DEPLOY_KEY`, after the tarball audit.
+4. After that run is green: delete the repository secrets and the old deploy
+   key, revoke the old npm token, and narrow the organization secrets'
+   repository access. Then add the required checks (ruleset section above).
 
 ### Undo
 
