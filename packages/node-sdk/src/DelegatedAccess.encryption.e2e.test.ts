@@ -352,5 +352,41 @@ describe.skipIf(!nodeBinary)(
       await Bun.sleep(access.delegation.expiry.getTime() - Date.now() + 2_000);
       expect((await decrypt(access)).ok).toBe(false);
     }, 120_000);
+
+    // Naomi 13:35:53Z: the 64-byte cap is inclusive. A 64-byte name in a
+    // 64-byte scope is sealed to and read from its own key on the real node;
+    // 65 is refused before anything is asked, written or read through the root.
+    test("a 64-byte name in a 64-byte scope writes and reads on its own key; 65 is refused with nothing written", async () => {
+      const name = `A${"B".repeat(63)}`;
+      const scope = "s".repeat(64);
+      const secrets = owner.secretsForSpace(secretsSpace);
+
+      const put = await secrets.put(name, "longest-value", { scope });
+      expect(put.ok, JSON.stringify(put.ok ? undefined : put.error)).toBe(true);
+      const record = await owner.kvForSpace(secretsSpace).get<unknown>(`vault/secrets/scoped/${scope}/${name}`);
+      if (!record.ok) throw new Error(JSON.stringify(record.error));
+      const raw = record.data.data;
+      const stored = (typeof raw === "string" ? JSON.parse(raw) : raw) as Record<string, unknown>;
+      expect({ v: stored.v, keyPath: stored.keyPath }).toEqual({ v: 2, keyPath: `secrets/scoped/${scope}/${name.toLowerCase()}` });
+      expect(await secrets.get(name, { scope, requestPermission: true })).toEqual({ ok: true, data: "longest-value" });
+
+      const refusals = [
+        [`${name}C`, {}, `Secret name "${name}C" is longer than 64 characters.`],
+        [name, { scope: `${scope}s` }, `Secret scope "${scope}s" is longer than 64 characters.`],
+      ] as const;
+      for (const [refusedName, options, message] of refusals) {
+        for (const result of [
+          await secrets.put(refusedName, "x", options),
+          await secrets.get(refusedName, { ...options, requestPermission: true }),
+          await secrets.get(refusedName, options),
+        ]) {
+          expect(result.ok ? undefined : { code: result.error.code, message: result.error.message })
+            .toEqual({ code: "INVALID_INPUT", message });
+        }
+      }
+      const listed = await secrets.vault.list({ prefix: "secrets/", removePrefix: true, source: "network" });
+      if (!listed.ok) throw new Error(JSON.stringify(listed.error));
+      expect(listed.data.filter((key) => key.endsWith(`${name}C`) || key.includes(`${scope}s/`))).toEqual([]);
+    }, 120_000);
   },
 );
