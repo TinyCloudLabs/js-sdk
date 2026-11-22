@@ -20,6 +20,9 @@ const response = json<Record<string, string>>("node-dev-os-attestation.json");
 const collateral = json<Collateral>("node-dev-os-collateral.json");
 const NONCE = "ad9077d2ad7b1ee0df0cf481f13ecffa";
 const DID = "did:key:z6MkjHi79SMX4doJyo2w7jDTM6Fa7iX6EVZWXNbJ6RzBm3Wi";
+// Phala's `phala` KMS root key (ca_pubkey of kc_aOwADKBd per `phala api /kms`, 2026-11-22), P-256 SPKI.
+const KMS_ID =
+  "3059301306072a8648ce3d020106082a8648ce3d03010703420004e8e325a477b0bf22800dc927a46c68638938d283fe73d1f9028eeac7028193f3470122193875f598b7addc503e534712ab437b4120776bbac32ddf8897f844ee";
 const AT = new Date("2026-11-22T13:16:00Z");
 
 /** Test-only lists that accept the recorded dev CVM, to exercise every check past the OS one. */
@@ -77,6 +80,7 @@ describe("recorded node quote", () => {
       osImage: { name: "dstack-dev-0.5.15 (test only)", hash: "432b8a1e82ec8a90b3d30bb201e5d20a8bc5c05b69f1d8ba13687232dda5aebd" },
       appId: "350d124c81d53a57e8899e9f85a904918e663b61",
       composeHash: "1dc2fe4a207c340c9cfb312ffa7af0725774d23671e5b553c3b4398f63e5ad68",
+      keyProvider: { name: "kms", id: KMS_ID },
       identity: DID,
       tcbStatus: "UpToDate",
     });
@@ -93,6 +97,34 @@ describe("recorded node quote", () => {
   test("a release pinned for another app ID is refused", async () => {
     const trust = { ...DEV_AS_PRODUCTION, releases: [{ ...DEV_AS_PRODUCTION.releases[0]!, appId: "0".repeat(39) + "1" }] };
     expect((await refusal(response, options({ trust }))).code).toBe("release");
+  });
+
+  test("keys from a KMS other than the release's are refused", async () => {
+    // The release pins another root key: as if the host had booted the CVM against its own KMS.
+    const pinned = `${KMS_ID.slice(0, -4)}0000`;
+    const trust = { ...DEV_AS_PRODUCTION, releases: [{ ...DEV_AS_PRODUCTION.releases[0]!, keyProviderId: pinned }] };
+    const refused = await refusal(response, options({ trust }));
+    expect(refused.code).toBe("kms");
+    expect(refused.message).toStartWith(`keys came from key provider {"name":"kms","id":"${KMS_ID.slice(0, 40)}`);
+    expect(refused.message).toEndWith(`not 1.26.19's kms ${pinned.slice(0, 8)}…`);
+  });
+
+  test("an event log that claims another KMS does not replay to RTMR3", async () => {
+    const events = JSON.parse(response.event_log!) as { event: string; event_payload: string }[];
+    const rogue = JSON.stringify({ name: "kms", id: `${KMS_ID.slice(0, -4)}0000` });
+    for (const e of events) if (e.event === "key-provider") e.event_payload = Buffer.from(rogue).toString("hex");
+    expect(await refusal({ ...response, event_log: JSON.stringify(events) }, options({ trust: DEV_AS_PRODUCTION }))).toEqual({
+      code: "event-log",
+      message: "event log does not replay to the quote's RTMR3",
+    });
+  });
+
+  test("an event name with ':' and a non-string digest are refused", async () => {
+    const events = JSON.parse(response.event_log!) as { event: string; digest: unknown }[];
+    const colon = events.map((e) => (e.event === "storage-fs" ? { ...e, event: "storage:fs" } : e));
+    expect((await refusal({ ...response, event_log: JSON.stringify(colon) }, options({ trust: DEV_AS_PRODUCTION }))).message).toMatch(/has a ':' in its name/);
+    const numeric = events.map((e) => (e.event === "storage-fs" ? { ...e, digest: 1 } : e));
+    expect((await refusal({ ...response, event_log: JSON.stringify(numeric) }, options({ trust: DEV_AS_PRODUCTION }))).message).toMatch(/has no digest/);
   });
 
   test("OS measurements that differ from the pinned ones are refused", async () => {

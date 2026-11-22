@@ -6,7 +6,7 @@ const USAGE = `usage: tinycloud-tee-verify <url> [--service tinycloud-node|openk
 
 Asks the service for a hardware quote over a fresh nonce and checks it:
 Intel's signature and TCB status, the production OS measurements, the
-released app ID and compose hash, and the signer the quote binds.
+released app ID, compose hash and KMS, and the signer the quote binds.
 Exit 0: verified. Exit 1: refused. Exit 2: usage.`;
 
 function parse(argv: string[]): { url: string; service: ServiceName; signer?: string; json: boolean } | null {
@@ -47,6 +47,7 @@ async function main(): Promise<number> {
           `  os image:     ${v.osImage.name} (${v.osImage.hash})`,
           `  app id:       ${v.appId}`,
           `  compose hash: ${v.composeHash}`,
+          `  kms:          ${v.keyProvider.name} ${v.keyProvider.id}`,
           `  signer:       ${v.identity}`,
           `  tcb:          ${v.tcbStatus}`,
           "",

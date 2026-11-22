@@ -12,6 +12,7 @@ export type RefusalCode =
   | "event-log"
   | "os"
   | "release"
+  | "kms"
   | "service";
 
 /** The attestation did not verify. `message` says why, for a person to read. */

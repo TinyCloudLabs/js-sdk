@@ -6,9 +6,10 @@ Checks that a TinyCloud service runs the code it says it runs, in a TEE. It veri
 2. Intel's signature over the TDX quote, with TCB status `UpToDate` (pinned `@phala/dcap-qvl` 0.7.0, collateral from Phala's PCCS).
 3. REPORTDATA is the binding digest.
 4. The TD debug bit is clear.
-5. The RTMR3 event log replays to the quote, and the app ID, compose hash and OS image hash are read from that replay.
+5. The RTMR3 event log replays to the quote, and the app ID, compose hash, OS image hash and key provider are read from that replay. Only version 1 event logs are supported; an OS that writes version 2 events is refused until the replay supports them.
 6. The OS image and its MRTD and RTMR0-2 are on the published production list.
 7. The app ID and compose hash are a published release.
+8. The keys came from that release's KMS: the `key-provider` event names its root key exactly. dstack takes keys from whatever KMS the host names unless the compose sets `key_provider_id`, and only records the one it used.
 
 The lists are in `pins/` (see `pins/README.md`).
 
@@ -26,6 +27,7 @@ verified
   os image:     <name> (<hash>)
   app id:       <app id>
   compose hash: <compose hash>
+  kms:          kms <root key, hex SPKI>
   signer:       did:key:…
   tcb:          UpToDate
 ```

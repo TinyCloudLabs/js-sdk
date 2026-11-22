@@ -64,6 +64,8 @@ export interface Verified {
   osImage: { name: string; hash: string };
   appId: string;
   composeHash: string;
+  /** The KMS the CVM took its keys from, as the release pins it. */
+  keyProvider: { name: string; id: string };
   /** The signer the quote binds. */
   identity: string;
   tcbStatus: TcbStatus;
@@ -81,9 +83,10 @@ const short = (hex: string) => `${hex.slice(0, 8)}…`;
  * Verifies a service's `/attestation` response, failing closed. In order:
  * the binding of `identity` and `nonce`; Intel's signature over the quote and
  * TCB status UpToDate; REPORTDATA; the TD debug bit; the RTMR3 event-log
- * replay; the OS image against the published production list; and the app ID
- * and compose hash against the published releases. Throws `TeeVerifyRefused`
- * saying which check failed.
+ * replay; the OS image against the published production list; the app ID
+ * and compose hash against the published releases; and the KMS the CVM took
+ * its keys from against that release's. Throws `TeeVerifyRefused` saying
+ * which check failed.
  */
 export async function verifyAttestation(response: unknown, options: VerifyOptions): Promise<Verified> {
   const trust = options.trust ? checkTrust(options.trust) : PUBLISHED_TRUST;
@@ -153,6 +156,11 @@ export async function verifyAttestation(response: unknown, options: VerifyOption
   if (!release) {
     refuse("release", `compose hash ${short(measured.composeHash)} of app ${measured.appId} is not a released ${options.service} version`);
   }
+  // dstack takes keys from any KMS the host names unless the compose pins key_provider_id,
+  // so a host-run KMS would otherwise pass. The key-provider event records which one served them.
+  if (measured.keyProvider !== JSON.stringify({ name: release.keyProviderName, id: release.keyProviderId })) {
+    refuse("kms", `keys came from key provider ${measured.keyProvider.slice(0, 160)}, not ${release.version}'s ${release.keyProviderName} ${short(release.keyProviderId)}`);
+  }
 
   return {
     service: options.service,
@@ -160,6 +168,7 @@ export async function verifyAttestation(response: unknown, options: VerifyOption
     osImage: { name: os.name, hash: os.osImageHash },
     appId: measured.appId,
     composeHash: measured.composeHash,
+    keyProvider: { name: release.keyProviderName, id: release.keyProviderId },
     identity: options.identity,
     tcbStatus: verified.status,
   };

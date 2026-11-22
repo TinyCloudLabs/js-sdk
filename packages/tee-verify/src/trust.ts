@@ -25,12 +25,20 @@ export interface RefusedOsImage {
   why: string;
 }
 
-/** A released version of a service: its dstack app ID and compose hash. */
+/**
+ * A released version of a service: its dstack app ID, compose hash and the KMS
+ * it must take its keys from. dstack accepts any KMS the host names unless the
+ * compose sets `key_provider_id`; it only records the one used in the
+ * `key-provider` event, `{"name":<keyProviderName>,"id":<keyProviderId>}`.
+ */
 export interface ReleasePin {
   service: ServiceName;
   version: string;
   appId: string;
   composeHash: string;
+  keyProviderName: string;
+  /** Hex DER SubjectPublicKeyInfo of the KMS root key. */
+  keyProviderId: string;
 }
 
 export interface Trust {
@@ -54,7 +62,8 @@ export function checkTrust(trust: Trust): Trust {
     if (!p.name || !HEX32.test(p.osImageHash) || !p.why) throw new Error(`invalid refused OS image ${JSON.stringify(p.name)}`);
   }
   for (const p of trust.releases) {
-    if ((p.service !== "tinycloud-node" && p.service !== "openkey") || !p.version || !APP_ID.test(p.appId) || !HEX32.test(p.composeHash)) {
+    if ((p.service !== "tinycloud-node" && p.service !== "openkey") || !p.version || !APP_ID.test(p.appId) || !HEX32.test(p.composeHash)
+        || !p.keyProviderName || !/^(?:[0-9a-f]{2})+$/.test(p.keyProviderId)) {
       throw new Error(`invalid release pin ${JSON.stringify(p.version)}`);
     }
   }
