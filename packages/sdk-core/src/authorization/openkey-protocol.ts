@@ -76,6 +76,13 @@ export interface CapabilityPresentationEnvelopeV1 {
   manifestId?: string;
   manifestDigest?: string;
   /**
+   * Only when the manifest the digest covers holds `{owner}` in a permission path:
+   * the `did:pkh:eip155:<chain>:<EIP-55 address>` the SDK resolved it to. A hint.
+   * OpenKey resolves `{owner}` with the owner it derives itself, and a hint that
+   * differs makes the binding `unsigned`.
+   */
+  owner?: string;
+  /**
    * Full manifest payload(s) the SDK forwards so the OpenKey review UI
    * can render honest provenance labels. Display-only:
    *   - The envelope MUST NEVER expand authority; the ReCap payload is

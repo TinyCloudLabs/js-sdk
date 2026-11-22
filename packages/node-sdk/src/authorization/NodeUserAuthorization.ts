@@ -27,6 +27,9 @@ import {
   DEFAULT_MANIFEST_SPACE,
   ENCRYPTION_PERMISSION_SERVICE,
   composeManifestRequest,
+  resolveManifestOwner,
+  manifestUsesOwnerPlaceholder,
+  MANIFEST_OWNER_PLACEHOLDER,
   GENERIC_APP_ID_WITHOUT_HOST,
   genericAppManifest,
   genericAppManifestWarning,
@@ -489,6 +492,10 @@ export class NodeUserAuthorization implements IUserAuthorization {
    */
   private _manifest?: Manifest | Manifest[];
   private _capabilityRequest?: ComposedManifestRequest;
+  /** The owner `{owner}` in manifest paths resolves to: `did:pkh:eip155:<chain>:<EIP-55 address>`, bound once the signer's address and chain are known. */
+  private _manifestOwnerDid?: string;
+  /** The owner the cached request was composed for, when a manifest path holds `{owner}`. */
+  private _capabilityRequestOwner?: string;
   private readonly includeAccountRegistryPermissions: boolean;
   private readonly includeImplicitCapabilitiesRead: boolean;
   private readonly requireExistingAccount: boolean;
@@ -596,6 +603,19 @@ export class NodeUserAuthorization implements IUserAuthorization {
     return this.getCapabilityRequest();
   }
 
+  /**
+   * The manifests a sign-in checks for caveats before any signer call. A template whose owner
+   * is not bound yet is checked as published: resolving the token adds no caveats.
+   * @internal
+   */
+  get manifestsForCaveatRefusal(): readonly Manifest[] | undefined {
+    if (this._capabilityRequest === undefined && this._manifest !== undefined && this._manifestOwnerDid === undefined) {
+      const manifests = Array.isArray(this._manifest) ? this._manifest : [this._manifest];
+      if (manifests.some(manifestUsesOwnerPlaceholder)) return manifests;
+    }
+    return this.getCapabilityRequest()?.manifests;
+  }
+
   get hosts(): string[] {
     return this.tinycloudHosts ? [...this.tinycloudHosts] : [];
   }
@@ -607,6 +627,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
   setManifest(manifest: Manifest | Manifest[] | undefined): void {
     this._manifest = manifest;
     this._capabilityRequest = undefined;
+    this._capabilityRequestOwner = undefined;
   }
 
   setCapabilityRequest(request: ComposedManifestRequest | undefined): void {
@@ -651,6 +672,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
     this._tinyCloudSession = { ...session, address };
     this._address = address;
     this._chainId = session.chainId;
+    this.bindManifestOwner(address, session.chainId);
     // Don't overwrite an explicitly-configured host (e.g. local dev) with a
     // possibly-stale persisted value: only adopt persisted hosts when none
     // are already set.
@@ -795,6 +817,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
     this._tinyCloudSession = { ...session };
     this._address = session.address;
     this._chainId = session.chainId;
+    this.bindManifestOwner(session.address, session.chainId);
     this._session = {
       address: session.address,
       walletAddress: session.address,
@@ -1022,15 +1045,51 @@ export class NodeUserAuthorization implements IUserAuthorization {
       this._capabilityRequest = request;
       return request;
     }
+    const manifests = Array.isArray(this._manifest) ? this._manifest : [this._manifest];
+    const usesOwner = manifests.some(manifestUsesOwnerPlaceholder);
+    if (usesOwner && this._manifestOwnerDid === undefined) {
+      throw new ManifestValidationError(
+        `a manifest path holds ${MANIFEST_OWNER_PLACEHOLDER} and the signer's address is not known yet; sign in before reading the requested permissions`,
+      );
+    }
+    const ownerDid = this._manifestOwnerDid;
     this._capabilityRequest = composeManifestRequest(
-      Array.isArray(this._manifest) ? this._manifest : [this._manifest],
+      ownerDid === undefined ? manifests : manifests.map((manifest) => resolveManifestOwner(manifest, ownerDid)),
       {
         includeAccountRegistryPermissions:
           this.includeAccountRegistryPermissions,
         includeImplicitCapabilitiesRead: this.includeImplicitCapabilitiesRead,
       }
     );
+    this._capabilityRequestOwner = usesOwner ? ownerDid : undefined;
     return this._capabilityRequest;
+  }
+
+  /**
+   * Binds `{owner}` in manifest paths to the signer. Does nothing for a manifest without the
+   * token, so apps that use none see no change. A request composed for another owner is dropped.
+   */
+  private bindManifestOwner(address: string, chainId: number): void {
+    if (this._manifest === undefined) return;
+    const manifests = Array.isArray(this._manifest) ? this._manifest : [this._manifest];
+    if (!manifests.some(manifestUsesOwnerPlaceholder)) return;
+    const ownerDid = pkhDid(address, chainId);
+    this._manifestOwnerDid = ownerDid;
+    if (this._capabilityRequestOwner !== undefined && this._capabilityRequestOwner !== ownerDid) {
+      this._capabilityRequest = undefined;
+      this._capabilityRequestOwner = undefined;
+    }
+  }
+
+  /** {@link bindManifestOwner} for a sign-in that has not read the signer yet (only reads it when a manifest uses the token). */
+  private async bindManifestOwnerFromSigner(identity?: { readonly address: string; readonly chainId: number }): Promise<void> {
+    if (this._manifest === undefined) return;
+    const manifests = Array.isArray(this._manifest) ? this._manifest : [this._manifest];
+    if (!manifests.some(manifestUsesOwnerPlaceholder)) return;
+    this.bindManifestOwner(
+      canonicalizeAddress(identity?.address ?? await this.signer.getAddress()),
+      identity?.chainId ?? await this.signer.getChainId(),
+    );
   }
 
   /**
@@ -1048,6 +1107,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
   }
 
   private async refreshNamedKeyFeatureForSignIn(address: string, chainId: number): Promise<void> {
+    this.bindManifestOwner(address, chainId);
     const request = this.getCapabilityRequest();
     const siweDomain = this.siweConfig?.domain ?? this.domain;
     const hasNamedKeys = request?.manifests.some((manifest) =>
@@ -1156,6 +1216,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
     address: string,
     chainId: number,
   ): { entries: PermissionEntry[]; primarySpaceId: string } {
+    this.bindManifestOwner(address, chainId);
     const request = this.getCapabilityRequest();
     if (request === undefined) {
       const primarySpaceId = makePkhSpaceId(address, chainId, this.spacePrefix);
@@ -1283,6 +1344,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
     spaceAbilities?: Record<string, AbilitiesMap>;
     rawAbilities?: Record<string, string[]>;
   } {
+    this.bindManifestOwner(address, chainId);
     const request = this.getCapabilityRequest();
     if (request === undefined) {
       const defaultNetworkId = this.defaultEncryptionNetworkId(address, chainId);
@@ -1927,6 +1989,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
    * @param options - Optional per-call SIWE overrides for this sign-in only
    */
   async signIn(options?: SignInOptions): Promise<ClientSession> {
+    await this.bindManifestOwnerFromSigner();
     this.warnIfGenericManifest();
     refuseCaveated(this.getCapabilityRequest()?.manifests);
     const generation = this.sessionGeneration;
@@ -2143,6 +2206,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
     address: string;
     chainId: number;
   }> {
+    await this.bindManifestOwnerFromSigner(identity);
     this.warnIfGenericManifest();
     refuseCaveated(this.getCapabilityRequest()?.manifests);
     const address = canonicalizeAddress(identity?.address ?? await this.signer.getAddress());
@@ -2247,6 +2311,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
     // For now, we'll get it from the signer since it should match
     const address = canonicalizeAddress(identity?.address ?? await this.signer.getAddress());
     const chainId = identity?.chainId ?? await this.signer.getChainId();
+    this.bindManifestOwner(address, chainId);
     this.assertSignInCurrent(generation);
 
     await this.resolveTinyCloudHostsForSignIn(address, chainId);
@@ -2402,6 +2467,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
   ): Promise<PreparedOpenKeyAuthorization> {
     const generation = this.sessionGeneration;
     identity = identity ? Object.freeze({ ...identity, address: canonicalizeAddress(identity.address) }) : undefined;
+    await this.bindManifestOwnerFromSigner(identity);
     refuseCaveated(this.getCapabilityRequest()?.manifests);
     assertMaxExpiresAt(options?.maxExpiresAt);
     // A per-call host override is the host this session will actually use,
@@ -2599,6 +2665,8 @@ export class NodeUserAuthorization implements IUserAuthorization {
       reason: reason && reason.length > 0 ? reason : undefined,
       manifestId,
       manifestDigest,
+      // A hint only: OpenKey resolves `{owner}` with the owner it derives itself and treats a different value as unsigned.
+      owner: primary && manifestUsesOwnerPlaceholder(primary) ? this._manifestOwnerDid : undefined,
       manifests: envelopeManifests.length > 0 ? envelopeManifests : undefined,
     };
   }

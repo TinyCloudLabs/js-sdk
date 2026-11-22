@@ -496,6 +496,7 @@ export type Ledger = {
   tc3443SessionRetireRoot?: LogoutRatchet & { worker: { delta: number; ceiling: number }; replicaWorker: { delta: number; ceiling: number } };
   tc3443PortFolderRoot?: LogoutRatchet;
   tc3704OpenKeyPromptRoot?: LogoutRatchet;
+  tc3731ManifestOwnerRoot?: LogoutRatchet;
   tc2773LazyRestoreReplicaWorker?: Omit<WorkerRatchet, "worker"> & { replicaWorker: { delta: number; ceiling: number } };
 };
 
@@ -1146,6 +1147,7 @@ export function ancestryPins(root: Ledger, hasGatedOnly: boolean): Array<{ row: 
   if (root.tc3443SessionRetireRoot !== undefined) pins.push({ row: "tc3443SessionRetireRoot", pin: root.tc3443SessionRetireRoot.sourceCommits.at(-1)! });
   if (root.tc3443PortFolderRoot !== undefined) pins.push({ row: "tc3443PortFolderRoot", pin: root.tc3443PortFolderRoot.sourceCommits.at(-1)! });
   if (root.tc3704OpenKeyPromptRoot !== undefined) pins.push({ row: "tc3704OpenKeyPromptRoot", pin: root.tc3704OpenKeyPromptRoot.sourceCommits.at(-1)! });
+  if (root.tc3731ManifestOwnerRoot !== undefined) pins.push({ row: "tc3731ManifestOwnerRoot", pin: root.tc3731ManifestOwnerRoot.sourceCommits.at(-1)! });
   if (hasGatedOnly) pins.push({ row: "gatedOnlyRatchet", pin: approvedGatedOnlyRatchet.sourceCommit });
   return pins;
 }
@@ -1266,6 +1268,7 @@ export function rootCeilings(root: Ledger): Array<{ row: string; ceiling: GzipSi
     ["tc3443SessionRetireRoot", root.tc3443SessionRetireRoot?.root.ceiling],
     ["tc3443PortFolderRoot", root.tc3443PortFolderRoot?.root.ceiling],
     ["tc3704OpenKeyPromptRoot", root.tc3704OpenKeyPromptRoot?.root.ceiling],
+    ["tc3731ManifestOwnerRoot", root.tc3731ManifestOwnerRoot?.root.ceiling],
   ];
   return rows.flatMap(([row, ceiling]) => ceiling === undefined ? [] : [{ row, ceiling }]);
 }
@@ -3880,6 +3883,26 @@ export const approvedTc3704OpenKeyPromptRoot: LogoutRatchet = {
   "reason": "requestPermissions skips the SDK prompt when OpenKey signs and shows the request, and sends OpenKey the app's name as display-only text with the sign request (TinyCloudWeb, openKeySignPresentation); the web-sdk root bundles both. Canonical Node 22/Bun 1.3.14 CI on #1117 (934c8daf, master fbdbaa7b merged in) measured index.mjs 1533915 and index.cjs 1465566 gzip -9 bytes: +333 and +281 over the tc3443PortFolderRoot ceilings 1533582 and 1465285. No other ceiling moves. Details: TC-3704"
 };
 
+/** The exact TC-3731 manifest owner token root allowance from canonical CI. */
+export const approvedTc3731ManifestOwnerRoot: LogoutRatchet = {
+  "label": "a manifest permission path can hold the token {owner} (TC-3731)",
+  "ruling": "size-ruling: TC-3731 row tc3731ManifestOwnerRoot index.mjs 1534530 (+615), index.cjs 1466077 (+511) gzip bytes over the tc3704OpenKeyPromptRoot ceilings, CI's canonical figure (2026-11-22). Details: TC-3731",
+  "base": "895bfdc72d6d4e70f5bac72f39b373e2195e7dcd",
+  "sourceCommits": ["a877975473564b71c9999c885b353e10220a2924"],
+  "canonicalCI": {
+    "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45078405861",
+    "jobs": [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45078405861/job/137380725081",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45078405861/job/137380725327"
+    ]
+  },
+  "root": {
+    "delta": { "index.mjs": 615, "index.cjs": 511 },
+    "ceiling": { "index.mjs": 1534530, "index.cjs": 1466077 }
+  },
+  "reason": "TinyCloudNode and NodeUserAuthorization bind the signer's did:pkh owner into manifest permission paths that hold {owner}, and a restored web session resolves the token with its own address and chain id; sdk-core and node-sdk are bundled into the web-sdk root. Canonical Node 22/Bun 1.3.14 CI on #1121 (c3425b3a, master 895bfdc7 merged in) measured index.mjs 1534530 and index.cjs 1466077 gzip -9 bytes: +615 and +511 over the tc3704OpenKeyPromptRoot ceilings 1533915 and 1465566. No other ceiling moves. Details: TC-3731"
+};
+
 export const approvedLedgerRows: Record<string, unknown> = {
   phase2Ratchet: approvedPhase2,
   fixRequiredRatchet: approvedFixRequiredRatchet,
@@ -3997,6 +4020,7 @@ export const approvedLedgerRows: Record<string, unknown> = {
   tc3443SessionRetireRoot: approvedTc3443SessionRetireRoot,
   tc3443PortFolderRoot: approvedTc3443PortFolderRoot,
   tc3704OpenKeyPromptRoot: approvedTc3704OpenKeyPromptRoot,
+  tc3731ManifestOwnerRoot: approvedTc3731ManifestOwnerRoot,
 };
 
 /** Only a git merge-base ledger may retain the pre-correction toolchain. */
@@ -4540,6 +4564,11 @@ export function validateLedger(value: Ledger, historicalBase = false): void {
       (!value.tc3443PortFolderRoot ||
         JSON.stringify(value.tc3704OpenKeyPromptRoot) !== JSON.stringify(approvedTc3704OpenKeyPromptRoot))) {
     throw new Error("Only the exact TC-3704 root admission is approved.");
+  }
+  if (value.tc3731ManifestOwnerRoot !== undefined &&
+      (!value.tc3704OpenKeyPromptRoot ||
+        JSON.stringify(value.tc3731ManifestOwnerRoot) !== JSON.stringify(approvedTc3731ManifestOwnerRoot))) {
+    throw new Error("Only the exact TC-3731 root admission is approved.");
   }
 }
 
@@ -5553,5 +5582,13 @@ export function validateTc3704OpenKeyPromptRootTransition(base?: LogoutRatchet, 
   if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc3704OpenKeyPromptRoot) ||
       base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
     throw new Error("The TC-3704 root admission may be introduced once and cannot change later.");
+  }
+}
+
+/** The exact TC-3731 manifest owner token root admission is introduced once and immutable. */
+export function validateTc3731ManifestOwnerRootTransition(base?: LogoutRatchet, current?: LogoutRatchet): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc3731ManifestOwnerRoot) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The TC-3731 root admission may be introduced once and cannot change later.");
   }
 }
