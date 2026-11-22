@@ -19,6 +19,7 @@
     "packages/vfs",
     "packages/operations",
     "packages/replica",
+    "packages/tee-verify",
     "packages/mcp",
     "packages/courier",
     "packages/cli",

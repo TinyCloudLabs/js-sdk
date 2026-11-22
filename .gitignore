@@ -31,3 +31,4 @@ packages/operations/dist/
 packages/replica/dist/
 packages/courier/dist/
 packages/mcp/dist/
+packages/tee-verify/dist/

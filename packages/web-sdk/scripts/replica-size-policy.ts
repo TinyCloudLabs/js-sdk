@@ -489,6 +489,7 @@ export type Ledger = {
   tc2944VaultPathClassifierRoot?: LogoutRatchet;
   tc3448OnBehalfPromptRoot?: LogoutRatchet;
   tc2490OneApprovalRoot?: LogoutRatchet;
+  tc3841TeeVerifyRoot?: LogoutRatchet;
   tc2773LazyRestoreReplicaWorker?: Omit<WorkerRatchet, "worker"> & { replicaWorker: { delta: number; ceiling: number } };
 };
 
@@ -1132,6 +1133,7 @@ export function ancestryPins(root: Ledger, hasGatedOnly: boolean): Array<{ row: 
   if (root.tc2944VaultPathClassifierRoot !== undefined) pins.push({ row: "tc2944VaultPathClassifierRoot", pin: root.tc2944VaultPathClassifierRoot.sourceCommits.at(-1)! });
   if (root.tc3448OnBehalfPromptRoot !== undefined) pins.push({ row: "tc3448OnBehalfPromptRoot", pin: root.tc3448OnBehalfPromptRoot.sourceCommits.at(-1)! });
   if (root.tc2490OneApprovalRoot !== undefined) pins.push({ row: "tc2490OneApprovalRoot", pin: root.tc2490OneApprovalRoot.sourceCommits.at(-1)! });
+  if (root.tc3841TeeVerifyRoot !== undefined) pins.push({ row: "tc3841TeeVerifyRoot", pin: root.tc3841TeeVerifyRoot.sourceCommits.at(-1)! });
   if (hasGatedOnly) pins.push({ row: "gatedOnlyRatchet", pin: approvedGatedOnlyRatchet.sourceCommit });
   return pins;
 }
@@ -1245,6 +1247,7 @@ export function rootCeilings(root: Ledger): Array<{ row: string; ceiling: GzipSi
     ["tc2944VaultPathClassifierRoot", root.tc2944VaultPathClassifierRoot?.root.ceiling],
     ["tc3448OnBehalfPromptRoot", root.tc3448OnBehalfPromptRoot?.root.ceiling],
     ["tc2490OneApprovalRoot", root.tc2490OneApprovalRoot?.root.ceiling],
+    ["tc3841TeeVerifyRoot", root.tc3841TeeVerifyRoot?.root.ceiling],
   ];
   return rows.flatMap(([row, ceiling]) => ceiling === undefined ? [] : [{ row, ceiling }]);
 }
@@ -3719,6 +3722,26 @@ export const approvedTc2490OneApprovalRoot: LogoutRatchet = {
   "reason": "TinyCloudNode accepts a signed session grant spanning several of the owner's spaces, keeps each resource's own space in portable grants, and picks a manifest sign-in's primary space among its own requested spaces; node-sdk is bundled into the web-sdk root. Canonical Node 22/Bun 1.3.14 CI on #1060 (53e4dc78, master c5a7f854 merged in) measured index.mjs 1529858 and index.cjs 1462849 gzip -9 bytes: +186 and +180 over the TC-3448 ceilings 1529672 and 1462669. No other ceiling moves. Details: TC-2490"
 };
 
+/** The exact TC-3841 root allowance from canonical CI: dependency hoisting only, bundled code byte-identical. */
+export const approvedTc3841TeeVerifyRoot: LogoutRatchet = {
+  "label": "@tinycloud/tee-verify workspace package moves dependency hoisting (TC-3841)",
+  "ruling": "size-ruling: TC-3841 (Naomi 14:14Z): index.cjs 1463391 (+542), hoisting only, bundled code byte-identical. Details: TC-3841",
+  "base": "cb3edeab4f66ae2fc7f84243c7b8fdc3a15fc812",
+  "sourceCommits": ["7e76617192c07168a955658ae3faf59a5c2d302a"],
+  "canonicalCI": {
+    "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45028752915",
+    "jobs": [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45028752915/job/137228088791",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45028752915/job/137228088695"
+    ]
+  },
+  "root": {
+    "delta": { "index.mjs": 0, "index.cjs": 542 },
+    "ceiling": { "index.mjs": 1529858, "index.cjs": 1463391 }
+  },
+  "reason": "The new packages/tee-verify workspace depends on @phala/dcap-qvl, which needs asn1.js ^5.4.1, so bun hoists asn1.js 5.4.1 to the root and nests 4.10.1 under parse-asn1. The web-sdk root bundles the same code; only module paths and order change. Canonical Node 22/Bun 1.3.14 CI on #1132 (7e766171, master cb3edeab) measured index.cjs 1463391 gzip -9 bytes, +542 over the TC-2490 ceiling 1462849, and index.mjs 1529768, under its 1529858 ceiling, which stays. No other ceiling moves. Details: TC-3841"
+};
+
 export const approvedLedgerRows: Record<string, unknown> = {
   phase2Ratchet: approvedPhase2,
   fixRequiredRatchet: approvedFixRequiredRatchet,
@@ -3829,6 +3852,7 @@ export const approvedLedgerRows: Record<string, unknown> = {
   tc2944VaultPathClassifierRoot: approvedTc2944VaultPathClassifierRoot,
   tc3448OnBehalfPromptRoot: approvedTc3448OnBehalfPromptRoot,
   tc2490OneApprovalRoot: approvedTc2490OneApprovalRoot,
+  tc3841TeeVerifyRoot: approvedTc3841TeeVerifyRoot,
 };
 
 /** Only a git merge-base ledger may retain the pre-correction toolchain. */
@@ -4337,6 +4361,11 @@ export function validateLedger(value: Ledger, historicalBase = false): void {
       (!value.tc3448OnBehalfPromptRoot ||
         JSON.stringify(value.tc2490OneApprovalRoot) !== JSON.stringify(approvedTc2490OneApprovalRoot))) {
     throw new Error("Only the exact TC-2490 root admission is approved.");
+  }
+  if (value.tc3841TeeVerifyRoot !== undefined &&
+      (!value.tc2490OneApprovalRoot ||
+        JSON.stringify(value.tc3841TeeVerifyRoot) !== JSON.stringify(approvedTc3841TeeVerifyRoot))) {
+    throw new Error("Only the exact TC-3841 root admission is approved.");
   }
 }
 
@@ -5294,5 +5323,13 @@ export function validateTc2490OneApprovalRootTransition(base?: LogoutRatchet, cu
   if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc2490OneApprovalRoot) ||
       base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
     throw new Error("The TC-2490 root admission may be introduced once and cannot change later.");
+  }
+}
+
+/** The exact TC-3841 hoisting-only root admission is introduced once and immutable. */
+export function validateTc3841TeeVerifyRootTransition(base?: LogoutRatchet, current?: LogoutRatchet): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc3841TeeVerifyRoot) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The TC-3841 root admission may be introduced once and cannot change later.");
   }
 }

@@ -3435,5 +3435,23 @@
       "ceiling": { "index.mjs": 1529858, "index.cjs": 1462849 }
     },
     "reason": "TinyCloudNode accepts a signed session grant spanning several of the owner's spaces, keeps each resource's own space in portable grants, and picks a manifest sign-in's primary space among its own requested spaces; node-sdk is bundled into the web-sdk root. Canonical Node 22/Bun 1.3.14 CI on #1060 (53e4dc78, master c5a7f854 merged in) measured index.mjs 1529858 and index.cjs 1462849 gzip -9 bytes: +186 and +180 over the TC-3448 ceilings 1529672 and 1462669. No other ceiling moves. Details: TC-2490"
+  },
+  "tc3841TeeVerifyRoot": {
+    "label": "@tinycloud/tee-verify workspace package moves dependency hoisting (TC-3841)",
+    "ruling": "size-ruling: TC-3841 (Naomi 14:14Z): index.cjs 1463391 (+542), hoisting only, bundled code byte-identical. Details: TC-3841",
+    "base": "cb3edeab4f66ae2fc7f84243c7b8fdc3a15fc812",
+    "sourceCommits": ["7e76617192c07168a955658ae3faf59a5c2d302a"],
+    "canonicalCI": {
+      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45028752915",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45028752915/job/137228088791",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45028752915/job/137228088695"
+      ]
+    },
+    "root": {
+      "delta": { "index.mjs": 0, "index.cjs": 542 },
+      "ceiling": { "index.mjs": 1529858, "index.cjs": 1463391 }
+    },
+    "reason": "The new packages/tee-verify workspace depends on @phala/dcap-qvl, which needs asn1.js ^5.4.1, so bun hoists asn1.js 5.4.1 to the root and nests 4.10.1 under parse-asn1. The web-sdk root bundles the same code; only module paths and order change. Canonical Node 22/Bun 1.3.14 CI on #1132 (7e766171, master cb3edeab) measured index.cjs 1463391 gzip -9 bytes, +542 over the TC-2490 ceiling 1462849, and index.mjs 1529768, under its 1529858 ceiling, which stays. No other ceiling moves. Details: TC-3841"
   }
 }
