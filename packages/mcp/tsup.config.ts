@@ -9,6 +9,7 @@ export default defineConfig({
     "src/cli.ts",
     "src/http.ts",
     "src/http-cli.ts",
+    "src/node-keep-alive.ts",
   ],
   format: ["esm", "cjs"],
   target: "node20",
