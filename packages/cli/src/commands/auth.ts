@@ -652,7 +652,7 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
   auth
     .command("login")
     .description("Authenticate with TinyCloud")
-    .option("--device", "Approve on another device (e.g. a phone) through OpenKey device authorization; requires a KV-scoped --manifest (SQL and secret decrypt need browser or --paste login)")
+    .option("--device", "Approve on another device, such as a phone, through OpenKey. Needs a KV-scoped --manifest. It can ask for decrypt on the default network, which covers every encrypted item in it. Secrets and SQL need browser or --paste login.")
     .option("--paste", "Use manual paste mode; OpenKey return codes expire after 5 minutes")
     .option("--no-popup", "Print the OpenKey URL without opening a browser")
     .option("--method <method>", "Authentication method: local or openkey")

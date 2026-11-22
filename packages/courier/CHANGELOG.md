@@ -1,5 +1,22 @@
 # @tinycloud/courier
 
+## 0.7.1-beta.2
+
+### Patch Changes
+
+- Updated dependencies [18a0e38]
+- Updated dependencies [81884ce]
+  - @tinycloud/sdk-core@3.14.0-beta.2
+  - @tinycloud/node-sdk@3.14.0-beta.2
+
+## 0.7.1-beta.1
+
+### Patch Changes
+
+- 13853a9: Revoking a Courier pairing while it is being renewed also ends the access the renewal grants.
+
+  Details: TC-3485
+
 ## 0.7.1-beta.0
 
 ### Patch Changes

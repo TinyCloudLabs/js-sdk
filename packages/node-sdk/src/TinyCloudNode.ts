@@ -183,6 +183,7 @@ import {
   resolveRegistryResource,
   warnRegistryDefaultNode,
   NodeNotFoundError,
+  isKnownTinyCloudNode,
   exactHttpOrigin,
   createInMemoryRegistrySequenceStore,
   createInMemoryRegistryCacheStore,
@@ -2180,6 +2181,7 @@ export class TinyCloudNode {
       createPlacement: this.config.sharePlacementSigner || this.config.privateKey
         ? share => this.createPlacementForShare(receiveOnlyGraph, share) : undefined,
       receivedPlacementTransport: share => this.transportForPlacedShare(receiveOnlyGraph, share),
+      receivedHostHintTransport: host => this.transportForShareHost(receiveOnlyGraph, host),
       hosts: [this.config.host!],
       // session: undefined - not needed for receive()
       invoke: receiveOnlyGraph.invoke,
@@ -2438,8 +2440,19 @@ export class TinyCloudNode {
     return this.createResourceTransport(graph, undefined, { record, parent });
   }
 
+  /**
+   * A received v1 share's own host as the no-record destination. Only a known
+   * node (production, or one the recipient configured) is accepted; the
+   * registry record still decides whenever the owner has one.
+   */
+  private transportForShareHost(graph: ServiceGraphLifetime, host: string): ResourceTransport | undefined {
+    const { newUserHost, tinycloudFallbackHosts } = this.config;
+    if (!isKnownTinyCloudNode(host, [this.explicitHost, newUserHost, ...(tinycloudFallbackHosts ?? [])])) return undefined;
+    return this.createResourceTransport(graph, undefined, undefined, [host]);
+  }
+
   private createResourceTransport(graph: ServiceGraphLifetime, session?: ServiceSession,
-    placement?: { record: SharePlacement; parent: SharePlacementParent }): ResourceTransport {
+    placement?: { record: SharePlacement; parent: SharePlacementParent }, noEntryHosts?: readonly string[]): ResourceTransport {
     const rawFetch = this.fetchForGraph(graph);
     return async (resources, send, options) => {
       graph.assertActive();
@@ -2452,7 +2465,7 @@ export class TinyCloudNode {
               cacheStore: this.config.registryCacheStore, registryChainId: this.config.registryChainId,
               fetch: rawFetch as typeof fetch,
             }).then((destinations) => endToEnd ? destinations.map((destination) => ({ ...destination, url: endToEndNodeHost(destination.url) })) : destinations)
-            : await this.routingDestinations(requestedResource, requestedAccess, undefined, dataRead, endToEnd);
+            : await this.routingDestinations(requestedResource, requestedAccess, noEntryHosts, dataRead, endToEnd);
           graph.assertActive();
           return targets;
         },
@@ -5510,6 +5523,7 @@ export class TinyCloudNode {
       createPlacement: this.config.sharePlacementSigner || this.config.privateKey
         ? share => this.createPlacementForShare(graph, share) : undefined,
       receivedPlacementTransport: share => this.transportForPlacedShare(graph, share),
+      receivedHostHintTransport: host => this.transportForShareHost(graph, host),
       hosts: [input.host],
       invoke: graph.invoke,
       fetch: graph.fetch,
@@ -6722,6 +6736,7 @@ export class TinyCloudNode {
       createPlacement: this.config.sharePlacementSigner || this.config.privateKey
         ? share => this.createPlacementForShare(graph, share) : undefined,
       receivedPlacementTransport: share => this.transportForPlacedShare(graph, share),
+      receivedHostHintTransport: host => this.transportForShareHost(graph, host),
       hosts: [this.config.host!],
       session: serviceSession,
       invoke: graph.invoke,

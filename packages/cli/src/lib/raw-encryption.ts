@@ -55,16 +55,17 @@ export function deviceRefusal(entries: readonly PermissionEntry[]): PermissionEn
 
 const DEVICE_DECRYPT_ALLOWED = "tinycloud.encryption/decrypt on the default network (space \"default\", path \"\")";
 
+/** The refusal for any request that touches the secrets space; `--paste` login is the route that can read secrets. */
+const DEVICE_SECRETS_REFUSAL = "--device can't read secrets yet. Use tinycloud auth login --paste instead.";
+
 /**
- * The DEVICE_AUTH_UNSUPPORTED_SCOPE message: what was refused, what --device allows, and `next` ("Use … for this
- * manifest."). `subject` ("this manifest", "this request") names who asked for the secrets space. Request text is
- * escaped and clipped.
+ * The DEVICE_AUTH_UNSUPPORTED_SCOPE message: for the secrets space the fixed refusal above; for any other refused
+ * entry, what was refused, what --device allows, and `next` ("Use … for this manifest."). Request text is escaped
+ * and clipped.
  */
-export function deviceRefusalMessage(refused: PermissionEntry | "secrets", subject: string, next: string): string {
+export function deviceRefusalMessage(refused: PermissionEntry | "secrets", next: string): string {
+  if (refused === "secrets") return DEVICE_SECRETS_REFUSAL;
   const allowed = `The only encryption permission --device can ask for is ${DEVICE_DECRYPT_ALLOWED}.`;
-  if (refused === "secrets") {
-    return `--device can't authorize the secrets space, and ${subject} asks for it. ${allowed} ${next}`;
-  }
   const actions = refused.actions.slice(0, 5).map((action) => safeClipped(action)).join(", ") || "no actions";
   return `--device can't ask for ${actions} on space "${safeClipped(refused.space ?? "")}", path "${safeClipped(refused.path)}"` +
     `${refused.caveats?.length ? " with extra limits" : ""}. ${allowed} ${next}`;

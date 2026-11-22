@@ -31,6 +31,9 @@
   "changesets": [
     "permission-prompt-on-behalf-of",
     "tc-2490-one-approval",
-    "tc-3293-with-feed-narrow"
+    "tc-3293-with-feed-narrow",
+    "tc-3485-courier-revoke-renewal-fence",
+    "tc-3639-recap-decode-without-buffer",
+    "tc-3661-share-link-host"
   ]
 }
