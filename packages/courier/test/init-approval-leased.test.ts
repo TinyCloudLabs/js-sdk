@@ -7,6 +7,7 @@ import { bases } from 'multiformats/basics';
 import { SiweMessage } from 'siwe';
 import { NodeWasmBindings, PrivateKeySigner, TinyCloudNode } from '@tinycloud/node-sdk';
 import { DEFAULT_TINYCLOUD_LOCATION_REGISTRY_URL, REGISTRY_NOT_FOUND_BODY, parseSignedSiweCacao } from '@tinycloud/sdk-core';
+import { RenewalAuthorityInactiveError } from '@tinycloud/sdk-core/delegations/renewal';
 import { checkLinkRecord, type LinkRecord } from '@tinycloud/share-envelope/links';
 import { encodeDagCbor } from '../../sdk-core/src/delegations/cacao';
 import { AGENT_GRANT, COURIER_DEFAULT_LEASE_SECONDS, COURIER_SPACE } from '../src/keys';
@@ -22,6 +23,9 @@ Object.assign(process.env, {
 });
 // Imported after COURIER_HOME is set, so no module resolves a real profile directory.
 const { main } = await import('../src/main');
+const { courierNode } = await import('../src/node');
+const { loadProfile } = await import('../src/profile');
+const { preflightOwner } = await import('../src/interim-owner');
 afterAll(() => fs.rmSync(home, { recursive: true, force: true }));
 
 const LINKS = 'https://links.fixture.test';
@@ -150,5 +154,41 @@ test('a leased approval is verified, admitted at the node and saved with the gra
   } finally {
     globalThis.fetch = realFetch;
     Object.defineProperty(TinyCloudNode.prototype, 'kv', kv);
+  }
+});
+
+test('a leased grant holds to its signed end until the node renews it, and is not restored once the node reports it revoked', async () => {
+  // Uses the grant and lease the previous test installed.
+  const saved = readHome<{ siwe: string; delegationCid: string }>('grant.json');
+  const signedEnd = new Date(saved.siwe.match(/^Expiration Time:\s*(.+)$/m)![1]!);
+  const statusCalls: string[] = [];
+  let status: Record<string, unknown> = {};
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    const url = String(input);
+    if (url === `${NODE}/delegation/status`) {
+      const { cid } = JSON.parse(String(init?.body)) as { cid: string };
+      statusCalls.push(cid);
+      return Response.json({ cid, ...status });
+    }
+    if (url === `${NODE}/info`) return Response.json({ nodeId: nodeIdentity.nodeDid });
+    if (url === `${NODE}/.well-known/tinycloud/node-keys`) return Response.json(nodeIdentity);
+    if (new URL(url).origin === new URL(DEFAULT_TINYCLOUD_LOCATION_REGISTRY_URL).origin && /^\/v[12]\/locations\/[^/]+$/.test(new URL(url).pathname)) {
+      return new Response(REGISTRY_NOT_FOUND_BODY, { status: 404, headers: { 'content-type': 'application/json' } });
+    }
+    throw new Error(`unexpected network call: ${url}`);
+  }) as typeof fetch;
+  try {
+    // Not renewed yet: no renewal to restore through, so the grant restores as signed and delegates no further than its end.
+    status = { status: 'active', exists: true, active: true, revoked: false, expired: false, effective_expiry: Math.floor(signedEnd.getTime() / 1000), renewal_history: [] };
+    const node = await courierNode(loadProfile());
+    expect(statusCalls).toEqual([saved.delegationCid]);
+    expect(node.sessionEnd?.toISOString()).toBe(signedEnd.toISOString());
+
+    status = { status: 'revoked', exists: true, active: false, revoked: true, expired: false };
+    await expect(courierNode(loadProfile())).rejects.toBeInstanceOf(RenewalAuthorityInactiveError);
+    expect(await preflightOwner()).toEqual({ state: 'approval-unavailable' });
+  } finally {
+    globalThis.fetch = realFetch;
   }
 });

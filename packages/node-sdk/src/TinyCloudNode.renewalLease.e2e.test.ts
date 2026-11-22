@@ -13,7 +13,8 @@ import { startUnregisteredLocationRegistry, type UnregisteredLocationRegistry } 
 // The node's scheduler renews a lease-held grant once half its period remains, checking every 5 minutes, so one run
 // takes about 20 minutes. Three owners share one node, each with a 17-minute grant:
 //   A: a lease to minute 19. Renewed once, to the lease's end and no further: the grant works past its signed end and
-//      stops at the lease's end. A peer grant issued from the renewed grant ends by the grant's signed end.
+//      stops at the lease's end. A peer grant issued from the renewed grant reaches past the grant's signed end, the
+//      node honours it there, and it stops by the lease's end.
 //   B: a lease the owner revokes at once. Never renewed; the grant and its peer end at their signed 17 minutes.
 //   C: a lease whose grant the owner revokes. The peer stops at once and the grant is never renewed.
 const nodeBinary = process.env.TC_RENEWAL_E2E_NODE_BIN;
@@ -107,12 +108,14 @@ describe.skipIf(!nodeBinary)("a renewal lease on a real node", () => {
     const leaseEnd = Math.floor(Date.parse(a.lease.leaseExpiresAt) / 1000);
     expect(renewed.effective_expiry).toBe(leaseEnd);
 
-    // The renewed grant restores to the lease's end. A peer grant from it, asking for an hour, ends by the grant's
-    // signed end, before the lease's.
+    // The renewed grant restores to the lease's end. A peer grant from it, asking for an hour, reaches past the grant's
+    // signed end and ends by the lease's.
     const aAgent = new TinyCloudNode(config());
     await aAgent.restoreSessionWithRenewal({ ...a.grant, tinycloudHosts: [node.host] }, a.lease.leaseAuthorization);
+    expect(aAgent.sessionEnd?.getTime()).toBe(leaseEnd * 1000);
     const aPeer = await peerGrant(aAgent, "a");
-    expect(aPeer.end).toBeLessThanOrEqual(a.grantEnd);
+    expect(aPeer.end).toBeGreaterThan(a.grantEnd);
+    expect(aPeer.end).toBeLessThanOrEqual(leaseEnd * 1000);
     const aPeerStatus = await a.wallet.getDelegationStatus(aPeer.cid);
     expect(aPeerStatus.ok && aPeerStatus.data.effective_expiry).toBeLessThanOrEqual(leaseEnd);
     expect((await aPeer.access.kv.get("value")).ok).toBe(true);
@@ -125,16 +128,17 @@ describe.skipIf(!nodeBinary)("a renewal lease on a real node", () => {
       await expect(candidate.restoreSessionWithRenewal({ ...grant, tinycloudHosts: [node.host] }, lease.leaseAuthorization)).rejects.toThrow();
     }
 
-    // Past the grants' signed ends: B and its peer have stopped; A still works through its renewal, its peer has stopped.
+    // Past the grants' signed ends: B and its peer have stopped; A and its peer still work through A's renewal.
     await sleep(Math.max(0, Math.max(a.grantEnd, b.grantEnd) - Date.now()) + 5_000);
     expect((await bPeer.access.kv.get("value")).ok).toBe(false);
     expect((await bAgent.kv.get("b/value")).ok).toBe(false);
     expect((await aAgent.kv.get("a/value")).ok).toBe(true);
-    expect((await aPeer.access.kv.get("value")).ok).toBe(false);
+    expect((await aPeer.access.kv.get("value")).ok).toBe(true);
 
-    // A stops at the lease's end and is not renewed past it.
+    // A and its peer stop at the lease's end, and A is not renewed past it.
     await sleep(Math.max(0, leaseEnd * 1000 - Date.now()) + 5_000);
     expect((await aAgent.kv.get("a/value")).ok).toBe(false);
+    expect((await aPeer.access.kv.get("value")).ok).toBe(false);
     const after = await a.wallet.getDelegationStatus(a.grant.delegationCid);
     expect(after.ok && after.data.active).toBe(false);
     expect(after.ok && after.data.renewal_history?.length).toBe(renewed.renewal_history?.length);

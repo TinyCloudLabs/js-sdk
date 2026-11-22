@@ -103,6 +103,7 @@ function fixture({ inboundLifetime, tipEndsAt = 3 * DAY, parentEndsAt = 40 * DAY
   const node = {
     credentialHolderDid: courierDid,
     restorableSession: { delegationCid: parent.cid, siwe: `courier.test wants you to sign in with your Ethereum account:\n0x1111111111111111111111111111111111111111\n\nCourier renewal test.\n\nURI: did:key:issuer\nVersion: 1\nChain ID: 1\nNonce: abcdefgh\nIssued At: ${new Date(at - DAY).toISOString()}\nExpiration Time: ${new Date(parent.end).toISOString()}` },
+    get sessionEnd() { return new Date(/Expiration Time: (.+)/.exec(this.restorableSession.siwe)[1]); },
     computeDelegationCid: authorization => records.find(item => portable(item, item.cid === 'prior' ? 'old-owner-grant' : parent.cid).delegationHeader.Authorization === authorization)?.cid,
     delegationManager: {
       queryAllIssued: async () => ({ ok: true, data: structuredClone(records) }),
