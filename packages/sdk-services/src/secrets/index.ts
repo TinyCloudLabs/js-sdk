@@ -1,6 +1,4 @@
 export { SecretsService } from "./SecretsService";
-export { migrateSecrets } from "./migrate";
-export type { SecretMigrateOptions, SecretMigrateReport, SecretMigrateSkipReason } from "./migrate";
 export {
   NAMED_KEYS_UNSUPPORTED,
   NAMED_KEYS_UNSUPPORTED_MESSAGE,

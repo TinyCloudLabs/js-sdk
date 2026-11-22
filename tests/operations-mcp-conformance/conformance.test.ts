@@ -102,10 +102,12 @@ provingScenario("3. a missing decrypt grant can be imported and used by a fresh 
   expect(authority.missing).toEqual([
     expect.objectContaining({ service: "tinycloud.encryption", actions: ["tinycloud.encryption/decrypt"] }),
   ]);
-  const decryptOnly = fixture.hermetic.permissions.filter((permission) =>
-    permission.service === "tinycloud.encryption"
-  );
-  const delegation = await fixture.hermetic.mintDelegationWithPermissions([...decryptOnly]);
+  const exactKey = fixture.hermetic.permissions
+    .filter((permission) => permission.service === "tinycloud.encryption")
+    .map((permission) => ({ ...permission, path: `${permission.path}/secrets/hermetic_delegation_canary` }));
+  expect(exactKey).toHaveLength(1);
+  expect(authority.missing).toEqual([expect.objectContaining({ path: exactKey[0]!.path })]);
+  const delegation = await fixture.hermetic.mintDelegationWithPermissions([...exactKey]);
   const imported = await invokeOperation("tinycloud.auth.import", 1, { profile: fixture.profile }, {
     kind: "tinycloud.auth.delegation",
     version: 1,
@@ -113,7 +115,35 @@ provingScenario("3. a missing decrypt grant can be imported and used by a fresh 
     delegation,
   });
   expect(imported).toMatchObject({ status: "ok", output: { cid: delegation.cid, activated: true } });
-  expect(await secret(fixture)).toMatchObject({ status: "ok" });
+  // The exact-key grant is honored, so the read gets past authority to the envelope. The fixture canary is sealed to
+  // the network key (the older format), which only `tc secrets migrate` moves onto the secret's own key.
+  expect(await secret(fixture)).toMatchObject({
+    status: "error",
+    error: { code: "SECRET_LEGACY_ENVELOPE", details: { names: ["HERMETIC_DELEGATION_CANARY"] } },
+  });
+});
+
+provingScenario("3b. a network-wide decrypt grant answering the exact-key request is refused, and nothing is stored", async (fixture) => {
+  const kvOnly = fixture.hermetic.permissions.filter((permission) => permission.service === "tinycloud.kv");
+  await persistRuntimeDelegations(fixture, [await fixture.hermetic.mintDelegationWithPermissions([...kvOnly])]);
+  const authority = await secret(fixture);
+  if (authority.status !== "authority_required") throw new Error("expected authority_required");
+  const networkDecrypt = fixture.hermetic.permissions.filter((permission) =>
+    permission.service === "tinycloud.encryption"
+  );
+  expect(networkDecrypt).toHaveLength(1);
+  expect(authority.missing).toEqual([
+    expect.objectContaining({ path: `${networkDecrypt[0]!.path}/secrets/hermetic_delegation_canary` }),
+  ]);
+  const delegation = await fixture.hermetic.mintDelegationWithPermissions([...networkDecrypt]);
+  const imported = await invokeOperation("tinycloud.auth.import", 1, { profile: fixture.profile }, {
+    kind: "tinycloud.auth.delegation",
+    version: 1,
+    requestId: authority.request.requestId,
+    delegation,
+  });
+  expect(imported).toMatchObject({ status: "error", error: { code: "DELEGATION_REJECTED" } });
+  expect(await secret(fixture)).toMatchObject({ status: "authority_required" });
 });
 
 provingScenario("4. no grant requests the exact KV/decrypt union once", async (fixture) => {

@@ -1,3 +1,8 @@
+/**
+ * Published as `@tinycloud/sdk-services/secrets/migrate` and deliberately not exported from the package root, so the
+ * root and web bundles do not carry a CLI migration (the same way as `secrets/totp`).
+ */
+
 import { ErrorCodes, err, type Result } from "../types";
 import type { VaultResealResult } from "../vault/types";
 import type { ISecretsService, SecretsError } from "./ISecretsService";

@@ -431,7 +431,6 @@ export type {
 
 export {
   SecretsService,
-  migrateSecrets,
   NAMED_KEYS_UNSUPPORTED,
   NAMED_KEYS_UNSUPPORTED_MESSAGE,
   NAMED_KEYS_CHECK_FAILED,
@@ -470,9 +469,6 @@ export type {
   ResolvedSecretPath,
   SecretScopeOptions,
   SecretPutOptions,
-  SecretMigrateOptions,
-  SecretMigrateReport,
-  SecretMigrateSkipReason,
   SecretGetOptions,
 } from "./secrets";
 

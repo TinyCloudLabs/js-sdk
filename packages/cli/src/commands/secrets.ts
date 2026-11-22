@@ -58,7 +58,7 @@ import { safeInline } from "../output/safe-text.js";
 import { abortableSleep, DEFAULT_WAIT_TIMEOUT, parseWaitTimeout, runSecretsWait } from "../lib/secrets-wait.js";
 import { secretKeyResource, secretKeyResourceForVaultPath, isOverlongStoredScope, unreadableSecretNote } from "../lib/secret-keys.js";
 import { canonicalNetworkUrn } from "../lib/owner-did.js";
-import { migrateSecrets } from "@tinycloud/sdk-services";
+import { migrateSecrets } from "@tinycloud/sdk-services/secrets/migrate";
 import { resolveProfilePosture, type CLIContext, type ProfileConfig } from "../config/types.js";
 import {
   ensureDelegationAuthority,

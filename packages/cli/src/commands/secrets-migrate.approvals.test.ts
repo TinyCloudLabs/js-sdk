@@ -37,10 +37,9 @@ mock.module("./auth.js", () => ({
   },
 }));
 
-// The real migrateSecrets is covered in sdk-services; here it selects two secrets and asks for their keys.
-const realServices = await import("@tinycloud/sdk-services");
-mock.module("@tinycloud/sdk-services", () => ({
-  ...realServices,
+// The real migrateSecrets is covered in sdk-services; here it selects two secrets and asks for their keys. The CLI
+// imports it from its own subpath, which the web-sdk root bundle does not carry.
+mock.module("@tinycloud/sdk-services/secrets/migrate", () => ({
   migrateSecrets: async (_secrets: unknown, options: { dryRun?: boolean; authorizeKeys?: (keyPaths: readonly string[]) => Promise<void> }) => {
     if (!options.dryRun) await options.authorizeKeys?.(["secrets/openai_api_key", "secrets/scoped/my-app/other_key"]);
     return { ok: true, data: { dryRun: options.dryRun === true, total: 2, moved: options.dryRun ? 0 : 2, already: 0, staysOnNetwork: 0, skipped: {} } };
