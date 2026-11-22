@@ -686,6 +686,13 @@ export function expandDelegationPermissionEntries(
       entry.actions.some((action) => action !== "decrypt" && action !== "tinycloud.encryption/decrypt")) {
       throw new ManifestValidationError("named-key delegation requires an exact key and decrypt only");
     }
+    // Under `secrets`, only one secret's own key: never the bare `secrets` key,
+    // which screens read as every secret (TC-3801).
+    if ((resource.path === "secrets" || resource.path.startsWith("secrets/")) && !isSecretKeyPath(resource.path)) {
+      throw new ManifestValidationError(
+        "secret keys must be exact: secrets/<name> or secrets/scoped/<scope>/<name>, with the name in lower case",
+      );
+    }
     return [{
       ...entry,
       space: ENCRYPTION_MANIFEST_SPACE,

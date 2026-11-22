@@ -174,8 +174,6 @@ describe.skipIf(!nodeBinary)(
       const receipt = await owner.revokeDelegation(delegation.cid);
       expect(receipt.ok, JSON.stringify(receipt.ok ? undefined : receipt.error)).toBe(true);
 
-      const decrypted = await decrypt(access);
-      expect(decrypted.ok).toBe(false);
       expect((await access.readSecret({ name: "API_KEY" })).status).not.toBe("ok");
     }, 120_000);
 
@@ -318,9 +316,41 @@ describe.skipIf(!nodeBinary)(
       // A real wait: the node checks expiry against its own wall clock, in
       // whole seconds, which fake timers in this process cannot move.
       await Bun.sleep(access.delegation.expiry.getTime() - Date.now() + 2_000);
-      const decrypted = await decrypt(access);
-      expect(decrypted.ok).toBe(false);
       expect((await access.readSecret({ name: "API_KEY" })).status).not.toBe("ok");
+    }, 120_000);
+
+    // Non-secret data still opens on the network itself (TC-3801): a delegation
+    // naming the network decrypts, and stops at revoke and at expiry. It also
+    // carries the secrets kv get the owner holds, as the pre-TC-3801 grant did:
+    // this node refuses to revoke an encryption-only delegation (403
+    // Unauthorized Revoker). The kv get reads only ciphertext.
+    const networkDecrypt = () => [
+      secretsEntries()[0]!,
+      { service: "tinycloud.encryption", path: networkId, actions: ["tinycloud.encryption/decrypt"] },
+    ];
+    const expectDecrypts = async (access: DelegatedAccess) => {
+      const opened = await decrypt(access);
+      if (!opened.ok) throw new Error(JSON.stringify(opened.error));
+      expect(new TextDecoder().decode(opened.data)).toBe("delegated plaintext");
+    };
+
+    test("a network decrypt delegation opens non-secret network data, and stops once revoked", async () => {
+      const { delegation, access } = await grant(sessionOnlyChild(), networkDecrypt());
+      await expectDecrypts(access);
+
+      const receipt = await owner.revokeDelegation(delegation.cid);
+      expect(receipt.ok, JSON.stringify(receipt.ok ? undefined : receipt.error)).toBe(true);
+
+      expect((await decrypt(access)).ok).toBe(false);
+    }, 120_000);
+
+    test("a network decrypt delegation stops decrypting once it expires", async () => {
+      const { access } = await grant(sessionOnlyChild(), networkDecrypt(), 5_000);
+      await expectDecrypts(access);
+
+      // A real wait, as above: the node checks expiry on its own clock.
+      await Bun.sleep(access.delegation.expiry.getTime() - Date.now() + 2_000);
+      expect((await decrypt(access)).ok).toBe(false);
     }, 120_000);
   },
 );

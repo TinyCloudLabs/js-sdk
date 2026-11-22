@@ -794,7 +794,10 @@ export class TinyCloudWeb {
         getService: () => this.node.secretsForSpace(resolvedSpace),
         space: resolvedSpace,
         getManifest: () => this._manifest,
-        requestPermissions: (additional) => this.requestPermissions(additional),
+        requestPermissions: (additional, options) => options === undefined
+          ? this.requestPermissions(additional)
+          : this.requestPermissions(additional, options),
+        getEncryptionNetworkId: () => this.node.getEncryptionNetworkIdForSpace(resolvedSpace),
         resolveSpace: (space) => space.startsWith("tinycloud:") ? space : this.node.spaces.get(space).id,
         getUnlockSigner: () => this.walletSigner,
       });

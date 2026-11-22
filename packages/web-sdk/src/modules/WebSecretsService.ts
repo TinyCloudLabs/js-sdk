@@ -13,9 +13,11 @@ import {
   type ServiceError,
 } from "@tinycloud/sdk-core";
 import type { VaultError } from "@tinycloud/sdk-core";
+import type { RequestPermissionsOptions } from "./requestPermissionsCore";
 
 type RequestPermissions = (
   additional: PermissionEntry[],
+  options?: RequestPermissionsOptions,
 ) => Promise<{ approved: boolean; delegations?: readonly unknown[] }>;
 
 const SECRETS_SPACE = "secrets";
@@ -44,31 +46,40 @@ function displayActionUrn(action: "put" | "del"): string {
   return action === "put" ? "tinycloud.kv/put" : "tinycloud.kv/del";
 }
 
-/** Matches a secret key resource: `<network URN>/<the secret's key path>`. */
-const NETWORK_URN = /^urn:tinycloud:encryption:[^/]+$/;
+/** A secret-key ask lasts 1 h (the node caps it at 7 d and the session's end) and always shows the prompt (TC-3801). */
+const SECRET_KEY_ASK: RequestPermissionsOptions = { expiryMs: 60 * 60_000, allowPromptSuppression: false };
+
+/** The did:pkh address in an encryption network URN, the only part compared without case. */
+const PKH_ADDRESS = /^(urn:tinycloud:encryption:did:pkh:eip155:\d+:)(0x[0-9a-fA-F]{40})(?=:)/;
+
+function foldAddressCase(path: string): string {
+  return path.replace(PKH_ADDRESS, (_match, prefix: string, address: string) => prefix + address.toLowerCase());
+}
 
 /**
- * The decrypt entry a read refused for want of exactly this secret's own key
- * (`DECRYPT_DENIED` naming `<network>/<keyPath>`), or undefined for any other
- * failure or any other path.
+ * The decrypt entry for this secret's own key, `<networkId>/<keyPath>`, when a
+ * read was refused with a hint naming exactly that key (address case aside);
+ * undefined for any other failure, path, owner or network.
  */
 function missingKeyDecrypt(
   error: unknown,
   name: string,
   options: SecretScopeOptions | undefined,
+  networkId: string | undefined,
 ): PermissionEntry | undefined {
   const { code, permissionHint } = (error ?? {}) as {
     code?: unknown;
     permissionHint?: { service?: unknown; path?: unknown };
   };
   const path = permissionHint?.path;
-  const { keyPath } = resolveSecretPath(name, options);
   if (code !== "DECRYPT_DENIED" || permissionHint?.service !== "tinycloud.encryption" ||
-    typeof path !== "string" || keyPath === undefined || !path.endsWith(`/${keyPath}`) ||
-    !NETWORK_URN.test(path.slice(0, -keyPath.length - 1))) {
+    typeof path !== "string" || networkId === undefined) {
     return undefined;
   }
-  return { service: "tinycloud.encryption", path, actions: ["decrypt"], skipPrefix: true };
+  // Only a read that resolved its name gets this far, so this cannot throw.
+  const expected = `${networkId}/${resolveSecretPath(name, options).keyPath}`;
+  if (foldAddressCase(path) !== foldAddressCase(expected)) return undefined;
+  return { service: "tinycloud.encryption", path: expected, actions: ["decrypt"], skipPrefix: true };
 }
 
 function kvActionUrn(action: "put" | "del"): string {
@@ -119,6 +130,8 @@ export interface WebSecretsServiceConfig {
   space?: string;
   getManifest: () => Manifest | Manifest[] | undefined;
   requestPermissions: RequestPermissions;
+  /** The encryption network of this secrets space; an opted-in read asks only for a key on it. */
+  getEncryptionNetworkId?: () => string | undefined;
   resolveSpace?: (space: string) => string;
   getUnlockSigner?: () => unknown;
 }
@@ -189,9 +202,10 @@ export class WebSecretsService implements ISecretsService {
     const { requestPermission: _asked, ...rest } = options;
     const forwarded = Object.keys(rest).length > 0 ? rest : undefined;
     const first = await call(name, forwarded);
-    const entry = first.ok ? undefined : missingKeyDecrypt((first as { error?: unknown }).error, name, forwarded);
+    const entry = first.ok ? undefined : missingKeyDecrypt(
+      (first as { error?: unknown }).error, name, forwarded, this.config.getEncryptionNetworkId?.());
     if (entry === undefined) return first;
-    const asked = await this.ask([entry], "tinycloud.encryption/decrypt", name);
+    const asked = await this.ask([entry], "tinycloud.encryption/decrypt", name, SECRET_KEY_ASK);
     if (!asked.ok) return asked as Result<never, ServiceError | VaultError>;
     return call(name, forwarded);
   }
@@ -273,9 +287,12 @@ export class WebSecretsService implements ISecretsService {
     entries: PermissionEntry[],
     action: string,
     name: string,
+    options?: RequestPermissionsOptions,
   ): Promise<Result<void, ServiceError | VaultError>> {
     try {
-      const result = await this.config.requestPermissions(entries);
+      const result = options === undefined
+        ? await this.config.requestPermissions(entries)
+        : await this.config.requestPermissions(entries, options);
       if (!result.approved) {
         return secretsError(
           ErrorCodes.PERMISSION_DENIED,

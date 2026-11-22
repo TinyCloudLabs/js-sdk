@@ -78,7 +78,7 @@ const origins = (attempts: Attempt[]) => new Set(attempts.map((attempt) => new U
 
 test("reading secret values on the proxied production name goes only to the TEE origin", async () => {
   const { node, attempts } = await fixture();
-  await node.secrets.get("API_KEY");
+  await node.secrets.get("API_KEY", { requestPermission: true });
   await node.secrets.list();
   expect(invocations(attempts).length).toBeGreaterThanOrEqual(2);
   expect(origins(attempts)).toEqual(new Set([TEE]));

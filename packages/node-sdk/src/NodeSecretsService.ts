@@ -80,13 +80,11 @@ function secretPermissionEntries(
   });
 
   // A secret opens with decrypt on its own key and is written after
-  // key.create on it (TC-3284); only a secret with no key of its own
-  // (name or scope over 64 bytes, never writable) still reads through the network.
-  const keyPath = action === "list" ? undefined : resolveSecretPath(name, options).keyPath;
-  if ((action === "get" || (action === "put" && keyPath !== undefined)) && encryptionNetworkId !== undefined) {
+  // key.create on it (TC-3284); never the network root, never a prefix.
+  if ((action === "get" || action === "put") && encryptionNetworkId !== undefined) {
     entries.push({
       service: "tinycloud.encryption",
-      path: keyPath === undefined ? encryptionNetworkId : `${encryptionNetworkId}/${keyPath}`,
+      path: `${encryptionNetworkId}/${resolveSecretPath(name, options).keyPath}`,
       actions: [action === "get" ? "decrypt" : "key.create"],
       skipPrefix: true,
     });

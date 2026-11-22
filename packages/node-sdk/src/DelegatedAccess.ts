@@ -263,7 +263,7 @@ export class DelegatedAccess {
     const resolved = resolveSecretPath(input.name, { scope: input.scope });
     return (await this.secrets()).read(resolved.vaultKey, {
       expectAad: true,
-      ...(resolved.keyPath === undefined ? {} : { keyPath: resolved.keyPath }),
+      keyPath: resolved.keyPath,
       namedKeyOnly: !(this._delegation.resources ?? [this._delegation]).some((resource) =>
         /^urn:tinycloud:encryption:[^/]+$/.test(resource.path) &&
         resource.actions.some((action) => action.endsWith("decrypt"))),
