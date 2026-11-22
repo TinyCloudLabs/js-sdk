@@ -1,6 +1,6 @@
 import { beforeAll, describe, expect, test } from "bun:test";
 import { Wallet } from "ethers";
-import { PrivateKeySigner, TinyCloudNode } from "@tinycloud/node-sdk";
+import { PrivateKeySigner, TinyCloudNode, ownerFullAccess } from "@tinycloud/node-sdk";
 // The web SDK's own WASM bindings. The package entry point needs a DOM, so
 // import the adapter source: it is exactly what a browser TinyCloudWeb hands
 // to its inner TinyCloudNode, and the vault service above it is the same code.
@@ -32,6 +32,7 @@ function makeClient(webWasm: boolean): TinyCloudNode {
     autoDiscoverLocalNode: false,
     enablePublicSpace: false,
     autoCreateSpace: true,
+    ...ownerFullAccess(),
   });
 }
 

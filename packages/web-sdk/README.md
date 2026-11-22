@@ -57,7 +57,7 @@ expiry. The permission check does not contact the node, so a session the node
 rejects (a 401 after a revocation or a reset, for example) is still restored.
 With OpenKey, `prepareSignIn()` makes the same check.
 
-Without a `manifest`, `signIn()` asks only for the app's own folder, `applications/<your domain reversed>/` (KV and SQL), and logs a warning. Sessions last 7 days unless you set `sessionExpirationMs`.
+Without a `manifest`, `signIn()` asks only for the app's own folder, `applications/<your domain reversed>/` (KV and SQL), and logs a warning. A port other than 80 or 443 is part of the name: `notes.example.com:8443` gets `applications/com.example.notes_8443/`. Outside a browser, set `domain`; without one, apps share `applications/xyz.tinycloud.app/` and log how to get their own. Sessions last 7 days unless you set `sessionExpirationMs`.
 
 `restoreSession()` resolves from stored state. It automatically starts a
 background hosting probe, capped at 5 seconds, and reactivates stored panel

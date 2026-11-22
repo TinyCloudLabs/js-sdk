@@ -3,7 +3,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { grantAuthRequest, NodeWasmBindings, PrivateKeySigner, TinyCloudNode } from "@tinycloud/node-sdk";
+import { grantAuthRequest, NodeWasmBindings, ownerFullAccess, PrivateKeySigner, TinyCloudNode } from "@tinycloud/node-sdk";
 import type { AuthRequestArtifact } from "@tinycloud/node-sdk";
 import { signLocationRecordV2 } from "@tinycloud/sdk-core";
 import type { PermissionEntry } from "@tinycloud/sdk-core";
@@ -128,7 +128,7 @@ test("fresh delegate profile preserves data identity and distinct decryption fai
     expect(request.sessionDid).toBe(String(initial.sessionDid).split("#", 1)[0]);
     const owner = new TinyCloudNode({ signer, wasmBindings: new NodeWasmBindings(), host: encryptionOrigin,
       tinycloudRegistryUrl: registry.url.origin, autoCreateSpace: false, autoBootstrapAccount: false,
-      includeAccountRegistryPermissions: false, enablePublicSpace: false });
+      includeAccountRegistryPermissions: false, enablePublicSpace: false, ...ownerFullAccess() });
     await owner.restoreSession(fixture.ownerRestorableSession as Parameters<TinyCloudNode["restoreSession"]>[0]);
     expect(owner.hasRuntimePermissions(request.requested)).toBe(false);
     await owner.grantRuntimePermissions(request.requested, { expiry: "10m" });

@@ -127,7 +127,7 @@ const delegation = await tc.createDelegation({
 });
 ```
 
-Without a `manifest`, `signIn()` asks only for the app's own folder, `applications/<your domain reversed>/` (KV and SQL), and logs a warning. Sessions last 7 days unless you set `sessionExpirationMs`.
+Without a `manifest`, `signIn()` asks only for the app's own folder, `applications/<your domain reversed>/` (KV and SQL), and logs a warning. A port other than 80 or 443 is part of the name: `notes.example.com:8443` gets `applications/com.example.notes_8443/`. Apps with no domain share one folder, `applications/node.app/`, and log how to get their own. Sessions last 7 days unless you set `sessionExpirationMs`.
 
 ## Documentation
 

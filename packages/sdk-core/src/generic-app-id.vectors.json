@@ -1,0 +1,202 @@
+[
+  {
+    "host": "notes.example.com",
+    "appId": "com.example.notes"
+  },
+  {
+    "host": "Notes.Example.com:3000",
+    "appId": "com.example.notes_3000"
+  },
+  {
+    "host": "localhost",
+    "appId": "localhost"
+  },
+  {
+    "host": "[::1]:3000",
+    "appId": "o_8d59a2581124dff8"
+  },
+  {
+    "host": "bad_host.example",
+    "appId": "o_bfaa0d5b273b053e"
+  },
+  {
+    "host": "",
+    "appId": "node.app"
+  },
+  {
+    "host": null,
+    "appId": "node.app"
+  },
+  {
+    "host": "NOTES.EXAMPLE.COM",
+    "appId": "com.example.notes"
+  },
+  {
+    "host": "notes.example.com:443",
+    "appId": "com.example.notes"
+  },
+  {
+    "host": "notes.example.com:3000:4000",
+    "appId": "o_bde36bf288b2cc4c"
+  },
+  {
+    "host": "notes.example.com:abc",
+    "appId": "o_d7b53f7a5761953d"
+  },
+  {
+    "host": "notes.example.com.",
+    "appId": "com.example.notes"
+  },
+  {
+    "host": "notes.example.com..",
+    "appId": "o_b5fce5bcb7c4b375"
+  },
+  {
+    "host": "notes..example.com",
+    "appId": "o_9cb37f1ac89452ed"
+  },
+  {
+    "host": ".",
+    "appId": "node.app"
+  },
+  {
+    "host": "..",
+    "appId": "o_cdb4ee2aea69cc6a"
+  },
+  {
+    "host": ".notes.example.com",
+    "appId": "o_7a21bd9de1dac2cb"
+  },
+  {
+    "host": "::1",
+    "appId": "o_eff8e7ca506627fe"
+  },
+  {
+    "host": "[2001:db8::1]",
+    "appId": "o_ecda91ca4e05f8c7"
+  },
+  {
+    "host": "127.0.0.1",
+    "appId": "1.0.0.127"
+  },
+  {
+    "host": "127.0.0.1:8080",
+    "appId": "1.0.0.127_8080"
+  },
+  {
+    "host": "bücher.example",
+    "appId": "o_c6b737c4a99ba714"
+  },
+  {
+    "host": "xn--bcher-kva.example",
+    "appId": "example.xn--bcher-kva"
+  },
+  {
+    "host": "evil.example/notes.example.com",
+    "appId": "o_e4f8f4c01c199dce"
+  },
+  {
+    "host": "evil.example%2fnotes.example.com",
+    "appId": "o_00ca7cb0184562f9"
+  },
+  {
+    "host": "evil.example%2Fnotes.example.com",
+    "appId": "o_00ca7cb0184562f9"
+  },
+  {
+    "host": "user@notes.example.com",
+    "appId": "o_ced7fec49c76f6d2"
+  },
+  {
+    "host": "user:pass@notes.example.com",
+    "appId": "o_eeb62fd910ba1abd"
+  },
+  {
+    "host": " notes.example.com ",
+    "appId": "com.example.notes"
+  },
+  {
+    "host": "notes.example.com\n",
+    "appId": "com.example.notes"
+  },
+  {
+    "host": "notes example.com",
+    "appId": "o_c2243706de3bec02"
+  },
+  {
+    "host": "-bad.example",
+    "appId": "o_2c7985306bdaeb27"
+  },
+  {
+    "host": "bad-.example",
+    "appId": "o_5086fda11d8b59ea"
+  },
+  {
+    "host": "a-b.example",
+    "appId": "example.a-b"
+  },
+  {
+    "host": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.example",
+    "appId": "example.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  {
+    "host": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.example",
+    "appId": "o_fdeeb40dffc11e15"
+  },
+  {
+    "host": "*.example.com",
+    "appId": "o_47287a8f16ec75e6"
+  },
+  {
+    "host": "notes.example.com?x=1",
+    "appId": "o_48303e65ac594b59"
+  },
+  {
+    "host": "notes.example.com#frag",
+    "appId": "o_3b9dac6a714c16f9"
+  },
+  {
+    "host": "  ",
+    "appId": "node.app"
+  },
+  {
+    "host": ":3000",
+    "appId": "node.app"
+  },
+  {
+    "host": "Notes.Example.com.",
+    "appId": "com.example.notes"
+  },
+  {
+    "host": "notes.example.com:80",
+    "appId": "com.example.notes"
+  },
+  {
+    "host": "notes.example.com:8443",
+    "appId": "com.example.notes_8443"
+  },
+  {
+    "host": "Notes.Example.com.:08443",
+    "appId": "com.example.notes_8443"
+  },
+  {
+    "host": "localhost:3000",
+    "appId": "localhost_3000"
+  },
+  {
+    "host": "[::1]",
+    "appId": "o_6d16ab695dd7911d"
+  },
+  {
+    "host": "Bad_Host.example:443",
+    "appId": "o_bfaa0d5b273b053e"
+  },
+  {
+    "host": "bad_host.example:8443",
+    "appId": "o_cbd1f4a0b4de55c9"
+  },
+  {
+    "host": "com.example.notes_8443",
+    "appId": "o_e96b28388c342d7a"
+  }
+]

@@ -54,8 +54,8 @@ test("a sign-in that declares nothing signs only the app's own folder, for 7 day
   const resources = Object.keys(extractRecapAttenuations(session.siwe!)).map((uri) => uri.replace(/^.*?:(?=[a-z]+\/)/, ""));
   expect(resources.sort()).toEqual([
     "applications/capabilities",
-    "applications/kv/com.example.notes/",
-    "applications/sql/com.example.notes/",
+    "applications/kv/com.example.notes_8443/",
+    "applications/sql/com.example.notes_8443/",
   ]);
   const expiry = new Date(new SiweMessage(session.siwe!).expirationTime!).getTime();
   expect(expiry - before).toBeGreaterThan(7 * DAY_MS - 60_000);
@@ -65,9 +65,9 @@ test("a sign-in that declares nothing signs only the app's own folder, for 7 day
 test("each generic sign-in warns once, on the plain and the prepared path", async () => {
   const a = auth();
   await a.signIn();
-  expect(genericWarnings()).toEqual([[warning("com.example.notes")]]);
+  expect(genericWarnings()).toEqual([[warning("com.example.notes_8443")]]);
   await a.prepareOpenKeySignIn();
-  expect(genericWarnings()).toEqual([[warning("com.example.notes")], [warning("com.example.notes")]]);
+  expect(genericWarnings()).toEqual([[warning("com.example.notes_8443")], [warning("com.example.notes_8443")]]);
 });
 
 test("declared sign-ins neither warn nor use the generic folder", async () => {
@@ -90,7 +90,9 @@ test("a Node client without a domain names its folder node.app, not the SIWE def
 });
 
 test("generic app ids reverse the host name and fall back to node.app", () => {
-  expect(genericAppId("Notes.Example.com:3000")).toBe("com.example.notes");
+  expect(genericAppId("Notes.Example.com:3000")).toBe("com.example.notes_3000");
   expect(genericAppId("localhost")).toBe("localhost");
-  for (const host of [undefined, null, "", "[::1]:3000", "bad_host.example"]) expect(genericAppId(host)).toBe("node.app");
+  for (const host of [undefined, null, ""]) expect(genericAppId(host)).toBe("node.app");
+  expect(genericAppId("[::1]:3000")).toBe("o_8d59a2581124dff8");
+  expect(genericAppId("bad_host.example")).toBe("o_bfaa0d5b273b053e");
 });

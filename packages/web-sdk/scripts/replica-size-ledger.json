@@ -3527,5 +3527,23 @@
     "worker": { "delta": 54, "ceiling": 780957 },
     "replicaWorker": { "delta": 121, "ceiling": 774682 },
     "reason": "Sign-out asks the node to stop accepting the session's keys; the retire request is in a lazy chunk loaded at session start, and the validateSessionRoot WASM export is bundled into the replica and kv-storage workers; sdk-core and node-sdk are bundled into the web-sdk root. Canonical Node 22/Bun 1.3.14/Rust 1.99.0 CI on #1118 (6ca3c911, master 7d438ee4 merged in) measured index.mjs 1531668 and index.cjs 1464420 gzip -9 bytes: +1065 and +1083 over the TC-3688 ceilings 1530603 and 1463337; the kv-storage worker 780957 (+54 over 780903) and replica.worker.js 774682 (+121 over 774561). No other ceiling moves. Details: TC-3443"
+  },
+  "tc3443PortFolderRoot": {
+    "label": "an app without a manifest gets a folder that includes its port (TC-3443)",
+    "ruling": "size-ruling: TC-3443 #1134 (2026-11-22 21:38Z): web-sdk root may grow index.mjs +1914 / index.cjs +865 gzip bytes over the tc3443SessionRetireRoot ceilings, per CI run 45071400680; workers unchanged. Details: TC-3443",
+    "base": "d382af88a04cfe10c04ad70f82ffdc3c6cf3aa15",
+    "sourceCommits": ["3bb106314aa21a3c29d2d42cd1daa74cf1d3211b"],
+    "canonicalCI": {
+      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45071400680",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45071400680/job/137358939899",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45071400680/job/137358940187"
+      ]
+    },
+    "root": {
+      "delta": { "index.mjs": 1914, "index.cjs": 865 },
+      "ceiling": { "index.mjs": 1533582, "index.cjs": 1465285 }
+    },
+    "reason": "Canonical Node 22/Bun 1.3.14/Rust 1.99.0 CI on #1134 (7e04e8d4, master d382af88 merged in) measured index.mjs 1533582 and index.cjs 1465285 gzip -9 bytes: +1914 and +865 over the tc3443SessionRetireRoot ceilings 1531668 and 1464420. The workers and every other ceiling stay at their ledger values. Details: TC-3443"
   }
 }

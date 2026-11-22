@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { Wallet } from "ethers";
-import { TinyCloudNode } from "@tinycloud/node-sdk";
+import { TinyCloudNode, ownerFullAccess } from "@tinycloud/node-sdk";
 import { feedResourceNames, initializeFeedDatabases, readFeedCardMd } from "@tinycloud/sdk-services/feed";
 import { feedAgentPermissions } from "../../../packages/cli/src/feed/connection";
 import { startUnregisteredLocationRegistry } from "../../../packages/node-sdk/src/test-support/unregistered-location-registry";
@@ -29,7 +29,7 @@ describe.skipIf(!loopback)("card.md reaches an already-connected agent (live nod
   const responseName = () => (resources.ok ? resources.data.responseResource : "");
   // The location registry is a loopback stub that knows no owner, so nothing leaves this machine.
   const client = (name: string) => new TinyCloudNode({
-    privateKey: Wallet.createRandom().privateKey.slice(2), host: SERVER!, prefix: `sdk-test-${name}`,
+    privateKey: Wallet.createRandom().privateKey.slice(2), host: SERVER!, ...ownerFullAccess(`sdk-test-${name}`),
     autoCreateSpace: true, tinycloudRegistryUrl: registry.url.origin,
   });
 

@@ -111,7 +111,7 @@ test("a marker written by a completed bootstrap makes the next sign-in skip", as
   const steps = bootstrapSteps(ADDRESS, 1);
 
   const firstLogin = makeNode(kv);
-  await Reflect.get(firstLogin, "writeBootstrapCompletionMarker").call(firstLogin, steps);
+  await Reflect.get(firstLogin, "writeBootstrapCompletionMarker").call(firstLogin, steps, { kv });
 
   const secondLogin = makeNode(kv);
   const decision = await Reflect.get(secondLogin, "resolveBootstrapDecision").call(
