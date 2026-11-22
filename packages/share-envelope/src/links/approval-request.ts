@@ -3,7 +3,7 @@ import { p256 } from "@noble/curves/p256";
 import { z } from "zod";
 import { didKeyFromEd25519PublicKey } from "../didkey.js";
 import { ed25519KeyProblem } from "./ed25519-strict.js";
-import { decodeStrictBase64Url } from "./header.js";
+import { decodeStrictBase64Url, linkIssuerPublicKey } from "./header.js";
 import { LinkError } from "./errors.js";
 
 const bytes32 = z.string().refine((value) => decodeStrictBase64Url(value)?.length === 32);
@@ -43,8 +43,12 @@ const invitationContext = z.object({
   subjectKind: z.enum(["session", "file"]), subjectName: z.string().min(1).max(120),
   acceptanceExpiresAt: isoUtc, accessExpiresAt: isoUtc,
  }).strict();
-const requestSchema = z.object({
-  issuer: z.string(), requestVersion: z.literal(1), targetDid: z.string(),
+const ed25519DidKey = z.string().refine((did) => {
+  const key = linkIssuerPublicKey(did);
+  return key !== null && ed25519KeyProblem(key) === null;
+});
+const requestFields = {
+  issuer: z.string(), targetDid: z.string(),
   targetPublicJwk: ed25519Jwk, nodeOrigin: origin,
   permissions: z.array(permission), reason: z.string().optional(),
   grantLifetimeSeconds: z.number().int().positive(), resultEncryptionPublicJwk: p256Jwk,
@@ -57,10 +61,27 @@ const requestSchema = z.object({
    * maximum; it has no upper bound of its own, and the approver may still choose less.
    */
   suggestedLifetimeSeconds: z.number().int().positive().optional(),
-}).strict().refine((request) => request.suggestedLifetimeSeconds === undefined || request.suggestedLifetimeSeconds <= request.grantLifetimeSeconds)
-  .refine((request) => request.context === undefined ? request.permissions.length > 0 : request.permissions.length === 0);
+};
+const hasValidSuggestedLifetime = (request: { suggestedLifetimeSeconds?: number | undefined; grantLifetimeSeconds: number }) =>
+  request.suggestedLifetimeSeconds === undefined || request.suggestedLifetimeSeconds <= request.grantLifetimeSeconds;
+const hasConsistentContextPermissions = (request: { context?: z.infer<typeof invitationContext> | undefined; permissions: unknown[] }) =>
+  request.context === undefined ? request.permissions.length > 0 : request.permissions.length === 0;
 
-export type OpenKeyApprovalRequestV1 = z.infer<typeof requestSchema>;
+const requestCommonSchema = z.object(requestFields).strict();
+const requestV1Schema = z.object({ ...requestFields, requestVersion: z.literal(1) }).strict()
+  .refine(hasValidSuggestedLifetime)
+  .refine(hasConsistentContextPermissions);
+const requestV2Schema = z.object({ ...requestFields, requestVersion: z.literal(2), requester: ed25519DidKey }).strict()
+  .refine(hasValidSuggestedLifetime)
+  .refine(hasConsistentContextPermissions);
+
+type ApprovalRequestCommon = z.infer<typeof requestCommonSchema>;
+export type OpenKeyApprovalRequestV2 = z.infer<typeof requestV2Schema>;
+export type OpenKeyApprovalRequest = ApprovalRequestCommon & {
+  requestVersion: 1 | 2;
+  requester?: string;
+};
+export type OpenKeyApprovalRequestV1 = OpenKeyApprovalRequest;
 export type ShareInvitationApprovalContext = z.infer<typeof invitationContext>;
 
 const DAY_SECONDS = 86_400;
@@ -70,7 +91,7 @@ const DAY_SECONDS = 86_400;
  * approval is valid until `context.acceptanceExpiresAt` (at most 24 hours from `now`).
  */
 export function buildShareInvitationApprovalSpec(input: {
-  readonly targetDid: string; readonly targetPublicJwk: OpenKeyApprovalRequestV1["targetPublicJwk"];
+  readonly targetDid: string; readonly targetPublicJwk: OpenKeyApprovalRequest["targetPublicJwk"];
   readonly nodeOrigin: string; readonly context: ShareInvitationApprovalContext; readonly now: number;
 }): Omit<OpenKeyApprovalRequestV1, "resultEncryptionPublicJwk"> {
   const { context } = input;
@@ -82,21 +103,56 @@ export function buildShareInvitationApprovalSpec(input: {
   };
 }
 
-/** The signed request names exactly its issuer's public session key; no private JWK fields are accepted. */
-export function parseApprovalRequest(value: unknown, options: { readonly issuer?: string } = {}): OpenKeyApprovalRequestV1 {
-  const parsed = requestSchema.safeParse(value);
-  if (!parsed.success) throw new LinkError("body_validation_failed", "invalid approval request");
+/**
+ * Validate an approval request and its key bindings; no private JWK fields are accepted.
+ *
+ * - Version 1 binds `issuer === targetDid` and `options.issuer === issuer`.
+ * - Version 2 binds `requester` (an Ed25519 `did:key`) to `issuer` and `options.issuer`, while requiring
+ *   `requester !== targetDid` so same-key requests keep version 1 as their single canonical form.
+ * - Both versions enforce `did:key(targetPublicJwk) === targetDid`.
+ */
+export function parseApprovalRequest(value: unknown, options: { readonly issuer?: string } = {}): OpenKeyApprovalRequest {
+  const version = typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>).requestVersion
+    : undefined;
+  const parsed = version === 1
+    ? requestV1Schema.safeParse(value)
+    : version === 2
+      ? requestV2Schema.safeParse(value)
+      : null;
+  if (!parsed || !parsed.success) throw new LinkError("body_validation_failed", "invalid approval request");
   const request = parsed.data;
   const publicKey = decodeStrictBase64Url(request.targetPublicJwk.x)!;
-  if (ed25519KeyProblem(publicKey) !== null || didKeyFromEd25519PublicKey(publicKey) !== request.targetDid ||
-      request.issuer !== request.targetDid || (options.issuer !== undefined && request.issuer !== options.issuer)) {
+  if (ed25519KeyProblem(publicKey) !== null || didKeyFromEd25519PublicKey(publicKey) !== request.targetDid) {
+    throw new LinkError("issuer_binding_mismatch");
+  }
+  if (request.requestVersion === 1) {
+    if (request.issuer !== request.targetDid || (options.issuer !== undefined && request.issuer !== options.issuer)) {
+      throw new LinkError("issuer_binding_mismatch");
+    }
+    return request;
+  }
+  if (
+    request.issuer !== request.requester ||
+    request.requester === request.targetDid ||
+    (options.issuer !== undefined && request.requester !== options.issuer)
+  ) {
     throw new LinkError("issuer_binding_mismatch");
   }
   return request;
 }
 
+/** Narrow a parsed approval request to version 2 (distinct stable requester key). */
+export function isApprovalRequestV2(request: OpenKeyApprovalRequest): request is OpenKeyApprovalRequestV2 {
+  return request.requestVersion === 2;
+}
+
+/** The DID of the key that signed the approval request link (`requester` on v2, `issuer` on v1). */
+export function approvalRequestRequester(request: Pick<OpenKeyApprovalRequest, "issuer" | "requestVersion" | "requester">): string {
+  return request.requestVersion === 2 && request.requester !== undefined ? request.requester : request.issuer;
+}
 
 /** Purpose is explicit when supplied; a legacy request is always task, never inferred as standing. */
-export function approvalRequestPurpose(request: Pick<OpenKeyApprovalRequestV1, "purpose">): "task" | "standing" {
+export function approvalRequestPurpose(request: Pick<OpenKeyApprovalRequest, "purpose">): "task" | "standing" {
   return request.purpose ?? "task";
 }

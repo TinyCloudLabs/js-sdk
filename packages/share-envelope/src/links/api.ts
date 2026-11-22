@@ -21,7 +21,7 @@ import {
 } from "./header.js";
 import { openRecordChecked, runBodyValidator, toEpochMs, type LinkBodyValidator, type OpenedLink } from "./record.js";
 import type { LinkSigner } from "./signer.js";
-import { parseApprovalRequest, type OpenKeyApprovalRequestV1 } from "./approval-request.js";
+import { parseApprovalRequest, type OpenKeyApprovalRequest } from "./approval-request.js";
 
 const DEFAULT_TIMEOUT_MS = 10_000;
 const MAX_JSON_RESPONSE_BYTES = 4096;
@@ -220,19 +220,48 @@ export async function createLink(input: CreateLinkInput): Promise<CreatedLink> {
   return { link: buildShortLink({ origin: input.linkOrigin, type: input.type, id, key, bodyCid }), id, expiresAt: record.header.expiresAt, bodyCid };
 }
 
-/** Store one immutable request. The Worker sees only its signed header and sealed bytes. */
-export async function createApprovalRequest(input: LinkTransportOptions & {
-  readonly request: OpenKeyApprovalRequestV1;
-  readonly issuerKey: LinkSigner;
+export type CreateApprovalRequestInput = LinkTransportOptions & {
+  readonly request: OpenKeyApprovalRequest;
   readonly apiOrigin: string;
   readonly openkeyOrigin: string;
   readonly expiresAt?: Date;
   readonly now?: Date | number;
-}): Promise<CreatedLink & { readonly record: LinkRecord }> {
-  const request = parseApprovalRequest(input.request, { issuer: input.issuerKey.did });
+} & (
+  | { readonly issuerKey: LinkSigner; readonly requesterKey?: LinkSigner }
+  | { readonly issuerKey?: LinkSigner; readonly requesterKey: LinkSigner }
+);
+
+/** Store one immutable request. The Worker sees only its signed header and sealed bytes. */
+export async function createApprovalRequest(input: CreateApprovalRequestInput): Promise<CreatedLink & { readonly record: LinkRecord }> {
+  const linkSigner = input.requesterKey ?? input.issuerKey;
+  if (!linkSigner) throw new LinkError("invalid_argument", "a signer is required");
+  let candidate: unknown = input.request;
+  if (input.requesterKey !== undefined) {
+    if (!isPlainObject(input.request)) throw new LinkError("body_validation_failed", "invalid approval request");
+    if (
+      input.issuerKey !== undefined &&
+      input.issuerKey.did !== input.requesterKey.did &&
+      input.issuerKey.did !== input.request.targetDid
+    ) {
+      throw new LinkError("issuer_binding_mismatch");
+    }
+    if (input.request.requestVersion === 1) {
+      if ("requester" in input.request) throw new LinkError("body_validation_failed", "invalid approval request");
+      if (input.request.issuer !== input.request.targetDid && input.request.issuer !== input.requesterKey.did) {
+        throw new LinkError("issuer_binding_mismatch");
+      }
+      candidate = {
+        ...input.request,
+        issuer: input.requesterKey.did,
+        requestVersion: 2 as const,
+        requester: input.requesterKey.did,
+      };
+    }
+  }
+  const request = parseApprovalRequest(candidate, { issuer: linkSigner.did });
   const now = toEpochMs(input.now);
   const prepared = await prepareLinkRecord({
-    type: "openkey-approval-request", issuerKey: input.issuerKey, apiOrigin: input.apiOrigin,
+    type: "openkey-approval-request", issuerKey: linkSigner, apiOrigin: input.apiOrigin,
     now, expiresAt: input.expiresAt ?? new Date(now + LINK_TYPE_SPECS["openkey-approval-request"].defaultLifeSeconds * 1000),
     plaintext: new TextEncoder().encode(canonicalize(request)),
   });
@@ -365,7 +394,7 @@ export async function resolveLink(link: string, input: ResolveLinkInput): Promis
 }
 
 /** Repeatable GET plus the same strict signature/CID/AEAD/issuer pipeline as every typed link. */
-export async function resolveApprovalRequest(link: string, input: ResolveLinkInput): Promise<ResolvedLink & { readonly request: OpenKeyApprovalRequestV1 }> {
+export async function resolveApprovalRequest(link: string, input: ResolveLinkInput): Promise<ResolvedLink & { readonly request: OpenKeyApprovalRequest }> {
   const opened = await resolveLink(link, input);
   if (opened.type !== "openkey-approval-request") throw new LinkError("type_path_mismatch");
   if (opened.header.audience !== input.apiOrigin) throw new LinkError("audience_mismatch");

@@ -12,6 +12,7 @@ export {
   deleteLink,
   prepareLinkRecord,
   resolveLink,
+  type CreateApprovalRequestInput,
   type CreateLinkInput,
   type CreatedLink,
   type LinkTransportOptions,
@@ -78,7 +79,17 @@ export {
 } from "./header.js";
 export { checkLinkRecord, openLinkRecord, type CheckedLinkRecord, type LinkBodyValidator, type OpenedLink } from "./record.js";
 export { signerFromJwk, signerFromSeed, type Ed25519PrivateJwk, type LinkSigner } from "./signer.js";
-export { buildShareInvitationApprovalSpec, parseApprovalRequest, approvalRequestPurpose, type OpenKeyApprovalRequestV1, type ShareInvitationApprovalContext } from "./approval-request.js";
+export {
+  buildShareInvitationApprovalSpec,
+  parseApprovalRequest,
+  approvalRequestPurpose,
+  approvalRequestRequester,
+  isApprovalRequestV2,
+  type OpenKeyApprovalRequest,
+  type OpenKeyApprovalRequestV1,
+  type OpenKeyApprovalRequestV2,
+  type ShareInvitationApprovalContext,
+} from "./approval-request.js";
 export {
   APPROVAL_POLL_INTERVAL_MS,
   APPROVAL_RESULT_CLIENT_ID,
