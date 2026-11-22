@@ -82,4 +82,14 @@ describe("migrateSecrets", () => {
     expect(result).toMatchObject({ ok: false, error: { code: "INVALID_INPUT" } });
     expect(calls).toEqual([]);
   });
+
+  test("a vault without resealToKey is refused before any key is asked for", async () => {
+    let asked = false;
+    const secrets = { vault: {}, listAll: async () => ({ ok: true, data: [{ name: "API_KEY" }] }) } as unknown as ISecretsService;
+
+    const result = await migrateSecrets(secrets, { authorizeKeys: async () => { asked = true; } });
+
+    expect(result).toMatchObject({ ok: false, error: { code: "INVALID_INPUT" } });
+    expect(asked).toBe(false);
+  });
 });

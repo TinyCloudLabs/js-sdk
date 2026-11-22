@@ -82,9 +82,14 @@ export async function migrateSecrets(
       moves.push({ vaultKey: resolved.vaultKey, keyPath: resolved.keyPath });
     }
   }
-  if (!dryRun && moves.length > 0) await options.authorizeKeys?.(moves.map((move) => move.keyPath));
+  if (moves.length === 0) return { ok: true, data: report };
+  // `resealToKey` is optional on the interface: a vault built outside the SDK may not have it. Refuse before asking
+  // for any key, so a vault that cannot move secrets never prompts for them.
+  const reseal = vault.resealToKey?.bind(vault);
+  if (reseal === undefined) return invalid("This vault cannot move secrets onto their own keys.");
+  if (!dryRun) await options.authorizeKeys?.(moves.map((move) => move.keyPath));
   for (const { vaultKey, keyPath } of moves) {
-    const result = await vault.resealToKey(vaultKey, keyPath, { dryRun });
+    const result = await reseal(vaultKey, keyPath, { dryRun });
     if (result.status === "skipped") {
       report.skipped[result.reason] = (report.skipped[result.reason] ?? 0) + 1;
     } else if (result.status === "already") {

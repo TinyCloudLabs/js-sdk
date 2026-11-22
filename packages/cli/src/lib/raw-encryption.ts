@@ -40,6 +40,13 @@ export function isExactSecretKeyPermission(
     !permission.caveats?.length;
 }
 
+/** {@link isExactSecretKeyPermission} with decrypt as the only action: the one raw entry OpenKey signs for an agent. */
+export function isDecryptOnlyExactSecretKey(
+  permission: Pick<PermissionEntry, "service" | "path" | "actions" | "caveats">,
+): boolean {
+  return isExactSecretKeyPermission(permission) && permission.actions.every((action) => action === "tinycloud.encryption/decrypt");
+}
+
 /**
  * The built-in Share publishing decrypt entry names the approving account's
  * `default/share/` encryption prefix before owner resolution.

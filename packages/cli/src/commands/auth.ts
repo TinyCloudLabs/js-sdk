@@ -89,7 +89,7 @@ import {
   defaultManifestLoginExpiry,
 } from "../auth/scoped-login.js";
 import { assertNoCaveatLimits } from "../lib/caveat-refusal.js";
-import { isExactSecretKeyPermission, isRawEncryptionPermission, isVerifiedRawEncryptionPermission } from "../lib/raw-encryption.js";
+import { isDecryptOnlyExactSecretKey, isExactSecretKeyPermission, isRawEncryptionPermission, isVerifiedRawEncryptionPermission } from "../lib/raw-encryption.js";
 import { withExactKeyNode } from "../lib/exact-key-grant.js";
 import { canonicalOwnerDid } from "../lib/owner-did.js";
 import { assertNotLocalOwner, assertSessionReplaceable, commitLogin, readProfileSnapshot } from "../auth/login-commit.js";
@@ -2252,8 +2252,7 @@ export function assertOpenKeyAgentRequest(requested: PermissionEntry[]): void {
   // One secret's own key, decrypt only, is the only raw encryption entry OpenKey signs for an agent: never a prefix, the
   // whole network or key creation (until OpenKey's route for it is live).
   if (requested.some((permission) =>
-    (isRawEncryptionPermission(permission) && !(isExactSecretKeyPermission(permission) &&
-      permission.actions.every((action) => action === "tinycloud.encryption/decrypt"))) ||
+    (isRawEncryptionPermission(permission) && !isDecryptOnlyExactSecretKey(permission)) ||
     isRawCidRevocationPermission(permission))) {
     throw new CLIError(
       "RAW_RECAP_RESOURCE_UNSUPPORTED",
