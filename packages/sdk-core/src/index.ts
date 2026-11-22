@@ -627,6 +627,7 @@ export {
   type ParsedSecretCatalogKey,
   type SecretScopeOptions,
   type SecretPutOptions,
+  type SecretGetOptions,
   // Encryption Service (network-scoped)
   EncryptionService,
   DecryptTransportResponseError,

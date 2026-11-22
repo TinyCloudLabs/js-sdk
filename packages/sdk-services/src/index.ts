@@ -425,6 +425,7 @@ export type {
   VaultGrantOptions,
   VaultEntry,
   VaultNetworkReadResult,
+  VaultResealResult,
   VaultError,
 } from "./vault";
 
@@ -444,6 +445,7 @@ export {
   parseSecretCatalogKey,
   resolveSecretListPrefix,
   resolveSecretPath,
+  parseSecretKeyPath,
   secretKeyPath,
   secretReadPermissions,
 } from "./secrets";
@@ -461,6 +463,7 @@ export type {
   SecretMigrateOptions,
   SecretMigrateReport,
   SecretMigrateSkipReason,
+  SecretGetOptions,
 } from "./secrets";
 
 // Encryption service (network-scoped one-of-one decrypt)

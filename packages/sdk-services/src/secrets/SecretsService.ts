@@ -20,6 +20,7 @@ import {
   resolveSecretPath,
   SECRET_NAME_RE,
   type ResolvedSecretPath,
+  type SecretGetOptions,
   type SecretScopeOptions,
   type SecretPutOptions,
 } from "./paths";
@@ -70,7 +71,7 @@ export class SecretsService implements ISecretsService {
 
   private async readPayload(
     name: string,
-    options?: SecretScopeOptions,
+    options?: SecretGetOptions,
   ): Promise<Result<SecretPayload, SecretsError>> {
     const secretPath = resolveSecretPathResult(name, options);
     if ("ok" in secretPath) return secretPath;
@@ -81,6 +82,7 @@ export class SecretsService implements ISecretsService {
       expectAad: true,
       ...(secretPath.keyPath === undefined ? {} : { keyPath: secretPath.keyPath }),
       ...(options?.source === undefined ? {} : { source: options.source }),
+      ...(options?.namedKeyOnly === true ? { namedKeyOnly: true } : {}),
     });
     if (!result.ok) {
       return result;
@@ -90,7 +92,7 @@ export class SecretsService implements ISecretsService {
 
   async get(
     name: string,
-    options?: SecretScopeOptions,
+    options?: SecretGetOptions,
   ): Promise<Result<string, SecretsError>> {
     const payload = await this.readPayload(name, options);
     if (!payload.ok) return payload;
@@ -99,7 +101,7 @@ export class SecretsService implements ISecretsService {
 
   async getEntry(
     name: string,
-    options?: SecretScopeOptions,
+    options?: SecretGetOptions,
   ): Promise<Result<SecretEntry, SecretsError>> {
     const payload = await this.readPayload(name, options);
     if (!payload.ok) return payload;

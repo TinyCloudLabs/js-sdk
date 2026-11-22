@@ -15,6 +15,7 @@ import type {
   VaultGrantOptions,
   VaultListPage,
   VaultNetworkReadResult,
+  VaultResealResult,
 } from "./types";
 
 /**
@@ -97,6 +98,14 @@ export interface IDataVaultService extends IService {
     key: string,
     options?: VaultGetOptions<T>,
   ): Promise<VaultNetworkReadResult<T>>;
+
+  /**
+   * Move one record onto its own key, verifying before it writes: read it from
+   * the network with its ETag, seal it to `keyPath` (creating the key), open
+   * the new copy and compare bytes, then write only if the record is
+   * unchanged (`ifMatch`). A failure at any step keeps the old copy.
+   */
+  resealToKey(key: string, keyPath: string, options?: { dryRun?: boolean }): Promise<VaultResealResult>;
 
   /**
    * Delete an encrypted key.

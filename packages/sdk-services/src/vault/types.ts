@@ -195,6 +195,29 @@ export type VaultNetworkReadResult<T> =
   | { status: "legacy_envelope" };
 
 /**
+ * Outcome of {@link IDataVaultService.resealToKey}. Value-free: no plaintext,
+ * ciphertext, or key material, in any variant.
+ */
+export type VaultResealResult =
+  | { status: "moved" }
+  /** Already v2, naming exactly the key path, and its AAD verifies. */
+  | { status: "already" }
+  /** `dryRun` only: the copy would move; nothing was encrypted or written. */
+  | { status: "pending" }
+  /** Nothing was written. */
+  | {
+    status: "skipped";
+    reason:
+      | "not_found"
+      | "permission_required"
+      | "read_failed"
+      | "aad_mismatch"
+      | "verify_failed"
+      | "conflict"
+      | "write_failed";
+  };
+
+/**
  * Structured error codes for vault operations.
  */
 /**
@@ -244,6 +267,13 @@ export type VaultErrorInput =
       code: "LEGACY_ENVELOPE";
       key: string;
       message: string;
+    }
+  | {
+      /** The node refused to open the record's own key: the grant for it is missing, lapsed or revoked. Ask for `permissionHint`. */
+      code: "DECRYPT_DENIED";
+      key: string;
+      message: string;
+      permissionHint: PermissionHint;
     }
   | {
       /** `ifMatch` write refused (HTTP 412): the value changed or no longer exists. Re-read and retry. */

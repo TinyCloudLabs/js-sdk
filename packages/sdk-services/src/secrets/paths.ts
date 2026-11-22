@@ -36,6 +36,21 @@ export interface SecretPutOptions extends SecretScopeOptions {
   type?: SecretType;
 }
 
+/** Options for reading one secret. */
+export interface SecretGetOptions extends SecretScopeOptions {
+  /**
+   * Open only a copy sealed to the secret's own key. A copy still sealed to
+   * the network key is `LEGACY_ENVELOPE`, never opened through the network.
+   */
+  namedKeyOnly?: boolean;
+  /**
+   * Ask for missing read authority, which may prompt the wallet to sign.
+   * Only for a read the user started. Without it a read never asks: a missing
+   * grant for the secret's own key is `DECRYPT_DENIED` with `permissionHint`.
+   */
+  requestPermission?: boolean;
+}
+
 /**
  * Derive the canonical secret scope for an app id such as
  * `xyz.tinycloud.feed-workflows` → `xyz-tinycloud-feed-workflows`.
@@ -100,6 +115,19 @@ export function secretKeyPath(name: string, scope?: string): string {
     throw new Error("A secret's key needs a name and scope of at most 64 bytes, scope in canonical form");
   }
   return `${scope === undefined ? SECRET_PREFIX : `${SCOPED_SECRET_PREFIX}${scope}/`}${name.toLowerCase()}`;
+}
+
+/** The secret whose key `path` is, exactly as `secretKeyPath` derives it; `undefined` for any other path. */
+export function parseSecretKeyPath(path: string): { name: string; scope?: string } | undefined {
+  const match = /^secrets\/(?:scoped\/([^/]+)\/)?([^/]+)$/.exec(path);
+  const name = match?.[2]!.toUpperCase();
+  try {
+    return name !== undefined && secretKeyPath(name, match![1]) === path
+      ? { name, ...(match![1] === undefined ? {} : { scope: match![1] }) }
+      : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /**

@@ -85,7 +85,7 @@ import {
   PartialNodeWriteError,
   routingFailure,
   isVaultResourceUri,
-  secretKeyPath,
+  parseSecretKeyPath,
   type ResourceAccess,
   type ResourceDestination,
 } from "@tinycloud/sdk-services";
@@ -230,16 +230,6 @@ function didPrincipalMatches(actual: string, expected: string): boolean {
 
 /** Requests this class composed from manifests: the `secrets/` prefix never comes from one (TC-3284). */
 const MANIFEST_COMPOSED = new WeakSet<ComposedManifestRequest>();
-
-/** A secret's own key path exactly as `secretKeyPath` derives it: never mixed case or another layout. */
-function isSecretKeyPath(path: string): boolean {
-  const match = /^secrets\/(?:scoped\/([^/]+)\/)?([^/]+)$/.exec(path);
-  try {
-    return match !== null && secretKeyPath(match[2]!.toUpperCase(), match[1]) === path;
-  } catch {
-    return false;
-  }
-}
 
 function addRawAbility(
   rawAbilities: Record<string, string[]>,
@@ -979,17 +969,8 @@ export class NodeUserAuthorization implements IUserAuthorization {
 
   private async refreshNamedKeyFeatureForSignIn(address: string, chainId: number): Promise<void> {
     const request = this.getCapabilityRequest();
-    if (request === undefined) {
-      // A plain owner session asks for its secrets' keys when the node has
-      // them (TC-3284). Best effort: a node not reachable yet is signed for
-      // without them, as before, and checkNodeInfo still refuses it after.
-      await this.resolveTinyCloudHostsForSignIn(address, chainId)
-        .then(() => this.refreshNodeInfo())
-        .catch(() => undefined);
-      return;
-    }
     const siweDomain = this.siweConfig?.domain ?? this.domain;
-    const hasNamedKeys = request.manifests.some((manifest) =>
+    const hasNamedKeys = request?.manifests.some((manifest) =>
       manifest.keys?.length && appKeyHostBinding(siweDomain, manifest.keys_app_id ?? manifest.app_id));
     if (hasNamedKeys) {
       await this.resolveTinyCloudHostsForSignIn(address, chainId);
@@ -1261,10 +1242,6 @@ export class NodeUserAuthorization implements IUserAuthorization {
         spaceAbilities,
         rawAbilities: {
           [defaultNetworkId]: [DECRYPT_ACTION, NETWORK_CREATE_ACTION],
-          // The owner's own session seals and opens every secret's key (TC-3284).
-          ...(this._nodeFeatures.includes("encryption-named-keys-v1")
-            ? { [`${defaultNetworkId}/secrets/`]: [DECRYPT_ACTION, KEY_CREATE_ACTION] }
-            : {}),
         },
       };
     }
@@ -1301,7 +1278,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
       const ownSecrets = ownDefault && entry.space === "encryption" &&
         entry.actions.every((action) => action === DECRYPT_ACTION || action === KEY_CREATE_ACTION) &&
         (parsed.kind === "key"
-          ? isSecretKeyPath(parsed.path)
+          ? parseSecretKeyPath(parsed.path) !== undefined
           : parsed.prefix === "secrets" && !MANIFEST_COMPOSED.has(request));
       if (parsed.kind !== "network" && !sharePrefix && !ownSecrets) {
         throw new ManifestValidationError("named keys go in manifest.keys");

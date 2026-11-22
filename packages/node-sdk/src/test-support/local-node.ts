@@ -37,6 +37,9 @@ export async function startLocalNode(binary: string, directoryPrefix: string): P
       ROCKET_ADDRESS: "127.0.0.1",
       TINYCLOUD_KEYS__TYPE: "Static",
       TINYCLOUD_KEYS__SECRET: randomBytes(48).toString("base64url"),
+      // Secrets are sealed to their own named keys (TC-3284).
+      TINYCLOUD_ENCRYPTION_NETWORK__NAMED_KEYS_V1: "true",
+      TINYCLOUD_ENCRYPTION_NETWORK__DELETION_LEDGER_PATH: join(directory, "deletions.jsonl"),
     },
     stdio: ["ignore", "pipe", "pipe"],
   });

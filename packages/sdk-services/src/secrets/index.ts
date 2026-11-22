@@ -18,6 +18,7 @@ export {
   parseSecretCatalogKey,
   resolveSecretListPrefix,
   resolveSecretPath,
+  parseSecretKeyPath,
   secretKeyPath,
   secretReadPermissions,
 } from "./paths";
@@ -33,4 +34,5 @@ export type {
   ResolvedSecretPath,
   SecretScopeOptions,
   SecretPutOptions,
+  SecretGetOptions,
 } from "./paths";
