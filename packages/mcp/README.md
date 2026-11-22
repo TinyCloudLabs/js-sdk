@@ -212,7 +212,9 @@ the node renews the account grant until the lease ends; without it, the grant
 ends after 30 days. Per-request grants are renewed by the owner. Expired or
 missing sessions return a fresh link in `error.details`; expired grants use
 `authority_required`. A lease the node no longer renews (it ended, or the
-node's renewer changed) starts a fresh connection approval.
+node's renewer changed) starts a fresh connection approval. To stop renewal,
+open OpenKey Settings, go to Renewing permissions and select Stop renewal.
+Removing the connection does not stop renewal.
 
 The hosted server checks the account approval with the node when a client
 connects or calls an authenticated tool. Successful checks are cached for up
