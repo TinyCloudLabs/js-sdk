@@ -17,7 +17,7 @@
  */
 import { beforeAll, describe, expect, test } from "bun:test";
 import { ed25519 } from "@noble/curves/ed25519";
-import { PrivateKeySigner, TinyCloudNode, type TinyCloudNodeConfig } from "@tinycloud/node-sdk";
+import { PrivateKeySigner, TinyCloudNode, ownerFullAccess, type TinyCloudNodeConfig } from "@tinycloud/node-sdk";
 import { fromBase64Url, signCompactUcanAuthorization } from "@tinycloud/share-envelope";
 import { createDelegatedShareKey, parseNativeShareUrl, type DelegatedShareKey } from "@tinycloud/share-sdk";
 import { ShareRoot, ensureShareRoot, publishRootBearerLink, revokeRootBearerLink, signShareKeyDelegation, type RootBearerLink, type ShareKeySigner } from "@tinycloud/share-sdk/share-root";
@@ -40,7 +40,7 @@ class CountingSigner extends PrivateKeySigner {
 
 const wallet = new CountingSigner(Wallet.createRandom().privateKey.slice(2));
 const nodeConfig = { host: SERVER_URL, autoBootstrapAccount: false, tinycloudFallbackHosts: [SERVER_URL], autoDiscoverLocalNode: false, enablePublicSpace: false, domain: "share.test" } satisfies Partial<TinyCloudNodeConfig>;
-const owner = new TinyCloudNode({ ...nodeConfig, signer: wallet, prefix: "applications", autoCreateSpace: true });
+const owner = new TinyCloudNode({ ...nodeConfig, signer: wallet, ...ownerFullAccess("applications"), autoCreateSpace: true });
 const id = crypto.randomUUID();
 const P1 = `${PREFIX}${id}/a.md`;
 const P2 = `${PREFIX}${id}/b.md`;

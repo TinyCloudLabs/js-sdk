@@ -90,7 +90,8 @@ await tcw.signIn();
 
 // After (1.0.0) - same API, WebUserAuthorization is used automatically
 const tcw = new TinyCloudWeb({
-  providers: { web3: { driver: window.ethereum } }
+  providers: { web3: { driver: window.ethereum } },
+  manifest: { app_id: 'com.example.notes', name: 'Notes' },
 });
 await tcw.signIn();
 ```
@@ -99,7 +100,8 @@ await tcw.signIn();
 
 ```typescript
 // Start without wallet
-const tcw = new TinyCloudWeb();
+const manifest = { app_id: 'com.example.notes', name: 'Notes' };
+const tcw = new TinyCloudWeb({ manifest });
 console.log(tcw.sessionDid);  // Available immediately
 
 // Later, connect wallet

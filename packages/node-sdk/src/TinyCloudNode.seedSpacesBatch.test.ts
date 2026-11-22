@@ -54,6 +54,11 @@ function makeNode() {
   // it reads (tinyCloudSession, capabilityRequest) — no session/host steps
   // are present in this test's `steps` array, so nothing else is read.
   (node as any).auth = { tinyCloudSession: undefined, capabilityRequest: undefined };
+  // Bootstrap provisions through its own scope: give direct calls one that
+  // reads the account fake each test installs as `_account`.
+  const scope = { grants: [], account: () => node.account };
+  const run = (node as any).runAccountBootstrap;
+  (node as any).runAccountBootstrap = (steps: unknown[], options?: unknown) => run.call(node, steps, options, scope);
   return node;
 }
 

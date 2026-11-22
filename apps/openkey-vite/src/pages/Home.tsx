@@ -1,6 +1,6 @@
 import { useEffect, useState, lazy, Suspense } from "react";
 import { useLocation } from "react-router-dom";
-import { TinyCloudWeb } from "@tinycloud/web-sdk";
+import { TinyCloudWeb, type Manifest } from "@tinycloud/web-sdk";
 import { OpenKey } from "@openkey/sdk";
 import { providers } from "ethers";
 import { OpenKeyEIP1193Provider } from "@/lib/openkey-provider";
@@ -9,6 +9,21 @@ import Button from "@/components/Button";
 import Header from "@/components/Header";
 
 const StorageModule = lazy(() => import("@/pages/StorageModule"));
+
+/**
+ * StorageModule reads, writes, lists and deletes KV keys at the root of the
+ * `default` space and shares them with get + list links.
+ */
+const MANIFEST: Manifest = {
+  app_id: "xyz.tinycloud.examples.openkey-vite",
+  name: "TinyCloud OpenKey Vite Example",
+  space: "default",
+  prefix: "",
+  defaults: false,
+  permissions: [
+    { service: "tinycloud.kv", path: "", actions: ["get", "put", "del", "list"] },
+  ],
+};
 
 declare global {
   interface Window {
@@ -85,6 +100,7 @@ function Home() {
             driver: web3Provider,
           },
         },
+        manifest: MANIFEST,
       });
 
       const tcwProvider = new TinyCloudWeb(tcwConfig);

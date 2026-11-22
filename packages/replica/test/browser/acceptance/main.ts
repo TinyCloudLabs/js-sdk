@@ -75,6 +75,15 @@ const api = {
       autoCreateSpace: true,
       persistSession: true,
       sessionStorageKeyPrefix: "tc858-acceptance",
+      // A sign-in without a manifest gets only the app's own folder; the page reads the boot prefix.
+      manifest: {
+        app_id: "tc858-acceptance",
+        name: "TC-858 acceptance",
+        defaults: false,
+        includePublicSpace: false,
+        prefix: "",
+        permissions: [{ service: "tinycloud.kv", space: "default", path: options.prefix, actions: ["get", "put", "del", "list", "metadata"] }],
+      },
     };
     capturedPending = undefined;
     replicationEventLog.length = 0;

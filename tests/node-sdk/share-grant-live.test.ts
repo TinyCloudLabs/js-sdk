@@ -26,7 +26,7 @@
 import { beforeAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { x25519, ed25519 } from "@noble/curves/ed25519";
 import { sha256 } from "@noble/hashes/sha256";
-import { PrivateKeySigner, TinyCloudNode, type TinyCloudNodeConfig } from "@tinycloud/node-sdk";
+import { PrivateKeySigner, TinyCloudNode, ownerFullAccess, type TinyCloudNodeConfig } from "@tinycloud/node-sdk";
 import { base64Decode, base64Encode, canonicalHashHex, canonicalizeEncryptionJson, hexEncode, type InlineEncryptedEnvelope } from "@tinycloud/sdk-services";
 import { canonicalize, didKeyFromEd25519PublicKey, signCompactUcanAuthorization } from "@tinycloud/share-envelope";
 import { createDelegatedShareKey, prepareAddressedShare, publishAddressedShare, type AddressedPublishAuthority, type DelegatedShareKey } from "@tinycloud/share-sdk";
@@ -57,7 +57,7 @@ const nodeConfig = (extra: Partial<TinyCloudNodeConfig> = {}) => new TinyCloudNo
   host: SERVER_URL, autoBootstrapAccount: false, tinycloudFallbackHosts: [SERVER_URL], autoDiscoverLocalNode: false,
   enablePublicSpace: false, domain: "share.test", signer: wallet, prefix: "applications", ...extra,
 });
-const owner = nodeConfig({ autoCreateSpace: true });
+const owner = nodeConfig({ autoCreateSpace: true, ...ownerFullAccess("applications") });
 let spaceId: string;
 let ownerDid: string;
 let nodeDid: string;

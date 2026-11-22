@@ -40,17 +40,16 @@ const SIGNED_READ_URL_MS = 5 * 60 * 1000; // 5 minutes
  * Length tracks how long the user/agent is expected to be working
  * without re-prompt.
  *
- * Sized at 30 days so long-running backend services, agents, and other
- * persistent identities re-sign in rarely: every forced re-sign-in is a
- * point where an unattended process can fail. Revocation, not expiry, is
- * the control for cutting off a session early. Delegations minted from a
- * session are still bounded by it (TinyCloud Node enforces child expiry
- * <= parent expiry).
+ * Sized at 7 days, matching CLI OpenKey login, `auth request` and share
+ * links. Long-running services and agents that need longer set
+ * `sessionExpirationMs` explicitly. Delegations minted from a session are
+ * still bounded by it (TinyCloud Node enforces child expiry <= parent
+ * expiry).
  *
  * Use for: TinyCloudNode session expiry, runtime permission grants
  * (which are capped by the session anyway).
  */
-const SESSION_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
+const SESSION_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 
 /**
  * Ad-hoc third-party delegations the caller often forgets to revoke.
@@ -63,13 +62,12 @@ const SESSION_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 const SHARE_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 
 /**
- * Manifest-declared delegations for installed apps. Long enough that
- * monthly re-prompts feel like maintenance, short enough that
- * abandoning an app prunes its access.
+ * Manifest-declared delegations for installed apps. Same length as a
+ * session; an app that needs longer sets the manifest `expiry`.
  *
  * Use for: manifest `expiry` defaults.
  */
-const APP_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
+const APP_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 
 // Space hosting uses one UTC calendar year, with leap-day clamping. TC-2691.
 const HOSTING_YEARS = 1;

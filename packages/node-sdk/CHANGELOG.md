@@ -1,5 +1,122 @@
 # @tinycloudlabs/node-sdk
 
+## 3.14.0-beta.10
+
+### Minor Changes
+
+- 778e1e2: A manifest permission path can hold the token `{owner}`, which resolves to the signing account's `did:pkh:eip155:<chain id>:<checksummed address>` at sign-in. The digest sent to OpenKey covers the manifest as published, with the token in place, so one published manifest serves every account. A manifest without the token sends the same request and digest as before. The token is accepted only inside `permissions[].path`; anywhere else (a name, a key, a space, an additional delegate) the sign-in is refused before OpenKey is asked. `@tinycloud/sdk-core` exports `resolveManifestOwner`, `manifestUsesOwnerPlaceholder` and `MANIFEST_OWNER_PLACEHOLDER`, and the presentation envelope may carry an `owner` hint that OpenKey checks against the owner it derives itself. A restored web session resolves the token with its own address and chain id.
+
+  Details: TC-3731
+
+### Patch Changes
+
+- Updated dependencies [778e1e2]
+  - @tinycloud/sdk-core@3.14.0-beta.10
+
+## 3.14.0-beta.8
+
+### Patch Changes
+
+- fbdbaa7: Account setup's own access is used only by the setup steps. A call your app makes while setup is running, or after it ends or fails, runs with your app's own session and its manifest.
+
+  With `includeAccountRegistryPermissions: false`, account setup builds the account index with its own access, and the app's session gets no registry permissions.
+
+  Details: TC-3443
+
+- fbdbaa7: An app that signs in without a manifest gets a folder named by its domain and port: `notes.example.com:8443` gets `applications/com.example.notes_8443/`, and ports 80 and 443 add nothing. A host that isn't a domain name, such as an IPv6 address, gets a folder of its own named `o_` and 16 hex characters. Apps with no domain share one folder and log, once, how to get their own.
+
+  An app that used 3.14.0-beta.5 on another port with no manifest gets a new folder: data it saved in that beta is in the folder without the port, such as `applications/com.example.notes/`.
+
+  Details: TC-3443
+
+- Updated dependencies [fbdbaa7]
+  - @tinycloud/sdk-core@3.14.0-beta.8
+
+## 3.14.0-beta.7
+
+### Minor Changes
+
+- d382af8: Signing out asks each TinyCloud node the session used to stop accepting its session key and the keys created while setting up the account. Sign-out on this device finishes without waiting for the nodes. A node counts as done only when it confirms it recorded this; a node that can't be reached or doesn't support it keeps accepting those keys until the latest grant they hold ends, which can be after the session expires if the session was renewed or holds a longer delegation. `nodeSignOutStatus()` on `TinyCloudNode` and the web SDK resolves when the node calls finish and lists the nodes that confirmed (`confirmed`), had nothing to record (`nothingToRecord`) and didn't confirm (`notConfirmed`, each with a reason: unreachable, refused, unsupported or failed).
+
+  Only the instance that set up the account holds its setup keys. After a reload, sign-out can't send them, and they expire on their own (7 days by default). Access the user gave apps and agents before signing out stays until they remove it in Settings.
+
+  Details: TC-3443
+
+### Patch Changes
+
+- Updated dependencies [d382af8]
+- Updated dependencies [d382af8]
+  - @tinycloud/sdk-core@3.14.0-beta.7
+  - @tinycloud/node-sdk-wasm@1.8.0-beta.0
+
+## 3.14.0-beta.6
+
+### Patch Changes
+
+- 7d438ee: Account index writes are sent only when the session can write the index (`tinycloud.sql` write and schema on the account database). A session without that access skips the index writes. Account reads and writes through the registry records don't depend on that access.
+
+  Details: TC-3688
+
+- Updated dependencies [7d438ee]
+  - @tinycloud/sdk-core@3.14.0-beta.6
+
+## 3.14.0-beta.5
+
+### Minor Changes
+
+- 2cb453f: A sign-in that declares no `manifest`, `capabilityRequest` or `defaultActions` asks only for the app's own folder: KV (get, put, del, list, metadata) and SQL (read, write) under `applications/<app id>/`, plus capabilities read on `applications`, for 7 days. The app id is the sign-in domain reversed (`notes.example.com` → `com.example.notes`), or `node.app` for a Node client without a `domain`. It doesn't get the whole primary space, the secrets vault, account registry entries, the public space or the encryption network, and it logs one console warning per sign-in. `@tinycloud/server`'s `createServerIdentity` without a `manifest` gets the same folder.
+
+  Sessions, app delegations and bootstrap sessions default to 7 days, with or without a manifest. A manifest's `expiry` doesn't set the session length; set `sessionExpirationMs` for a longer session.
+
+  Upgrading: the default was 30 days. Apps that relied on it, including apps with a manifest such as Share's library sign-in, set `sessionExpirationMs` to keep 30 days.
+
+  Owner tools that need every action on their own space pass `...ownerFullAccess(space)` (new, from `@tinycloud/sdk-core` and `@tinycloud/node-sdk`) in the `TinyCloudNode` config; `defaultActions` is a `TinyCloudNode` option.
+
+  A wallet-mode `TinyCloudNode` runs its calls on its own session from the first sign-in: the sessions it signs to set up a new account are used only for that setup, so the manifest bounds what the app can do.
+
+  `createEncryptionNetwork` returns a network that already exists without asking to create it, so calling it for the network account setup created needs no `network.create` in the manifest.
+
+  Details: TC-3443
+
+### Patch Changes
+
+- Updated dependencies [2cb453f]
+  - @tinycloud/sdk-core@3.14.0-beta.5
+  - @tinycloud/sdk-services@3.14.0-beta.5
+  - @tinycloud/replica@0.4.7-beta.0
+
+## 3.14.0-beta.4
+
+### Minor Changes
+
+- 4e4d845: OpenKey sign-in through an approval link asks the owner to let the grant renew itself.
+  - `tc auth login` asks for a 30-day renewal by default. A sign-in that asks for any encryption permission (decrypt included) or for the secrets space asks for no renewal unless `--renew` names one. `--renew <duration>` asks for another length (longer than `--expiry` and at most 365d) and `--no-renew` asks for none. `tc status` shows when a renewing sign-in stops renewing.
+  - `courier init --request` and `courier init --wait` ask for a 90-day renewal by default. `--renew <duration>` asks for another length and `--renew off` asks for none.
+  - The owner can approve with or without renewal. A saved request is resumed only by a run that asks for the same renewal.
+  - A renewing Courier grant keeps its peers' access going past the grant's signed end, up to the end the node has renewed it to.
+  - `TinyCloudNode.sessionEnd` gives when the session's authority ends. After `restoreSessionWithRenewal` it is the renewed end the node reported, and `delegateTo` can delegate up to it.
+
+  Details: TC-3522
+
+## 3.14.0-beta.3
+
+### Patch Changes
+
+- Updated dependencies [628be3c]
+  - @tinycloud/sdk-core@3.14.0-beta.3
+
+## 3.14.0-beta.2
+
+### Patch Changes
+
+- 81884ce: A share link's host is used when the owner has no registry record and the host is a known TinyCloud node: a production node, or a host the recipient configured (`host`, `newUserHost` or `tinycloudFallbackHosts`). Share links to owners without a registry record open from recipients that have no `newUserHost`, including `TinyCloudWeb.receiveShare`. The owner's registry record decides whenever it exists, and v2 shares and receives that delegate to the current session don't use the link host. `@tinycloud/sdk-core` exports `isKnownTinyCloudNode`, and `SharingService` takes an optional `receivedHostHintTransport` callback that `TinyCloudNode` supplies.
+
+  Details: TC-3661
+
+- Updated dependencies [18a0e38]
+- Updated dependencies [81884ce]
+  - @tinycloud/sdk-core@3.14.0-beta.2
+
 ## 3.14.0-beta.1
 
 ### Minor Changes

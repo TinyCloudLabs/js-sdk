@@ -1,4 +1,4 @@
-import { TinyCloudNode } from "@tinycloud/node-sdk";
+import { TinyCloudNode, ownerFullAccess } from "@tinycloud/node-sdk";
 import { randomBytes, randomUUID } from "node:crypto";
 import { posix as pathPosix } from "node:path";
 
@@ -47,7 +47,7 @@ export function createClient(name, privateKey) {
   return new TinyCloudNode({
     privateKey,
     host: SERVER_URL,
-    prefix: `vfs-${name}`,
+    ...ownerFullAccess(`vfs-${name}`),
     autoCreateSpace: true,
   });
 }

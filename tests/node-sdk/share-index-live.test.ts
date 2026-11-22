@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { Wallet } from "ethers";
-import { PrivateKeySigner, TinyCloudNode } from "@tinycloud/node-sdk";
+import { PrivateKeySigner, TinyCloudNode, ownerFullAccess } from "@tinycloud/node-sdk";
 import { parseSignedSiweCacao } from "@tinycloud/sdk-core";
 import { ed25519 } from "@noble/curves/ed25519";
 import { canonicalize, didKeyFromEd25519PublicKey } from "@tinycloud/share-envelope";
@@ -84,6 +84,7 @@ async function signedIn(key: string): Promise<TinyCloudNode> {
     autoDiscoverLocalNode: false,
     enablePublicSpace: false,
     autoCreateSpace: true,
+    ...ownerFullAccess(),
   });
   await node.signIn();
   return node;

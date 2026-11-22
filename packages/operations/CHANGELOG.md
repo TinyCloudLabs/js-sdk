@@ -1,5 +1,75 @@
 # @tinycloud/operations
 
+## 0.9.2-beta.8
+
+### Patch Changes
+
+- Updated dependencies [778e1e2]
+  - @tinycloud/sdk-core@3.14.0-beta.10
+  - @tinycloud/node-sdk@3.14.0-beta.10
+
+## 0.9.2-beta.7
+
+### Patch Changes
+
+- Updated dependencies [fbdbaa7]
+- Updated dependencies [fbdbaa7]
+  - @tinycloud/node-sdk@3.14.0-beta.8
+  - @tinycloud/sdk-core@3.14.0-beta.8
+
+## 0.9.2-beta.6
+
+### Patch Changes
+
+- Updated dependencies [d382af8]
+  - @tinycloud/node-sdk@3.14.0-beta.7
+  - @tinycloud/sdk-core@3.14.0-beta.7
+
+## 0.9.2-beta.5
+
+### Patch Changes
+
+- Updated dependencies [7d438ee]
+  - @tinycloud/sdk-core@3.14.0-beta.6
+  - @tinycloud/node-sdk@3.14.0-beta.6
+
+## 0.9.2-beta.4
+
+### Patch Changes
+
+- 2cb453f: A login, grant or decrypt grant made through the CLI, `@tinycloud/operations` or the MCP server without an expiry still lasts 30 days. The SDK's default for the same requests is 7 days.
+
+  Details: TC-3443
+
+- Updated dependencies [2cb453f]
+  - @tinycloud/sdk-core@3.14.0-beta.5
+  - @tinycloud/node-sdk@3.14.0-beta.5
+  - @tinycloud/sdk-services@3.14.0-beta.5
+
+## 0.9.2-beta.3
+
+### Patch Changes
+
+- Updated dependencies [4e4d845]
+  - @tinycloud/node-sdk@3.14.0-beta.4
+
+## 0.9.2-beta.2
+
+### Patch Changes
+
+- Updated dependencies [628be3c]
+  - @tinycloud/sdk-core@3.14.0-beta.3
+  - @tinycloud/node-sdk@3.14.0-beta.3
+
+## 0.9.2-beta.1
+
+### Patch Changes
+
+- Updated dependencies [18a0e38]
+- Updated dependencies [81884ce]
+  - @tinycloud/sdk-core@3.14.0-beta.2
+  - @tinycloud/node-sdk@3.14.0-beta.2
+
 ## 0.9.2-beta.0
 
 ### Patch Changes
