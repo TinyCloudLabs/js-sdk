@@ -3581,5 +3581,23 @@
       "ceiling": { "index.mjs": 1534530, "index.cjs": 1466077 }
     },
     "reason": "TinyCloudNode and NodeUserAuthorization bind the signer's did:pkh owner into manifest permission paths that hold {owner}, and a restored web session resolves the token with its own address and chain id; sdk-core and node-sdk are bundled into the web-sdk root. Canonical Node 22/Bun 1.3.14 CI on #1121 (c3425b3a, master 895bfdc7 merged in) measured index.mjs 1534530 and index.cjs 1466077 gzip -9 bytes: +615 and +511 over the tc3704OpenKeyPromptRoot ceilings 1533915 and 1465566. No other ceiling moves. Details: TC-3731"
+  },
+  "tc3443AppIdLineBreakRoot": {
+    "label": "a host with a line break gets its own o_ folder (TC-3443)",
+    "ruling": "size-ruling: TC-3443 row tc3443AppIdLineBreakRoot index.mjs 1534531 (+1), index.cjs 1466079 (+2) gzip bytes over the tc3731ManifestOwnerRoot ceilings, CI's canonical figure (2026-11-22). Details: TC-3443",
+    "base": "5cc591102a9aef7d90d880e97671a2261f0f5b41",
+    "sourceCommits": ["3d2ff8abd3e5a5562803d6e28aa83540333e5c46"],
+    "canonicalCI": {
+      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45082592488",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45082592488/job/137393874380",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45082592488/job/137393874698"
+      ]
+    },
+    "root": {
+      "delta": { "index.mjs": 1, "index.cjs": 2 },
+      "ceiling": { "index.mjs": 1534531, "index.cjs": 1466079 }
+    },
+    "reason": "A host with a line break gets its own o_ folder like any other host that is not a domain name, matching the vectors shared with OpenKey (sdk-core owner-access); sdk-core is bundled into the web-sdk root. Canonical Node 22/Bun 1.3.14 CI on #1135 (354f2184, master 5cc59110 merged in) measured index.mjs 1534531 and index.cjs 1466079 gzip -9 bytes: +1 and +2 over the tc3731ManifestOwnerRoot ceilings 1534530 and 1466077. No other ceiling moves. Details: TC-3443"
   }
 }
