@@ -8,7 +8,8 @@ export const GENERIC_APP_ID_WITHOUT_HOST = "node.app";
 
 // DNS labels only: no `_`, so no host name can spell a `_<port>` or `o_<hash>` id.
 const HOST_LABEL = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
-const HOST_AND_PORT = /^(.*?)(?::(\d{1,5}))?$/;
+// `s`: `.` spans line breaks too, so every host matches (one with a newline is not a DNS name and is hashed).
+const HOST_AND_PORT = /^(.*?)(?::(\d{1,5}))?$/s;
 const DEFAULT_PORTS = new Set([80, 443]);
 
 /**
@@ -16,7 +17,7 @@ const DEFAULT_PORTS = new Set([80, 443]);
  * name reversed (`notes.example.com` → `com.example.notes`), with a
  * non-default port after `_` (`notes.example.com:8443` →
  * `com.example.notes_8443`; 80 and 443 are dropped). A host that is not a DNS
- * name (an IPv6 literal, a label with `_`) gets `o_` and the first 16 hex of
+ * name (an IPv6 literal, a label with `_`, a line break) gets `o_` and the first 16 hex of
  * the SHA-256 of the lowercased host and port. {@link GENERIC_APP_ID_WITHOUT_HOST}
  * when there is no host.
  */

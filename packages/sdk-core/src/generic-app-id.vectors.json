@@ -198,5 +198,25 @@
   {
     "host": "com.example.notes_8443",
     "appId": "o_e96b28388c342d7a"
+  },
+  {
+    "host": "notes.example.com\nother.example",
+    "appId": "o_e2aea855b3a3e306"
+  },
+  {
+    "host": "notes.example.com\r\nother.example",
+    "appId": "o_cef7d391e7d6f5fe"
+  },
+  {
+    "host": "notes.example.com\nother.example:8443",
+    "appId": "o_c9a8104a811cd897"
+  },
+  {
+    "host": "notes.example.com\nother.example:443",
+    "appId": "o_e2aea855b3a3e306"
+  },
+  {
+    "host": "notes.example.com other.example",
+    "appId": "o_fcd22395ad11264d"
   }
 ]
