@@ -7,6 +7,7 @@ import {
   jwkThumbprint,
   checkOpenkeyIdentity,
   verifyAttestation,
+  verifyService,
   type RefusalCode,
   type Trust,
   type VerifyOptions,
@@ -199,27 +200,58 @@ describe("OpenKey identity", () => {
   const EC_T = "oKIywvGUpTVTyxMQ3bwIIeQUudfr_CkLMjCE19ECD-U";
   const jwks = { keys: [rsa, okp, ec, { ...okp, kid: "c" }] };
 
-  test("an identity listing the proven subset of the served keys passes and names the rest unproven", () => {
-    expect(checkOpenkeyIdentity(`${ISSUER}#${RSA_T},${OKP_T},${EC_T}`, ISSUER, jwks)).toEqual({ unprovenKeys: [] });
-    expect(checkOpenkeyIdentity(`${ISSUER}#${RSA_T},${EC_T}`, ISSUER, jwks)).toEqual({ unprovenKeys: [OKP_T] });
+  const refusedWith = (identity: string, keys: unknown = jwks, opts: Parameters<typeof checkOpenkeyIdentity>[3] = {}) => {
+    try {
+      checkOpenkeyIdentity(identity, ISSUER, keys, opts);
+    } catch (error) {
+      if (error instanceof TeeVerifyRefused) return error.code;
+      throw error;
+    }
+    return "passed";
+  };
+
+  test("an identity covering every served key passes", () => {
+    expect(checkOpenkeyIdentity(`${ISSUER}#${RSA_T},${OKP_T},${EC_T}`, ISSUER, jwks)).toEqual({ unattestedKeys: [] });
+  });
+
+  test("a served key the identity leaves out is refused, unless explicitly allowed", () => {
+    expect(refusedWith(`${ISSUER}#${RSA_T},${EC_T}`)).toBe("unattested-keys");
+    expect(checkOpenkeyIdentity(`${ISSUER}#${RSA_T},${EC_T}`, ISSUER, jwks, { allowUnattestedKeys: true })).toEqual({
+      unattestedKeys: [OKP_T],
+    });
+    // excluded_keys > 0 refuses even when the served set matches.
+    expect(refusedWith(`${ISSUER}#${RSA_T},${OKP_T},${EC_T}`, jwks, { excludedKeys: 1 })).toBe("unattested-keys");
   });
 
   test("an identity with an unserved key, another issuer, no keys, or out of order is refused", () => {
-    const refusedWith = (identity: string, keys: unknown = jwks) => {
-      try {
-        checkOpenkeyIdentity(identity, ISSUER, keys);
-      } catch (error) {
-        if (error instanceof TeeVerifyRefused) return error.code;
-        throw error;
-      }
-      return "passed";
-    };
     expect(refusedWith(`${ISSUER}#${RSA_T},${"A".repeat(43)}`)).toBe("identity");
     expect(refusedWith(`https://evil.example/api/auth#${RSA_T}`)).toBe("identity");
     expect(refusedWith(`${ISSUER}#`)).toBe("identity");
     expect(refusedWith(`${ISSUER}#${EC_T},${RSA_T}`)).toBe("identity");
     expect(refusedWith(`${ISSUER}#${RSA_T},${RSA_T}`)).toBe("identity");
     expect(refusedWith(`${ISSUER}#${RSA_T}`, { keys: [] })).toBe("identity");
+    expect(refusedWith(`${ISSUER}#${RSA_T}`, { keys: [null] })).toBe("identity");
+  });
+
+  test("verifyService refuses an OpenKey that serves an unattested key; the opt-in only gets past that check", async () => {
+    const base = "http://localhost:1";
+    const issuer = `${base}/api/auth`;
+    // The node quote stands in for OpenKey's: it can't pass OpenKey's binding, so the
+    // opt-in path ends at the binding check, after the key check let it through.
+    const answer = { ...response, identity: `${issuer}#${RSA_T},${EC_T}`, excluded_keys: 1 };
+    const fetcher = (async (url: URL) =>
+      Response.json(url.pathname === "/api/auth/jwks" ? jwks : answer)) as unknown as typeof fetch;
+    const run = async (allowUnattestedKeys: boolean) => {
+      try {
+        await verifyService(base, { service: "openkey", fetch: fetcher, trust: DEV_AS_PRODUCTION, allowUnattestedKeys });
+      } catch (error) {
+        if (error instanceof TeeVerifyRefused) return error.code;
+        throw error;
+      }
+      return "passed";
+    };
+    expect(await run(false)).toBe("unattested-keys");
+    expect(await run(true)).toBe("binding");
   });
 });
 

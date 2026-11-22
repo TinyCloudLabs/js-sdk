@@ -9,7 +9,7 @@ Checks that a TinyCloud service runs the code it says it runs, in a TEE. It veri
 5. The RTMR3 event log replays to the quote, and the app ID, compose hash, OS image hash and key provider are read from that replay. Only version 1 event logs are supported; an OS that writes version 2 events is refused until the replay supports them.
 6. The OS image and its MRTD and RTMR0-2 are on the published production list.
 7. The app ID and compose hash are a published release.
-8. The keys came from that release's KMS: the `key-provider` event names its root key exactly. dstack takes keys from whatever KMS the host names unless the compose sets `key_provider_id`, and only records the one it used.
+8. The CVM's dstack keys came from that release's KMS: the `key-provider` event names its root key exactly. dstack takes keys from whatever KMS the host names unless the compose sets `key_provider_id`, and only records the one it used.
 
 The lists are in `pins/` (see `pins/README.md`).
 
@@ -34,8 +34,9 @@ verified
 
 or `refused: <reason>`. Exit 0 means verified, 1 refused, 2 a usage error. Options:
 
-- `--signer <signer>`: the signer you expect, matched exactly. Without it, the node's `/info` `nodeId` is checked. For OpenKey, the attested `identity` (`<issuer>#<sorted RFC 7638 thumbprints>`) must list only keys that `<url>/api/auth/jwks` serves. OpenKey quotes only the keys it proves it holds, so served keys left out are printed as `unproven`: the quote does not cover tokens they sign. The response's `excluded_keys` count is outside the key binding and is not used.
-- `--service openkey`: verify `https://api.openkey.so` (binding domain `so.openkey/tee-key/v1`). OpenKey has no published release yet, so it is refused.
+- `--signer <signer>`: the signer you expect, matched exactly. Without it, the node's `/info` `nodeId` is checked.
+- `--service openkey`: verify `https://api.openkey.so` (binding domain `so.openkey/tee-key/v1`). Its attested `identity` (`<issuer>#<sorted RFC 7638 thumbprints>`) must list only keys that `<url>/api/auth/jwks` serves, and **every** key it serves. A served key the quote does not cover is refused (`unattested-keys`), because relying parties that trust `/jwks` would accept tokens it signs. A positive `excluded_keys` also refuses; otherwise that count is not used, as it is outside the key binding. OpenKey keeps its signing keys in its database, not in the TEE, so a pass proves the measured code holds those keys, not that no other system does (openkey#706, `docs/tee-overview.md`); the command prints this as a warning. OpenKey has no published release yet, so it is refused.
+- `--allow-unattested-keys` (OpenKey only): report served keys the quote does not cover as a warning instead of refusing. Use it only to diagnose a key rotation, never to trust tokens.
 - `--json`: machine-readable output.
 
 ## Library

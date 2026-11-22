@@ -7,10 +7,16 @@ import { serviceBinding, verifyAttestation, type Verified } from "./verify.js";
 export interface VerifyServiceOptions {
   service?: ServiceName;
   /**
-   * The signer you expect. Without it, the node's `/info` `nodeId`, or for
-   * OpenKey the identity computed from `<url>/api/auth/jwks`, is checked.
+   * The signer you expect, matched exactly. Without it, the node's `/info`
+   * `nodeId` is checked; OpenKey's attested identity is checked against
+   * `<url>/api/auth/jwks` either way.
    */
   identity?: string;
+  /**
+   * OpenKey only: report served keys the quote does not cover instead of
+   * refusing. For diagnosing a key rotation, never for trusting tokens.
+   */
+  allowUnattestedKeys?: boolean;
   trust?: Trust;
   fetch?: typeof fetch;
 }
@@ -32,14 +38,14 @@ async function getJson(fetcher: typeof fetch, url: URL): Promise<unknown> {
 
 /**
  * Asks the service at `baseUrl` for a quote over a fresh random nonce and
- * verifies it with `verifyAttestation`. For OpenKey without `identity`, the
- * attested identity must list only keys `<url>/api/auth/jwks` serves; served
- * keys it leaves out are returned as `unprovenKeys`.
+ * verifies it with `verifyAttestation`. For OpenKey, the attested identity must
+ * also list only keys `<url>/api/auth/jwks` serves, and every served key, or
+ * the result is refused (`checkOpenkeyIdentity`).
  */
 export async function verifyService(
   baseUrl: string,
   options: VerifyServiceOptions = {},
-): Promise<Verified & { unprovenKeys?: string[] }> {
+): Promise<Verified & { unattestedKeys?: string[] }> {
   const service = options.service ?? "tinycloud-node";
   const fetcher = options.fetch ?? fetch;
   serviceBinding(service);
@@ -50,7 +56,7 @@ export async function verifyService(
   let identity = options.identity;
   let jwks: unknown;
   const issuer = new URL("/api/auth", base).href;
-  if (identity === undefined && service === "openkey") {
+  if (service === "openkey") {
     jwks = await getJson(fetcher, new URL(`${issuer}/jwks`));
   } else if (identity === undefined) {
     const info = (await getJson(fetcher, new URL("/info", base))) as { nodeId?: unknown } | null;
@@ -62,10 +68,15 @@ export async function verifyService(
   url.searchParams.set("nonce", nonce);
   const response = await getJson(fetcher, url);
   const trust = options.trust ? { trust: options.trust } : {};
-  if (identity !== undefined) return verifyAttestation(response, { service, nonce, identity, ...trust });
-  // OpenKey: the binding is rebuilt from the identity it attests, which must be a subset of the served keys.
-  const attested = (response as { identity?: unknown } | null)?.identity;
-  if (typeof attested !== "string") refuse("response", "response has no identity");
-  const { unprovenKeys } = checkOpenkeyIdentity(attested, issuer, jwks);
-  return { ...(await verifyAttestation(response, { service, nonce, identity: attested, ...trust })), unprovenKeys };
+  if (service !== "openkey") return verifyAttestation(response, { service, nonce, identity: identity!, ...trust });
+  // OpenKey: the binding is rebuilt from the identity it attests (or the one you
+  // expect), which must cover exactly the keys it serves.
+  const r = response as { identity?: unknown; excluded_keys?: unknown } | null;
+  if (typeof r?.identity !== "string") refuse("response", "response has no identity");
+  const { unattestedKeys } = checkOpenkeyIdentity(r.identity, issuer, jwks, {
+    excludedKeys: r.excluded_keys,
+    ...(options.allowUnattestedKeys ? { allowUnattestedKeys: true } : {}),
+  });
+  const verified = await verifyAttestation(response, { service, nonce, identity: identity ?? r.identity, ...trust });
+  return unattestedKeys.length > 0 ? { ...verified, unattestedKeys } : verified;
 }

@@ -90,7 +90,8 @@ export function replayRtmr3(log: unknown): Replayed {
   }
   let keyProvider: string;
   try {
-    keyProvider = new TextDecoder("utf-8", { fatal: true }).decode(kms.payload);
+    // ignoreBOM: a leading BOM stays in the string, so it fails the exact compare.
+    keyProvider = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(kms.payload);
   } catch {
     refuse("event-log", "key-provider payload is not UTF-8");
   }

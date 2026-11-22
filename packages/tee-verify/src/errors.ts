@@ -13,6 +13,7 @@ export type RefusalCode =
   | "os"
   | "release"
   | "kms"
+  | "unattested-keys"
   | "service";
 
 /** The attestation did not verify. `message` says why, for a person to read. */
