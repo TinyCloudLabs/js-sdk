@@ -1,18 +1,18 @@
 import { expect, test } from "bun:test";
 import ledger from "./replica-size-ledger.json";
 import {
-  approvedTc3617SliceCRoot,
+  approvedTc3617ScopedGrantLeaseRoot,
   ancestryPins,
   rootCeilingFor,
   validateLedger,
-  validateTc3617SliceCRootTransition,
+  validateTc3617ScopedGrantLeaseRootTransition,
 } from "./replica-size-policy";
 
-test("TC-3617 slice C records the exact canonical CI root bytes of #1125 within the ruled +600/+450 cap", () => {
+test("TC-3617 scoped grant lease records the exact canonical CI root bytes of #1125 within the ruled +600/+450 cap", () => {
   validateLedger(ledger);
-  const row = ledger.tc3617SliceCRoot;
+  const row = ledger.tc3617ScopedGrantLeaseRoot;
   const predecessor = ledger.tc3617HostedMcpLeaseRoot;
-  expect(row).toEqual(approvedTc3617SliceCRoot);
+  expect(row).toEqual(approvedTc3617ScopedGrantLeaseRoot);
   expect(row.base).toBe("cb3edeab4f66ae2fc7f84243c7b8fdc3a15fc812");
   expect(row.canonicalCI).toEqual({
     run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44981511729",
@@ -30,11 +30,11 @@ test("TC-3617 slice C records the exact canonical CI root bytes of #1125 within 
     const delta = row.root.delta[format];
     expect(row.root.ceiling[format] - predecessor.root.ceiling[format]).toBe(delta);
     expect(delta).toBeLessThanOrEqual(cap[format]);
-    expect(rootCeilingFor(ledger, format)).toEqual({ row: "tc3617SliceCRoot", ceiling: row.root.ceiling[format] });
+    expect(rootCeilingFor(ledger, format)).toEqual({ row: "tc3617ScopedGrantLeaseRoot", ceiling: row.root.ceiling[format] });
   }
 
   expect(ancestryPins(ledger, false)).toContainEqual({
-    row: "tc3617SliceCRoot",
+    row: "tc3617ScopedGrantLeaseRoot",
     pin: row.sourceCommits.at(-1),
   });
   expect(Object.keys(row).sort()).toEqual([
@@ -42,10 +42,10 @@ test("TC-3617 slice C records the exact canonical CI root bytes of #1125 within 
   ]);
 });
 
-test("TC-3617 slice C refuses mutation, removal, or a missing TC-3617 hosted MCP lease predecessor", () => {
-  const row = ledger.tc3617SliceCRoot;
-  validateTc3617SliceCRootTransition(undefined, row);
-  validateTc3617SliceCRootTransition(row, structuredClone(row));
+test("TC-3617 scoped grant lease refuses mutation, removal, or a missing TC-3617 hosted MCP lease predecessor", () => {
+  const row = ledger.tc3617ScopedGrantLeaseRoot;
+  validateTc3617ScopedGrantLeaseRootTransition(undefined, row);
+  validateTc3617ScopedGrantLeaseRootTransition(row, structuredClone(row));
 
   for (const mutate of [
     (value: typeof row) => { value.root.ceiling["index.cjs"]++; },
@@ -55,10 +55,10 @@ test("TC-3617 slice C refuses mutation, removal, or a missing TC-3617 hosted MCP
   ]) {
     const changed = structuredClone(row);
     mutate(changed);
-    expect(() => validateTc3617SliceCRootTransition(undefined, changed)).toThrow("TC-3617 slice C");
-    expect(() => validateLedger({ ...ledger, tc3617SliceCRoot: changed })).toThrow("TC-3617 slice C");
+    expect(() => validateTc3617ScopedGrantLeaseRootTransition(undefined, changed)).toThrow("TC-3617 scoped grant lease");
+    expect(() => validateLedger({ ...ledger, tc3617ScopedGrantLeaseRoot: changed })).toThrow("TC-3617 scoped grant lease");
   }
 
-  expect(() => validateTc3617SliceCRootTransition(row, undefined)).toThrow("TC-3617 slice C");
-  expect(() => validateLedger({ ...ledger, tc3617HostedMcpLeaseRoot: undefined })).toThrow("TC-3617 slice C");
+  expect(() => validateTc3617ScopedGrantLeaseRootTransition(row, undefined)).toThrow("TC-3617 scoped grant lease");
+  expect(() => validateLedger({ ...ledger, tc3617HostedMcpLeaseRoot: undefined })).toThrow("TC-3617 scoped grant lease");
 });

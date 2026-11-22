@@ -30,7 +30,7 @@ test("TC-3617 records the exact canonical CI root bytes of #1122 within the rule
     const delta = row.root.delta[format];
     expect(row.root.ceiling[format] - predecessor.root.ceiling[format]).toBe(delta);
     expect(delta).toBeLessThanOrEqual(cap[format]);
-    expect(rootCeilingFor({ ...ledger, tc3617SliceCRoot: undefined }, format)).toEqual({ row: "tc3617HostedMcpLeaseRoot", ceiling: row.root.ceiling[format] });
+    expect(rootCeilingFor({ ...ledger, tc3617ScopedGrantLeaseRoot: undefined }, format)).toEqual({ row: "tc3617HostedMcpLeaseRoot", ceiling: row.root.ceiling[format] });
   }
 
   expect(ancestryPins(ledger, false)).toContainEqual({

@@ -3454,9 +3454,9 @@
     },
     "reason": "TinyCloudNode.getRenewalEffectiveExpiry refuses a session lease issued to a renewer the node no longer advertises with the coded RenewalRenewerChangedError, so the owner is asked again; node-sdk is bundled into the web-sdk root. Canonical Node 22/Bun 1.3.14 CI on #1122 (1ab6415b) measured index.mjs 1529920 and index.cjs 1462864 gzip -9 bytes: +62 and +15 over the TC-2490 ceilings 1529858 and 1462849. No other ceiling moves. Details: TC-3617"
   },
-  "tc3617SliceCRoot": {
-    "label": "a scoped grant past its signed end is installed while the owner's renewal lease renews it (TC-3617 slice C)",
-    "ruling": "size-ruling: TC-3617 row tc3617SliceCRoot index.mjs 1530404 (+484), index.cjs 1463216 (+352) gzip bytes over the tc3617HostedMcpLeaseRoot ceilings (+546 / +367 over tc2490), CI's canonical figure, within the ruled +600 B / +450 B. Details: TC-3617",
+  "tc3617ScopedGrantLeaseRoot": {
+    "label": "a scoped grant past its signed end is installed while the owner's renewal lease renews it (TC-3617 scoped grant lease)",
+    "ruling": "size-ruling: TC-3617 row tc3617ScopedGrantLeaseRoot index.mjs 1530404 (+484), index.cjs 1463216 (+352) gzip bytes over the tc3617HostedMcpLeaseRoot ceilings (+546 / +367 over tc2490), CI's canonical figure, within the ruled +600 B / +450 B. Details: TC-3617",
     "base": "cb3edeab4f66ae2fc7f84243c7b8fdc3a15fc812",
     "sourceCommits": ["65212d5121b49af93b85938ed9aa6d423017875d"],
     "canonicalCI": {
