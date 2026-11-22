@@ -276,6 +276,7 @@ export {
   PermissionNotInManifestError,
   SessionExpiredError,
   ManifestValidationError,
+  ownerFullAccess,
   composeManifestRequest,
   resolveManifest,
   validateManifest,

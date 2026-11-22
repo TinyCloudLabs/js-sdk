@@ -41,7 +41,7 @@ import {
 import { theme } from "../output/theme.js";
 import { handleError, CLIError, cliErrorFromService, wrapError } from "../output/errors.js";
 import { mergeWarnings } from "../output/warnings.js";
-import { ExitCode } from "../config/constants.js";
+import { CLI_DEFAULT_SESSION_EXPIRY_MS, ExitCode } from "../config/constants.js";
 import { validatePrivateOutput, writePrivateOutput } from "../lib/private-output.js";
 import { ensureAuthenticated } from "../lib/sdk.js";
 import { closeReplication } from "../lib/replication-registry.js";
@@ -1856,7 +1856,7 @@ export function registerSecretsCommand(
         };
         const result = await withSpinner(
           `Granting ${safeInline(recipientDid)} access to read secrets...`,
-          () => node.delegateTo(recipientDid, [permission]),
+          () => node.delegateTo(recipientDid, [permission], { expiry: CLI_DEFAULT_SESSION_EXPIRY_MS }),
         );
         process.stderr.write(networkGrantNotice(recipientDid, networkName, result.delegation.expiry) + "\n");
 

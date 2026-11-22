@@ -8,6 +8,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 
 import type { ComposedManifestRequest, WasmRecapEntry } from "@tinycloud/sdk-core";
+import { ownerFullAccess } from "@tinycloud/sdk-core";
 
 import { TinyCloudNode } from "./TinyCloudNode";
 import { NodeWasmBindings } from "./NodeWasmBindings";
@@ -78,6 +79,7 @@ describe("signed recap probes (review: real WASM)", () => {
       signer: new PrivateKeySigner(PRIVATE_KEY),
       tinycloudHosts: ["https://tinycloud.test"],
       sessionStorage: new MemorySessionStorage(),
+      ...ownerFullAccess(),
       replication: {
         enabled: true,
         storage: {} as never,

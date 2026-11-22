@@ -83,14 +83,14 @@ bun run demo
 ### Initialize TinyCloudNode
 
 ```typescript
-import { TinyCloudNode } from "@tinycloud/node-sdk";
+import { TinyCloudNode, ownerFullAccess } from "@tinycloud/node-sdk";
 import { Wallet } from "ethers";
 
 // Create instance with private key
 const tc = new TinyCloudNode({
   privateKey: "your-ethereum-private-key-hex",
   host: "http://localhost:8000",
-  prefix: "my-app",
+  ...ownerFullAccess("my-app"),
   autoCreateSpace: true,
 });
 

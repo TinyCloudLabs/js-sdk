@@ -12,9 +12,12 @@ import {
   createSiweSession,
 } from "@tinycloud/server";
 
+const manifest = { app_id: 'com.example.notes', name: 'Notes' };
+
 const identity = await createServerIdentity({
   privateKey: process.env.TC_SERVER_PRIVATE_KEY!,
   host: process.env.TC_HOST,
+  manifest,
 });
 
 console.log(identity.did);
