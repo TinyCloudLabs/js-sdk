@@ -3794,21 +3794,21 @@ export const approvedTc3443GenericManifestRoot: LogoutRatchet = {
 /** The exact TC-3688 account-index guard root allowance from canonical CI. */
 export const approvedTc3688AccountIndexGuardRoot: LogoutRatchet = {
   "label": "account index writes are sent only when the session can write the index (TC-3688)",
-  "ruling": "size-ruling: TC-3688 row tc3688AccountIndexGuardRoot index.mjs 1529972 (+114), index.cjs 1462961 (+112) gzip bytes over the tc2490 ceilings, CI's canonical figure. Details: TC-3688",
+  "ruling": "size-ruling: TC-3688 row tc3688AccountIndexGuardRoot index.mjs 1530603 (+104), index.cjs 1463337 (+102) gzip bytes over the tc3443 ceilings, CI's canonical figure. Details: TC-3688",
   "base": "2cb453f6523219d12bce66489fc2625782e970fa",
-  "sourceCommits": ["5cf63dddaa8aa4eaf98d75d01133f4e6c63f3c9f"],
+  "sourceCommits": ["13fe661a2d7535b5493e83b42efe4d288722ac1a"],
   "canonicalCI": {
-    "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44934457098",
+    "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45063241608",
     "jobs": [
-      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44934457098/job/136937986659",
-      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44934457098/job/136937986698"
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45063241608/job/137333621784",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45063241608/job/137333621819"
     ]
   },
   "root": {
-    "delta": { "index.mjs": 114, "index.cjs": 112 },
-    "ceiling": { "index.mjs": 1530613, "index.cjs": 1463347 }
+    "delta": { "index.mjs": 104, "index.cjs": 102 },
+    "ceiling": { "index.mjs": 1530603, "index.cjs": 1463337 }
   },
-  "reason": "AccountService skips the account index writes (and index setup) when the session's recap lacks tinycloud.sql write and schema on the account database; sdk-core and node-sdk are bundled into the web-sdk root. Canonical Node 22/Bun 1.3.14 CI on #1116 (5cf63ddd, master cb3edeab) measured index.mjs 1529972 and index.cjs 1462961 gzip -9 bytes: +114 and +112 over the TC-2490 ceilings 1529858 and 1462849. No other ceiling moves. Details: TC-3688"
+  "reason": "AccountService skips the account index writes (and index setup) when the session's recap lacks tinycloud.sql write and schema on the account database; sdk-core and node-sdk are bundled into the web-sdk root. Canonical Node 22/Bun 1.3.14 CI on #1116 (13fe661a, master 2cb453f6 merged in) measured index.mjs 1530603 and index.cjs 1463337 gzip -9 bytes: +104 and +102 over the TC-3443 ceilings 1530499 and 1463235. No other ceiling moves. Details: TC-3688"
 };
 
 export const approvedLedgerRows: Record<string, unknown> = {
