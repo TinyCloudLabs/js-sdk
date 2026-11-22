@@ -29,7 +29,9 @@
     "@tinycloud/sdk-services-test": "21.0.5"
   },
   "changesets": [
+    "cli-keeps-30-day-login",
     "device-refuses-secrets",
+    "generic-app-manifest",
     "permission-prompt-on-behalf-of",
     "secrets-network-grant-whole-network",
     "tc-2490-one-approval",
