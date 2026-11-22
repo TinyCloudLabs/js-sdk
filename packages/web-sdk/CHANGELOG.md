@@ -1,5 +1,28 @@
 # @tinycloudlabs/web-sdk
 
+## 3.14.0-beta.9
+
+### Minor Changes
+
+- 895bfdc: When OpenKey signs a permission request, `requestPermissions` shows no SDK prompt, and OpenKey's approval screen shows the request. The sign request carries the app's name and, for a request made for another app, that app's name (`onBehalfOf`). OpenKey shows them beside the requesting site as the app's own claim, and the signed message doesn't include them. `setRuntimePermissionSigner(signer, { openKey: true })` marks a custom signer as OpenKey's and passes it that display text as the second argument of `signMessage`. Set `openKey: true` only for a signer that shows its own approval screen for every request. The SDK prompt shows for wallets, for signers not marked as OpenKey, for OpenKey clients that don't accept the display text and for an OpenKey key held in an external wallet.
+
+  Details: TC-3704
+
+## 3.14.0-beta.8
+
+### Patch Changes
+
+- fbdbaa7: An app that signs in without a manifest gets a folder named by its domain and port: `notes.example.com:8443` gets `applications/com.example.notes_8443/`, and ports 80 and 443 add nothing. A host that isn't a domain name, such as an IPv6 address, gets a folder of its own named `o_` and 16 hex characters. Apps with no domain share one folder and log, once, how to get their own.
+
+  An app that used 3.14.0-beta.5 on another port with no manifest gets a new folder: data it saved in that beta is in the folder without the port, such as `applications/com.example.notes/`.
+
+  Details: TC-3443
+
+- Updated dependencies [fbdbaa7]
+- Updated dependencies [fbdbaa7]
+  - @tinycloud/node-sdk@3.14.0-beta.8
+  - @tinycloud/sdk-core@3.14.0-beta.8
+
 ## 3.14.0-beta.7
 
 ### Minor Changes
