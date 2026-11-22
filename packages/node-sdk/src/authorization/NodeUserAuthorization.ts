@@ -85,6 +85,7 @@ import {
   PartialNodeWriteError,
   routingFailure,
   isVaultResourceUri,
+  secretKeyPath,
   type ResourceAccess,
   type ResourceDestination,
 } from "@tinycloud/sdk-services";
@@ -161,6 +162,8 @@ const DECRYPT_ACTION = ENCRYPTION.DECRYPT;
 
 const NETWORK_CREATE_ACTION = ENCRYPTION.NETWORK_CREATE;
 
+const KEY_CREATE_ACTION = "tinycloud.encryption/key.create";
+
 /** `<status> - <server text>` for a failed host activation. */
 function describeHostFailure(result: SpaceHostResult): string {
   const text = result.error?.trim();
@@ -222,6 +225,19 @@ function didPrincipalMatches(actual: string, expected: string): boolean {
     return principalDidEquals(actual, expected);
   } catch {
     return actual === expected;
+  }
+}
+
+/** Requests this class composed from manifests: the `secrets/` prefix never comes from one (TC-3284). */
+const MANIFEST_COMPOSED = new WeakSet<ComposedManifestRequest>();
+
+/** A secret's own key path exactly as `secretKeyPath` derives it: never mixed case or another layout. */
+function isSecretKeyPath(path: string): boolean {
+  const match = /^secrets\/(?:scoped\/([^/]+)\/)?([^/]+)$/.exec(path);
+  try {
+    return match !== null && secretKeyPath(match[2]!.toUpperCase(), match[1]) === path;
+  } catch {
+    return false;
   }
 }
 
@@ -957,13 +973,23 @@ export class NodeUserAuthorization implements IUserAuthorization {
         includeImplicitCapabilitiesRead: this.includeImplicitCapabilitiesRead,
       }
     );
+    MANIFEST_COMPOSED.add(this._capabilityRequest);
     return this._capabilityRequest;
   }
 
   private async refreshNamedKeyFeatureForSignIn(address: string, chainId: number): Promise<void> {
     const request = this.getCapabilityRequest();
+    if (request === undefined) {
+      // A plain owner session asks for its secrets' keys when the node has
+      // them (TC-3284). Best effort: a node not reachable yet is signed for
+      // without them, as before, and checkNodeInfo still refuses it after.
+      await this.resolveTinyCloudHostsForSignIn(address, chainId)
+        .then(() => this.refreshNodeInfo())
+        .catch(() => undefined);
+      return;
+    }
     const siweDomain = this.siweConfig?.domain ?? this.domain;
-    const hasNamedKeys = request?.manifests.some((manifest) =>
+    const hasNamedKeys = request.manifests.some((manifest) =>
       manifest.keys?.length && appKeyHostBinding(siweDomain, manifest.keys_app_id ?? manifest.app_id));
     if (hasNamedKeys) {
       await this.resolveTinyCloudHostsForSignIn(address, chainId);
@@ -1235,6 +1261,10 @@ export class NodeUserAuthorization implements IUserAuthorization {
         spaceAbilities,
         rawAbilities: {
           [defaultNetworkId]: [DECRYPT_ACTION, NETWORK_CREATE_ACTION],
+          // The owner's own session seals and opens every secret's key (TC-3284).
+          ...(this._nodeFeatures.includes("encryption-named-keys-v1")
+            ? { [`${defaultNetworkId}/secrets/`]: [DECRYPT_ACTION, KEY_CREATE_ACTION] }
+            : {}),
         },
       };
     }
@@ -1261,11 +1291,19 @@ export class NodeUserAuthorization implements IUserAuthorization {
       const parsed = entry.path.includes("/")
         ? parseEncryptionResource(entry.path)
         : { ...parseNetworkId(entry.path), kind: "network" as const };
-      const sharePrefix = parsed.kind === "prefix" && parsed.network === "default" &&
-        parsed.prefix === "share" && entry.actions.length > 0 &&
-        entry.actions.every((action) => action === DECRYPT_ACTION) &&
-        didPrincipalMatches(parsed.ownerDid, currentDid);
-      if (parsed.kind !== "network" && !sharePrefix) {
+      const ownDefault = parsed.kind !== "network" && parsed.network === "default" &&
+        entry.actions.length > 0 && didPrincipalMatches(parsed.ownerDid, currentDid);
+      const sharePrefix = ownDefault && parsed.kind === "prefix" && parsed.prefix === "share" &&
+        entry.actions.every((action) => action === DECRYPT_ACTION);
+      // The owner's secrets' own keys (TC-3284): an exact key as secretKeyPath
+      // derives it, or the whole `secrets/` prefix from an explicit
+      // capabilityRequest only; decrypt and key.create, nothing else.
+      const ownSecrets = ownDefault && entry.space === "encryption" &&
+        entry.actions.every((action) => action === DECRYPT_ACTION || action === KEY_CREATE_ACTION) &&
+        (parsed.kind === "key"
+          ? isSecretKeyPath(parsed.path)
+          : parsed.prefix === "secrets" && !MANIFEST_COMPOSED.has(request));
+      if (parsed.kind !== "network" && !sharePrefix && !ownSecrets) {
         throw new ManifestValidationError("named keys go in manifest.keys");
       }
       for (const action of entry.actions) {

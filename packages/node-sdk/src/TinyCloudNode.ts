@@ -316,7 +316,9 @@ export type SecretReadResult =
   | { status: "read_failed" }
   | { status: "corrupt_envelope" }
   | { status: "decrypt_failed" }
-  | { status: "invalid_payload" };
+  | { status: "invalid_payload" }
+  /** The secret is still sealed to the network key and this reader has no network decrypt (TC-3284). */
+  | { status: "legacy_envelope" };
 
 /**
  * Full actions the session key's root delegation grants over a space. Used for
@@ -6515,6 +6517,8 @@ export class TinyCloudNode {
     const chainId = nodeContext?.chainId ?? this._chainId;
     const host = nodeContext?.host ?? this.config.host!;
     const ownerDid = this.ownerDidFromSpaceId(spaceId) ?? did;
+    const session = nodeContext?.session;
+    let delegatedKeys: Promise<NamedKeyClient> | undefined;
     return new DataVaultService({
       spaceId,
       crypto: vaultCrypto,
@@ -6522,8 +6526,14 @@ export class TinyCloudNode {
         networkId: `urn:tinycloud:encryption:${ownerDid}:${DEFAULT_ENCRYPTION_NETWORK_NAME}`,
         service: encryptionService,
         decryptCapabilityProof: () => ({
-          proofs: [(nodeContext?.session ?? this.requireServiceSession()).delegationCid],
+          proofs: [(session ?? this.requireServiceSession()).delegationCid],
         }),
+        // Secrets' own keys (TC-3284). A delegated vault signs with exactly its
+        // delegation's session, never this node's or another installed grant.
+        namedKeys: () => session === undefined
+          ? (this._namedKeyClient ??= import("./encryption-keys.js").then(({ createNamedKeyClient }) => createNamedKeyClient(this)))
+          : (delegatedKeys ??= import("./encryption-keys.js").then(({ createNamedKeyClient }) =>
+            createNamedKeyClient(this, { binding: { graph: serviceGraph, session, exactSession: true } }))),
       },
       tc: {
         kv,
@@ -7464,7 +7474,9 @@ export class TinyCloudNode {
   /**
    * Read a secret from an explicit target space without requesting or
    * auto-signing authority. Active runtime delegations are selected by the
-   * normal KV and encryption invocation paths.
+   * normal KV and encryption invocation paths. A secret on its own key needs
+   * `decrypt` on that key (TC-3284); one still sealed to the network key is
+   * `legacy_envelope` unless the session or a grant decrypts with the network.
    */
   async readSecret(input: SecretReadInput): Promise<SecretReadResult> {
     const resolved = resolveSecretPath(input.name, { scope: input.scope });
@@ -7473,6 +7485,15 @@ export class TinyCloudNode {
       : this.ownedSpaceId(input.space);
     const result = await this.getBaseVault(targetSpace).readNetworkEncrypted<unknown>(
       resolved.vaultKey,
+      {
+        expectAad: true,
+        ...(resolved.keyPath === undefined ? {} : { keyPath: resolved.keyPath }),
+        namedKeyOnly: !this.hasRuntimePermissions([{
+          service: "tinycloud.encryption",
+          path: this.getEncryptionNetworkIdForSpace(targetSpace),
+          actions: ["tinycloud.encryption/decrypt"],
+        }]),
+      },
     );
 
     // Not a static import on purpose: web-sdk's root size budget has no room for it, so bundlers ship it as its own file.

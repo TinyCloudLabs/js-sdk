@@ -30,6 +30,8 @@ import type {
   DecryptCapabilityProof,
   InlineEncryptedEnvelope,
 } from "../encryption";
+import type { NamedKeyClient, NamedKeyEnvelope } from "../encryption/namedKeys";
+import type { PermissionHint } from "../types";
 import { base64Decode as envelopeBase64Decode } from "../encryption/canonical";
 import type { IDataVaultService } from "./IDataVaultService";
 import {
@@ -371,6 +373,11 @@ function kvWriteError(
 // DataVaultService
 // =============================================================================
 
+/** Plaintext of a stored envelope, or why it was not opened. */
+type StoredDecrypt =
+  | { ok: true; data: Uint8Array }
+  | { ok: false; error: { code: string; message: string; permissionHint?: PermissionHint } };
+
 /**
  * Data Vault service implementation.
  *
@@ -489,6 +496,53 @@ export class DataVaultService extends BaseService implements IDataVaultService {
       return await proof();
     }
     return proof ?? { proofs: [] };
+  }
+
+  private async namedKeys(): Promise<Pick<NamedKeyClient, "encrypt" | "decrypt">> {
+    const load = this.networkEncryption?.namedKeys;
+    if (load === undefined) throw new Error("Named-key encryption is not configured");
+    return load();
+  }
+
+  /**
+   * Open a stored envelope. Its own `keyPath` picks the key, never KV metadata
+   * (TC-3284). None: the network root key, unless `namedKeyOnly`. Present:
+   * only a v2 envelope on this vault's network naming exactly
+   * `options.keyPath`, opened with one decrypt on that key; a node refusal
+   * carries a hint for exactly that key.
+   */
+  private async decryptStored(
+    envelope: InlineEncryptedEnvelope,
+    options: VaultGetOptions<unknown> | undefined,
+  ): Promise<StoredDecrypt> {
+    const config = this.networkEncryption!;
+    // Object(): a stored `null` reaches the v1 validator as before (corrupt).
+    const { keyPath, networkId } = Object(envelope) as Partial<InlineEncryptedEnvelope>;
+    if (keyPath === undefined) {
+      return options?.namedKeyOnly
+        ? { ok: false, error: { code: "LEGACY_ENVELOPE", message: "Envelope is sealed to the network key, not this record's own key" } }
+        : config.service.decryptEnvelope(envelope, await this.decryptCapabilityProof());
+    }
+    if ((envelope.v as number) !== 2 || keyPath !== options?.keyPath ||
+        canonicalAadSpaceId(String(networkId)) !== canonicalAadSpaceId(config.networkId)) {
+      return { ok: false, error: { code: "INVALID_ENVELOPE", message: "Envelope is sealed to another key" } };
+    }
+    try {
+      return { ok: true, data: await (await this.namedKeys()).decrypt(envelope as unknown as NamedKeyEnvelope) };
+    } catch (error) {
+      if (routingFailure(error)) throw error;
+      const { code, status, message } = error as { code?: unknown; status?: unknown; message?: unknown };
+      return {
+        ok: false,
+        error: status === 401 || status === 403
+          ? {
+            code: "DECRYPT_DENIED",
+            message: String(message),
+            permissionHint: { service: "tinycloud.encryption", path: `${networkId}/${keyPath}`, actions: ["tinycloud.encryption/decrypt"] },
+          }
+          : { code: code === "INVALID_ENVELOPE" ? code : "DECRYPT_FAILED", message: String(message) },
+      };
+    }
   }
 
   private serializeValue(
@@ -761,11 +815,14 @@ export class DataVaultService extends BaseService implements IDataVaultService {
         ...(options?.metadata ?? {}),
       };
       const aad = toBytes(`tinycloud.vault:${this.vaultConfig.spaceId}:${key}`);
-      const envelopeResult = await config.service.encryptToNetwork(
-        config.networkId,
-        plaintext,
-        { aad, metadata },
-      );
+      const envelopeResult = options?.keyPath === undefined
+        ? await config.service.encryptToNetwork(config.networkId, plaintext, { aad, metadata })
+        : {
+          ok: true as const,
+          data: await (await this.namedKeys()).encrypt(options.keyPath, plaintext, {
+            networkId: config.networkId, aad, metadata, ensureKey: true,
+          }),
+        };
       if (!envelopeResult.ok) {
         const routing = routingFailure(envelopeResult.error);
         if (routing) return vaultError(routing);
@@ -850,7 +907,7 @@ export class DataVaultService extends BaseService implements IDataVaultService {
       const envelope = (
         typeof rawEnvelope === "string" ? JSON.parse(rawEnvelope) : rawEnvelope
       ) as InlineEncryptedEnvelope;
-      if (options?.expectAad === true) {
+      if (options?.expectAad === true || options?.keyPath !== undefined) {
         const verdict = checkEnvelopeAad(envelope, this.vaultConfig.spaceId, key);
         if (verdict === "corrupt") {
           return vaultError({ code: "DECRYPTION_FAILED", message: "envelope is malformed" });
@@ -863,15 +920,13 @@ export class DataVaultService extends BaseService implements IDataVaultService {
           });
         }
       }
-      const proof = await this.decryptCapabilityProof();
-      const plaintextResult = await config.service.decryptEnvelope(envelope, proof);
+      const plaintextResult = await this.decryptStored(envelope, options);
       if (!plaintextResult.ok) {
         const routing = routingFailure(plaintextResult.error);
         if (routing) return vaultError(routing);
-        return vaultError({
-          code: "DECRYPTION_FAILED",
-          message: plaintextResult.error.message,
-        });
+        return vaultError(plaintextResult.error.code === "LEGACY_ENVELOPE"
+          ? { code: "LEGACY_ENVELOPE", key, message: plaintextResult.error.message }
+          : { code: "DECRYPTION_FAILED", message: plaintextResult.error.message });
       }
 
       const metadata: Record<string, string> = envelope.metadata ?? {};
@@ -964,17 +1019,16 @@ export class DataVaultService extends BaseService implements IDataVaultService {
       return { status: "corrupt_envelope" };
     }
 
-    if (options?.expectAad === true) {
+    if (options?.expectAad === true || options?.keyPath !== undefined) {
       const verdict = checkEnvelopeAad(envelope, this.vaultConfig.spaceId, key);
       if (verdict !== "ok") {
         return { status: verdict === "corrupt" ? "corrupt_envelope" : "aad_mismatch" };
       }
     }
 
-    let plaintextResult: Awaited<ReturnType<typeof config.service.decryptEnvelope>>;
+    let plaintextResult: StoredDecrypt;
     try {
-      const proof = await this.decryptCapabilityProof();
-      plaintextResult = await config.service.decryptEnvelope(envelope, proof);
+      plaintextResult = await this.decryptStored(envelope, options);
     } catch (error) {
       if (routingFailure(error)) throw error;
       return { status: "decrypt_failed" };
@@ -990,6 +1044,9 @@ export class DataVaultService extends BaseService implements IDataVaultService {
       }
       if (plaintextResult.error.code === "INVALID_ENVELOPE") {
         return { status: "corrupt_envelope" };
+      }
+      if (plaintextResult.error.code === "LEGACY_ENVELOPE") {
+        return { status: "legacy_envelope" };
       }
       if (plaintextResult.error.code === "NODE_NOT_RESPONDING" || plaintextResult.error.code === "TRANSPORT_ERROR") {
         return { status: "node_unreachable" };

@@ -253,12 +253,21 @@ export class DelegatedAccess {
    * Read a secret from the delegated space, as `TinyCloudNode.readSecret` does
    * for an explicit space. Needs `tinycloud.kv/get` on the secret's vault
    * record (`vault/secrets/...`) and `tinycloud.encryption/decrypt` on the
-   * owner's encryption network in this delegation; a missing one comes back
-   * as `permission_required`. Never requests or signs new authority.
+   * secret's own key (`<network>/secrets/<name>`, or a `secrets/` prefix) in
+   * this delegation; a missing one comes back as `permission_required`. A
+   * secret still sealed to the network key opens only when this delegation
+   * decrypts with the bare network, else `legacy_envelope` with no node call
+   * (TC-3284). Never requests or signs new authority.
    */
   async readSecret(input: DelegatedSecretReadInput): Promise<SecretReadResult> {
     const resolved = resolveSecretPath(input.name, { scope: input.scope });
-    return (await this.secrets()).read(resolved.vaultKey);
+    return (await this.secrets()).read(resolved.vaultKey, {
+      expectAad: true,
+      ...(resolved.keyPath === undefined ? {} : { keyPath: resolved.keyPath }),
+      namedKeyOnly: !(this._delegation.resources ?? [this._delegation]).some((resource) =>
+        /^urn:tinycloud:encryption:[^/]+$/.test(resource.path) &&
+        resource.actions.some((action) => action.endsWith("decrypt"))),
+    });
   }
 
   /** One load and one set of services per access; a failed load is retried by the next call. */
