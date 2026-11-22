@@ -3748,21 +3748,21 @@ export const approvedTc3661ShareLinkHostRoot: LogoutRatchet = {
 /** The exact TC-3522 renewed session end root allowance from canonical CI. */
 export const approvedTc3522LeaseAskRoot: LogoutRatchet = {
   "label": "a renewed session delegates up to the end the node renewed it to (TC-3522)",
-  "ruling": "size-ruling: TC-3522 row tc3522LeaseAskRoot index.mjs 1529937 (+79), index.cjs 1462930 (+81) gzip bytes over the tc2490 ceilings, CI's canonical figure, within the ruled +100 B / +100 B. Details: TC-3522",
+  "ruling": "size-ruling: TC-3522 row tc3522LeaseAskRoot index.mjs 1530103 (+50), index.cjs 1463084 (+87) gzip bytes over the tc3661 ceilings, CI's canonical figure, within the ruled +100 B / +100 B. Details: TC-3522",
   "base": "628be3c4bd1c633bb7f676f6c32c761cf8b596df",
-  "sourceCommits": ["ee2f5f160c03f93c07ffaeb3f047ccc65c1c106a"],
+  "sourceCommits": ["e4913f37af9b5fef23f6874895a160bae5d08ee8"],
   "canonicalCI": {
-    "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44973713620",
+    "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45054824553",
     "jobs": [
-      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44973713620/job/137058820860",
-      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44973713620/job/137058820836"
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45054824553/job/137307609390",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45054824553/job/137307609492"
     ]
   },
   "root": {
-    "delta": { "index.mjs": 79, "index.cjs": 81 },
-    "ceiling": { "index.mjs": 1530132, "index.cjs": 1463078 }
+    "delta": { "index.mjs": 50, "index.cjs": 87 },
+    "ceiling": { "index.mjs": 1530103, "index.cjs": 1463084 }
   },
-  "reason": "TinyCloudNode.sessionEnd gives the end the node renewed a session to after restoreSessionWithRenewal, and delegateTo and planDelegation delegate up to it; node-sdk is bundled into the web-sdk root. Canonical Node 22/Bun 1.3.14 CI on #1123 (ee2f5f16) measured index.mjs 1529937 and index.cjs 1462930 gzip -9 bytes: +79 and +81 over the TC-2490 ceilings 1529858 and 1462849. No other ceiling moves. Details: TC-3522"
+  "reason": "TinyCloudNode.sessionEnd gives the end the node renewed a session to after restoreSessionWithRenewal, and delegateTo and planDelegation delegate up to it; node-sdk is bundled into the web-sdk root. Canonical Node 22/Bun 1.3.14 CI on #1123 (e4913f37, master 628be3c4 merged in) measured index.mjs 1530103 and index.cjs 1463084 gzip -9 bytes: +50 and +87 over the TC-3661 ceilings 1530053 and 1462997. No other ceiling moves. Details: TC-3522"
 };
 
 export const approvedLedgerRows: Record<string, unknown> = {

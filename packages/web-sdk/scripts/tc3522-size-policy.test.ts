@@ -15,15 +15,15 @@ test("TC-3522 records the exact canonical CI root bytes of #1123 within the rule
   expect(row).toEqual(approvedTc3522LeaseAskRoot);
   expect(row.base).toBe("628be3c4bd1c633bb7f676f6c32c761cf8b596df");
   expect(row.canonicalCI).toEqual({
-    run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44973713620",
+    run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45054824553",
     jobs: [
-      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44973713620/job/137058820860",
-      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44973713620/job/137058820836",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45054824553/job/137307609390",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45054824553/job/137307609492",
     ],
   });
-  expect(row.sourceCommits).toEqual(["ee2f5f160c03f93c07ffaeb3f047ccc65c1c106a"]);
-  expect(row.root.ceiling).toEqual({ "index.mjs": 1530132, "index.cjs": 1463078 });
-  expect(row.root.delta).toEqual({ "index.mjs": 79, "index.cjs": 81 });
+  expect(row.sourceCommits).toEqual(["e4913f37af9b5fef23f6874895a160bae5d08ee8"]);
+  expect(row.root.ceiling).toEqual({ "index.mjs": 1530103, "index.cjs": 1463084 });
+  expect(row.root.delta).toEqual({ "index.mjs": 50, "index.cjs": 87 });
 
   const cap = { "index.mjs": 100, "index.cjs": 100 } as const;
   for (const format of ["index.mjs", "index.cjs"] as const) {
