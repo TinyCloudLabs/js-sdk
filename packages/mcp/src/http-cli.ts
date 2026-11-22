@@ -4,10 +4,12 @@ import { isAbsolute, resolve } from "node:path";
 import { toNodeHandler } from "@modelcontextprotocol/node";
 
 import { createHostedMcpApp } from "./http.js";
+import { installNodeKeepAlive } from "./node-keep-alive.js";
 import { loadOAuthMetadata } from "./oauth.js";
 
 export async function main(): Promise<void> {
   process.umask(0o077);
+  installNodeKeepAlive();
   const publicUrl = requiredUrl("TC_MCP_PUBLIC_URL");
   const stateDir = requiredAbsolutePath("TC_MCP_STATE_DIR");
   const stateSecret = requiredString("TC_MCP_STATE_SECRET");

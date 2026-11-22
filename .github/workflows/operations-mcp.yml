@@ -81,7 +81,7 @@ jobs:
           bash "$GITHUB_WORKSPACE/.github/scripts/run-private-tests.sh" bun test tests/operations-mcp-conformance/conformance.test.ts
           bash "$GITHUB_WORKSPACE/.github/scripts/run-private-tests.sh" bun test packages/operations/src/legacy-cli-concurrency.test.ts
           bash "$GITHUB_WORKSPACE/.github/scripts/run-private-tests.sh" bun test packages/node-sdk/src/TinyCloudNode.accountRegistrySync.test.ts
-          bash "$GITHUB_WORKSPACE/.github/scripts/run-private-tests.sh" bun test packages/mcp/src/results.test.ts packages/mcp/src/tools.test.ts packages/mcp/src/stdio.test.ts packages/mcp/src/http.test.ts packages/mcp/src/remote-store.test.ts packages/mcp/src/http.e2e.test.ts
+          bash "$GITHUB_WORKSPACE/.github/scripts/run-private-tests.sh" bun test packages/mcp/src/results.test.ts packages/mcp/src/tools.test.ts packages/mcp/src/stdio.test.ts packages/mcp/src/http.test.ts packages/mcp/src/remote-store.test.ts packages/mcp/src/http.e2e.test.ts packages/mcp/src/node-keep-alive.test.ts
           bash "$GITHUB_WORKSPACE/.github/scripts/run-private-tests.sh" bun test packages/cli/src/commands/share.test.ts
           bash "$GITHUB_WORKSPACE/.github/scripts/run-private-tests.sh" bun test packages/cli/src/commands/share-email-unavailable.test.ts
           bash "$GITHUB_WORKSPACE/.github/scripts/run-private-tests.sh" bun test packages/cli/src/commands/share-addressed-unavailable.test.ts

@@ -75,11 +75,11 @@ for (const path of [resolve(cli, "src/commands/secrets.ts"), resolve(cli, "src/c
   }
 }
 
-for (const [packagePath, name] of [[operations, "operations"], [cli, "CLI"], [mcp, "MCP"]] as const) {
+for (const [packagePath, name, node] of [[operations, "operations", ">=20"], [cli, "CLI", ">=20"], [mcp, "MCP", ">=20.18.1"]] as const) {
   const manifest = JSON.parse(await readFile(resolve(packagePath, "package.json"), "utf8")) as {
     engines?: { node?: string };
   };
-  if (manifest.engines?.node !== ">=20") fail(`${name} must declare Node >=20`);
+  if (manifest.engines?.node !== node) fail(`${name} must declare Node ${node}`);
 }
 
 console.log("Operations, projection, registration, logging, and Node 20 boundary checks passed.");

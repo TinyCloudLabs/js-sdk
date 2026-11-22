@@ -27,6 +27,7 @@ import { invokeOperation } from "@tinycloud/operations";
 import { nodeRevocationOf, operationRetryDescriptor, type NodeRevocation } from "@tinycloud/operations/mcp-authority";
 import { tcAppsApprovalMessage, tcAppsApprovalReason } from "@tinycloud/operations/tc-apps";
 import { nativeOwnerForConnectorGrant, canonicalOwnerDid, NATIVE_GRANT_MAX_LIFETIME_SECONDS } from "./native-auth.js";
+import { retryReadOnConnectionReset } from "./node-keep-alive.js";
 
 import type { McpOperationInvocation } from "./tools.js";
 const PROFILE = "agent";
@@ -943,7 +944,8 @@ export class RemoteTenantStore {
       timer.unref();
     });
     const probe = await Promise.race([
-      node.kvForSpace(String(raw.spaceId)).list({ prefix: "spaces/" }).catch(() => undefined),
+      retryReadOnConnectionReset(() => node.kvForSpace(String(raw.spaceId)).list({ prefix: "spaces/" }))
+        .catch(() => undefined),
       timeout,
     ]).finally(() => clearTimeout(timer));
     const refusal = probe !== undefined && !probe.ok ? nodeRevocationOf(probe.error) : undefined;
