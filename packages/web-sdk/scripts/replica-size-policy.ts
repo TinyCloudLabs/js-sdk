@@ -495,6 +495,7 @@ export type Ledger = {
   tc3688AccountIndexGuardRoot?: LogoutRatchet;
   tc3443SessionRetireRoot?: LogoutRatchet & { worker: { delta: number; ceiling: number }; replicaWorker: { delta: number; ceiling: number } };
   tc3443PortFolderRoot?: LogoutRatchet;
+  tc3704OpenKeyPromptRoot?: LogoutRatchet;
   tc2773LazyRestoreReplicaWorker?: Omit<WorkerRatchet, "worker"> & { replicaWorker: { delta: number; ceiling: number } };
 };
 
@@ -1144,6 +1145,7 @@ export function ancestryPins(root: Ledger, hasGatedOnly: boolean): Array<{ row: 
   if (root.tc3688AccountIndexGuardRoot !== undefined) pins.push({ row: "tc3688AccountIndexGuardRoot", pin: root.tc3688AccountIndexGuardRoot.sourceCommits.at(-1)! });
   if (root.tc3443SessionRetireRoot !== undefined) pins.push({ row: "tc3443SessionRetireRoot", pin: root.tc3443SessionRetireRoot.sourceCommits.at(-1)! });
   if (root.tc3443PortFolderRoot !== undefined) pins.push({ row: "tc3443PortFolderRoot", pin: root.tc3443PortFolderRoot.sourceCommits.at(-1)! });
+  if (root.tc3704OpenKeyPromptRoot !== undefined) pins.push({ row: "tc3704OpenKeyPromptRoot", pin: root.tc3704OpenKeyPromptRoot.sourceCommits.at(-1)! });
   if (hasGatedOnly) pins.push({ row: "gatedOnlyRatchet", pin: approvedGatedOnlyRatchet.sourceCommit });
   return pins;
 }
@@ -1263,6 +1265,7 @@ export function rootCeilings(root: Ledger): Array<{ row: string; ceiling: GzipSi
     ["tc3688AccountIndexGuardRoot", root.tc3688AccountIndexGuardRoot?.root.ceiling],
     ["tc3443SessionRetireRoot", root.tc3443SessionRetireRoot?.root.ceiling],
     ["tc3443PortFolderRoot", root.tc3443PortFolderRoot?.root.ceiling],
+    ["tc3704OpenKeyPromptRoot", root.tc3704OpenKeyPromptRoot?.root.ceiling],
   ];
   return rows.flatMap(([row, ceiling]) => ceiling === undefined ? [] : [{ row, ceiling }]);
 }
@@ -3857,6 +3860,26 @@ export const approvedTc3443PortFolderRoot: LogoutRatchet = {
   "reason": "Canonical Node 22/Bun 1.3.14/Rust 1.99.0 CI on #1134 (7e04e8d4, master d382af88 merged in) measured index.mjs 1533582 and index.cjs 1465285 gzip -9 bytes: +1914 and +865 over the tc3443SessionRetireRoot ceilings 1531668 and 1464420. The workers and every other ceiling stay at their ledger values. Details: TC-3443"
 };
 
+/** The exact TC-3704 OpenKey-prompt root allowance from canonical CI. */
+export const approvedTc3704OpenKeyPromptRoot: LogoutRatchet = {
+  "label": "the SDK permission prompt is skipped when OpenKey signs and shows the request (TC-3704)",
+  "ruling": "size-ruling: TC-3704 row tc3704OpenKeyPromptRoot index.mjs 1533915 (+333), index.cjs 1465566 (+281) gzip bytes over the tc3443PortFolderRoot ceilings, CI's canonical figure. Details: TC-3704",
+  "base": "fbdbaa7ba8e66fb0fc91d2815df2a5eb90299c94",
+  "sourceCommits": ["ac08001eab851e5e4965a855f3179c791831fd00"],
+  "canonicalCI": {
+    "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45074741963",
+    "jobs": [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45074741963/job/137369362680",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45074741963/job/137369362946"
+    ]
+  },
+  "root": {
+    "delta": { "index.mjs": 333, "index.cjs": 281 },
+    "ceiling": { "index.mjs": 1533915, "index.cjs": 1465566 }
+  },
+  "reason": "requestPermissions skips the SDK prompt when OpenKey signs and shows the request, and sends OpenKey the app's name as display-only text with the sign request (TinyCloudWeb, openKeySignPresentation); the web-sdk root bundles both. Canonical Node 22/Bun 1.3.14 CI on #1117 (934c8daf, master fbdbaa7b merged in) measured index.mjs 1533915 and index.cjs 1465566 gzip -9 bytes: +333 and +281 over the tc3443PortFolderRoot ceilings 1533582 and 1465285. No other ceiling moves. Details: TC-3704"
+};
+
 export const approvedLedgerRows: Record<string, unknown> = {
   phase2Ratchet: approvedPhase2,
   fixRequiredRatchet: approvedFixRequiredRatchet,
@@ -3973,6 +3996,7 @@ export const approvedLedgerRows: Record<string, unknown> = {
   tc3688AccountIndexGuardRoot: approvedTc3688AccountIndexGuardRoot,
   tc3443SessionRetireRoot: approvedTc3443SessionRetireRoot,
   tc3443PortFolderRoot: approvedTc3443PortFolderRoot,
+  tc3704OpenKeyPromptRoot: approvedTc3704OpenKeyPromptRoot,
 };
 
 /** Only a git merge-base ledger may retain the pre-correction toolchain. */
@@ -4511,6 +4535,11 @@ export function validateLedger(value: Ledger, historicalBase = false): void {
       (!value.tc3443SessionRetireRoot ||
         JSON.stringify(value.tc3443PortFolderRoot) !== JSON.stringify(approvedTc3443PortFolderRoot))) {
     throw new Error("Only the exact TC-3443 port-folder root admission is approved.");
+  }
+  if (value.tc3704OpenKeyPromptRoot !== undefined &&
+      (!value.tc3443PortFolderRoot ||
+        JSON.stringify(value.tc3704OpenKeyPromptRoot) !== JSON.stringify(approvedTc3704OpenKeyPromptRoot))) {
+    throw new Error("Only the exact TC-3704 root admission is approved.");
   }
 }
 
@@ -5516,5 +5545,13 @@ export function validateTc3443PortFolderRootTransition(base?: LogoutRatchet, cur
   if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc3443PortFolderRoot) ||
       base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
     throw new Error("The TC-3443 port-folder admission may be introduced once and cannot change later.");
+  }
+}
+
+/** The exact TC-3704 OpenKey-prompt root admission is introduced once and immutable. */
+export function validateTc3704OpenKeyPromptRootTransition(base?: LogoutRatchet, current?: LogoutRatchet): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc3704OpenKeyPromptRoot) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The TC-3704 root admission may be introduced once and cannot change later.");
   }
 }

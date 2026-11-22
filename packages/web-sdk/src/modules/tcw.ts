@@ -97,6 +97,7 @@ import {
   validateAdditionalPermissions,
   type RequestPermissionsOptions,
 } from "./requestPermissionsCore";
+import { openKeySignPresentation, type OpenKeySignPresentation } from "./openKeySignPresentation";
 import {
   isPermissionPromptSuppressed,
   suppressPermissionPromptFor30Days,
@@ -141,15 +142,24 @@ const DOMAIN_WITHOUT_HOST = "app.tinycloud.xyz";
 
 // Config
 
-/** Signs a message for a runtime permission grant; see `TinyCloudWeb.setRuntimePermissionSigner`. */
+/**
+ * Signs a message for a runtime permission grant; see `TinyCloudWeb.setRuntimePermissionSigner`. A signer set with
+ * `{ openKey: true }` also receives the `presentation` to pass on to OpenKey's approval; display-only, never signed.
+ */
 export interface RuntimePermissionSigner {
-  signMessage(message: string): Promise<string>;
+  signMessage(message: string, presentation?: OpenKeySignPresentation): Promise<string>;
 }
 
-/** The byte-exact message signing the OpenKey SDK's `OpenKey` class offers beside `authorizeTinyCloud`. The SDK always sends a `keyId`. */
+/**
+ * The byte-exact message signing the OpenKey SDK's `OpenKey` class offers beside `authorizeTinyCloud`. The SDK always sends a `keyId`.
+ * `signMessagePresentation` is 1 on an OpenKey SDK that accepts a `presentation` on the request. `signMessageShowsApproval` is
+ * true when OpenKey's own approval screen shows the request, and false when the connected key signs in an external wallet.
+ */
 interface OpenKeyMessageSigner extends OpenKeyConnection {
+  readonly signMessagePresentation?: number;
+  readonly signMessageShowsApproval?: boolean;
   signMessage?: (
-    request: { message: string; keyId: string },
+    request: { message: string; keyId: string; presentation?: OpenKeySignPresentation },
     opts?: { mode?: "iframe" | "popup" | "redirect" },
   ) => Promise<{ signature: string }>;
 }
@@ -429,7 +439,7 @@ export class TinyCloudWeb {
   /** Incremented by signOut; a sign-in that started before it does not complete. */
   private signOutCount = 0;
   /** The signer set with `setRuntimePermissionSigner`, with the session it was set for. */
-  private runtimeSigner?: { readonly signer: RuntimePermissionSigner; readonly address: string; readonly signOuts: number };
+  private runtimeSigner?: { readonly signer: RuntimePermissionSigner; readonly address: string; readonly signOuts: number; readonly openKey: boolean };
   private signOutInFlight = 0;
   private signOutOperation?: { node?: TinyCloudNode; remote?: Promise<void>; result: Promise<void> };
   /** The node the latest sign-out ended; it holds that sign-out's node status. */
@@ -1892,9 +1902,10 @@ export class TinyCloudWeb {
         : { approved: true, session: this.session() };
     }
 
+    const openKeySigns = this.runtimeSignedByOpenKey();
     const grantPermissions = this._testHooks?.grantPermissions ??
       ((approved: PermissionEntry[], grantOptions?: RequestPermissionsOptions) => {
-        const signMessage = this.runtimeMessageSigner();
+        const signMessage = this.runtimeMessageSigner(openKeySignPresentation(manifest, options?.onBehalfOf));
         const grant = {
           ...(grantOptions?.expiryMs !== undefined ? { expiry: grantOptions.expiryMs } : {}),
           ...(signMessage !== undefined ? { signMessage } : {}),
@@ -1904,6 +1915,7 @@ export class TinyCloudWeb {
     const result = await requestPermissionsCore(additional, {
       manifest,
       showModal: this._testHooks?.showModal ?? ((options) => showPermissionRequestModal(options, this.uiClient.promptScope)),
+      skipPrompt: openKeySigns && this.openKeyShowsApp(),
       isPromptSuppressed: () => isPermissionPromptSuppressed(manifest),
       suppressPromptFor30Days: () =>
         suppressPermissionPromptFor30Days(manifest),
@@ -1921,24 +1933,54 @@ export class TinyCloudWeb {
   }
 
   /**
+   * The signer a valid `setRuntimePermissionSigner` call bound to the current session, or undefined. A signer bound to a
+   * session that has ended or been replaced is cleared.
+   */
+  private boundRuntimeSigner(): NonNullable<typeof this.runtimeSigner> | undefined {
+    const bound = this.runtimeSigner;
+    if (bound === undefined) return undefined;
+    const current = this._node?.address;
+    const sameSession =
+      bound.signOuts === this.signOutCount &&
+      this.signOutInFlight === 0 &&
+      current !== undefined &&
+      current.toLowerCase() === bound.address.toLowerCase();
+    if (sameSession) return bound;
+    // The session it was set for has ended or been replaced.
+    this.runtimeSigner = undefined;
+    return undefined;
+  }
+
+  /** Whether OpenKey signs the runtime grants: the bound signer declared itself OpenKey, or none is bound and `openkey` is configured. */
+  private runtimeSignedByOpenKey(): boolean {
+    const bound = this.boundRuntimeSigner();
+    return bound !== undefined ? bound.openKey : this.config?.openkey !== undefined;
+  }
+
+  /**
+   * Whether OpenKey's own approval shows the request, so the SDK prompt is skipped: a bound signer that declared itself
+   * OpenKey passes the presentation on; the configured OpenKey client accepts one (`signMessagePresentation` is 1) and
+   * reports its approval screen shows the request (`signMessageShowsApproval` is true, which an external-wallet key is not).
+   * Otherwise the SDK prompt is shown as it is for any other signer, with its 30-day option.
+   */
+  private openKeyShowsApp(): boolean {
+    if (this.boundRuntimeSigner() !== undefined) return true;
+    const client = this.config?.openkey?.client as (OpenKeyAuthorizeTinyCloud & OpenKeyMessageSigner) | undefined;
+    return this._node?.address !== undefined && typeof client?.signMessage === "function" && client.signMessagePresentation === 1 && client.signMessageShowsApproval === true;
+  }
+
+  /**
    * Signs the SIWE of a runtime permission grant. Precedence: the signer set with `setRuntimePermissionSigner`, then
    * the configured OpenKey client's byte-exact `signMessage` (an OpenKey session's wallet provider does not implement
    * `personal_sign`), signing with the keyId of the connected account after connecting the client first when it is not
    * connected; a missing or ambiguous key throws `OpenKeySigningKeyError`. Without an OpenKey client or a session account,
    * undefined: the connected wallet signs. Only `requestPermissions` calls this; sign-in and session setup never do.
+   * `presentation` names the app beside the requesting origin in the OpenKey approval.
    */
-  private runtimeMessageSigner(): ((siwe: string) => Promise<string>) | undefined {
-    const bound = this.runtimeSigner;
+  private runtimeMessageSigner(presentation: OpenKeySignPresentation): ((siwe: string) => Promise<string>) | undefined {
+    const bound = this.boundRuntimeSigner();
     if (bound !== undefined) {
-      const current = this._node?.address;
-      const sameSession =
-        bound.signOuts === this.signOutCount &&
-        this.signOutInFlight === 0 &&
-        current !== undefined &&
-        current.toLowerCase() === bound.address.toLowerCase();
-      if (sameSession) return (siwe) => bound.signer.signMessage(siwe);
-      // The session it was set for has ended or been replaced.
-      this.runtimeSigner = undefined;
+      return (siwe) => bound.openKey ? bound.signer.signMessage(siwe, presentation) : bound.signer.signMessage(siwe);
     }
     const openkey = this.config?.openkey;
     const client = openkey?.client as (OpenKeyAuthorizeTinyCloud & OpenKeyMessageSigner) | undefined;
@@ -1961,7 +2003,10 @@ export class TinyCloudWeb {
     };
     return async (siwe) => {
       const keyId = await resolveOpenKeySigningKey(client, account, mode, assertCurrent);
-      const { signature } = await client.signMessage!({ message: siwe, keyId }, { mode });
+      const { signature } = await client.signMessage!(
+        { message: siwe, keyId, ...(client.signMessagePresentation === 1 ? { presentation } : {}) },
+        { mode },
+      );
       assertCurrent();
       return signature;
     };
@@ -1976,15 +2021,19 @@ export class TinyCloudWeb {
    * Call it after the session is established; it throws without one. It is bound to that session: sign-out, a new
    * sign-in, a restore, or a session for another account clear it. It is never used for sign-in or session setup.
    * Without it, grants sign through the `openkey` client when configured, else the connected wallet.
+   *
+   * `options.openKey: true` declares that the signer signs through OpenKey and passes the `presentation` it receives with
+   * the message on to OpenKey's approval. Permission requests then skip the SDK's own prompt, which OpenKey's approval replaces.
+   * Set it only for a signer that shows its own approval screen for every request; it is read from this call alone.
    */
-  setRuntimePermissionSigner(signer?: RuntimePermissionSigner): void {
+  setRuntimePermissionSigner(signer?: RuntimePermissionSigner, options?: { openKey?: boolean }): void {
     if (signer === undefined) {
       this.runtimeSigner = undefined;
       return;
     }
     const address = this._node?.address;
     if (address === undefined) throw new Error("setRuntimePermissionSigner requires a signed-in session.");
-    this.runtimeSigner = { signer, address, signOuts: this.signOutCount };
+    this.runtimeSigner = { signer, address, signOuts: this.signOutCount, openKey: options?.openKey === true };
   }
 
   /** True when the panel may ask for a permission: a manifest, a page signer and a live session exist. */
