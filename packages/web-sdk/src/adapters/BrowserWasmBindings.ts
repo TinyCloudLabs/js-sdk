@@ -29,6 +29,9 @@ export class BrowserWasmBindings implements IWasmBindings {
   validatePersistedSessionForRenewal(proof: PersistedSessionProof) {
     return tinycloud.validatePersistedSessionForRenewal(proof);
   }
+  validateSessionRoot(proof: PersistedSessionProof) {
+    return tinycloud.validateSessionRoot(proof);
+  }
   computeCid(data: Uint8Array, codec: bigint): string { return tinycloud.computeCid(data, codec); }
 
   ensureEip55(address: string): string { return tinycloud.ensureEip55(address); }

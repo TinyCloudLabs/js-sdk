@@ -1493,7 +1493,7 @@ describe("TinyCloudNode.checkSpaceHosting", () => {
         await node.signOut();
         await expect(asked).resolves.toBe("unknown");
         expect(activationAborted).toBe(true);
-        expect(calls.map((call) => call.url.replace(RESTORE_HOST, ""))).toEqual(["/invoke", "/delegate"]);
+        expect(calls.map((call) => call.url.replace(RESTORE_HOST, "")).filter((path) => path !== "/session/retire" && path !== "/info")).toEqual(["/invoke", "/delegate"]);
         expect(invokeAny).toHaveBeenCalledTimes(1);
       },
     );
@@ -1534,14 +1534,14 @@ describe("TinyCloudNode.checkSpaceHosting", () => {
     let release!: (response: Response) => void;
     const probeSent = Promise.withResolvers<void>();
     await withFetch(
-      () => new Promise<Response>((resolve) => { release = resolve; probeSent.resolve(); }),
+      (call) => call.url.endsWith("/invoke") ? new Promise<Response>((resolve) => { release = resolve; probeSent.resolve(); }) : new Response(null, { status: 404 }),
       async (calls) => {
         const asked = node.checkSpaceHosting();
         await probeSent.promise;
         await node.signOut();
         release(new Response("unauthorized", { status: 401 }));
         await expect(asked).resolves.toBe("unknown");
-        expect(calls.map((call) => call.url.replace(RESTORE_HOST, ""))).toEqual(["/invoke"]);
+        expect(calls.map((call) => call.url.replace(RESTORE_HOST, "")).filter((path) => path !== "/session/retire" && path !== "/info")).toEqual(["/invoke"]);
         expect(invokeAny).toHaveBeenCalledTimes(1);
         expect(node.spaceHosting).toBe("unknown");
       },

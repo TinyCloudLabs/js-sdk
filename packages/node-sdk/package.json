@@ -59,6 +59,16 @@
         "default": "./dist/secret-read.cjs"
       }
     },
+    "./session-retire": {
+      "import": {
+        "types": "./dist/session-retire.d.ts",
+        "default": "./dist/session-retire.js"
+      },
+      "require": {
+        "types": "./dist/session-retire.d.cts",
+        "default": "./dist/session-retire.cjs"
+      }
+    },
     "./credential-pending-store": {
       "types": "./dist/credential-pending-store.d.ts",
       "import": "./dist/credential-pending-store.js",
