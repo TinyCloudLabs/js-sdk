@@ -2727,7 +2727,9 @@ export class TinyCloudNode {
     delegation: { readonly cid: string; readonly authorization: string },
     leaseAuthorization: string,
   ): Promise<number> {
-    const { verifyRenewalHistory, RenewalLeaseExpiredError, RenewalAuthorityInactiveError, RenewalRenewerChangedError } = await import("@tinycloud/sdk-core/delegations/renewal");
+    const {
+      verifyRenewalHistory, OwnerRenewalMismatchError, RenewalLeaseExpiredError, RenewalAuthorityInactiveError, RenewalRenewerChangedError,
+    } = await import("@tinycloud/sdk-core/delegations/renewal");
     const session = this.currentTinyCloudSession();
     if (!session) throw new Error("A session is required to verify renewal authority");
     const original = await parseSignedSiweCacao(
@@ -2751,7 +2753,6 @@ export class TinyCloudNode {
       || typeof caveats[0] !== "object" || caveats[0] === null
       || Array.isArray(caveats[0]) || Object.keys(caveats[0]).length !== 0
     ) {
-      const { OwnerRenewalMismatchError } = await import("@tinycloud/sdk-core/delegations/renewal-receipt");
       throw new OwnerRenewalMismatchError("Renewal lease does not authorize only this delegation");
     }
     // The lease names the renewer it was issued to; a node that rotated its renewer never renews it.

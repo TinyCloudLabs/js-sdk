@@ -366,3 +366,12 @@ export class RenewalHistoryInvalidError extends Error {
   readonly code = RENEWAL_HISTORY_INVALID;
   constructor(message: string) { super(message); this.name = "RenewalHistoryInvalidError"; }
 }
+export const RENEWAL_LEASE_MISMATCH = "RENEWAL_LEASE_MISMATCH";
+/** The lease or its receipt does not match the signed original grant or the verified node. */
+export class OwnerRenewalMismatchError extends Error {
+  readonly code = RENEWAL_LEASE_MISMATCH;
+  constructor(message: string) {
+    super(message);
+    this.name = "OwnerRenewalMismatchError";
+  }
+}

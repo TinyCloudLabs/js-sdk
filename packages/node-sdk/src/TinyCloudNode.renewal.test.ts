@@ -12,6 +12,7 @@ import { encodeDagCbor } from "../../sdk-core/src/delegations/cacao";
 import { signedRestorableSession } from "./test-support/signed-restorable-session";
 import { signedLocationRecordForTest } from "./test-support/restored-policy-node";
 import { activateValidatedRuntimeDelegation, siweRuntimeDelegation } from "./delegation";
+import { OwnerRenewalMismatchError as ReceiptOwnerRenewalMismatchError } from "@tinycloud/sdk-core/delegations/renewal-receipt";
 
 describe("TinyCloudNode renewal lease registration", () => {
   test("signs and admits only the exact renewal capability for its active node identity", async () => {
@@ -524,6 +525,11 @@ describe("TinyCloudNode renewal lease registration", () => {
       });
       await expect(activate({ leaseAuthorization: accountLease.delegation.authHeader! }))
         .rejects.toMatchObject({ reason: "authority_invalid" });
+      // The node-sdk path throws the same class that `renewal-receipt` exports, so `instanceof` holds across both subpaths.
+      await expect(node.getDelegationRenewalEffectiveExpiry(
+        { cid: scoped.delegationCid, authorization: scoped.delegationHeader.Authorization },
+        accountLease.delegation.authHeader!,
+      )).rejects.toBeInstanceOf(ReceiptOwnerRenewalMismatchError);
       // The node cannot answer: an outage, never a refusal.
       statusDown = true;
       await expect(activate({ leaseAuthorization })).rejects.toMatchObject({ reason: "activation_unavailable" });
