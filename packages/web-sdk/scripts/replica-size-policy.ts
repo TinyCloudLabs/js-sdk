@@ -3863,21 +3863,21 @@ export const approvedTc3443PortFolderRoot: LogoutRatchet = {
 /** The exact TC-3704 OpenKey-prompt root allowance from canonical CI. */
 export const approvedTc3704OpenKeyPromptRoot: LogoutRatchet = {
   "label": "the SDK permission prompt is skipped when OpenKey signs and shows the request (TC-3704)",
-  "ruling": "size-ruling: TC-3704 row tc3704OpenKeyPromptRoot index.mjs 1533930 (+348), index.cjs 1465579 (+294) gzip bytes over the tc3443PortFolderRoot ceilings, CI's canonical figure. Details: TC-3704",
+  "ruling": "size-ruling: TC-3704 row tc3704OpenKeyPromptRoot index.mjs 1533915 (+333), index.cjs 1465566 (+281) gzip bytes over the tc3443PortFolderRoot ceilings, CI's canonical figure. Details: TC-3704",
   "base": "fbdbaa7ba8e66fb0fc91d2815df2a5eb90299c94",
   "sourceCommits": ["ac08001eab851e5e4965a855f3179c791831fd00"],
   "canonicalCI": {
-    "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44938951455",
+    "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45074741963",
     "jobs": [
-      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44938951455/job/136951745776",
-      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44938951455/job/136951745723"
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45074741963/job/137369362680",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45074741963/job/137369362946"
     ]
   },
   "root": {
-    "delta": { "index.mjs": 348, "index.cjs": 294 },
-    "ceiling": { "index.mjs": 1533930, "index.cjs": 1465579 }
+    "delta": { "index.mjs": 333, "index.cjs": 281 },
+    "ceiling": { "index.mjs": 1533915, "index.cjs": 1465566 }
   },
-  "reason": "requestPermissions skips the SDK prompt when OpenKey signs and shows the request, and sends OpenKey the app's name as display-only text with the sign request (TinyCloudWeb, openKeySignPresentation); the web-sdk root bundles both. Canonical Node 22/Bun 1.3.14 CI on #1117 (ac08001e, master cb3edeab) measured index.mjs 1530206 and index.cjs 1463143 gzip -9 bytes: +348 and +294 over the TC-2490 ceilings 1529858 and 1462849. No other ceiling moves. Details: TC-3704"
+  "reason": "requestPermissions skips the SDK prompt when OpenKey signs and shows the request, and sends OpenKey the app's name as display-only text with the sign request (TinyCloudWeb, openKeySignPresentation); the web-sdk root bundles both. Canonical Node 22/Bun 1.3.14 CI on #1117 (934c8daf, master fbdbaa7b merged in) measured index.mjs 1533915 and index.cjs 1465566 gzip -9 bytes: +333 and +281 over the tc3443PortFolderRoot ceilings 1533582 and 1465285. No other ceiling moves. Details: TC-3704"
 };
 
 export const approvedLedgerRows: Record<string, unknown> = {
