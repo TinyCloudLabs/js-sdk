@@ -1,0 +1,26 @@
+# Dependency gate (pre-release security check). Fails a pull request that adds
+# or upgrades to a dependency version with a known vulnerability of severity
+# high or critical. Vulnerabilities already on master do not fail it; only
+# what the PR's manifest and lockfile changes introduce. No `paths:` filter,
+# so it can be a required check.
+name: Dependency review
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  dependency-review:
+    name: dependency-review
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/dependency-review-action@bbc44d14a204704ccc493733616cd1e93a0321ec # v5.0.1
+        with:
+          fail-on-severity: high

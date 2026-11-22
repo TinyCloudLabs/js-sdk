@@ -1,0 +1,18 @@
+# gitleaks config for `gitleaks dir` over the packed npm tarball contents
+# (audit-npm-tarballs.mjs). The default rules, plus one allowlist:
+#
+# generic-api-key matches minified code where a property whose name ends in
+# "Key" is assigned an identifier or a type name. A key compiled into a bundle is a
+# string literal, so its match always contains a quote. The allowlist drops only
+# generic-api-key matches with no quote or backtick, and only in JS, type
+# declarations and sourcemaps (whose sources are JSON strings with escaped quotes).
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Unquoted identifiers in compiled JS, type declarations and sourcemaps"
+targetRules = ["generic-api-key"]
+condition = "AND"
+paths = ['''\.(js|cjs|mjs|d\.ts|d\.cts|d\.mts|map)$''']
+regexTarget = "match"
+regexes = ['''^[^"'`]*$''']

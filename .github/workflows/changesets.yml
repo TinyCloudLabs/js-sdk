@@ -27,6 +27,8 @@ jobs:
     name: Beta Release
     if: github.event_name == 'push' && !contains(github.event.head_commit.message, '[skip ci]')
     runs-on: ubuntu-latest
+    # Publish credentials live only in the master-limited production environment.
+    environment: production
     # actions: read lets pre-publish read earlier Release runs' logs (TC-1457).
     # contents: read is all this job needs. beta-github-releases holds
     # contents: write and creates the GitHub Releases (O25).
@@ -129,6 +131,18 @@ jobs:
       - name: Check internal dependency pins
         if: steps.check.outputs.pending != '0'
         run: node scripts/check-internal-dep-pins.mjs
+
+      # Pre-release security check: every public package's tarball file list
+      # against the allowlist, its contents against key and token shapes, and
+      # `gitleaks dir` over the packed files. Runs before the version commit
+      # exists, so a finding leaves master and npm untouched.
+      - name: Install gitleaks
+        if: steps.check.outputs.pending != '0'
+        uses: ./.github/actions/install-gitleaks
+
+      - name: Audit the npm tarballs
+        if: steps.check.outputs.pending != '0'
+        run: node .github/scripts/audit-npm-tarballs.mjs "$RUNNER_TEMP/npm-tarball-audit"
 
       # Commit the version bump locally; nothing leaves the runner until the
       # npm check below has passed (TC-1457). The push still comes before any
@@ -303,6 +317,7 @@ jobs:
     name: Beta Resume
     if: github.event_name == 'workflow_dispatch' && github.event.inputs.resume == 'beta'
     runs-on: ubuntu-latest
+    environment: production
     permissions:
       actions: read
       contents: read
@@ -341,6 +356,11 @@ jobs:
         id: unfinished
         run: node "$RUNNER_TEMP/release-scripts/check-npm-release-provenance.mjs" unfinished-beta "$GITHUB_OUTPUT"
 
+      # Installed before the older version commit is checked out: it may predate the action.
+      - name: Install gitleaks
+        if: steps.unfinished.outputs.sha != ''
+        uses: ./.github/actions/install-gitleaks
+
       - name: Check out the unfinished beta release
         if: steps.unfinished.outputs.sha != ''
         run: git checkout --quiet --detach "$RELEASE_SHA"
@@ -374,6 +394,11 @@ jobs:
       - name: Check internal dependency pins
         if: steps.unfinished.outputs.sha != ''
         run: node scripts/check-internal-dep-pins.mjs
+
+      # Pre-release security check on exactly what is about to be published (see the beta job).
+      - name: Audit the npm tarballs
+        if: steps.unfinished.outputs.sha != ''
+        run: node "$RUNNER_TEMP/release-scripts/audit-npm-tarballs.mjs" "$RUNNER_TEMP/npm-tarball-audit"
 
       - name: Setup Node for npm publish
         if: steps.unfinished.outputs.sha != ''
@@ -501,6 +526,7 @@ jobs:
     name: Stable Release
     if: github.event_name == 'workflow_dispatch' && github.event.inputs.confirm == 'release'
     runs-on: ubuntu-latest
+    environment: production
     permissions:
       actions: read
       contents: write
@@ -514,10 +540,15 @@ jobs:
           ref: master
           persist-credentials: false
 
-      # Recovery runs check out an older release commit that may predate this
-      # script, so keep a copy from master for the release step.
-      - name: Keep the GitHub release script
-        run: cp .github/scripts/github-releases.mjs "$RUNNER_TEMP/github-releases.mjs"
+      # Recovery runs check out an older release commit that may predate these
+      # scripts and the gitleaks action, so keep copies from master.
+      - name: Keep the release scripts
+        run: |
+          cp .github/scripts/github-releases.mjs "$RUNNER_TEMP/github-releases.mjs"
+          cp -R .github/scripts "$RUNNER_TEMP/release-scripts"
+
+      - name: Install gitleaks
+        uses: ./.github/actions/install-gitleaks
 
       - uses: oven-sh/setup-bun@v1
         with:
@@ -637,6 +668,11 @@ jobs:
       - name: Check internal dependency pins
         if: steps.unfinished.outputs.sha == ''
         run: node scripts/check-internal-dep-pins.mjs
+
+      # Pre-release security check (see the beta job). Runs before the release
+      # commit is pushed; recovery runs audit the release commit they publish.
+      - name: Audit the npm tarballs
+        run: node "$RUNNER_TEMP/release-scripts/audit-npm-tarballs.mjs" "$RUNNER_TEMP/npm-tarball-audit"
 
       # Push before publishing anything (TC-1095). One push carries two
       # commits: the stable release, then pre mode re-entered for the next

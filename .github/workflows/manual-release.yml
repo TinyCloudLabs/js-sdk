@@ -16,6 +16,8 @@ on:
 jobs:
   release:
     runs-on: ubuntu-latest
+    # Publish credentials live only in the master-limited production environment.
+    environment: production
     steps:
       - name: Checkout code repository
         uses: actions/checkout@v4

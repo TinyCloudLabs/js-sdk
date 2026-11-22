@@ -21,6 +21,8 @@ permissions:
 jobs:
   rollback:
     runs-on: ubuntu-latest
+    # Publish credentials live only in the master-limited production environment.
+    environment: production
     steps:
       - name: Require the default branch
         run: |

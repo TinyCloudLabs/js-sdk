@@ -1,0 +1,45 @@
+# Public 32-byte hex constants that bundled dependencies put in the npm
+# tarballs (noble-curves, ethers, viem docs). audit-npm-tarballs.mjs fails on
+# any other standalone 0x + 64 hex value, because that is the shape of a
+# private key.
+#
+# Each line: sha256 of the lowercased value including "0x", then what it is.
+# Before adding a line, check the value is a published constant in the library
+# that carries it, never a key. Reviewed 2026-11-22 against the latest beta
+# tarballs of all 16 public packages.
+6aed34e6bddff5e1d872b5d7d5698a7b73abd6f3b33402732edc73ab9ffb9c70 # zero (ethers HashZero)
+4eaddc8cfcdd27223821e3e31ab54b2416dd3b0c1a86afd7e8d6538ca1bd0a77 # one (noble-curves)
+db943adefab0807b8e8a7795dbe0f0a5084318030e7328cb6b521d59e738f0d4 # 420 (viem hexToBigInt doc example)
+1fccd851dad760a7c437b59152845c710020827701337686ffd0cecb744f370c # "Hello World!" padded (viem fromHex doc example)
+b4a5e94d493bb5b92407024416ee5d9811f4f3a6d5a01043bd0aa9369e533cb6 # "Hello world" padded (viem toHex doc example)
+ee102551440d1320d38aee5895baa5a122bbcfce05abc12b9607ce23d3418522 # ethers English wordlist checksum
+35d08d612aad21977635a6d34b23c9676eee4546a8504c828fb305b924355fab # 2^256-1 (ethers MaxUint256)
+b6fe674d3ce7002a12b2a23515d1ec1a755c9fe16cca1ef2d255a6b041a34df0 # 2^255-1 (noble-curves MAX_255B)
+d5a78c09b0f0f3ee225bd7a8bd5abf6a13581831b3e8bb6ef9bccdcc46c3d35d # ed25519 field prime p
+9d84a1587c9f6793e3ce9285e532a5706f9eab943e7d0b3ffccbb476258b2fb0 # ed25519 curve a (-1 mod p)
+f2eee2d60c054dbc0774993d12852448105ab0dc88ff2f1ed9bbcaaa6c723e0b # ed25519 curve d
+a4b51853b2206084213896191c6cc2f909517d68693080fe17e6ec9e18d36631 # ed25519 group order n
+c77fbf239ae090ce75c8d25c7024c543442806f8304a13b56687cbfcc9b4d611 # ed25519 base point Gx
+082e8dfc3aa5f32e9bc17569aebcdf01521552fbbcd9ca1ed6787544307e9ffe # ed25519 base point Gy
+2f98b04a033f75aa85681c487faed4ecff6bf5160a7994c22171f1c1ed5f01e8 # P-256 field prime p
+7b33ce4f1732261e2dd649f8b20f38b9edbcae101c253948af2361ee6bd05a75 # P-256 curve a
+3dadb4d65de816824d4c33be13a8056d646286a640f89ad8c7abdd1a3c149d4d # P-256 curve b
+caaef3a6c4f0cc10b849d3b571c13b9c88e18b222a709d50ea34dc4f96aef02b # P-256 group order n
+7c645f0d9686b442c0f0bfbf9a033f5f6a99b472b539aaa7b6ce3c4cfe9fd081 # P-256 base point Gx
+9a9a21e360bef6aec17702e383cf310c42d4e53b4f4a01696ecc3fb224ec6fa5 # P-256 base point Gy
+13501af033f2016a8b959d12a26f579dbd8ac74b5eaa1b556739ebabdb07ecc4 # secp256k1 field prime p
+5702e826aaa3bc66cfb0827a510e2d0114bd8702c761dc60f65db93cc3f06bd9 # secp256k1 group order n
+5e6a6e619535b5a647f694fa3f13c0a25f957ddb7755d595d977d305de646fd6 # secp256k1 endomorphism beta
+147553152e13a668c333a05579133077617071a9cc4ba5e325bdf702e8105a85 # secp256k1 SSWU isogenous curve A (RFC 9380)
+c3f5ffea485b658c1dcd48bcf05bbedaa663667b7d0ad18cfc72696c8c08d7f9 # secp256k1 3-isogeny map constant (RFC 9380)
+3847ed1425f5ecfb58b709e6146e6f3bb6200a4a363172706733a0b5e638982d # secp256k1 3-isogeny map constant (RFC 9380)
+288beda5515d03c4e2d1fe921b030544660f6f9eb203d20a755e58f6c93f0edb # secp256k1 3-isogeny map constant (RFC 9380)
+f874a4b4d6e0840d1be345af3e50a879f8fc308755ffa5b9f3955faa0cfc91e0 # secp256k1 3-isogeny map constant (RFC 9380)
+7179ba45d0f8e734c49f0ad86269c71b4095c66bcc47f69f082a65f4daf6c986 # secp256k1 3-isogeny map constant (RFC 9380)
+789c89ea14c9e12f96aa987c571f59cb870a621335930cebaacd4a756921d54f # secp256k1 3-isogeny map constant (RFC 9380)
+6556f840440af55bb527c54e67cc5bad5821561c4dc3aeaf037d73e598160a5a # secp256k1 3-isogeny map constant (RFC 9380)
+f6608a1227b04c5f56b02a6f7dc14b5d6e5daf0c371e82c39167c19220746338 # secp256k1 3-isogeny map constant (RFC 9380)
+25bc41ac0fb122a5bc372566592cc6789027cdb9369f8d1605555c410afe7881 # secp256k1 3-isogeny map constant (RFC 9380)
+49962018cc7e055399ffc2fa9294e8cc4aa9397e7254f99d1a70bea828b89a73 # secp256k1 3-isogeny map constant (RFC 9380)
+52f2bdfe9948b42316a07ea6a71a53d7eff591bce0d21ab999dd406da5af5d76 # secp256k1 3-isogeny map constant (RFC 9380)
+e2bf3bfc75b2cf85b7bb52db344aaa03c08994633a34df33c0a331eed924af8b # secp256k1 3-isogeny map constant (RFC 9380)
