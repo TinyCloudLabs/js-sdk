@@ -1925,6 +1925,12 @@ describe("CLI secrets commands", () => {
             actions: ["tinycloud.kv/put"],
             skipPrefix: true,
           },
+          {
+            service: "tinycloud.encryption",
+            path: `${DEFAULT_NETWORK_ID}/secrets/scoped/food-tracker/anthropic_api_key`,
+            actions: ["tinycloud.encryption/key.create"],
+            skipPrefix: true,
+          },
         ],
       },
     ]);

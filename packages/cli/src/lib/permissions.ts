@@ -599,17 +599,17 @@ async function secretPermissionsFromAppManifest(
     resource.path.startsWith("vault/secrets/")
   );
 
-  // Each readable secret gets its own key's decrypt. Only a secret with no key of its own (a name or scope over 64
-  // characters, or a whole-scope read) needs the network decrypt, which opens every secret.
+  // Each readable secret gets its own key's decrypt. Until the per-secret flip the block also keeps the network
+  // decrypt, so secrets not yet migrated stay readable; the first CLI release after the flip gate drops it.
   const reads = permissions.filter((permission) => permission.actions.includes("tinycloud.kv/get"));
   if (reads.length > 0) {
     const network = await defaultSecretsNetworkId(profile, requestedOwner);
-    const keys = reads.map((permission) => secretKeyResourceForVaultPath(network, permission.path));
-    for (const key of new Set(keys)) {
+    const keys = reads.flatMap((permission) => secretKeyResourceForVaultPath(network, permission.path) ?? []);
+    for (const path of [network, ...new Set(keys)]) {
       permissions.push({
         service: ENCRYPTION_PERMISSION_SERVICE,
         space: ENCRYPTION_MANIFEST_SPACE,
-        path: key ?? network,
+        path,
         actions: ["tinycloud.encryption/decrypt"],
       });
     }

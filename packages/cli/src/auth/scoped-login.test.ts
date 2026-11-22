@@ -62,14 +62,18 @@ async function proof(options: { write?: boolean; expired?: boolean; lifetimeMs?:
     ...(options.spaces ? { requestedSpaces: spaces.map(space => ({ space, spaceId: wasm.makeSpaceId(address, 1, space), spaceReady: true })), spaceReady: true } : {}) };
 }
 
-/** A real owner-signed session over the Secret Manager scope; `decrypt: false` is the owner unticking it. */
+/**
+ * A real owner-signed session over the Secret Manager scope: the network decrypt plus OPENAI_API_KEY's own key, as a
+ * `secrets:` block requests until the per-secret flip. `decrypt: false` is the owner unticking both.
+ */
 async function secretsProof(options: { decrypt?: boolean; nestedDecrypt?: boolean; networkId?: string } = {}) {
   const now = Date.now();
   const decryptNetwork = options.networkId ?? network;
+  const decrypt = { [decryptNetwork]: ["tinycloud.encryption/decrypt"], [`${decryptNetwork}/secrets/openai_api_key`]: ["tinycloud.encryption/decrypt"] };
   const prepared = wasm.prepareSession({
     abilities: { kv: { "vault/secrets/OPENAI_API_KEY": ["tinycloud.kv/get"] }, capabilities: { "": ["tinycloud.capabilities/read"] },
-      ...(options.nestedDecrypt ? { encryption: { [decryptNetwork]: ["tinycloud.encryption/decrypt"] } } : {}) },
-    ...(options.decrypt === false || options.nestedDecrypt ? {} : { rawAbilities: { [decryptNetwork]: ["tinycloud.encryption/decrypt"] } }),
+      ...(options.nestedDecrypt ? { encryption: decrypt } : {}) },
+    ...(options.decrypt === false || options.nestedDecrypt ? {} : { rawAbilities: decrypt }),
     address, chainId: 1, domain: "cli.example.test", spaceId: secretsSpaceId, jwk: key,
     issuedAt: new Date(now - 60_000).toISOString(),
     expirationTime: new Date(now + 3600_000).toISOString(),
@@ -483,6 +487,7 @@ describe("scoped first login", () => {
     expect(permissions).toEqual([
       { service: "tinycloud.kv", space: "secrets", path: "vault/secrets/OPENAI_API_KEY", actions: ["tinycloud.kv/get"] },
       { service: "tinycloud.encryption", space: "encryption", path: network, actions: ["tinycloud.encryption/decrypt"] },
+      { service: "tinycloud.encryption", space: "encryption", path: `${network}/secrets/openai_api_key`, actions: ["tinycloud.encryption/decrypt"] },
     ]);
     expect(() => validateLoginPermissions(permissions)).not.toThrow();
     // Raw entries alone are not a login space.
@@ -496,11 +501,12 @@ describe("scoped first login", () => {
     expect(sent[0]).toEqual([{ ...capabilityRead, space: "secrets" }, ...permissions]);
     expect(approved.declined).toEqual([]);
     const rawEntry = { service: "tinycloud.encryption", space: "encryption", path: network, actions: ["tinycloud.encryption/decrypt"] };
+    const keyEntry = { ...rawEntry, path: `${network}/secrets/openai_api_key` };
     expect((await ProfileManager.getSession("scoped") as Record<string, unknown>).permissions).toContainEqual(rawEntry);
     expect([...permissionTuples([rawEntry], ownerDid)].map((tuple) => JSON.parse(tuple)[1])).toEqual(["encryption"]);
 
     const unticked = await refreshOpenKeySession("scoped", host, { permissions, replaceSession: true, openKeyAcquisition: async () => secretsProof({ decrypt: false }) });
-    expect(unticked.declined).toEqual([rawEntry]);
+    expect(unticked.declined).toEqual([rawEntry, keyEntry]);
   });
 
   test("a real nested signed decrypt remains declined, not a raw grant", async () => {

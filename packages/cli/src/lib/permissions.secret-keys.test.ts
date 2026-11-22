@@ -24,12 +24,13 @@ const encryption = (permissions: { service: string }[]) =>
   permissions.filter((permission) => permission.service === "tinycloud.encryption");
 
 describe("per-secret keys in CLI manifests", () => {
-  test("a secrets block reads each secret with its own key, never the network decrypt", async () => {
+  test("a secrets block reads each secret with its own key, plus the network decrypt until the flip", async () => {
     const permissions = await loadManifestPermissions(
       manifestSource({ app_id: "xyz.tinycloud.agent", secrets: { OPENAI_API_KEY: true, ELEVENLABS_API_KEY: ["get"] } }),
       "agent", { allowLogicalSpaces: true },
     );
     expect(encryption(permissions).map((permission) => permission.path).sort()).toEqual([
+      `urn:tinycloud:encryption:${OWNER_DID}:default`,
       `urn:tinycloud:encryption:${OWNER_DID}:default/secrets/elevenlabs_api_key`,
       `urn:tinycloud:encryption:${OWNER_DID}:default/secrets/openai_api_key`,
     ]);
@@ -37,7 +38,7 @@ describe("per-secret keys in CLI manifests", () => {
       permission.space === "encryption" && permission.actions.join() === "tinycloud.encryption/decrypt")).toBe(true);
   });
 
-  test("a secret with no key of its own (name over 64 characters) is read with the network decrypt", async () => {
+  test("a secret with no key of its own (name over 64 characters) gets only the network decrypt", async () => {
     const long = `A${"B".repeat(64)}`;
     const permissions = await loadManifestPermissions(
       manifestSource({ app_id: "xyz.tinycloud.agent", secrets: { [long]: true } }),
