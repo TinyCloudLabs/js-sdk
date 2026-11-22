@@ -33,6 +33,7 @@ import {
   type RegisterPolicyV3Receipt,
   refuseCaveated,
 } from "@tinycloud/node-sdk/core";
+import type { NodeSignOutStatus } from "@tinycloud/node-sdk";
 import {
   resolveReplicationConfig,
   validateReplicationConfig,
@@ -431,6 +432,8 @@ export class TinyCloudWeb {
   private runtimeSigner?: { readonly signer: RuntimePermissionSigner; readonly address: string; readonly signOuts: number };
   private signOutInFlight = 0;
   private signOutOperation?: { node?: TinyCloudNode; remote?: Promise<void>; result: Promise<void> };
+  /** The node the latest sign-out ended; it holds that sign-out's node status. */
+  private signedOutNode?: TinyCloudNode;
   private persistedRestoreBlocked = false;
   private signOutCleanupFailed = false;
   private remoteSignOutTimeoutMs = 3000;
@@ -1544,6 +1547,7 @@ export class TinyCloudWeb {
         }
       })();
       this.signOutOperation = { node, remote, result };
+      if (node) this.signedOutNode = node;
       // A failed node result can precede its cleanup. Repeated calls compare the node's operation identity
       // rather than resolving a new active address and clearing somebody else's session.
       void Promise.all([result, remote]).then(() => {
@@ -1556,6 +1560,15 @@ export class TinyCloudWeb {
       return Promise.reject(error);
     }
   };
+
+  /**
+   * Which nodes stopped accepting the session key at the latest sign-out that ended a session; see
+   * `TinyCloudNode.nodeSignOutStatus()`. Resolves `undefined` before any. `signOut()` does not wait for these node
+   * calls, and only a node's first request, within a 48 KiB keepalive allowance, may outlive a page that unloads
+   * right after it, once the retire code (loaded when the session starts) has loaded.
+   */
+  nodeSignOutStatus = (): Promise<NodeSignOutStatus | undefined> =>
+    this.signedOutNode?.nodeSignOutStatus() ?? Promise.resolve(undefined);
 
   /**
    * Clears the stored session for `address` only while it is the signing-out session (`ownSignature`); a newer

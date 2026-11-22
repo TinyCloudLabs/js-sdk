@@ -492,6 +492,8 @@ export type Ledger = {
   tc3661ShareLinkHostRoot?: LogoutRatchet;
   tc3522LeaseAskRoot?: LogoutRatchet;
   tc3443GenericManifestRoot?: LogoutRatchet;
+  tc3688AccountIndexGuardRoot?: LogoutRatchet;
+  tc3443SessionRetireRoot?: LogoutRatchet & { worker: { delta: number; ceiling: number }; replicaWorker: { delta: number; ceiling: number } };
   tc2773LazyRestoreReplicaWorker?: Omit<WorkerRatchet, "worker"> & { replicaWorker: { delta: number; ceiling: number } };
 };
 
@@ -1138,6 +1140,8 @@ export function ancestryPins(root: Ledger, hasGatedOnly: boolean): Array<{ row: 
   if (root.tc3661ShareLinkHostRoot !== undefined) pins.push({ row: "tc3661ShareLinkHostRoot", pin: root.tc3661ShareLinkHostRoot.sourceCommits.at(-1)! });
   if (root.tc3522LeaseAskRoot !== undefined) pins.push({ row: "tc3522LeaseAskRoot", pin: root.tc3522LeaseAskRoot.sourceCommits.at(-1)! });
   if (root.tc3443GenericManifestRoot !== undefined) pins.push({ row: "tc3443GenericManifestRoot", pin: root.tc3443GenericManifestRoot.sourceCommits.at(-1)! });
+  if (root.tc3688AccountIndexGuardRoot !== undefined) pins.push({ row: "tc3688AccountIndexGuardRoot", pin: root.tc3688AccountIndexGuardRoot.sourceCommits.at(-1)! });
+  if (root.tc3443SessionRetireRoot !== undefined) pins.push({ row: "tc3443SessionRetireRoot", pin: root.tc3443SessionRetireRoot.sourceCommits.at(-1)! });
   if (hasGatedOnly) pins.push({ row: "gatedOnlyRatchet", pin: approvedGatedOnlyRatchet.sourceCommit });
   return pins;
 }
@@ -1254,6 +1258,8 @@ export function rootCeilings(root: Ledger): Array<{ row: string; ceiling: GzipSi
     ["tc3661ShareLinkHostRoot", root.tc3661ShareLinkHostRoot?.root.ceiling],
     ["tc3522LeaseAskRoot", root.tc3522LeaseAskRoot?.root.ceiling],
     ["tc3443GenericManifestRoot", root.tc3443GenericManifestRoot?.root.ceiling],
+    ["tc3688AccountIndexGuardRoot", root.tc3688AccountIndexGuardRoot?.root.ceiling],
+    ["tc3443SessionRetireRoot", root.tc3443SessionRetireRoot?.root.ceiling],
   ];
   return rows.flatMap(([row, ceiling]) => ceiling === undefined ? [] : [{ row, ceiling }]);
 }
@@ -3788,6 +3794,47 @@ export const approvedTc3443GenericManifestRoot: LogoutRatchet = {
   "reason": "A sign-in without a manifest asks only for its app's own folder (the generic app-folder manifest and its one console warning), and owner tools opt into every action on their space with ownerFullAccess (sdk-core owner-access, node-sdk and web-sdk sign-in); sdk-core and node-sdk are bundled into the web-sdk root. Canonical Node 22/Bun 1.3.14 CI on #1099 (19cc3d05, master 4e4d8459 merged in) measured index.mjs 1530499 and index.cjs 1463235 gzip -9 bytes: +396 and +151 over the TC-3522 ceilings 1530103 and 1463084. No other ceiling moves. Details: TC-3443"
 };
 
+/** The exact TC-3688 account-index guard root allowance from canonical CI. */
+export const approvedTc3688AccountIndexGuardRoot: LogoutRatchet = {
+  "label": "account index writes are sent only when the session can write the index (TC-3688)",
+  "ruling": "size-ruling: TC-3688 row tc3688AccountIndexGuardRoot index.mjs 1530603 (+104), index.cjs 1463337 (+102) gzip bytes over the tc3443 ceilings, CI's canonical figure. Details: TC-3688",
+  "base": "2cb453f6523219d12bce66489fc2625782e970fa",
+  "sourceCommits": ["13fe661a2d7535b5493e83b42efe4d288722ac1a"],
+  "canonicalCI": {
+    "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45063241608",
+    "jobs": [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45063241608/job/137333621784",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45063241608/job/137333621819"
+    ]
+  },
+  "root": {
+    "delta": { "index.mjs": 104, "index.cjs": 102 },
+    "ceiling": { "index.mjs": 1530603, "index.cjs": 1463337 }
+  },
+  "reason": "AccountService skips the account index writes (and index setup) when the session's recap lacks tinycloud.sql write and schema on the account database; sdk-core and node-sdk are bundled into the web-sdk root. Canonical Node 22/Bun 1.3.14 CI on #1116 (13fe661a, master 2cb453f6 merged in) measured index.mjs 1530603 and index.cjs 1463337 gzip -9 bytes: +104 and +102 over the TC-3443 ceilings 1530499 and 1463235. No other ceiling moves. Details: TC-3688"
+};
+
+export const approvedTc3443SessionRetireRoot: NonNullable<Ledger["tc3443SessionRetireRoot"]> = {
+  "label": "sign-out retires the session at the node, with the retire code in a lazy chunk (TC-3443)",
+  "ruling": "size-ruling: TC-3443 row tc3443SessionRetireRoot index.mjs 1531668 (+1065), index.cjs 1464420 (+1083) gzip bytes over the tc3688 ceilings, kv-storage worker 780957 (+54) and replica worker 774682 (+121) gzip bytes over the tc2931 ceilings, CI's canonical figures. Details: TC-3443",
+  "base": "7d438ee4050498859d23ff3bb2f9022908b85b4c",
+  "sourceCommits": ["6ca3c9118bc045d731ae383523289a2c1e832741"],
+  "canonicalCI": {
+    "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45067208416",
+    "jobs": [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45067208416/job/137345926164",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45067208416/job/137345926173"
+    ]
+  },
+  "root": {
+    "delta": { "index.mjs": 1065, "index.cjs": 1083 },
+    "ceiling": { "index.mjs": 1531668, "index.cjs": 1464420 }
+  },
+  "worker": { "delta": 54, "ceiling": 780957 },
+  "replicaWorker": { "delta": 121, "ceiling": 774682 },
+  "reason": "Sign-out asks the node to stop accepting the session's keys; the retire request is in a lazy chunk loaded at session start, and the validateSessionRoot WASM export is bundled into the replica and kv-storage workers; sdk-core and node-sdk are bundled into the web-sdk root. Canonical Node 22/Bun 1.3.14/Rust 1.99.0 CI on #1118 (6ca3c911, master 7d438ee4 merged in) measured index.mjs 1531668 and index.cjs 1464420 gzip -9 bytes: +1065 and +1083 over the TC-3688 ceilings 1530603 and 1463337; the kv-storage worker 780957 (+54 over 780903) and replica.worker.js 774682 (+121 over 774561). No other ceiling moves. Details: TC-3443"
+};
+
 export const approvedLedgerRows: Record<string, unknown> = {
   phase2Ratchet: approvedPhase2,
   fixRequiredRatchet: approvedFixRequiredRatchet,
@@ -3901,6 +3948,8 @@ export const approvedLedgerRows: Record<string, unknown> = {
   tc3661ShareLinkHostRoot: approvedTc3661ShareLinkHostRoot,
   tc3522LeaseAskRoot: approvedTc3522LeaseAskRoot,
   tc3443GenericManifestRoot: approvedTc3443GenericManifestRoot,
+  tc3688AccountIndexGuardRoot: approvedTc3688AccountIndexGuardRoot,
+  tc3443SessionRetireRoot: approvedTc3443SessionRetireRoot,
 };
 
 /** Only a git merge-base ledger may retain the pre-correction toolchain. */
@@ -4424,6 +4473,16 @@ export function validateLedger(value: Ledger, historicalBase = false): void {
       (!value.tc3522LeaseAskRoot ||
         JSON.stringify(value.tc3443GenericManifestRoot) !== JSON.stringify(approvedTc3443GenericManifestRoot))) {
     throw new Error("Only the exact TC-3443 root admission is approved.");
+  }
+  if (value.tc3688AccountIndexGuardRoot !== undefined &&
+      (!value.tc3443GenericManifestRoot ||
+        JSON.stringify(value.tc3688AccountIndexGuardRoot) !== JSON.stringify(approvedTc3688AccountIndexGuardRoot))) {
+    throw new Error("Only the exact TC-3688 root admission is approved.");
+  }
+  if (value.tc3443SessionRetireRoot !== undefined &&
+      (!value.tc3688AccountIndexGuardRoot ||
+        JSON.stringify(value.tc3443SessionRetireRoot) !== JSON.stringify(approvedTc3443SessionRetireRoot))) {
+    throw new Error("Only the exact TC-3443 sign-out retire root and worker admission is approved.");
   }
 }
 
@@ -5405,5 +5464,21 @@ export function validateTc3443GenericManifestRootTransition(base?: LogoutRatchet
   if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc3443GenericManifestRoot) ||
       base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
     throw new Error("The TC-3443 root admission may be introduced once and cannot change later.");
+  }
+}
+
+/** The exact TC-3688 account-index guard root admission is introduced once and immutable. */
+export function validateTc3688AccountIndexGuardRootTransition(base?: LogoutRatchet, current?: LogoutRatchet): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc3688AccountIndexGuardRoot) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The TC-3688 root admission may be introduced once and cannot change later.");
+  }
+}
+
+/** The exact TC-3443 sign-out retire root and worker admission is introduced once and immutable. */
+export function validateTc3443SessionRetireRootTransition(base?: Ledger["tc3443SessionRetireRoot"], current?: Ledger["tc3443SessionRetireRoot"]): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc3443SessionRetireRoot) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The TC-3443 sign-out retire admission may be introduced once and cannot change later.");
   }
 }

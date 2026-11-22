@@ -132,6 +132,21 @@ await tc.signOut();
 console.log('Signed in:', tc.isSignedIn()); // false
 ```
 
+Sign-out finishes on this device without waiting for the TinyCloud nodes. It also asks each node the session used to stop accepting its session key and the keys created while setting up the account; `nodeSignOutStatus()` reports which did:
+
+```typescript
+const status = await tc.nodeSignOutStatus();
+if (status && status.nothingToRecord.length === 0 && status.notConfirmed.length === 0) {
+  // Every node the session used confirmed it stopped accepting the key.
+}
+```
+
+Each `notConfirmed` entry names the node and a reason (`unreachable`, `refused`, `unsupported` or `failed`). A node counts as done only when it confirms it recorded this. A node that can't be reached or doesn't support it keeps accepting those keys until the latest grant they hold ends, which can be after the session expires if the session was renewed or holds a longer delegation. A node refuses the whole retire when one root sent with it fails its checks, and names that root. Sign-out then sends that request once more without that root, so the node can still record the retire for the key's other grants. Other requests to that node go ahead. The node stays in `notConfirmed` as `refused` with that root's index, because it can still accept that root. If the second request is refused too, that refusal is reported and the node gets no further requests. A node's first request uses `keepalive` only while the sign-out's request bodies stay under 48 KiB in total (browsers allow 64 KiB per page). A page that unloads right after sign-out can lose the other requests and every retry.
+
+The code that sends these requests loads when the session starts (sign-in or a restored session). A sign-out before it has loaded sends them once it loads, so a page that unloads first sends none. If it can't load, `nodeSignOutStatus()` lists every node in `notConfirmed` as `failed`.
+
+Only the instance that set up the account holds its setup keys. After a reload, sign-out can't send them, and they expire on their own (7 days by default). Roots signed but never posted are held in memory only. After a reload, sign-out can't send them, so a node that receives one later accepts it until it expires. Signing in again while a session is live replaces it without retiring the old key, by design. Sign out first to retire it. Access the user gave apps and agents before signing out stays until they remove it in Settings.
+
 ## Custom Authorization
 
 You can customize the authorization process with additional configuration:
