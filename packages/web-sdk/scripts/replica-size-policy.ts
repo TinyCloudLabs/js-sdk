@@ -490,6 +490,7 @@ export type Ledger = {
   tc3448OnBehalfPromptRoot?: LogoutRatchet;
   tc2490OneApprovalRoot?: LogoutRatchet;
   tc3661ShareLinkHostRoot?: LogoutRatchet;
+  tc3522LeaseAskRoot?: LogoutRatchet;
   tc3443GenericManifestRoot?: LogoutRatchet;
   tc2773LazyRestoreReplicaWorker?: Omit<WorkerRatchet, "worker"> & { replicaWorker: { delta: number; ceiling: number } };
 };
@@ -1135,6 +1136,7 @@ export function ancestryPins(root: Ledger, hasGatedOnly: boolean): Array<{ row: 
   if (root.tc3448OnBehalfPromptRoot !== undefined) pins.push({ row: "tc3448OnBehalfPromptRoot", pin: root.tc3448OnBehalfPromptRoot.sourceCommits.at(-1)! });
   if (root.tc2490OneApprovalRoot !== undefined) pins.push({ row: "tc2490OneApprovalRoot", pin: root.tc2490OneApprovalRoot.sourceCommits.at(-1)! });
   if (root.tc3661ShareLinkHostRoot !== undefined) pins.push({ row: "tc3661ShareLinkHostRoot", pin: root.tc3661ShareLinkHostRoot.sourceCommits.at(-1)! });
+  if (root.tc3522LeaseAskRoot !== undefined) pins.push({ row: "tc3522LeaseAskRoot", pin: root.tc3522LeaseAskRoot.sourceCommits.at(-1)! });
   if (root.tc3443GenericManifestRoot !== undefined) pins.push({ row: "tc3443GenericManifestRoot", pin: root.tc3443GenericManifestRoot.sourceCommits.at(-1)! });
   if (hasGatedOnly) pins.push({ row: "gatedOnlyRatchet", pin: approvedGatedOnlyRatchet.sourceCommit });
   return pins;
@@ -1250,6 +1252,7 @@ export function rootCeilings(root: Ledger): Array<{ row: string; ceiling: GzipSi
     ["tc3448OnBehalfPromptRoot", root.tc3448OnBehalfPromptRoot?.root.ceiling],
     ["tc2490OneApprovalRoot", root.tc2490OneApprovalRoot?.root.ceiling],
     ["tc3661ShareLinkHostRoot", root.tc3661ShareLinkHostRoot?.root.ceiling],
+    ["tc3522LeaseAskRoot", root.tc3522LeaseAskRoot?.root.ceiling],
     ["tc3443GenericManifestRoot", root.tc3443GenericManifestRoot?.root.ceiling],
   ];
   return rows.flatMap(([row, ceiling]) => ceiling === undefined ? [] : [{ row, ceiling }]);
@@ -3745,11 +3748,31 @@ export const approvedTc3661ShareLinkHostRoot: LogoutRatchet = {
   "reason": "TinyCloudNode takes a share link's host as the destination when the owner has no registry record and the host is a known TinyCloud node (SharingService receivedHostHintTransport, isKnownTinyCloudNode); node-sdk is bundled into the web-sdk root. Canonical Node 22/Bun 1.3.14 CI on #1114 (d648dd28, master cb3edeab) measured index.mjs 1530053 and index.cjs 1462997 gzip -9 bytes: +195 and +148 over the TC-2490 ceilings 1529858 and 1462849. No other ceiling moves. Details: TC-3661"
 };
 
+/** The exact TC-3522 renewed session end root allowance from canonical CI. */
+export const approvedTc3522LeaseAskRoot: LogoutRatchet = {
+  "label": "a renewed session delegates up to the end the node renewed it to (TC-3522)",
+  "ruling": "size-ruling: TC-3522 row tc3522LeaseAskRoot index.mjs 1530103 (+50), index.cjs 1463084 (+87) gzip bytes over the tc3661 ceilings, CI's canonical figure, within the ruled +100 B / +100 B. Details: TC-3522",
+  "base": "628be3c4bd1c633bb7f676f6c32c761cf8b596df",
+  "sourceCommits": ["e4913f37af9b5fef23f6874895a160bae5d08ee8"],
+  "canonicalCI": {
+    "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45054824553",
+    "jobs": [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45054824553/job/137307609390",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45054824553/job/137307609492"
+    ]
+  },
+  "root": {
+    "delta": { "index.mjs": 50, "index.cjs": 87 },
+    "ceiling": { "index.mjs": 1530103, "index.cjs": 1463084 }
+  },
+  "reason": "TinyCloudNode.sessionEnd gives the end the node renewed a session to after restoreSessionWithRenewal, and delegateTo and planDelegation delegate up to it; node-sdk is bundled into the web-sdk root. Canonical Node 22/Bun 1.3.14 CI on #1123 (e4913f37, master 628be3c4 merged in) measured index.mjs 1530103 and index.cjs 1463084 gzip -9 bytes: +50 and +87 over the TC-3661 ceilings 1530053 and 1462997. No other ceiling moves. Details: TC-3522"
+};
+
 /** The exact TC-3443 generic app-folder manifest root allowance. */
 export const approvedTc3443GenericManifestRoot: LogoutRatchet = {
   "label": "a sign-in without a manifest asks only for its app's own folder (TC-3443)",
   "ruling": "size-ruling: TC-3443 row tc3443GenericManifestRoot raises the web-sdk root ceilings by CI's measured delta for the generic app-folder manifest, its warning and ownerFullAccess",
-  "base": "628be3c4bd1c633bb7f676f6c32c761cf8b596df",
+  "base": "4e4d8459a0c0f527137d2bfc359b7f97579ec2b2",
   "sourceCommits": ["db9325c21d1377ed0f6b57b3e066b7be5c51862b"],
   "canonicalCI": {
     "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44920526454",
@@ -3760,7 +3783,7 @@ export const approvedTc3443GenericManifestRoot: LogoutRatchet = {
   },
   "root": {
     "delta": { "index.mjs": 409, "index.cjs": 151 },
-    "ceiling": { "index.mjs": 1530462, "index.cjs": 1463148 }
+    "ceiling": { "index.mjs": 1530512, "index.cjs": 1463235 }
   },
   "reason": "A sign-in without a manifest asks only for its app's own folder (the generic app-folder manifest and its one console warning), and owner tools opt into every action on their space with ownerFullAccess (sdk-core owner-access, node-sdk and web-sdk sign-in); sdk-core and node-sdk are bundled into the web-sdk root. Canonical Node 22/Bun 1.3.14 CI on #1099 (db9325c2, master cb3edeab merged in) measured index.mjs 1530267 and index.cjs 1463000 gzip -9 bytes: +409 and +151 over the TC-2490 ceilings 1529858 and 1462849. No other ceiling moves. Details: TC-3443"
 };
@@ -3876,6 +3899,7 @@ export const approvedLedgerRows: Record<string, unknown> = {
   tc3448OnBehalfPromptRoot: approvedTc3448OnBehalfPromptRoot,
   tc2490OneApprovalRoot: approvedTc2490OneApprovalRoot,
   tc3661ShareLinkHostRoot: approvedTc3661ShareLinkHostRoot,
+  tc3522LeaseAskRoot: approvedTc3522LeaseAskRoot,
   tc3443GenericManifestRoot: approvedTc3443GenericManifestRoot,
 };
 
@@ -4391,8 +4415,13 @@ export function validateLedger(value: Ledger, historicalBase = false): void {
         JSON.stringify(value.tc3661ShareLinkHostRoot) !== JSON.stringify(approvedTc3661ShareLinkHostRoot))) {
     throw new Error("Only the exact TC-3661 root admission is approved.");
   }
-  if (value.tc3443GenericManifestRoot !== undefined &&
+  if (value.tc3522LeaseAskRoot !== undefined &&
       (!value.tc3661ShareLinkHostRoot ||
+        JSON.stringify(value.tc3522LeaseAskRoot) !== JSON.stringify(approvedTc3522LeaseAskRoot))) {
+    throw new Error("Only the exact TC-3522 root admission is approved.");
+  }
+  if (value.tc3443GenericManifestRoot !== undefined &&
+      (!value.tc3522LeaseAskRoot ||
         JSON.stringify(value.tc3443GenericManifestRoot) !== JSON.stringify(approvedTc3443GenericManifestRoot))) {
     throw new Error("Only the exact TC-3443 root admission is approved.");
   }
@@ -5360,6 +5389,14 @@ export function validateTc3661ShareLinkHostRootTransition(base?: LogoutRatchet, 
   if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc3661ShareLinkHostRoot) ||
       base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
     throw new Error("The TC-3661 root admission may be introduced once and cannot change later.");
+  }
+}
+
+/** The exact TC-3522 renewed session end root admission is introduced once and immutable. */
+export function validateTc3522LeaseAskRootTransition(base?: LogoutRatchet, current?: LogoutRatchet): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc3522LeaseAskRoot) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The TC-3522 root admission may be introduced once and cannot change later.");
   }
 }
 

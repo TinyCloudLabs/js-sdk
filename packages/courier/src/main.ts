@@ -18,6 +18,7 @@ import { courierVersion } from './version.js';
 import { cmdStart } from './guided.js';
 import { cmdStatus } from './status.js';
 import { cmdInvite, cmdJoin } from './invitation.js';
+import { COURIER_DEFAULT_LEASE_SECONDS } from './keys.js';
 
 function usage(): string {
   const name = programName();
@@ -31,11 +32,14 @@ Setup & pairing (humans run these):
   join <invitation-link> --consent [--wait 300]
                                    Join and activate the link's intended session; never create a substitute.
   init [--request | --wait [--timeout 60s] | --grant-file f|- | --paste | --resume] [--host url]
-       [--openkey-host url] [--openkey-api-host url] [--label s] [--handle h] [--expiry 30d] [--rotate-key]
+       [--openkey-host url] [--openkey-api-host url] [--label s] [--handle h] [--expiry 30d] [--renew ${COURIER_DEFAULT_LEASE_SECONDS / 86_400}d|off] [--rotate-key]
                                    Create/renew the agent key's restricted grant in OpenKey.
                                    --request prints {"openkeyUrl": …}, a short https://openkey.so/a/… link for the
                                    owner (send it to the owner only, privately), and exits. --wait then collects the
                                    approval (no code to paste): it polls, installs the grant, and acknowledges it.
+                                   With --request or --wait the link also asks the owner to let the grant renew
+                                   itself for up to the --renew duration after approval (default ${COURIER_DEFAULT_LEASE_SECONDS / 86_400}d, at most 365d,
+                                   longer than --expiry). The owner can approve it without renewal. --renew off asks for none.
                                    --timeout (default 60s, at most 9m) ends the wait with exit 8 and, on stdout,
                                    {"pending":{"step":1,"of":1,"approvalUrl","expiresAt"}}.
                                    Exit 8 is not a failure: the approval is still pending. Send the owner the

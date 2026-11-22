@@ -29,7 +29,7 @@ test("TC-2490 records the exact canonical CI root bytes of #1060 within the 700-
     const delta = row.root.delta[format];
     expect(row.root.ceiling[format] - predecessor.root.ceiling[format]).toBe(delta);
     expect(delta).toBeLessThanOrEqual(700);
-    expect(rootCeilingFor({ ...ledger, tc3661ShareLinkHostRoot: undefined, tc3443GenericManifestRoot: undefined }, format)).toEqual({ row: "tc2490OneApprovalRoot", ceiling: row.root.ceiling[format] });
+    expect(rootCeilingFor({ ...ledger, tc3661ShareLinkHostRoot: undefined, tc3522LeaseAskRoot: undefined, tc3443GenericManifestRoot: undefined }, format)).toEqual({ row: "tc2490OneApprovalRoot", ceiling: row.root.ceiling[format] });
   }
 
   expect(ancestryPins(ledger, false)).toContainEqual({

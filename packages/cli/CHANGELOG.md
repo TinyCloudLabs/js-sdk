@@ -1,5 +1,28 @@
 # @tinycloud/cli
 
+## 1.9.0-beta.2
+
+### Patch Changes
+
+- 1956204: `tinycloud auth login --device` refuses a request or manifest that touches the secrets space, before sending anything, with one line that points to `tinycloud auth login --paste`.
+
+  Details: TC-3480
+
+- 473d752: `tinycloud secrets network grant` says it lets the recipient read every secret in the network, including secrets added later, and prints the recipient and the end of the grant once it is made. Its JSON output carries `"scope":"whole-network"`.
+
+  Details: TC-2307
+
+- 628be3c: User-facing text in the CLI and SDK names the product TinyCloud One. `AccountSetupRequiredError` sends people to https://tinycloud.one/ to finish setting up their account. The CLI README's feed section is titled "TinyCloud One feed" (anchor `#tinycloud-one-feed`), and `tinycloud feed --help` and the CLI auth skill say TinyCloud One.
+
+  Upgrading: `AccountSetupRequiredError.setupUrl` is "https://tinycloud.one/". Code that compared it with "https://home.tinycloud.xyz/" needs this value.
+
+  Details: TC-3659
+
+- Updated dependencies [628be3c]
+  - @tinycloud/sdk-core@3.14.0-beta.3
+  - @tinycloud/node-sdk@3.14.0-beta.3
+  - @tinycloud/operations@0.9.2-beta.2
+
 ## 1.9.0-beta.1
 
 ### Patch Changes
