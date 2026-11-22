@@ -1,0 +1,64 @@
+import { expect, test } from "bun:test";
+import ledger from "./replica-size-ledger.json";
+import {
+  approvedTc3522LeaseAskRoot,
+  ancestryPins,
+  rootCeilingFor,
+  validateLedger,
+  validateTc3522LeaseAskRootTransition,
+} from "./replica-size-policy";
+
+test("TC-3522 records the exact canonical CI root bytes of #1123 within the ruled +100/+100 cap", () => {
+  validateLedger(ledger);
+  const row = ledger.tc3522LeaseAskRoot;
+  const predecessor = ledger.tc2490OneApprovalRoot;
+  expect(row).toEqual(approvedTc3522LeaseAskRoot);
+  expect(row.base).toBe("cb3edeab4f66ae2fc7f84243c7b8fdc3a15fc812");
+  expect(row.canonicalCI).toEqual({
+    run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44973713620",
+    jobs: [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44973713620/job/137058820860",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44973713620/job/137058820836",
+    ],
+  });
+  expect(row.sourceCommits).toEqual(["ee2f5f160c03f93c07ffaeb3f047ccc65c1c106a"]);
+  expect(row.root.ceiling).toEqual({ "index.mjs": 1529937, "index.cjs": 1462930 });
+  expect(row.root.delta).toEqual({ "index.mjs": 79, "index.cjs": 81 });
+
+  const cap = { "index.mjs": 100, "index.cjs": 100 } as const;
+  for (const format of ["index.mjs", "index.cjs"] as const) {
+    const delta = row.root.delta[format];
+    expect(row.root.ceiling[format] - predecessor.root.ceiling[format]).toBe(delta);
+    expect(delta).toBeLessThanOrEqual(cap[format]);
+    expect(rootCeilingFor(ledger, format)).toEqual({ row: "tc3522LeaseAskRoot", ceiling: row.root.ceiling[format] });
+  }
+
+  expect(ancestryPins(ledger, false)).toContainEqual({
+    row: "tc3522LeaseAskRoot",
+    pin: row.sourceCommits.at(-1),
+  });
+  expect(Object.keys(row).sort()).toEqual([
+    "base", "canonicalCI", "label", "reason", "root", "ruling", "sourceCommits",
+  ]);
+});
+
+test("TC-3522 refuses mutation, removal, or a missing TC-2490 predecessor", () => {
+  const row = ledger.tc3522LeaseAskRoot;
+  validateTc3522LeaseAskRootTransition(undefined, row);
+  validateTc3522LeaseAskRootTransition(row, structuredClone(row));
+
+  for (const mutate of [
+    (value: typeof row) => { value.root.ceiling["index.cjs"]++; },
+    (value: typeof row) => { value.root.delta["index.mjs"]++; },
+    (value: typeof row) => { value.sourceCommits[0] = "0".repeat(40); },
+    (value: typeof row) => { value.canonicalCI.jobs[0] = "unreviewed"; },
+  ]) {
+    const changed = structuredClone(row);
+    mutate(changed);
+    expect(() => validateTc3522LeaseAskRootTransition(undefined, changed)).toThrow("TC-3522");
+    expect(() => validateLedger({ ...ledger, tc3522LeaseAskRoot: changed })).toThrow("TC-3522");
+  }
+
+  expect(() => validateTc3522LeaseAskRootTransition(row, undefined)).toThrow("TC-3522");
+  expect(() => validateLedger({ ...ledger, tc2490OneApprovalRoot: undefined })).toThrow("TC-3522");
+});
