@@ -30,7 +30,7 @@ test("TC-3688 records the exact canonical CI root bytes of #1116 within the rule
     const delta = row.root.delta[format];
     expect(row.root.ceiling[format] - predecessor.root.ceiling[format]).toBe(delta);
     expect(delta).toBeLessThanOrEqual(cap[format]);
-    expect(rootCeilingFor(ledger, format)).toEqual({ row: "tc3688AccountIndexGuardRoot", ceiling: row.root.ceiling[format] });
+    expect(rootCeilingFor({ ...ledger, tc3443SessionRetireRoot: undefined }, format)).toEqual({ row: "tc3688AccountIndexGuardRoot", ceiling: row.root.ceiling[format] });
   }
 
   expect(ancestryPins(ledger, false)).toContainEqual({
