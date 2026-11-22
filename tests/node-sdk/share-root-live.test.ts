@@ -19,7 +19,7 @@
 import { beforeAll, describe, expect, test } from "bun:test";
 import { x25519, ed25519 } from "@noble/curves/ed25519";
 import { sha256 } from "@noble/hashes/sha256";
-import { PrivateKeySigner, TinyCloudNode, type TinyCloudNodeConfig } from "@tinycloud/node-sdk";
+import { PrivateKeySigner, TinyCloudNode, ownerFullAccess, type TinyCloudNodeConfig } from "@tinycloud/node-sdk";
 import { signCompactUcanRootAuthorization } from "@tinycloud/sdk-core";
 import { base64Decode, base64Encode, canonicalHashHex, canonicalizeEncryptionJson, hexEncode, type InlineEncryptedEnvelope } from "@tinycloud/sdk-services";
 import { canonicalize, didKeyFromEd25519PublicKey, signCompactUcanAuthorization, toBase64Url } from "@tinycloud/share-envelope";
@@ -54,7 +54,7 @@ const mkNode = (extra: Partial<TinyCloudNodeConfig> = {}) => new TinyCloudNode({
   ...extra,
 });
 
-const owner = mkNode({ autoCreateSpace: true });
+const owner = mkNode({ autoCreateSpace: true, ...ownerFullAccess("applications") });
 let spaceId: string;
 let ownerDid: string;
 let nodeDid: string;

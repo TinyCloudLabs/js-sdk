@@ -19,6 +19,7 @@ import Footer from "../components/Footer";
 import Header from "../components/Header";
 import VaultModule from "../pages/VaultModule";
 import { getWalletProvider } from "../utils/getWalletProvider";
+import { exampleManifest } from "../manifest";
 
 const StorageModule = lazy(() => import("../pages/StorageModule"));
 const SpaceModule = lazy(() => import("../pages/SpaceModule"));
@@ -44,7 +45,7 @@ type SignStrategyOption = "wallet-popup" | "callback" | "auto-approve";
 
 function Home() {
   const location = useLocation();
-  const { address, isConnected, connector } = useAccount();
+  const { address, chainId: walletChainId, isConnected, connector } = useAccount();
   const { setOpen } = useModal();
 
   const [loading, setLoading] = useState(false);
@@ -200,7 +201,7 @@ function Home() {
   };
 
   const signInWithWallet = async () => {
-    if (!connector || tcw) return;
+    if (!connector || !address || !walletChainId || tcw) return;
 
     setLoading(true);
 
@@ -208,6 +209,7 @@ function Home() {
       const provider = await getWalletProvider(connector);
       const tcwConfig = getTinyCloudWebConfig({
         provider,
+        manifest: exampleManifest(address, walletChainId),
       });
 
       const tcwProvider = new TinyCloudWeb(tcwConfig);
@@ -262,7 +264,7 @@ function Home() {
    * This demonstrates the connectWallet() upgrade pattern.
    */
   const connectWalletAndSignIn = async () => {
-    if (!connector || !tcw) return;
+    if (!connector || !address || !walletChainId || !tcw) return;
 
     setLoading(true);
 
@@ -275,7 +277,8 @@ function Home() {
       console.log("  - Is Session Only:", tcw.isSessionOnly);
       console.log("  - Is Wallet Connected:", tcw.isWalletConnected);
 
-      // Now sign in with the connected wallet
+      // Now sign in with the connected wallet, declaring what the app uses
+      tcw.setManifest(exampleManifest(address, walletChainId));
       await tcw.signIn();
 
       console.log("Signed in successfully:");

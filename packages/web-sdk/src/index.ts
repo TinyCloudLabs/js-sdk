@@ -32,6 +32,8 @@ export type {
   SecretReadInput,
   SecretReadResult,
   BootstrapWarning,
+  NodeSignOutFailure,
+  NodeSignOutStatus,
 } from "@tinycloud/node-sdk";
 export type {
   UnifiedOwnerRootInput,

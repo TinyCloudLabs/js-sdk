@@ -5,6 +5,7 @@ import { TinyCloudWeb } from '@tinycloud/web-sdk';
 import { OpenKey, OpenKeyProvider } from '@openkey/sdk';
 import { providers } from 'ethers';
 import { Eye, Edit3, Save, Check, Columns, Code } from 'lucide-react';
+import { SHARED_VIEWER_MANIFEST } from '../manifest';
 
 const MarkdownPreview = lazy(() => import('../components/editor/MarkdownPreview').then(m => ({ default: m.MarkdownPreview })));
 const MarkdownEditor = lazy(() => import('../components/editor/MarkdownEditor').then(m => ({ default: m.MarkdownEditor })));
@@ -140,6 +141,7 @@ const Shared = () => {
 
       const tcwInstance = new TinyCloudWeb({
         provider: ethersProvider,
+        manifest: SHARED_VIEWER_MANIFEST,
         siweConfig: {
           statement: 'Sign in to the TinyCloud OpenKey example app.',
           domain: window.location.hostname,

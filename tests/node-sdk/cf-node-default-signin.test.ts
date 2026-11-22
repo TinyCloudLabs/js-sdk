@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { TinyCloudNode } from "@tinycloud/node-sdk";
+import { TinyCloudNode, ownerFullAccess } from "@tinycloud/node-sdk";
 
 import { checkServerHealth, SERVER_URL, TEST_KEY } from "./setup";
 
@@ -96,6 +96,7 @@ describe("CF-Node Default (No-Manifest) Sign-In Acceptance", () => {
       privateKey: TEST_KEY,
       autoBootstrapAccount: false,
       autoCreateSpace: true,
+      ...ownerFullAccess(),
     });
 
     await alice.signIn();

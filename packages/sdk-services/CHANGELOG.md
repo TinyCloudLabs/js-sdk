@@ -1,5 +1,12 @@
 # @tinycloudlabs/sdk-services
 
+## 3.14.0-beta.5
+
+### Patch Changes
+
+- Updated dependencies [2cb453f]
+  - @tinycloud/bootstrap@2.10.0-beta.0
+
 ## 3.13.0
 
 ### Minor Changes

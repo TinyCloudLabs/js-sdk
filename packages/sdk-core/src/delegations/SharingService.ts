@@ -382,6 +382,13 @@ export interface DelegatedShareAccess {
 export interface SharingServiceConfig {
   createPlacement?: (share: EncodedShareData) => Promise<SharePlacement>;
   receivedPlacementTransport?: (share: EncodedShareData) => Promise<ResourceTransport>;
+  /**
+   * Transport for a v1 share that routes by the owner's registry record and
+   * uses the link's own host only when the owner has no record. Return
+   * undefined for a host that is not a known node. Consulted only when the
+   * share key signs the invocation.
+   */
+  receivedHostHintTransport?: (host: string) => ResourceTransport | undefined;
   /** TinyCloud host URLs */
   hosts: string[];
   /**
@@ -594,6 +601,7 @@ export class SharingService implements ISharingService {
   private readonly resourceTransport?: ResourceTransport;
   private readonly createPlacement?: SharingServiceConfig["createPlacement"];
   private readonly receivedPlacementTransport?: SharingServiceConfig["receivedPlacementTransport"];
+  private readonly receivedHostHintTransport?: SharingServiceConfig["receivedHostHintTransport"];
 
   /**
    * Creates a new SharingService instance.
@@ -619,6 +627,7 @@ export class SharingService implements ISharingService {
     this.resourceTransport = config.resourceTransport;
     this.createPlacement = config.createPlacement;
     this.receivedPlacementTransport = config.receivedPlacementTransport;
+    this.receivedHostHintTransport = config.receivedHostHintTransport;
   }
 
   /**
@@ -1342,6 +1351,8 @@ export class SharingService implements ISharingService {
       if (!this.receivedPlacementTransport || !shareData.placement) throw new Error("Unsupported share placement envelope; update the receiver SDK");
       await this.verifiedReceivedShareResource(shareData);
       resourceTransport = await this.receivedPlacementTransport(shareData);
+    } else if (!(autoSubdelegate && useSessionKey && this.session) && this.receivedHostHintTransport) {
+      resourceTransport = this.receivedHostHintTransport(shareData.host) ?? resourceTransport;
     }
 
     // Step 2: Create KeyInfo and ingest into registry

@@ -1,6 +1,6 @@
 import { beforeAll, describe, expect, test } from "bun:test";
 import { Wallet } from "ethers";
-import { inspectShareToken, PrivateKeySigner, TinyCloudNode, type TinyCloudNodeConfig } from "@tinycloud/node-sdk";
+import { inspectShareToken, ownerFullAccess, PrivateKeySigner, TinyCloudNode, type TinyCloudNodeConfig } from "@tinycloud/node-sdk";
 import { checkServerHealth, SERVER_URL } from "./setup";
 
 /**
@@ -54,7 +54,7 @@ describe("native recording share (live)", () => {
   beforeAll(checkServerHealth);
 
   test("the owner shares transcript and audio for a year with one approval", async () => {
-    owner = new TinyCloudNode({ ...config, signer: ownerSigner, autoCreateSpace: true });
+    owner = new TinyCloudNode({ ...config, signer: ownerSigner, autoCreateSpace: true, ...ownerFullAccess() });
     await owner.signIn();
     for (const [key, value] of Object.entries(FILES)) expect((await owner.kv.put(key, value)).ok).toBe(true);
 

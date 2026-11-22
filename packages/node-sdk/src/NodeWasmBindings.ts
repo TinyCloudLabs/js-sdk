@@ -17,6 +17,7 @@ import {
   validatePersistedSession,
   validatePersistedSessionForRenewal,
   validateSessionGrant,
+  validateSessionRoot,
   ensureEip55,
   makeSpaceId,
   createDelegation,
@@ -72,6 +73,9 @@ export class NodeWasmBindings implements IWasmBindings {
   }
   validateSessionGrant(proof: PersistedSessionProof) {
     return validateSessionGrant(proof);
+  }
+  validateSessionRoot(proof: PersistedSessionProof) {
+    return validateSessionRoot(proof);
   }
   ensureEip55 = ensureEip55;
   makeSpaceId = makeSpaceId;
