@@ -1207,7 +1207,7 @@ function secretMigratePermissions(node: TinyCloudNode, space: string | undefined
   if (!networkId.endsWith(":default")) {
     throw new CLIError(
       "USAGE_ERROR",
-      "Only secrets on the default encryption network have keys of their own; nothing here can be migrated.",
+      "Only secrets on the default encryption network can have their own key, so there's nothing to migrate here.",
       ExitCode.USAGE_ERROR,
     );
   }
@@ -1964,7 +1964,7 @@ export function registerSecretsCommand(
           if (!canRequestOwnerPermissions(profile)) {
             throw new CLIError(
               "PERMISSION_DENIED",
-              `Only the owner can migrate secrets; profile "${ctx.profile}" is not an owner profile.`,
+              `Only the owner can migrate secrets, and profile "${ctx.profile}" isn't an owner profile. Run this from your owner profile.`,
               ExitCode.PERMISSION_DENIED,
             );
           }
@@ -1975,7 +1975,7 @@ export function registerSecretsCommand(
               node,
               requested: secretMigratePermissions(node, spaceUri),
               expiryOption: undefined,
-              reason: "Move your secrets in the older format onto each secret's own key.",
+              reason: "Give each of your older-format secrets its own key. This needs access to all your encrypted data, because only that access can read the older format.",
               anchorSpace: spaceUri ?? SECRETS_SPACE,
             }),
           );
