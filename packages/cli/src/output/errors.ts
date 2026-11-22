@@ -15,7 +15,7 @@ import {
 } from "@tinycloud/operations/secret-request";
 import { operationWarnings, outputError, outputJson, type ErrorOutputDetails } from "./formatter.js";
 import { safeBlock } from "./safe-text.js";
-import { authorizationVerdictOf, parseCapabilityResource, SERVICE_LONG_TO_SHORT, validatedCapabilityOf } from "@tinycloud/sdk-core";
+import { authorizationVerdictOf, NAMED_KEYS_UNSUPPORTED, NAMED_KEYS_UNSUPPORTED_MESSAGE, parseCapabilityResource, SERVICE_LONG_TO_SHORT, validatedCapabilityOf } from "@tinycloud/sdk-core";
 import { describeStorageRejection, storageRejection } from "./storage.js";
 import { drainWarnings, mergeWarnings } from "./warnings.js";
 import { routingFailure } from "@tinycloud/sdk-services";
@@ -89,6 +89,9 @@ export function cliErrorFromService(
   message = error.message,
 ): CLIError {
   if (error instanceof CLIError) return error;
+  if (error.code === NAMED_KEYS_UNSUPPORTED) {
+    return new CLIError(NAMED_KEYS_UNSUPPORTED, NAMED_KEYS_UNSUPPORTED_MESSAGE, ExitCode.NODE_ERROR);
+  }
   const nodeRetry = nodeRetryError(error);
   if (nodeRetry) return nodeRetry;
   const storageFull = storageFullError(error);

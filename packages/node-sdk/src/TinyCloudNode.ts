@@ -1576,6 +1576,8 @@ export class TinyCloudNode {
    */
   private _restoredTcSession?: TinyCloudSession;
   private _restoredNodeFeatures?: string[];
+  /** `/info` read by {@link namedKeysSupported} for a restored session, which has no features of its own. */
+  private _namedKeysProbe?: Promise<boolean | undefined>;
   private _activeServiceSession?: ServiceSession;
   /** The sign-out in progress; signIn and restoreSession wait for it. */
   private signOutInFlight?: Promise<void>;
@@ -1912,6 +1914,27 @@ export class TinyCloudNode {
   private get replicationNodeFeatures(): readonly string[] | undefined {
     if (this.auth) return this.auth.nodeFeaturesKnown ? this.auth.nodeFeatures : undefined;
     return this._restoredNodeFeatures;
+  }
+
+  /**
+   * Whether the node lists `encryption-named-keys-v1`. A secrets `put` seals to the secret's own key,
+   * so on a node without it the put is refused before anything is asked or written.
+   *
+   * A sign-in knows the answer. A restored session (the CLI's) does not, so its host's `/info` is read
+   * once, with no credentials. `undefined` when the node cannot be asked: the put then goes its own way.
+   */
+  async namedKeysSupported(): Promise<boolean | undefined> {
+    const known = this.replicationNodeFeatures;
+    if (known !== undefined) return known.includes("encryption-named-keys-v1");
+    const host = this.config.host;
+    if (host === undefined) return undefined;
+    const probe = this._namedKeysProbe ??= checkNodeInfo(host, this.wasmBindings.protocolVersion()).then(
+      (info) => info.features.includes("encryption-named-keys-v1"),
+      () => undefined,
+    );
+    const answer = await probe;
+    if (answer === undefined && this._namedKeysProbe === probe) this._namedKeysProbe = undefined;
+    return answer;
   }
 
   /** SIWE domain — uses config override or defaults to app.tinycloud.xyz */
@@ -3216,6 +3239,7 @@ export class TinyCloudNode {
     this.config.host = this.explicitHost ?? DEFAULT_HOST;
     this._chainId = 1;
     this._restoredNodeFeatures = undefined;
+    this._namedKeysProbe = undefined;
     this._serviceContext = undefined;
     this._kv = undefined;
     this._sql = undefined;
@@ -5274,6 +5298,7 @@ export class TinyCloudNode {
     this.hostedOwnedSpaceIds.clear();
     this.cancelOwnedSpaceHosts();
     this._restoredNodeFeatures = undefined;
+    this._namedKeysProbe = undefined;
     if (this.auth) {
       this.auth.installRestoredSession(stagedManager, stagedTcSession, [stagedHost]);
       this._restoredTcSession = undefined;
@@ -7476,6 +7501,7 @@ export class TinyCloudNode {
         // `signer` is null on a session-only node, never undefined.
         canEscalate: () => this.signer != null && this.tc !== undefined,
         getEncryptionNetworkId: () => this.getEncryptionNetworkIdForSpace(resolvedSpace),
+        namedKeysSupported: () => this.namedKeysSupported(),
         resolveSpace: (space) => space.startsWith("tinycloud:") ? space : this.ownedSpaceId(space),
         getUnlockSigner: () => this.signer ?? undefined,
       });
@@ -8688,7 +8714,9 @@ export class TinyCloudNode {
       return { refused: "SESSION_EXPIRING", expiredAt: sessionExpiry };
     }
     const expandedEntries = this.expandPermissionEntries(entries);
-    const expiryMs = resolveExpiryMs(options?.expiry);
+    const expiryMs = expandedEntries.some(isSecretKeyEntry)
+      ? secretKeyGrantExpiryMs(options?.expiry)
+      : resolveExpiryMs(options?.expiry);
     const expirationTime = new Date(nowMs + expiryMs);
     const effectiveExpiration =
       sessionExpiry !== undefined && sessionExpiry < expirationTime

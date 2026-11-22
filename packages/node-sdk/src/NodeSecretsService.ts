@@ -1,5 +1,6 @@
 import {
   ErrorCodes,
+  namedKeysUnsupportedResult,
   resolveSecretListPrefix,
   resolveSecretPath,
   expandPermissionEntries,
@@ -127,6 +128,8 @@ export interface NodeSecretsServiceConfig {
    */
   uncoveredEntries?: (permissions: PermissionEntry[]) => PermissionEntry[];
   getEncryptionNetworkId?: () => string;
+  /** `false` when the node lacks named keys: `put` is then refused up front. `undefined`: not known. */
+  namedKeysSupported?: () => boolean | undefined | Promise<boolean | undefined>;
   resolveSpace?: (space: string) => string;
   getUnlockSigner?: () => unknown;
 }
@@ -198,6 +201,7 @@ export class NodeSecretsService implements ISecretsService {
     value: string,
     options?: SecretPutOptions,
   ): ReturnType<ISecretsService["put"]> {
+    if ((await this.config.namedKeysSupported?.()) === false) return namedKeysUnsupportedResult();
     const permission = await this.ensurePermission(name, options, "put");
     if (!permission.ok) return permission;
     return options === undefined

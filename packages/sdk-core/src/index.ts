@@ -604,6 +604,9 @@ export {
   type VaultError,
   // Secrets Service
   SecretsService,
+  NAMED_KEYS_UNSUPPORTED,
+  NAMED_KEYS_UNSUPPORTED_MESSAGE,
+  namedKeysUnsupportedResult,
   DEFAULT_SECRET_TYPE,
   SECRET_TYPES,
   isSecretType,

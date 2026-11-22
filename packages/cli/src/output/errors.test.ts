@@ -633,3 +633,15 @@ describe("node retry signals (TC-1413)", () => {
     expect(wrapError(new CLIError("NETWORK_ERROR", "fetch failed", 6))).toMatchObject({ code: "NETWORK_ERROR", exitCode: 6 });
   });
 });
+
+describe("cliErrorFromService: a secrets put on a node without per-secret keys", () => {
+  test("is its own code, a node-side exit code, with the service's words", () => {
+    const refused = cliErrorFromService({
+      code: "NAMED_KEYS_UNSUPPORTED",
+      message: "ignored: the CLI prints the shared text",
+    });
+    expect(refused).toMatchObject({ code: "NAMED_KEYS_UNSUPPORTED", exitCode: 7 });
+    expect(refused.message).toContain("Nothing was saved.");
+    expect(refused.message).toContain("whoever runs the node needs to upgrade it");
+  });
+});
