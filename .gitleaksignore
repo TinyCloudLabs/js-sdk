@@ -9,8 +9,9 @@
 # lists each value group, where it is and why it is safe.
 #
 # Format: <commit>:<file>:<rule>:<line>, one per line. Add a line only after a
-# security review shows the value is not a live secret. A live secret is
-# rotated and removed, never baselined.
+# security review shows the value is not a live secret, in a baseline-only PR:
+# PR scans read this file from the base commit, so a PR cannot exempt its own
+# finding. A live secret is rotated and removed, never baselined.
 01632e98873662b812f7920a72e78ac57984bdac:packages/sdk-core/test-fixtures/opencredentials-v1/manifest.json:generic-api-key:10
 01632e98873662b812f7920a72e78ac57984bdac:tests/browser/test-page.html:generic-api-key:12
 040603a85126ac45d710242e436ca5c4b2ff95ae:packages/sdk-core/test-fixtures/policy-engine-wire/resolve-happy-native.json:generic-api-key:12
