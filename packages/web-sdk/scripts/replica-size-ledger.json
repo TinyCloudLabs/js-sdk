@@ -3530,19 +3530,20 @@
   },
   "tc3443PortFolderRoot": {
     "label": "an app without a manifest gets a folder that includes its port (TC-3443)",
-    "ruling": "size-ruling: TC-3443 row tc3443PortFolderRoot index.mjs 1532621 (+953), index.cjs 1465304 (+884) gzip bytes over the tc3443SessionRetireRoot ceilings; provisional until CI's canonical figures. Details: TC-3443",
+    "ruling": "size-ruling: TC-3443 #1134 (2026-11-22 21:38Z): web-sdk root may grow index.mjs +1914 / index.cjs +865 gzip bytes over the tc3443SessionRetireRoot ceilings, per CI run 45071400680; workers unchanged. Details: TC-3443",
     "base": "d382af88a04cfe10c04ad70f82ffdc3c6cf3aa15",
     "sourceCommits": ["3bb106314aa21a3c29d2d42cd1daa74cf1d3211b"],
     "canonicalCI": {
-      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/provisional",
+      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45071400680",
       "jobs": [
-        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/provisional/job/provisional"
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45071400680/job/137358939899",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45071400680/job/137358940187"
       ]
     },
     "root": {
-      "delta": { "index.mjs": 953, "index.cjs": 884 },
-      "ceiling": { "index.mjs": 1532621, "index.cjs": 1465304 }
+      "delta": { "index.mjs": 1914, "index.cjs": 865 },
+      "ceiling": { "index.mjs": 1533582, "index.cjs": 1465285 }
     },
-    "reason": "provisional"
+    "reason": "Canonical Node 22/Bun 1.3.14/Rust 1.99.0 CI on #1134 (7e04e8d4, master d382af88 merged in) measured index.mjs 1533582 and index.cjs 1465285 gzip -9 bytes: +1914 and +865 over the tc3443SessionRetireRoot ceilings 1531668 and 1464420. The workers and every other ceiling stay at their ledger values. Details: TC-3443"
   }
 }

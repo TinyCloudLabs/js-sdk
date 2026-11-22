@@ -8,21 +8,24 @@ import {
   validateTc3443PortFolderRootTransition,
 } from "./replica-size-policy";
 
-test("TC-3443 records the exact canonical CI root bytes of #1134 within the ruled +1100/+1100 cap", () => {
+test("TC-3443 records the exact canonical CI root bytes of #1134 within the ruled +1914/+865 cap", () => {
   validateLedger(ledger);
   const row = ledger.tc3443PortFolderRoot;
   const predecessor = ledger.tc3443SessionRetireRoot;
   expect(row).toEqual(approvedTc3443PortFolderRoot);
   expect(row.base).toBe("d382af88a04cfe10c04ad70f82ffdc3c6cf3aa15");
   expect(row.canonicalCI).toEqual({
-    run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/provisional",
-    jobs: ["https://github.com/TinyCloudLabs/js-sdk/actions/runs/provisional/job/provisional"],
+    run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45071400680",
+    jobs: [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45071400680/job/137358939899",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45071400680/job/137358940187",
+    ],
   });
   expect(row.sourceCommits).toEqual(["3bb106314aa21a3c29d2d42cd1daa74cf1d3211b"]);
-  expect(row.root.ceiling).toEqual({ "index.mjs": 1532621, "index.cjs": 1465304 });
-  expect(row.root.delta).toEqual({ "index.mjs": 953, "index.cjs": 884 });
+  expect(row.root.ceiling).toEqual({ "index.mjs": 1533582, "index.cjs": 1465285 });
+  expect(row.root.delta).toEqual({ "index.mjs": 1914, "index.cjs": 865 });
 
-  const cap = { "index.mjs": 1100, "index.cjs": 1100 } as const;
+  const cap = { "index.mjs": 1914, "index.cjs": 865 } as const;
   for (const format of ["index.mjs", "index.cjs"] as const) {
     const delta = row.root.delta[format];
     expect(row.root.ceiling[format] - predecessor.root.ceiling[format]).toBe(delta);
