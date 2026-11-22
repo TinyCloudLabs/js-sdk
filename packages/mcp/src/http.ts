@@ -444,7 +444,7 @@ function createHostedSurface(
             );
           }
           return unavailable
-            ? json({ error: "The approval service is unavailable. Try the link again shortly." }, 503)
+            ? json({ error: "The approval service is unavailable. Wait a minute, then open the link again." }, 503)
             : json({ error: "The approval link is invalid or expired." }, 400);
         }
       }
