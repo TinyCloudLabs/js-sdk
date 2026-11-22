@@ -10,6 +10,7 @@ export {
   type SessionRestoreStatus,
 } from "./modules/tcw";
 export type { TinyCloudUI, UiConfig, UiPosition } from "./ui";
+export type { RegistryPublishOutcome } from "./registry-publish";
 export {
   establishOpenKeySession,
   type EstablishOpenKeySessionOptions,

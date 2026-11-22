@@ -1,11 +1,12 @@
-// TC-3547: publish the owner's registry location record once, at the first
-// first-party sign-in where the owner's did:pkh is `unregistered`.
+// Publish the owner's registry location record from TinyCloud One or Home.
+//
+// Only those first-party origins may ask for the record's owner signature; every other
+// host gets `"needs-one"` and sends the person to TinyCloud One to finish setup.
 //
 // This module is dynamic-import()'d from `tcw.ts` so none of it lands in the
-// root web-sdk chunk (TC-858 ceiling). Everything the publish needs comes in
-// through `EnsureOwnerRegistryRecordOptions` from tcw.ts, which already owns
-// the registry URL and the caching stores; this module never reaches into
-// TinyCloudNode privates.
+// root web-sdk chunk. Everything the publish needs comes in through
+// `EnsureOwnerRegistryRecordOptions` from tcw.ts, which already owns the registry
+// URL and the caching stores; this module never reaches into TinyCloudNode privates.
 
 import type {
   LocationRecordSigner,
@@ -17,8 +18,6 @@ import type {
 } from "@tinycloud/sdk-core";
 import {
   DEFAULT_TINYCLOUD_LOCATION_REGISTRY_URL,
-  LocationRecordValidationError,
-  LocationRegistryHttpError,
   lookupOwnerRegistryVerdict,
 } from "@tinycloud/sdk-core";
 // publishLocationRecordV2 lives on the registry-publication subpath only; sdk-core's
@@ -26,30 +25,43 @@ import {
 import { publishLocationRecordV2 } from "@tinycloud/sdk-core/registry-publication";
 
 import type { TinyCloudNode } from "@tinycloud/node-sdk";
-import { readRegistryPublishDismissed, writeRegistryPublishDismissed, type DismissedFlagStorage } from "./registry-publish-dismissed";
 
 /**
- * Payload preview given to the host app's consent callback. The host renders it in plain
- * words (owner DID, node DID + origin, primary space URI). The list of fields matches
- * exactly what `canonicalLocationPayloadV2` publishes, so the consent screen never says
- * "we'll publish X" and then publishes Y.
+ * Origins that may publish the owner's record. OpenKey refuses a registry-record
+ * signature for any other origin, so the SDK does not ask.
  */
-export interface RegistryPublishPreview {
-  readonly subject: string;
-  readonly nodeDid: string;
-  readonly nodeOrigin: string;
-  readonly space: string;
+export const REGISTRY_PUBLISH_ORIGINS: readonly string[] = [
+  "https://tinycloud.one",
+  "https://app.tinycloud.one",
+  "https://home.tinycloud.xyz",
+];
+
+/** Error code OpenKey's API returns when it refuses to sign a registry record for the calling origin. */
+const REGISTRY_SIGN_REFUSED_CODE = "registry_record_sign_refused";
+/** Message OpenKey's popup and embed return for the same refusal. */
+const REGISTRY_SIGN_REFUSED_MESSAGE = "REGISTRY_RECORD_SIGN_REFUSED";
+
+/** True when `error` (or anything in its `cause` chain) is OpenKey's registry-record sign refusal. */
+export function isRegistryRecordSignRefusal(error: unknown): boolean {
+  let current: unknown = error;
+  for (let depth = 0; depth < 5 && current !== null && typeof current === "object"; depth++) {
+    const { code, message, cause } = current as { code?: unknown; message?: unknown; cause?: unknown };
+    if (code === REGISTRY_SIGN_REFUSED_CODE) return true;
+    if (typeof message === "string" && message.includes(REGISTRY_SIGN_REFUSED_MESSAGE)) return true;
+    current = cause;
+  }
+  return false;
 }
 
 /**
  * Outcome of the publish attempt. Returned from `tcw.ensureOwnerRegistryRecord` so the
- * host can react (e.g. render a retry banner when it's `"declined"` or `"unavailable"`).
+ * host can react.
  */
 export type RegistryPublishOutcome =
   | "published"       // Sent to registry, verified, cached.
-  | "already-current" // Verdict was `registered`; no action.
-  | "declined"        // onConsent returned false, or dismissed previously.
-  | "unavailable";    // Verdict unavailable, signer missing, or publish failed. Sign-in continues.
+  | "already-current" // The registry already has the owner's record; nothing to do.
+  | "needs-one"       // The owner has no record and this host cannot publish one; send them to TinyCloud One (`AccountSetupRequiredError.setupUrl`).
+  | "unavailable";    // Registry unreachable, signer missing, or publish failed.
 
 /** A signer that produces an EIP-191 signature over a canonical location-record message for a specific owner `did:pkh`. */
 export interface OwnerMessageSigner {
@@ -61,7 +73,9 @@ export interface EnsureOwnerRegistryRecordOptions {
   node: TinyCloudNode;
   /** Owner's did:pkh, taken from `node.did` in tcw.ts (only computed for wallet / OpenKey owners). */
   subject: string;
-  /** Registry endpoint. Defaults to `DEFAULT_TINYCLOUD_LOCATION_REGISTRY_URL` from sdk-core when undefined; `null` from host config means the registry is explicitly disabled and the publish is skipped. */
+  /** The page's origin. Only `REGISTRY_PUBLISH_ORIGINS` may publish. */
+  origin: string | undefined;
+  /** Registry endpoint. Defaults to `DEFAULT_TINYCLOUD_LOCATION_REGISTRY_URL` when undefined; `null` from host config means the registry is explicitly disabled and the publish is skipped. */
   registryUrl?: string | null;
   /** Optional: SDK-side registry stores, so publication uses the same sequences / cache as everything else. */
   registryChainId?: number;
@@ -70,75 +84,42 @@ export interface EnsureOwnerRegistryRecordOptions {
   registryVerdictCache?: RegistryVerdictCache;
   /** Resolves the owner signer. Returning `undefined` means we have no way to sign (skip). */
   resolveSigner: () => Promise<OwnerMessageSigner | undefined>;
-  /** Host-supplied plain-words consent prompt. Returning false (or throwing) aborts without publishing. */
-  onConsent?: (preview: RegistryPublishPreview) => Promise<boolean>;
-  /** Host-supplied error hook. Called for every failure before we map the outcome to `"unavailable"`. Never throws. */
+  /** Host-supplied error hook. Called for every failure before we map the outcome. Never throws. */
   onError?: (error: unknown) => void;
   /**
    * Called after every await the helper issues. Throws when the signed-in session has
    * changed under the helper (sign-out, account switch). Fail-closed: the helper catches
    * the throw, reports via `onError`, and returns `"unavailable"` without writing anything,
-   * so a stale consent tap after a sign-out never reaches the registry or the new account's
-   * KV. See TC-3547 F2 (Bobbie 13:52:41Z).
+   * so a stale call after a sign-out never reaches the registry.
    */
   assertCurrent?: () => void;
   /** Overridable for tests. */
   now?: () => Date;
   /** Overridable for tests; defaults to the globalThis fetch used elsewhere in the SDK. */
   fetch?: typeof fetch;
-  /**
-   * Overridable for tests; defaults to `globalThis.localStorage`. SSR / private-mode /
-   * cross-origin denial automatically fall through to "no storage" → fail-open ("not
-   * dismissed"), per Naomi 14:20:13Z: localStorage keyed by `did:pkh`, per-device.
-   */
-  dismissedStorage?: DismissedFlagStorage;
-  /**
-   * Owner-started retry (TC-3547 Soren 13:26:53Z, Bobbie 13:27:14Z, Naomi 13:27:03Z):
-   * when the host observes the `finish-setup=registry` intent on the URL and the owner
-   * is signed in on a first-party page, call with this `true` to bypass the dismissed
-   * flag. The intent is a fixed token the host matches and strips (`replaceState`);
-   * NOTHING from the URL feeds the record. The record's node, origin, DID and contents
-   * still come only from the SDK's verified active node (Bobbie req. 1). The consent
-   * callback still runs; the verdict is still checked; `unregistered` is still the
-   * only publish path; overwrites are still refused (Bobbie req. 2).
-   */
-  ignoreDismissed?: boolean;
 }
 
 /**
- * Called from tcw.ts after `signIn()` succeeds for a `did:pkh` owner. Guards are:
+ * Called by `tcw.ensureOwnerRegistryRecord` for a `did:pkh` owner. Guards:
  *
- * 1. The caller (`tcw.ts`) already checked `bootstrapSignInPolicy().autoBootstrapAccount`.
- *    First-party only; third-party sign-ins never enter this path.
- * 2. We look up the registry verdict here, not above, so the dismissed-check short-circuits
- *    an owner who already said "Not now" before we ask the registry anything.
- * 3. We publish via `publishLocationRecordV2` (owner-signed under `did:pkh`). The record's
- *    node identity comes only from `node.activeNodeIdentity()` — never from caller input,
- *    which is Bobbie's req. 1 (a signed record pointing at the wrong node is the real
- *    attacker gain).
- * 4. We NEVER overwrite or merge into an existing record. The verdict is checked once
- *    up front; `publishLocationRecordV2`'s own `onPrepared` fence is used to refuse the
- *    publish if the final pre-sign re-read now sees a record (TC-3547 F1, Bobbie 13:52:41Z).
- *    An `offline` verdict is refused: a cold registry cannot prove the owner is actually
- *    absent, so publishing on it risks an unintended merge after the registry comes back.
- * 5. Sign-out / account switch is caught by `assertCurrent` after every await, so a stale
- *    tap after sign-out never writes to the new account's KV nor publishes with the old
- *    account's signer (TC-3547 F2).
- * 6. We swallow every error and funnel through `onError`. Sign-in never fails because of this.
+ * 1. The registry verdict is read first. Anything but `unregistered` returns
+ *    `"already-current"`, and an `offline` verdict returns `"unavailable"` because a cold
+ *    registry cannot prove the owner is absent.
+ * 2. An unregistered owner on an origin outside `REGISTRY_PUBLISH_ORIGINS` returns
+ *    `"needs-one"` before anything is signed.
+ * 3. The record's node identity comes only from `node.activeNodeIdentity()`, never from
+ *    caller input: a signed record pointing at the wrong node is the real attacker gain.
+ * 4. An existing record is never overwritten or merged. `publishLocationRecordV2`'s
+ *    pre-sign re-read refuses the publish if a record has appeared since the verdict.
+ * 5. Sign-out or account switch is caught by `assertCurrent` after every await.
+ * 6. OpenKey's registry-record sign refusal maps to `"needs-one"`. Every other error is
+ *    swallowed and funnelled through `onError`; this never throws.
  */
 export async function ensureOwnerRegistryRecord(options: EnsureOwnerRegistryRecordOptions): Promise<RegistryPublishOutcome> {
-  const { node, subject, onConsent, onError, resolveSigner, assertCurrent } = options;
+  const { node, subject, onError, resolveSigner, assertCurrent } = options;
   const registryUrl = options.registryUrl === undefined ? DEFAULT_TINYCLOUD_LOCATION_REGISTRY_URL : options.registryUrl;
   if (registryUrl === null) return "unavailable";
   try {
-    // Was the publish declined before? The dismissed flag lives in the owner's own
-    // account-registry KV, so both home.tinycloud.xyz and tinycloud.one read the same bit.
-    // Owner-started retries (ignoreDismissed) skip this check; all other guards hold.
-    if (!options.ignoreDismissed && readRegistryPublishDismissed(subject, options.dismissedStorage)) return "declined";
-    assertCurrent?.();
-
-    // Registry verdict decides whether to prompt at all. This is the same lookup NodeUserAuthorization
-    // does during third-party sign-in; here we use its result to decide whether to publish.
     const verdict = await lookupOwnerRegistryVerdict(subject, {
       registryUrl,
       ...(options.registryChainId !== undefined ? { registryChainId: options.registryChainId } : {}),
@@ -154,45 +135,13 @@ export async function ensureOwnerRegistryRecord(options: EnsureOwnerRegistryReco
     assertCurrent?.();
     if (!verdict) return "unavailable";
     if (verdict.status !== "unregistered") return "already-current";
-    // TC-3547 F1: an `offline` verdict is "unregistered + couldn't reach the registry".
-    // It cannot prove absence, so publishing on it risks an unintended merge after the
-    // registry comes back online. Fail closed; the next sign-in retries from a fresh
-    // verdict.
     if ((verdict as { offline?: boolean }).offline === true) return "unavailable";
+    if (!options.origin || !REGISTRY_PUBLISH_ORIGINS.includes(options.origin)) return "needs-one";
 
     const activeNode = await node.activeNodeIdentity();
     assertCurrent?.();
     const space = node.spaceId;
     if (typeof space !== "string" || !space.startsWith("tinycloud:")) return "unavailable";
-
-    const preview: RegistryPublishPreview = {
-      subject,
-      nodeDid: activeNode.nodeDid,
-      nodeOrigin: activeNode.origin,
-      space,
-    };
-
-    // No onConsent, no publish. The host that wants the publish must render consent
-    // itself — Bobbie req. 1 (defence against silent writes).
-    if (!onConsent) return "declined";
-    let approved: boolean;
-    try {
-      approved = await onConsent(preview);
-    } catch (error) {
-      onError?.(error);
-      return "declined";
-    }
-    // Check after the consent await — the owner may have signed out while the modal was open.
-    // If they did, we must NOT write the dismissed flag (that would hit the new account's KV)
-    // and we must NOT proceed to sign/publish on behalf of the old account.
-    try { assertCurrent?.(); } catch (error) { onError?.(error); return "unavailable"; }
-    if (!approved) {
-      // Bobbie 14:20:15Z: assertCurrent runs immediately before the flag write so a stale
-      // decline after sign-out never persists for the (possibly-new) current account.
-      try { assertCurrent?.(); } catch (error) { onError?.(error); return "unavailable"; }
-      writeRegistryPublishDismissed(subject, options.dismissedStorage);
-      return "declined";
-    }
 
     const signer = await resolveSigner().catch((error) => {
       onError?.(error);
@@ -200,11 +149,9 @@ export async function ensureOwnerRegistryRecord(options: EnsureOwnerRegistryReco
     });
     assertCurrent?.();
     if (!signer) return "unavailable";
-    // Signer subject comparison skipped on purpose: `tcw.ts` derives both `subject` and
-    // the signer's declared subject from the same `node.did`, so the check would be a
-    // no-op (Bobbie 13:52:41Z). The real guards are `signLocationRecordV2`'s type/subject
-    // enforcement and `verifyLocationRecordV2`'s EIP-191 recover against the record's
-    // subject — the registry rejects any mismatch.
+    // The signer's subject and `subject` both come from `node.did` in tcw.ts. The real
+    // guards are `signLocationRecordV2`'s type/subject enforcement and the registry's
+    // EIP-191 recover against the record's subject, which rejects any mismatch.
     const recordSigner: LocationRecordSigner = {
       type: "did:pkh",
       signMessage: (message) => signer.signMessage(message),
@@ -220,19 +167,12 @@ export async function ensureOwnerRegistryRecord(options: EnsureOwnerRegistryReco
           node: { did: activeNode.nodeDid, url: activeNode.origin },
           mode: "read-write",
         }],
-        // TC-3547 F1 + F2 tightening (Bobbie 14:00:27Z): check assertCurrent HERE, right
-        // before signLocationRecordV2's own PUT. This moves the last session-change check
-        // past publishLocationRecordV2's two registry reads and node-identity probe, so the
-        // only remaining window is the wallet / OpenKey signature prompt itself — which is
-        // owner-presence anyway.
+        // Authoritative no-overwrite guarantee: the live pre-sign read must still be empty.
+        // The session check sits here so the only remaining window is the signature prompt.
         onPrepared: async (_prepared, current) => {
           assertCurrent?.();
           return current === null;
         },
-        // (The up-front verdict check above may be minutes old by the time the modal is
-        // answered. publishLocationRecordV2 re-reads the registry just before signing and
-        // passes the live `current` to onPrepared; refusing anything but `current === null`
-        // is the authoritative no-overwrite guarantee.)
         ...(options.fetch ? { fetch: options.fetch } : {}),
         ...(options.now ? { now: options.now } : {}),
       });
@@ -240,8 +180,8 @@ export async function ensureOwnerRegistryRecord(options: EnsureOwnerRegistryReco
       options.registryVerdictCache?.invalidate(registryUrl, subject);
       return "published";
     } catch (error) {
+      if (isRegistryRecordSignRefusal(error)) return "needs-one";
       onError?.(error);
-      if (error instanceof LocationRecordValidationError || error instanceof LocationRegistryHttpError) return "unavailable";
       return "unavailable";
     }
   } catch (error) {

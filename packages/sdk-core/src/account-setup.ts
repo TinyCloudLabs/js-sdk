@@ -1,7 +1,6 @@
-/** Query-string intent appended to `AccountSetupRequiredError.setupUrl`. The first-party
- * host uses this to open the registry publish consent even after a previous decline,
- * closing the dead end where a dismissed banner + no Settings entry leaves an owner no way
- * to retry. See TC-3547. */
+/** Query-string intent appended to `AccountSetupRequiredError.setupUrl`. TinyCloud One and
+ * Home read it to open the finish-setup step that publishes the owner's registry record,
+ * the only place that record is signed. */
 export const FINISH_SETUP_REGISTRY_INTENT = "finish-setup=registry" as const;
 
 /** Where the person finishes setting up their account. TinyCloud One is the product name
@@ -11,8 +10,8 @@ const SETUP_URL = `https://tinycloud.one/?${FINISH_SETUP_REGISTRY_INTENT}` as co
 /** A third-party app cannot provision the owner's account as part of its grant. */
 export class AccountSetupRequiredError extends Error {
   readonly code = "ACCOUNT_SETUP_REQUIRED";
-  /** URL the owner is sent to; carries `finish-setup=registry` so the first-party host
-   *  opens the publish consent regardless of a previously-dismissed banner (TC-3547). */
+  /** URL the owner is sent to; carries `finish-setup=registry` so TinyCloud One or Home
+   *  opens its finish-setup step, which publishes the owner's registry record. */
   readonly setupUrl = SETUP_URL;
   /** Optional instruction copy the host app renders beside the setup link. Hosts that
    *  surface this error to the person (e.g. TinyChat) replace it with words from their

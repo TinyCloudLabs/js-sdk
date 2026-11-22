@@ -87,6 +87,7 @@ import {
   type IStorageService,
 } from "@tinycloud/sdk-core";
 import { routingFailure } from "@tinycloud/sdk-services";
+import type { RegistryPublishOutcome } from "../registry-publish";
 import { closeActiveModal, showPermissionRequestModal } from "../notifications/lazy-prompts";
 import { applyLegacyNotificationKeys } from "../notifications/legacy-config";
 import {
@@ -294,25 +295,9 @@ export interface Config extends ClientConfig {
   ui?: UiConfig | false;
 
   /**
-   * TC-3547: host-rendered consent for publishing the owner's registry location record
-   * at the first first-party sign-in. The SDK calls this with a plain-words preview of
-   * exactly what will be published (owner DID, node DID + origin, primary space URI);
-   * returning `true` triggers one owner signature (wallet `personal_sign` or OpenKey
-   * `signMessage`) and one PUT to the registry. Returning `false` persists a dismissed
-   * flag in the account-registry KV so the Home banner stays dismissed across sign-ins.
-   * Omitted: the automatic publish never runs; sign-in is unaffected.
-   */
-  onRegistryPublishConsent?: (preview: {
-    readonly subject: string;
-    readonly nodeDid: string;
-    readonly nodeOrigin: string;
-    readonly space: string;
-  }) => Promise<boolean>;
-  /**
-   * TC-3547: notified on every error from the automatic publish path (verdict lookup,
-   * signer resolution, consent callback throws, registry 4xx/5xx). Hosts can fold it
-   * into their own telemetry. Sign-in is not failed; the publish outcome string carries
-   * the branch (`"unavailable"` / `"declined"`).
+   * Notified on every error from {@link TinyCloudWeb.ensureOwnerRegistryRecord} (verdict
+   * lookup, signer resolution, registry 4xx/5xx). Hosts can fold it into their own
+   * telemetry. The method's return value carries the outcome.
    */
   onRegistryPublishError?: (error: unknown) => void;
 }
@@ -1471,13 +1456,6 @@ export class TinyCloudWeb {
     if (!session) throw new Error("Sign-in completed but no session available");
     // Explicit logout never permits an older tab's persisted proof to satisfy the next sign-in.
     if (!this.signOutCleanupFailed && this.signOutInFlight === 0) this.persistedRestoreBlocked = false;
-    // TC-3547: publish the owner's registry location record once, if the owner's did:pkh
-    // is `unregistered`. Fire-and-forget so sign-in returns immediately; the publish
-    // triggers a host-rendered consent modal (onRegistryPublishConsent) and one owner
-    // signature, both optional.
-    if (this.bootstrapSignInPolicy().autoBootstrapAccount && session.address) {
-      void this.ensureOwnerRegistryRecord().catch((error) => this.config.onRegistryPublishError?.(error));
-    }
     return {
       address: session.address,
       walletAddress: session.address,
@@ -1489,34 +1467,34 @@ export class TinyCloudWeb {
   };
 
   /**
-   * TC-3547: publish the owner's registry location record once, if the registry verdict
-   * is `unregistered` and the host supplied an `onRegistryPublishConsent` callback. Runs
-   * automatically at the end of a first-party sign-in; also safe to call from a "finish
-   * setup" retry button.
+   * Publish the owner's registry location record. Call it from a deliberate owner action
+   * (for example a "Finish setup" button), never automatically: a call is the owner's
+   * consent to one signature.
    *
-   * Pass `{ ignoreDismissed: true }` when the host opens the publish consent in response
-   * to the `finish-setup=registry` URL intent (see `AccountSetupRequiredError.setupUrl`).
-   * It skips the dismissed-flag short-circuit but preserves every other guard (unregistered
-   * only, verified node identity only, consent still required, no overwrite). Host conditions
-   * (Bobbie 13:27:14Z, Soren 13:27:29Z): the hosting page must set `frame-ancestors 'self'`
-   * (or equivalent) so no outside origin can clickjack the tap, and the host must strip the
-   * query via `history.replaceState` after reading it so a reload or shared link does not
-   * keep reopening the consent.
+   * Only TinyCloud One and Home can publish; OpenKey refuses to sign a registry record
+   * for any other origin. On any other host, or when OpenKey refuses, an owner who has no
+   * record gets `"needs-one"`: send them to `AccountSetupRequiredError.setupUrl`
+   * (`https://tinycloud.one/?finish-setup=registry`) and have them sign in to the app
+   * again. A record is only ever created, never overwritten.
    *
-   * Returns one of `"published"`, `"already-current"`, `"declined"`, `"unavailable"`.
-   * Sign-in is never failed; this method never throws.
+   * On TinyCloud One or Home, the page that reads the `finish-setup=registry` intent must
+   * set `frame-ancestors 'self'` (or equivalent) so no outside origin can clickjack the
+   * tap, and must strip the query with `history.replaceState` after reading it so a reload
+   * or shared link does not keep reopening the prompt.
+   *
+   * Returns `"published"`, `"already-current"`, `"needs-one"` or `"unavailable"`.
+   * This method never throws.
    */
-  async ensureOwnerRegistryRecord(options: { ignoreDismissed?: boolean } = {}): Promise<"published" | "already-current" | "declined" | "unavailable"> {
+  async ensureOwnerRegistryRecord(): Promise<RegistryPublishOutcome> {
     const node = this._node;
     const session = node?.session;
     if (!node || !session || !session.address) return "already-current";
     const subject = node.did;
     if (!subject.startsWith("did:pkh:")) return "already-current";
-    // TC-3547 F2 (Bobbie 13:52:41Z): capture the sign-out generation and the owner address
-    // at entry. The helper calls `assertCurrent()` after every await; a sign-out or account
-    // switch during the flow throws before the next KV write or registry PUT, so a stale
-    // tap can never write the dismissed flag to the next account's KV or sign a record
-    // with the old account's key.
+    // Capture the sign-out generation and the owner address at entry. The helper calls
+    // `assertCurrent()` after every await; a sign-out or account switch during the flow
+    // throws before the registry PUT, so a stale call can never sign a record with the
+    // old account's key.
     const signOutsAtEntry = this.signOutCount;
     const addressAtEntry = session.address;
     const assertCurrent = () => {
@@ -1535,13 +1513,9 @@ export class TinyCloudWeb {
     // intersection-cast pattern is already used at the runtime-signer boundary above.
     const openkeyMessageClient: (OpenKeyAuthorizeTinyCloud & OpenKeyMessageSigner) | undefined =
       openkey ? openkey.client as (OpenKeyAuthorizeTinyCloud & OpenKeyMessageSigner) : undefined;
-    const onConsent = this.config.onRegistryPublishConsent;
     const onError = this.config.onRegistryPublishError;
     try {
-      // Dynamic import: the TC-858 root-chunk ceiling on @tinycloud/web-sdk is measured in
-      // CI; keeping registry-publish.ts off the root chunk avoids a size-ledger row entirely.
-      // The js-sdk lead recommended this shape in his 13:07:23Z note on TC-3547. The specifier
-      // is a literal, so bundlers still see the dependency.
+      // Dynamic import keeps registry-publish.ts off the root chunk (TC-858 size ceiling).
       const { ensureOwnerRegistryRecord } = await import("../registry-publish");
       return await ensureOwnerRegistryRecord({
         node,
@@ -1550,9 +1524,8 @@ export class TinyCloudWeb {
         ...(this.config.registryChainId !== undefined ? { registryChainId: this.config.registryChainId } : {}),
         ...(this.config.registrySequenceStore ? { registrySequenceStore: this.config.registrySequenceStore } : {}),
         ...(this.config.registryCacheStore ? { registryCacheStore: this.config.registryCacheStore } : {}),
-        ...(onConsent ? { onConsent } : {}),
+        origin: typeof window === "undefined" ? undefined : window.location?.origin,
         ...(onError ? { onError } : {}),
-        ...(options.ignoreDismissed ? { ignoreDismissed: true } : {}),
         assertCurrent,
         resolveSigner: async () => {
           if (walletSigner) {

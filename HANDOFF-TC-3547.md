@@ -53,3 +53,11 @@ Sign a real `canonicalLocationPayloadV2` through OpenKey's `signMessage` (`packa
 - Default message now reads: `Finish setting up your TinyCloud account in TinyCloud One, then sign in to this app again: ${setupUrl}`. Host apps can still pass their own `setupInstruction`.
 - Changeset updated to name TinyCloud One, add the upgrading note, and end `Details: TC-3547`.
 - Account-setup unit tests pin the new URL and message. Under the written test-ruling (2026-11-21), only expected strings change; no assertion is removed or loosened.
+
+## 2026-11-22 rework (registry-record signing limited to TinyCloud One and Home)
+
+- OpenKey refuses registry-record signatures for any origin but `https://tinycloud.one`, `https://app.tinycloud.one` and `https://home.tinycloud.xyz`. The SDK no longer asks from other hosts.
+- Removed: the sign-in auto-publish hook, `onRegistryPublishConsent`, the consent preview and the dismissed flag (`registry-publish-dismissed.ts` and `ignoreDismissed`). Calling `ensureOwnerRegistryRecord()` is the consent.
+- `ensureOwnerRegistryRecord()` returns `"published" | "already-current" | "needs-one" | "unavailable"` (`RegistryPublishOutcome`, exported from `@tinycloud/web-sdk`). `needs-one` = no record and this host cannot publish, or OpenKey answered `registry_record_sign_refused` / `REGISTRY_RECORD_SIGN_REFUSED`.
+- Still create-only: nothing here updates an existing record, so the stored+1 rule is not exercised.
+- Host order: One and Home must ship an SDK with this method before any other host hands people to One.
