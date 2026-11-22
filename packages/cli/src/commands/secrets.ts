@@ -54,7 +54,8 @@ import { runProbeChild, type ProbeRequest } from "../lib/probe-child.js";
 import { runCommand, type CommandOutcome } from "../lib/run-command.js";
 import { safeInline } from "../output/safe-text.js";
 import { abortableSleep, DEFAULT_WAIT_TIMEOUT, parseWaitTimeout, runSecretsWait } from "../lib/secrets-wait.js";
-import { secretKeyResourceForVaultPath } from "../lib/secret-keys.js";
+import { secretKeyResourceForVaultPath, secretsKeyPrefixResource } from "../lib/secret-keys.js";
+import { migrateSecrets } from "@tinycloud/sdk-services";
 import { resolveProfilePosture, type CLIContext, type ProfileConfig } from "../config/types.js";
 import {
   ensureDelegationAuthority,
@@ -515,38 +516,70 @@ async function canonicalSecretGet(
       first = await invoke();
     }
   }
-  if (first.status !== "authority_required") return first;
   // The operations-owned explicit-key path should never return an authority
   // request. Keep this guard for the legacy no-key path only.
   if (auth?.privateKey !== undefined) return first;
-  if (first.context.posture !== "owner-openkey" && first.context.posture !== "local-owner-key") {
-    return first;
+
+  // An owner approves what the read still lacks: first the plan (the secret's own key, TC-3284), then at most one
+  // more, the network decrypt for a secret still in the older format or the key for a network-only session.
+  let result = first;
+  for (let approvals = 0; approvals < 2; approvals++) {
+    const approval = ownerSecretApproval(result, params.name);
+    if (approval === undefined) return result;
+    if (result.context.posture !== "owner-openkey" && result.context.posture !== "local-owner-key") {
+      return result;
+    }
+
+    const profile = await ProfileManager.getProfile(params.ctx.profile);
+    if (!canRequestOwnerPermissions(profile)) return result;
+    assertOwnerApprovalPossible(params.ctx.profile, profile, "get", params.name, approval.missing);
+    const node = params.node ?? ownerNode ?? await ensureSecretsNode(
+      params.ctx,
+      params.options,
+      params.openKeyAcquisition,
+    );
+    ownerNode ??= node;
+
+    await withSpinner("Requesting secret permissions...", () =>
+      ensureDelegationAuthority({
+        ctx: params.ctx,
+        profile,
+        node,
+        requested: approval.missing as PermissionEntry[],
+        expiryOption: undefined,
+        reason: approval.reason,
+        force: true,
+        anchorSpace: params.space ?? SECRETS_SPACE,
+        openKeyAcquisition: params.openKeyAcquisition,
+      }),
+    );
+    result = await invoke();
   }
+  return result;
+}
 
-  const profile = await ProfileManager.getProfile(params.ctx.profile);
-  if (!canRequestOwnerPermissions(profile)) return first;
-  assertOwnerApprovalPossible(params.ctx.profile, profile, "get", params.name, first.missing);
-  const node = params.node ?? ownerNode ?? await ensureSecretsNode(
-    params.ctx,
-    params.options,
-    params.openKeyAcquisition,
-  );
-
-  await withSpinner("Requesting secret permissions...", () =>
-    ensureDelegationAuthority({
-      ctx: params.ctx,
-      profile,
-      node,
-      requested: first.missing as PermissionEntry[],
-      expiryOption: undefined,
-      reason: secretCommandReason("get", params.name),
-      force: true,
-      anchorSpace: params.space ?? SECRETS_SPACE,
-      openKeyAcquisition: params.openKeyAcquisition,
-    }),
-  );
-
-  return invoke();
+/**
+ * What an owner would approve so a read can go on: the operation's own authority request, or the one decrypt a
+ * per-secret-key outcome names (TC-3284).
+ */
+function ownerSecretApproval(
+  result: CanonicalSecretGetResult,
+  name: string,
+): { missing: readonly Readonly<Record<string, unknown>>[]; reason: string } | undefined {
+  if (result.status === "authority_required") {
+    return { missing: result.missing, reason: secretCommandReason("get", name) };
+  }
+  if (result.status !== "error") return undefined;
+  const { code, details } = result.error;
+  if ((code !== "SECRET_LEGACY_ENVELOPE" && code !== "SECRET_KEY_GRANT_REQUIRED") || typeof details?.decrypt !== "string") {
+    return undefined;
+  }
+  return {
+    missing: [{ service: "tinycloud.encryption", path: details.decrypt, actions: [SECRET_DECRYPT_CAPABILITY] }],
+    reason: code === "SECRET_LEGACY_ENVELOPE"
+      ? `Read the secret ${name}. It's stored in the older format, so reading it needs access to all your encrypted data. Running \`${CLI_NAME} secrets migrate\` gives it its own key, and then this wider access isn't needed.`
+      : secretCommandReason("get", name),
+  };
 }
 
 /** Return the canonical envelope produced by the Commander projection before rendering. */
@@ -1164,6 +1197,37 @@ function secretPermissionEntries(params: {
 }
 
 const SECRET_KEY_CREATE_CAPABILITY = "tinycloud.encryption/key.create";
+
+/**
+ * The one approval an owner `secrets migrate` asks for: list, read and write every secret in the space, decrypt with
+ * the network (secrets in the older format) and decrypt and create keys under the whole `secrets/` key prefix.
+ */
+function secretMigratePermissions(node: TinyCloudNode, space: string | undefined): PermissionEntry[] {
+  const networkId = node.getEncryptionNetworkIdForSpace(space ?? SECRETS_SPACE);
+  if (!networkId.endsWith(":default")) {
+    throw new CLIError(
+      "USAGE_ERROR",
+      "Only secrets on the default encryption network have keys of their own; nothing here can be migrated.",
+      ExitCode.USAGE_ERROR,
+    );
+  }
+  return [
+    {
+      service: "tinycloud.kv",
+      space: space ?? SECRETS_SPACE,
+      path: resolveSecretListPrefix(),
+      actions: [secretKvAbility("list"), secretKvAbility("get"), secretKvAbility("put")],
+      skipPrefix: true,
+    },
+    { service: "tinycloud.encryption", path: networkId, actions: [SECRET_DECRYPT_CAPABILITY], skipPrefix: true },
+    {
+      service: "tinycloud.encryption",
+      path: secretsKeyPrefixResource(networkId),
+      actions: [SECRET_DECRYPT_CAPABILITY, SECRET_KEY_CREATE_CAPABILITY],
+      skipPrefix: true,
+    },
+  ];
+}
 
 function formatSecretScopeFlag(options: SecretScopeOptions | undefined): string {
   return options?.scope ? ` --scope ${JSON.stringify(options.scope)}` : "";
@@ -1876,6 +1940,58 @@ export function registerSecretsCommand(
           path: result.delegation.path,
           actions: result.delegation.actions,
         });
+      } catch (error) {
+        return handleError(error);
+      }
+    });
+
+  // tc secrets migrate [names...]
+  secrets
+    .command("migrate [names...]")
+    .description("Move secrets in the older format onto each secret's own key (counts only, never values)")
+    .option("--scope <scope>", "Only secrets in this logical scope")
+    .option("--space <name|uri>", "Target a non-default secrets space (short name or full URI)")
+    .option("--dry-run", "Count what would move without changing anything")
+    .option("--private-key <hex>", "Ethereum private key (or set TC_PRIVATE_KEY)")
+    .action(async (names: string[], options, cmd) => {
+      try {
+        const globalOpts = cmd.optsWithGlobals();
+        const ctx = await ProfileManager.resolveContext(globalOpts);
+        const node = await ensureSecretsNode(ctx, options);
+        const spaceUri = await resolveSecretSpace(options.space, ctx.profile);
+        if (!authOptions(options)?.privateKey) {
+          const profile = await ProfileManager.getProfile(ctx.profile);
+          if (!canRequestOwnerPermissions(profile)) {
+            throw new CLIError(
+              "PERMISSION_DENIED",
+              `Only the owner can migrate secrets; profile "${ctx.profile}" is not an owner profile.`,
+              ExitCode.PERMISSION_DENIED,
+            );
+          }
+          await withSpinner("Requesting secret permissions...", () =>
+            ensureDelegationAuthority({
+              ctx,
+              profile,
+              node,
+              requested: secretMigratePermissions(node, spaceUri),
+              expiryOption: undefined,
+              reason: "Move your secrets in the older format onto each secret's own key.",
+              anchorSpace: spaceUri ?? SECRETS_SPACE,
+            }),
+          );
+        }
+        const result = await withSpinner(
+          options.dryRun ? "Checking secrets..." : "Migrating secrets...",
+          () => migrateSecrets(secretsServiceForSpace(node, spaceUri), {
+            ...(names.length > 0 ? { names } : {}),
+            ...(options.scope ? { scope: options.scope } : {}),
+            dryRun: options.dryRun === true,
+          }),
+        );
+        if (!result.ok) {
+          throw cliErrorFromService(result.error);
+        }
+        outputJson({ ...result.data, ...(spaceUri ? { space: spaceUri } : {}) });
       } catch (error) {
         return handleError(error);
       }

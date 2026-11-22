@@ -1,6 +1,9 @@
 import { z } from "zod";
+import type { PermissionEntry } from "@tinycloud/sdk-core";
 import type { SecretReadResult } from "@tinycloud/node-sdk";
+import { secretKeyPath } from "@tinycloud/sdk-services";
 
+import { evaluateOperationAuthority } from "../authority.js";
 import { CLI_NAME } from "../cli-name.js";
 import {
   type OperationContext,
@@ -93,19 +96,7 @@ async function planSecretGet(
     context.runtime.node,
     context.summary.space,
   );
-  let networkSpace = reference.space;
-  if (input.space === undefined) {
-    try {
-      networkSpace = operationSpaceResolver(
-        context.runtime.node,
-        context.summary.space,
-      )("secrets");
-    } catch {
-      // Definition-focused callers may omit authenticated identity metadata;
-      // the runtime path supplies the owner space before production planning.
-    }
-  }
-  const networkId = resolveEncryptionNetworkId(context.runtime.node, networkSpace);
+  const decrypt = planSecretDecrypt(context, input, reference);
 
   return [
     {
@@ -114,12 +105,61 @@ async function planSecretGet(
       path: reference.permissionPath,
       actions: ["tinycloud.kv/get"],
     },
-    {
-      service: "tinycloud.encryption",
-      path: networkId,
-      actions: ["tinycloud.encryption/decrypt"],
-    },
+    decryptRequirement(decrypt.path),
   ];
+}
+
+interface SecretDecryptPlan {
+  /** The owner's encryption network. */
+  readonly network: string;
+  /** The secret's own key; absent for a name or scope over 64 bytes, or a non-default network. */
+  readonly key?: string;
+  /** The one this read is planned on: `key`, or `network` for a secret without one or a network-only session. */
+  readonly path: string;
+}
+
+/**
+ * The decrypt a secret read needs (TC-3284): the secret's own key, so an owner is asked only for that. A session that
+ * already decrypts with the whole network but not this key (a grant from before per-secret keys) reads with the
+ * network, so secrets still in the older format stay readable to it.
+ */
+function planSecretDecrypt(
+  context: OperationContext,
+  input: SecretsGetInput,
+  reference: SecretReference,
+): SecretDecryptPlan {
+  const node = context.runtime?.node;
+  let networkSpace = reference.space;
+  if (input.space === undefined) {
+    try {
+      networkSpace = operationSpaceResolver(node, context.summary.space)("secrets");
+    } catch {
+      // Definition-focused callers may omit authenticated identity metadata;
+      // the runtime path supplies the owner space before production planning.
+    }
+  }
+  const network = resolveEncryptionNetworkId(node, networkSpace);
+  let key: string | undefined;
+  if (network.endsWith(":default")) {
+    try {
+      key = `${network}/${secretKeyPath(reference.name, reference.scope)}`;
+    } catch {
+      // A name or scope over 64 bytes has no key of its own.
+    }
+  }
+  const granted = (context.runtime?.granted ?? []) as unknown as PermissionEntry[];
+  const holds = (path: string) =>
+    evaluateOperationAuthority(granted, [decryptRequirement(path) as unknown as PermissionEntry]).satisfied;
+  const path = key === undefined || (!holds(key) && holds(network)) ? network : key;
+  return { network, ...(key === undefined ? {} : { key }), path };
+}
+
+function decryptRequirement(path: string): CapabilityRequirement {
+  return {
+    service: "tinycloud.encryption",
+    path,
+    actions: ["tinycloud.encryption/decrypt"],
+  };
 }
 
 async function executeSecretGet(
@@ -161,20 +201,44 @@ async function executeSecretGet(
     };
   }
 
-  return classifySecretRead(reference, result, context.runtime?.localOwner === true);
+  // Resolved only for the two per-secret-key outcomes: a plain read never needs the network id here.
+  const plan = (): SecretDecryptPlan | undefined => {
+    try {
+      return planSecretDecrypt(context, input, reference);
+    } catch {
+      return undefined;
+    }
+  };
+  return classifySecretRead(reference, result, context.runtime?.localOwner === true, plan);
 }
 
 function classifySecretRead(
   reference: SecretReference,
   result: SecretReadResult,
   localOwner: boolean,
+  plan: () => SecretDecryptPlan | undefined,
 ): OperationExecutionOutcome<SecretsGetOutput> {
   switch (result.status) {
     case "ok":
       return { status: "ok", output: { value: result.value } };
     case "not_found":
       return missingSecretOutcome(reference, localOwner);
-    case "permission_required":
+    case "permission_required": {
+      // A secret on its own key, read by a session planned on the network decrypt: that grant can never open it.
+      const decrypt = plan();
+      const hint = result.hint as { service?: unknown; path?: unknown };
+      if (decrypt?.key !== undefined && decrypt.path === decrypt.network &&
+          hint.service === "tinycloud.encryption" && typeof hint.path === "string" &&
+          hint.path.toLowerCase() === decrypt.key.toLowerCase()) {
+        return {
+          status: "error",
+          error: operationError(
+            "SECRET_KEY_GRANT_REQUIRED",
+            `${reference.name} has its own key, and this profile's access reads only secrets in the older format. Ask the owner to approve access to this secret.`,
+            { details: secretErrorDetails(reference, decrypt.key) },
+          ),
+        };
+      }
       return {
         status: "authority_required",
         missing: [result.hint as unknown as CapabilityRequirement],
@@ -184,6 +248,16 @@ function classifySecretRead(
           requestId: "runtime-hint",
           fallback: `${CLI_NAME} auth grant <request-artifact>`,
         },
+      };
+    }
+    case "legacy_envelope":
+      return {
+        status: "error",
+        error: operationError(
+          "SECRET_LEGACY_ENVELOPE",
+          `${reference.name} is stored in the older format, which can be read only with access to all the owner's encrypted data. Ask the owner to run \`${CLI_NAME} secrets migrate\`, which gives it its own key.`,
+          { details: secretErrorDetails(reference, plan()?.network) },
+        ),
       };
     case "node_unreachable":
       return {
@@ -217,6 +291,15 @@ function classifySecretRead(
   return {
     status: "error",
     error: operationError("SECRET_READ_FAILED", "The secret read failed."),
+  };
+}
+
+/** Value-free details of a per-secret-key outcome: the secret and the decrypt an owner would approve for it. */
+function secretErrorDetails(reference: SecretReference, decrypt: string | undefined): Readonly<Record<string, unknown>> {
+  return {
+    names: [reference.name],
+    ...(reference.scope === undefined ? {} : { scope: reference.scope }),
+    ...(decrypt === undefined ? {} : { decrypt }),
   };
 }
 

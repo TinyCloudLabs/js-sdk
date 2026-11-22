@@ -430,6 +430,7 @@ export type {
 
 export {
   SecretsService,
+  migrateSecrets,
   DEFAULT_SECRET_TYPE,
   SECRET_TYPES,
   isSecretType,
@@ -457,6 +458,9 @@ export type {
   ResolvedSecretPath,
   SecretScopeOptions,
   SecretPutOptions,
+  SecretMigrateOptions,
+  SecretMigrateReport,
+  SecretMigrateSkipReason,
 } from "./secrets";
 
 // Encryption service (network-scoped one-of-one decrypt)

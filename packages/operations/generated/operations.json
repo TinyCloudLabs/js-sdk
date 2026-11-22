@@ -41,6 +41,8 @@
     "READ_CONTEXT_MISMATCH",
     "SECRET_READ_FAILED",
     "SECRET_DECRYPT_FAILED",
+    "SECRET_LEGACY_ENVELOPE",
+    "SECRET_KEY_GRANT_REQUIRED",
     "OUTPUT_INVALID",
     "INTERNAL_ERROR"
   ],
@@ -925,6 +927,8 @@
                       "READ_CONTEXT_MISMATCH",
                       "SECRET_READ_FAILED",
                       "SECRET_DECRYPT_FAILED",
+                      "SECRET_LEGACY_ENVELOPE",
+                      "SECRET_KEY_GRANT_REQUIRED",
                       "OUTPUT_INVALID",
                       "INTERNAL_ERROR"
                     ]
@@ -1281,6 +1285,8 @@
         "READ_CONTEXT_MISMATCH",
         "SECRET_READ_FAILED",
         "SECRET_DECRYPT_FAILED",
+        "SECRET_LEGACY_ENVELOPE",
+        "SECRET_KEY_GRANT_REQUIRED",
         "OUTPUT_INVALID",
         "INTERNAL_ERROR"
       ],
@@ -2191,6 +2197,8 @@
                       "READ_CONTEXT_MISMATCH",
                       "SECRET_READ_FAILED",
                       "SECRET_DECRYPT_FAILED",
+                      "SECRET_LEGACY_ENVELOPE",
+                      "SECRET_KEY_GRANT_REQUIRED",
                       "OUTPUT_INVALID",
                       "INTERNAL_ERROR"
                     ]
@@ -2570,6 +2578,8 @@
         "READ_CONTEXT_MISMATCH",
         "SECRET_READ_FAILED",
         "SECRET_DECRYPT_FAILED",
+        "SECRET_LEGACY_ENVELOPE",
+        "SECRET_KEY_GRANT_REQUIRED",
         "OUTPUT_INVALID",
         "INTERNAL_ERROR"
       ],
@@ -3597,6 +3607,8 @@
                       "READ_CONTEXT_MISMATCH",
                       "SECRET_READ_FAILED",
                       "SECRET_DECRYPT_FAILED",
+                      "SECRET_LEGACY_ENVELOPE",
+                      "SECRET_KEY_GRANT_REQUIRED",
                       "OUTPUT_INVALID",
                       "INTERNAL_ERROR"
                     ]
@@ -4077,6 +4089,8 @@
         "READ_CONTEXT_MISMATCH",
         "SECRET_READ_FAILED",
         "SECRET_DECRYPT_FAILED",
+        "SECRET_LEGACY_ENVELOPE",
+        "SECRET_KEY_GRANT_REQUIRED",
         "OUTPUT_INVALID",
         "INTERNAL_ERROR"
       ],
@@ -5117,6 +5131,8 @@
                       "READ_CONTEXT_MISMATCH",
                       "SECRET_READ_FAILED",
                       "SECRET_DECRYPT_FAILED",
+                      "SECRET_LEGACY_ENVELOPE",
+                      "SECRET_KEY_GRANT_REQUIRED",
                       "OUTPUT_INVALID",
                       "INTERNAL_ERROR"
                     ]
@@ -5550,6 +5566,8 @@
         "READ_CONTEXT_MISMATCH",
         "SECRET_READ_FAILED",
         "SECRET_DECRYPT_FAILED",
+        "SECRET_LEGACY_ENVELOPE",
+        "SECRET_KEY_GRANT_REQUIRED",
         "OUTPUT_INVALID",
         "INTERNAL_ERROR"
       ],
@@ -6509,6 +6527,8 @@
                       "READ_CONTEXT_MISMATCH",
                       "SECRET_READ_FAILED",
                       "SECRET_DECRYPT_FAILED",
+                      "SECRET_LEGACY_ENVELOPE",
+                      "SECRET_KEY_GRANT_REQUIRED",
                       "OUTPUT_INVALID",
                       "INTERNAL_ERROR"
                     ]
@@ -6923,6 +6943,8 @@
         "READ_CONTEXT_MISMATCH",
         "SECRET_READ_FAILED",
         "SECRET_DECRYPT_FAILED",
+        "SECRET_LEGACY_ENVELOPE",
+        "SECRET_KEY_GRANT_REQUIRED",
         "OUTPUT_INVALID",
         "INTERNAL_ERROR"
       ],
@@ -7123,6 +7145,8 @@
                     "READ_CONTEXT_MISMATCH",
                     "SECRET_READ_FAILED",
                     "SECRET_DECRYPT_FAILED",
+                    "SECRET_LEGACY_ENVELOPE",
+                    "SECRET_KEY_GRANT_REQUIRED",
                     "OUTPUT_INVALID",
                     "INTERNAL_ERROR"
                   ]
@@ -8010,6 +8034,8 @@
                       "READ_CONTEXT_MISMATCH",
                       "SECRET_READ_FAILED",
                       "SECRET_DECRYPT_FAILED",
+                      "SECRET_LEGACY_ENVELOPE",
+                      "SECRET_KEY_GRANT_REQUIRED",
                       "OUTPUT_INVALID",
                       "INTERNAL_ERROR"
                     ]
@@ -8306,6 +8332,8 @@
                         "READ_CONTEXT_MISMATCH",
                         "SECRET_READ_FAILED",
                         "SECRET_DECRYPT_FAILED",
+                        "SECRET_LEGACY_ENVELOPE",
+                        "SECRET_KEY_GRANT_REQUIRED",
                         "OUTPUT_INVALID",
                         "INTERNAL_ERROR"
                       ]
@@ -8445,6 +8473,8 @@
         "READ_CONTEXT_MISMATCH",
         "SECRET_READ_FAILED",
         "SECRET_DECRYPT_FAILED",
+        "SECRET_LEGACY_ENVELOPE",
+        "SECRET_KEY_GRANT_REQUIRED",
         "OUTPUT_INVALID",
         "INTERNAL_ERROR"
       ],
@@ -9341,6 +9371,8 @@
                       "READ_CONTEXT_MISMATCH",
                       "SECRET_READ_FAILED",
                       "SECRET_DECRYPT_FAILED",
+                      "SECRET_LEGACY_ENVELOPE",
+                      "SECRET_KEY_GRANT_REQUIRED",
                       "OUTPUT_INVALID",
                       "INTERNAL_ERROR"
                     ]
@@ -9705,6 +9737,8 @@
         "READ_CONTEXT_MISMATCH",
         "SECRET_READ_FAILED",
         "SECRET_DECRYPT_FAILED",
+        "SECRET_LEGACY_ENVELOPE",
+        "SECRET_KEY_GRANT_REQUIRED",
         "OUTPUT_INVALID",
         "INTERNAL_ERROR"
       ],
@@ -10799,6 +10833,8 @@
                       "READ_CONTEXT_MISMATCH",
                       "SECRET_READ_FAILED",
                       "SECRET_DECRYPT_FAILED",
+                      "SECRET_LEGACY_ENVELOPE",
+                      "SECRET_KEY_GRANT_REQUIRED",
                       "OUTPUT_INVALID",
                       "INTERNAL_ERROR"
                     ]
@@ -11192,6 +11228,8 @@
         "READ_CONTEXT_MISMATCH",
         "SECRET_READ_FAILED",
         "SECRET_DECRYPT_FAILED",
+        "SECRET_LEGACY_ENVELOPE",
+        "SECRET_KEY_GRANT_REQUIRED",
         "OUTPUT_INVALID",
         "INTERNAL_ERROR"
       ],
@@ -12126,6 +12164,8 @@
                       "READ_CONTEXT_MISMATCH",
                       "SECRET_READ_FAILED",
                       "SECRET_DECRYPT_FAILED",
+                      "SECRET_LEGACY_ENVELOPE",
+                      "SECRET_KEY_GRANT_REQUIRED",
                       "OUTPUT_INVALID",
                       "INTERNAL_ERROR"
                     ]
@@ -12502,6 +12542,8 @@
         "READ_CONTEXT_MISMATCH",
         "SECRET_READ_FAILED",
         "SECRET_DECRYPT_FAILED",
+        "SECRET_LEGACY_ENVELOPE",
+        "SECRET_KEY_GRANT_REQUIRED",
         "OUTPUT_INVALID",
         "INTERNAL_ERROR"
       ],
@@ -13534,6 +13576,8 @@
                       "READ_CONTEXT_MISMATCH",
                       "SECRET_READ_FAILED",
                       "SECRET_DECRYPT_FAILED",
+                      "SECRET_LEGACY_ENVELOPE",
+                      "SECRET_KEY_GRANT_REQUIRED",
                       "OUTPUT_INVALID",
                       "INTERNAL_ERROR"
                     ]
@@ -14002,6 +14046,8 @@
         "READ_CONTEXT_MISMATCH",
         "SECRET_READ_FAILED",
         "SECRET_DECRYPT_FAILED",
+        "SECRET_LEGACY_ENVELOPE",
+        "SECRET_KEY_GRANT_REQUIRED",
         "OUTPUT_INVALID",
         "INTERNAL_ERROR"
       ],
@@ -14928,6 +14974,8 @@
                       "READ_CONTEXT_MISMATCH",
                       "SECRET_READ_FAILED",
                       "SECRET_DECRYPT_FAILED",
+                      "SECRET_LEGACY_ENVELOPE",
+                      "SECRET_KEY_GRANT_REQUIRED",
                       "OUTPUT_INVALID",
                       "INTERNAL_ERROR"
                     ]
@@ -15323,6 +15371,8 @@
         "READ_CONTEXT_MISMATCH",
         "SECRET_READ_FAILED",
         "SECRET_DECRYPT_FAILED",
+        "SECRET_LEGACY_ENVELOPE",
+        "SECRET_KEY_GRANT_REQUIRED",
         "OUTPUT_INVALID",
         "INTERNAL_ERROR"
       ],
@@ -16239,6 +16289,8 @@
                       "READ_CONTEXT_MISMATCH",
                       "SECRET_READ_FAILED",
                       "SECRET_DECRYPT_FAILED",
+                      "SECRET_LEGACY_ENVELOPE",
+                      "SECRET_KEY_GRANT_REQUIRED",
                       "OUTPUT_INVALID",
                       "INTERNAL_ERROR"
                     ]
@@ -16616,6 +16668,8 @@
         "READ_CONTEXT_MISMATCH",
         "SECRET_READ_FAILED",
         "SECRET_DECRYPT_FAILED",
+        "SECRET_LEGACY_ENVELOPE",
+        "SECRET_KEY_GRANT_REQUIRED",
         "OUTPUT_INVALID",
         "INTERNAL_ERROR"
       ],
@@ -17586,6 +17640,8 @@
                       "READ_CONTEXT_MISMATCH",
                       "SECRET_READ_FAILED",
                       "SECRET_DECRYPT_FAILED",
+                      "SECRET_LEGACY_ENVELOPE",
+                      "SECRET_KEY_GRANT_REQUIRED",
                       "OUTPUT_INVALID",
                       "INTERNAL_ERROR"
                     ]
@@ -18009,6 +18065,8 @@
         "READ_CONTEXT_MISMATCH",
         "SECRET_READ_FAILED",
         "SECRET_DECRYPT_FAILED",
+        "SECRET_LEGACY_ENVELOPE",
+        "SECRET_KEY_GRANT_REQUIRED",
         "OUTPUT_INVALID",
         "INTERNAL_ERROR"
       ],
@@ -18889,6 +18947,8 @@
                       "READ_CONTEXT_MISMATCH",
                       "SECRET_READ_FAILED",
                       "SECRET_DECRYPT_FAILED",
+                      "SECRET_LEGACY_ENVELOPE",
+                      "SECRET_KEY_GRANT_REQUIRED",
                       "OUTPUT_INVALID",
                       "INTERNAL_ERROR"
                     ]
@@ -19221,6 +19281,8 @@
         "READ_CONTEXT_MISMATCH",
         "SECRET_READ_FAILED",
         "SECRET_DECRYPT_FAILED",
+        "SECRET_LEGACY_ENVELOPE",
+        "SECRET_KEY_GRANT_REQUIRED",
         "OUTPUT_INVALID",
         "INTERNAL_ERROR"
       ],
@@ -20156,6 +20218,8 @@
                       "READ_CONTEXT_MISMATCH",
                       "SECRET_READ_FAILED",
                       "SECRET_DECRYPT_FAILED",
+                      "SECRET_LEGACY_ENVELOPE",
+                      "SECRET_KEY_GRANT_REQUIRED",
                       "OUTPUT_INVALID",
                       "INTERNAL_ERROR"
                     ]
@@ -20539,6 +20603,8 @@
         "READ_CONTEXT_MISMATCH",
         "SECRET_READ_FAILED",
         "SECRET_DECRYPT_FAILED",
+        "SECRET_LEGACY_ENVELOPE",
+        "SECRET_KEY_GRANT_REQUIRED",
         "OUTPUT_INVALID",
         "INTERNAL_ERROR"
       ],
@@ -21427,6 +21493,8 @@
                       "READ_CONTEXT_MISMATCH",
                       "SECRET_READ_FAILED",
                       "SECRET_DECRYPT_FAILED",
+                      "SECRET_LEGACY_ENVELOPE",
+                      "SECRET_KEY_GRANT_REQUIRED",
                       "OUTPUT_INVALID",
                       "INTERNAL_ERROR"
                     ]
@@ -21771,6 +21839,8 @@
         "READ_CONTEXT_MISMATCH",
         "SECRET_READ_FAILED",
         "SECRET_DECRYPT_FAILED",
+        "SECRET_LEGACY_ENVELOPE",
+        "SECRET_KEY_GRANT_REQUIRED",
         "OUTPUT_INVALID",
         "INTERNAL_ERROR"
       ],
@@ -22667,6 +22737,8 @@
                       "READ_CONTEXT_MISMATCH",
                       "SECRET_READ_FAILED",
                       "SECRET_DECRYPT_FAILED",
+                      "SECRET_LEGACY_ENVELOPE",
+                      "SECRET_KEY_GRANT_REQUIRED",
                       "OUTPUT_INVALID",
                       "INTERNAL_ERROR"
                     ]
@@ -23013,6 +23085,8 @@
         "READ_CONTEXT_MISMATCH",
         "SECRET_READ_FAILED",
         "SECRET_DECRYPT_FAILED",
+        "SECRET_LEGACY_ENVELOPE",
+        "SECRET_KEY_GRANT_REQUIRED",
         "OUTPUT_INVALID",
         "INTERNAL_ERROR"
       ],
@@ -24072,6 +24146,8 @@
                       "READ_CONTEXT_MISMATCH",
                       "SECRET_READ_FAILED",
                       "SECRET_DECRYPT_FAILED",
+                      "SECRET_LEGACY_ENVELOPE",
+                      "SECRET_KEY_GRANT_REQUIRED",
                       "OUTPUT_INVALID",
                       "INTERNAL_ERROR"
                     ]
@@ -24430,6 +24506,8 @@
         "READ_CONTEXT_MISMATCH",
         "SECRET_READ_FAILED",
         "SECRET_DECRYPT_FAILED",
+        "SECRET_LEGACY_ENVELOPE",
+        "SECRET_KEY_GRANT_REQUIRED",
         "OUTPUT_INVALID",
         "INTERNAL_ERROR"
       ],
@@ -25672,6 +25750,8 @@
                       "READ_CONTEXT_MISMATCH",
                       "SECRET_READ_FAILED",
                       "SECRET_DECRYPT_FAILED",
+                      "SECRET_LEGACY_ENVELOPE",
+                      "SECRET_KEY_GRANT_REQUIRED",
                       "OUTPUT_INVALID",
                       "INTERNAL_ERROR"
                     ]
@@ -26177,6 +26257,8 @@
         "READ_CONTEXT_MISMATCH",
         "SECRET_READ_FAILED",
         "SECRET_DECRYPT_FAILED",
+        "SECRET_LEGACY_ENVELOPE",
+        "SECRET_KEY_GRANT_REQUIRED",
         "OUTPUT_INVALID",
         "INTERNAL_ERROR"
       ],
@@ -27113,6 +27195,8 @@
                       "READ_CONTEXT_MISMATCH",
                       "SECRET_READ_FAILED",
                       "SECRET_DECRYPT_FAILED",
+                      "SECRET_LEGACY_ENVELOPE",
+                      "SECRET_KEY_GRANT_REQUIRED",
                       "OUTPUT_INVALID",
                       "INTERNAL_ERROR"
                     ]
@@ -27515,6 +27599,8 @@
         "READ_CONTEXT_MISMATCH",
         "SECRET_READ_FAILED",
         "SECRET_DECRYPT_FAILED",
+        "SECRET_LEGACY_ENVELOPE",
+        "SECRET_KEY_GRANT_REQUIRED",
         "OUTPUT_INVALID",
         "INTERNAL_ERROR"
       ],
@@ -28377,6 +28463,8 @@
                       "READ_CONTEXT_MISMATCH",
                       "SECRET_READ_FAILED",
                       "SECRET_DECRYPT_FAILED",
+                      "SECRET_LEGACY_ENVELOPE",
+                      "SECRET_KEY_GRANT_REQUIRED",
                       "OUTPUT_INVALID",
                       "INTERNAL_ERROR"
                     ]
@@ -28695,6 +28783,8 @@
         "READ_CONTEXT_MISMATCH",
         "SECRET_READ_FAILED",
         "SECRET_DECRYPT_FAILED",
+        "SECRET_LEGACY_ENVELOPE",
+        "SECRET_KEY_GRANT_REQUIRED",
         "OUTPUT_INVALID",
         "INTERNAL_ERROR"
       ],
@@ -29637,6 +29727,8 @@
                       "READ_CONTEXT_MISMATCH",
                       "SECRET_READ_FAILED",
                       "SECRET_DECRYPT_FAILED",
+                      "SECRET_LEGACY_ENVELOPE",
+                      "SECRET_KEY_GRANT_REQUIRED",
                       "OUTPUT_INVALID",
                       "INTERNAL_ERROR"
                     ]
@@ -30031,6 +30123,8 @@
         "READ_CONTEXT_MISMATCH",
         "SECRET_READ_FAILED",
         "SECRET_DECRYPT_FAILED",
+        "SECRET_LEGACY_ENVELOPE",
+        "SECRET_KEY_GRANT_REQUIRED",
         "OUTPUT_INVALID",
         "INTERNAL_ERROR"
       ],
@@ -30980,6 +31074,8 @@
                       "READ_CONTEXT_MISMATCH",
                       "SECRET_READ_FAILED",
                       "SECRET_DECRYPT_FAILED",
+                      "SECRET_LEGACY_ENVELOPE",
+                      "SECRET_KEY_GRANT_REQUIRED",
                       "OUTPUT_INVALID",
                       "INTERNAL_ERROR"
                     ]
@@ -31335,6 +31431,8 @@
         "READ_CONTEXT_MISMATCH",
         "SECRET_READ_FAILED",
         "SECRET_DECRYPT_FAILED",
+        "SECRET_LEGACY_ENVELOPE",
+        "SECRET_KEY_GRANT_REQUIRED",
         "OUTPUT_INVALID",
         "INTERNAL_ERROR"
       ],
@@ -32334,6 +32432,8 @@
                       "READ_CONTEXT_MISMATCH",
                       "SECRET_READ_FAILED",
                       "SECRET_DECRYPT_FAILED",
+                      "SECRET_LEGACY_ENVELOPE",
+                      "SECRET_KEY_GRANT_REQUIRED",
                       "OUTPUT_INVALID",
                       "INTERNAL_ERROR"
                     ]
@@ -32736,6 +32836,8 @@
         "READ_CONTEXT_MISMATCH",
         "SECRET_READ_FAILED",
         "SECRET_DECRYPT_FAILED",
+        "SECRET_LEGACY_ENVELOPE",
+        "SECRET_KEY_GRANT_REQUIRED",
         "OUTPUT_INVALID",
         "INTERNAL_ERROR"
       ],
@@ -33669,6 +33771,8 @@
                       "READ_CONTEXT_MISMATCH",
                       "SECRET_READ_FAILED",
                       "SECRET_DECRYPT_FAILED",
+                      "SECRET_LEGACY_ENVELOPE",
+                      "SECRET_KEY_GRANT_REQUIRED",
                       "OUTPUT_INVALID",
                       "INTERNAL_ERROR"
                     ]
@@ -34057,6 +34161,8 @@
         "READ_CONTEXT_MISMATCH",
         "SECRET_READ_FAILED",
         "SECRET_DECRYPT_FAILED",
+        "SECRET_LEGACY_ENVELOPE",
+        "SECRET_KEY_GRANT_REQUIRED",
         "OUTPUT_INVALID",
         "INTERNAL_ERROR"
       ],
@@ -34983,6 +35089,8 @@
                       "READ_CONTEXT_MISMATCH",
                       "SECRET_READ_FAILED",
                       "SECRET_DECRYPT_FAILED",
+                      "SECRET_LEGACY_ENVELOPE",
+                      "SECRET_KEY_GRANT_REQUIRED",
                       "OUTPUT_INVALID",
                       "INTERNAL_ERROR"
                     ]
@@ -35378,6 +35486,8 @@
         "READ_CONTEXT_MISMATCH",
         "SECRET_READ_FAILED",
         "SECRET_DECRYPT_FAILED",
+        "SECRET_LEGACY_ENVELOPE",
+        "SECRET_KEY_GRANT_REQUIRED",
         "OUTPUT_INVALID",
         "INTERNAL_ERROR"
       ],

@@ -61,7 +61,7 @@ describe("tinycloud.secrets.get", () => {
       },
       {
         service: "tinycloud.encryption",
-        path: NETWORK_ID,
+        path: `${NETWORK_ID}/secrets/scoped/food-tracker/api_key`,
         actions: ["tinycloud.encryption/decrypt"],
       },
     ]);
@@ -86,7 +86,7 @@ describe("tinycloud.secrets.get", () => {
       },
       {
         service: "tinycloud.encryption",
-        path: NETWORK_ID,
+        path: `${NETWORK_ID}/secrets/api_key`,
         actions: ["tinycloud.encryption/decrypt"],
       },
     ]);
@@ -125,7 +125,7 @@ describe("tinycloud.secrets.get", () => {
       input,
     );
 
-    expect(planned[1]).toMatchObject({ path: NETWORK_ID });
+    expect(planned[1]).toMatchObject({ path: `${NETWORK_ID}/secrets/api_key` });
   });
 
   test("fails closed when the encryption network cannot be resolved", async () => {
