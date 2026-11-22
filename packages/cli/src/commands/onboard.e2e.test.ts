@@ -53,7 +53,7 @@ describe.skipIf(!NODE_BIN)("tinycloud onboard, against a real node", () => {
     profile: Record<string, unknown> | null;
     session: Record<string, unknown> | null;
     grants: Array<{ delegation: { cid: string; spaceId: string; siweProof?: { siwe: string; signature: string } } }>;
-    pending: Array<{ requestId: string; bodyCid: string; resultRef?: string; ackId: string; expectedOwner?: string }>;
+    pending: Array<{ requestId: string; approvalUrl: string; bodyCid: string; resultRef?: string; ackId: string; expectedOwner?: string; request: OpenKeyApprovalRequestV1 }>;
   }
   let approvalServer: ReturnType<typeof Bun.serve> | undefined;
   let approvalCertificate = "";
@@ -80,7 +80,7 @@ describe.skipIf(!NODE_BIN)("tinycloud onboard, against a real node", () => {
     const saved = await savedState(entry.homeName);
     const pending = saved.pending.find((item) => item.requestId === entry.id);
     const delegation = entry.delegation;
-    const sessionMatches = saved.session?.delegationCid === delegation.delegationCid &&
+    const sessionMatches = saved.session !== null && saved.session.delegationCid === delegation.delegationCid &&
       saved.session.signature === delegation.signature && saved.session.siwe === delegation.siwe;
     const grantMatches = saved.grants.some((item) => item.delegation.cid === delegation.delegationCid &&
       item.delegation.siweProof?.signature === delegation.signature && item.delegation.siweProof?.siwe === delegation.siwe);
@@ -208,29 +208,35 @@ describe.skipIf(!NODE_BIN)("tinycloud onboard, against a real node", () => {
     } finally { activeChildren.delete(child); }
   }
 
-  function spaceOf(request: OpenKeyApprovalRequestV1): string {
-    const spaces = [...new Set(request.permissions.map((permission) => permission.space?.split(":").at(-1)))];
-    if (spaces.length !== 1 || !spaces[0]) throw new Error("Onboarding approval did not name exactly one space");
-    return spaces[0];
+  function spacesOf(request: OpenKeyApprovalRequestV1): string[] {
+    return [...new Set(request.permissions.map(permission => permission.space!.split(":").at(-1)!))].sort();
   }
 
-  async function approve(entry: ApprovalEntry, request: OpenKeyApprovalRequestV1, signer: PrivateKeySigner) {
-    const abilities: Record<string, Record<string, string[]>> = {};
-    for (const permission of request.permissions) {
-      const service = permission.service.slice("tinycloud.".length);
-      abilities[service] = { ...abilities[service], [permission.path]: [...new Set([...(abilities[service]?.[permission.path] ?? []), ...permission.actions])] };
-    }
+  async function approve(entry: ApprovalEntry, request: OpenKeyApprovalRequestV1, signer: PrivateKeySigner,
+    permissions: Readonly<OpenKeyApprovalRequestV1["permissions"]> = request.permissions) {
     const address = await signer.getAddress();
     const ownerDid = "did:pkh:eip155:1:" + address;
-    const spaceId = wasm.makeSpaceId(address, 1, spaceOf(request));
+    const names = spacesOf(request);
+    const spaceId = wasm.makeSpaceId(address, 1, names.includes("applications") ? "applications" : names[0]!);
+    const spaceAbilities: Record<string, Record<string, Record<string, string[]>>> = {};
+    for (const permission of permissions) {
+      const resourceSpace = wasm.makeSpaceId(address, 1, permission.space!.split(":").at(-1)!);
+      const abilities = spaceAbilities[resourceSpace] ??= {};
+      const service = permission.service.slice("tinycloud.".length);
+      (abilities[service] ??= {})[permission.path] = [...permission.actions];
+    }
     const now = Date.now();
-    const prepared = wasm.prepareSession({ abilities, address, chainId: 1, domain: "cli.tinycloud.xyz", spaceId,
+    const prepared = wasm.prepareSession({ abilities: spaceAbilities[spaceId], spaceAbilities, address, chainId: 1, domain: "cli.tinycloud.xyz", spaceId,
       jwk: request.targetPublicJwk, issuedAt: new Date(now).toISOString(),
       expirationTime: new Date(now + request.grantLifetimeSeconds * 1000).toISOString() });
     const signature = await signer.signMessage(prepared.siwe);
     const session = wasm.completeSessionSetup({ ...prepared, signature });
-    await activateSessionWithHost(host, session.delegationHeader);
-    const delegation = { ...session, address, chainId: 1, spaceId, ownerDid, verificationMethod: request.targetDid, siwe: prepared.siwe, signature };
+    const activation = await activateSessionWithHost(host, session.delegationHeader);
+    expect(activation.success).toBe(true);
+    const requestedSpaces = names.map(space => ({ space, spaceId: wasm.makeSpaceId(address, 1, space),
+      spaceReady: activation.activated?.includes(wasm.makeSpaceId(address, 1, space)) === true }));
+    const delegation = { ...session, address, chainId: 1, spaceId, ownerDid, verificationMethod: request.targetDid, siwe: prepared.siwe, signature,
+      requestedSpaces, spaceReady: requestedSpaces.every(space => space.spaceReady === true) };
     const signedExpiry = prepared.siwe.match(/^Expiration Time:\s*(.+)$/m)?.[1];
     const signedIssuedAt = prepared.siwe.match(/^Issued At:\s*(.+)$/m)?.[1];
     if (!signedExpiry || !signedIssuedAt) throw new Error("Fixture grant lacks signed lifetime");
@@ -247,7 +253,8 @@ describe.skipIf(!NODE_BIN)("tinycloud onboard, against a real node", () => {
     const cipher = createCipheriv("aes-256-gcm", encryptionKey, nonce);
     cipher.setAAD(Buffer.from(entry.id));
     const plaintext = { resultVersion: 1, requestId: entry.id, requestDigest: entry.record.header.bodyCid,
-      requesterDid: entry.record.header.issuer, ownerDid, targetDid: request.targetDid, delegationExpiresAt, delegation };
+      // An owner asked for a lease answers with a choice; this fixture approves without renewal.
+      requesterDid: entry.record.header.issuer, ownerDid, targetDid: request.targetDid, delegationExpiresAt, delegation, ...(request.renewal ? { renewalChoice: "finite" } : {}) };
     const ciphertext = Buffer.concat([cipher.update(JSON.stringify(plaintext), "utf8"), cipher.final(), cipher.getAuthTag()]);
     const publicKey = relay.getPublicKey(undefined, "uncompressed");
     entry.resultRef = randomBytes(24).toString("base64url");
@@ -259,8 +266,9 @@ describe.skipIf(!NODE_BIN)("tinycloud onboard, against a real node", () => {
     approvalResults.set(entry.resultRef, entry);
   }
 
-  async function onboardWithApprovals(name: string, chooseSigner: (request: OpenKeyApprovalRequestV1) => Promise<PrivateKeySigner | null> | PrivateKeySigner | null) {
-    const { argv, env, cwd } = cliArgs(name, ["onboard"]);
+  async function onboardWithApprovals(name: string, chooseSigner: (request: OpenKeyApprovalRequestV1) => Promise<PrivateKeySigner | null> | PrivateKeySigner | null,
+    args = ["onboard"], selectPermissions?: (request: OpenKeyApprovalRequestV1) => OpenKeyApprovalRequestV1["permissions"]) {
+    const { argv, env, cwd } = cliArgs(name, args);
     const child = Bun.spawn(argv, { env, cwd, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
     activeChildren.add(child);
     const stdoutText = new Response(child.stdout).text();
@@ -302,11 +310,11 @@ describe.skipIf(!NODE_BIN)("tinycloud onboard, against a real node", () => {
             offered.push(entry);
             const signer = await chooseSigner(opened.request);
             if (signer === null) child.kill("SIGKILL");
-            else await approve(entry, opened.request, signer);
+            else if (!entry.delegation) await approve(entry, opened.request, signer, selectPermissions?.(opened.request));
           }
         }
       }
-      return { exitCode: await child.exited, stdout: await stdoutText, stderr, offered };
+      return { exitCode: await child.exited, stdout: await stdoutText, stderr, offered, links: [...seen] };
     } catch (error) {
       child.kill();
       await child.exited.catch(() => {});
@@ -320,9 +328,9 @@ describe.skipIf(!NODE_BIN)("tinycloud onboard, against a real node", () => {
     expect(Date.parse(entry.record.header.expiresAt)).toBe(Math.floor(Date.parse(entry.record.header.issuedAt) / 1000) * 1000 + 3600_000);
   }
 
-  function authority(permissions: ReadonlyArray<Omit<PermissionEntry, "space">>) {
+  function authority(permissions: Readonly<OpenKeyApprovalRequestV1["permissions"]>) {
     return permissions.map((permission) => ({ ...permission, actions: [...permission.actions].sort() }))
-      .sort((left, right) => left.service.localeCompare(right.service) || left.path.localeCompare(right.path));
+      .sort((left, right) => (left.space ?? "").localeCompare(right.space ?? "") || left.service.localeCompare(right.service) || left.path.localeCompare(right.path));
   }
 
   beforeAll(async () => {
@@ -414,7 +422,7 @@ globalThis.fetch = ((input: Parameters<typeof fetch>[0], init?: Parameters<typeo
         const parent = await stat(dirname(receiptPath));
         if (parent.uid !== process.getuid!() || (parent.mode & 0o077) !== 0) throw new Error("Fixture receipt requires its own private directory");
         const approvals = [...approvalRequests.values()].map((entry) => ({ requestId: entry.id, requestDigest: entry.record.header.bodyCid,
-          targetDid: entry.record.header.issuer, space: entry.request ? spaceOf(entry.request) : undefined,
+          targetDid: entry.record.header.issuer, spaces: entry.request ? spacesOf(entry.request) : undefined,
           grantLifetimeSeconds: entry.request?.grantLifetimeSeconds, signedLifetimeSeconds: entry.signedLifetimeSeconds,
           resultRef: entry.resultRef, ackId: entry.ackId }));
         await writeFile(receiptPath, JSON.stringify({ approvals, ackEvidence, ackChecks }, null, 2), { mode: 0o600, flag: "wx" });
@@ -449,52 +457,58 @@ globalThis.fetch = ((input: Parameters<typeof fetch>[0], init?: Parameters<typeo
     if (failure !== undefined) throw failure;
   });
 
-  test("a fresh home: two approvals, each for one space and 30 days; the grant does exactly what it names", async () => {
+  test("a fresh home resumes one saved step 1/1 request and stores one signed multi-space approval", async () => {
     await mkdir(home("agent"), { recursive: true, mode: 0o700 });
-    const first = await onboardWithApprovals("agent", (request) => spaceOf(request) === "applications" ? ownerSigner : null);
-    expect(first.exitCode).not.toBe(0);
-    expect(first.offered.map((entry) => spaceOf(entry.request!))).toEqual(["applications", "account"]);
-    const approval1 = first.offered[0]!;
-    expect(approval1.request).not.toHaveProperty("reason");
-    assertThirtyDays(approval1);
-    expect(new Set(approval1.request!.permissions.map((permission) => permission.space))).toEqual(new Set(["applications"]));
-    expect(authority(approval1.request!.permissions.map(({ space: _, ...permission }) => permission))).toEqual(authority([
-      { service: "tinycloud.capabilities", path: "", actions: ["tinycloud.capabilities/read"] },
-      { service: "tinycloud.kv", path: "", actions: ["tinycloud.kv/get", "tinycloud.kv/list", "tinycloud.kv/put", "tinycloud.kv/del", "tinycloud.kv/metadata"] },
-      { service: "tinycloud.sql", path: "", actions: ["tinycloud.sql/read", "tinycloud.sql/write"] },
+    const countBefore = approvalRequests.size;
+    const first = await onboardWithApprovals("agent", () => ownerSigner, ["onboard", "--timeout", "1s"]);
+    expect(first.exitCode, first.stderr + first.stdout).toBe(8);
+    const pending = JSON.parse(first.stdout).pending;
+    expect(pending).toMatchObject({ step: 1, of: 1 });
+    expect(first.offered).toHaveLength(1);
+    expect(first.links).toEqual([pending.approvalUrl]);
+    const approval = first.offered[0]!;
+    expect(approval.request).toMatchObject({
+      reason: "Set up TinyCloud on this computer: use your apps and see your spaces, for 30 days.",
+    });
+    expect(approval.request!.reason).not.toMatch(/tinycloud\.[a-z0-9_-]+:/i);
+    assertThirtyDays(approval);
+    expect(spacesOf(approval.request!)).toEqual(["account", "applications"]);
+    expect(authority(approval.request!.permissions)).toEqual(authority([
+      { service: "tinycloud.capabilities", space: "account", path: "", actions: ["tinycloud.capabilities/read"] },
+      { service: "tinycloud.kv", space: "account", path: "spaces/", actions: ["tinycloud.kv/get", "tinycloud.kv/list"] },
+      { service: "tinycloud.kv", space: "account", path: "applications/", actions: ["tinycloud.kv/get", "tinycloud.kv/list"] },
+      { service: "tinycloud.capabilities", space: "applications", path: "", actions: ["tinycloud.capabilities/read"] },
+      { service: "tinycloud.kv", space: "applications", path: "", actions: ["tinycloud.kv/get", "tinycloud.kv/list", "tinycloud.kv/put", "tinycloud.kv/del", "tinycloud.kv/metadata"] },
+      { service: "tinycloud.sql", space: "applications", path: "", actions: ["tinycloud.sql/read", "tinycloud.sql/write"] },
     ]));
     const beforeResume = await savedState("agent");
-    expect(beforeResume.session?.delegationCid).toBe(approval1.delegation!.delegationCid);
-    const accountRequestId = first.offered[1]!.id;
-    expect(beforeResume.pending.some((entry) => entry.requestId === accountRequestId)).toBe(true);
-    expect(beforeResume.grants.some((entry) => entry.delegation.spaceId.split(":").at(-1) === "account")).toBe(false);
-    expect((await cli("agent", ["kv", "get", "--space", "account", "spaces/applications"])).stderr).toContain("Unauthorized Action");
-    const done = await onboardWithApprovals("agent", (request) => {
-      if (spaceOf(request) !== "account") throw new Error("Resume requested an already-saved onboarding space");
-      return ownerSigner;
-    });
-    expect(done.exitCode).toBe(0);
-    expect(done.offered.map((entry) => entry.id)).toEqual([accountRequestId]);
-    const approval2 = done.offered[0]!;
-    assertThirtyDays(approval2);
-    expect(approval2.request!.permissions.filter((permission) => permission.service === "tinycloud.kv").map((permission) => [permission.path, permission.actions])).toEqual([
-      ["spaces/", ["tinycloud.kv/get", "tinycloud.kv/list"]],
-      ["applications/", ["tinycloud.kv/get", "tinycloud.kv/list"]],
-    ]);
-    expect(authority(approval2.request!.permissions.map(({ space: _, ...permission }) => permission))).toEqual(authority([
-      { service: "tinycloud.capabilities", path: "", actions: ["tinycloud.capabilities/read"] },
-      { service: "tinycloud.kv", path: "spaces/", actions: ["tinycloud.kv/get", "tinycloud.kv/list"] },
-      { service: "tinycloud.kv", path: "applications/", actions: ["tinycloud.kv/get", "tinycloud.kv/list"] },
-    ]));
+    expect(beforeResume.session).toBeNull();
+    expect(beforeResume.grants).toEqual([]);
+    expect(beforeResume.pending).toHaveLength(1);
+    expect(beforeResume.pending[0]).toMatchObject({ requestId: approval.id, approvalUrl: pending.approvalUrl, bodyCid: approval.record.header.bodyCid });
+    expect(beforeResume.pending[0]!.request.permissions).toEqual(approval.request!.permissions);
+    expect(approval.ackId).toBeUndefined();
+    expect((await cli("agent", ["kv", "get", "--space", "account", "spaces/applications"])).stderr).toContain("AUTH_REQUIRED");
+    const done = await onboardWithApprovals("agent", () => ownerSigner, ["onboard", "--timeout", "1s"]);
+    expect(done.exitCode, done.stderr + done.stdout).toBe(0);
+    expect(done.offered.map(entry => entry.id)).toEqual([approval.id]);
+    expect(done.links).toEqual(first.links);
+    expect(approvalRequests.size - countBefore).toBe(1);
     const result = JSON.parse(done.stdout) as { onboarded: boolean; profile: string; ownerDid: string };
     expect(result.onboarded).toBe(true);
     expect(result.profile).toBe("default");
     expect(result.ownerDid.toLowerCase()).toBe(`did:pkh:eip155:1:${(await ownerSigner.getAddress()).toLowerCase()}`);
     const afterResume = await savedState("agent");
-    expect(afterResume.session?.delegationCid).toBe(beforeResume.session?.delegationCid);
-    expect(afterResume.grants.some((entry) => entry.delegation.cid === approval2.delegation!.delegationCid)).toBe(true);
-    expect(approval1.ackId).toBeDefined();
-    expect(approval2.ackId).toBeDefined();
+    expect(afterResume.session?.delegationCid).toBe(approval.delegation!.delegationCid);
+    expect(afterResume.pending).toEqual([]);
+    expect(afterResume.grants).toEqual([]);
+    const address = await ownerSigner.getAddress();
+    expect(new Set((afterResume.session!.permissions as PermissionEntry[]).map(permission => permission.space))).toEqual(new Set([
+      wasm.makeSpaceId(address, 1, "account"), wasm.makeSpaceId(address, 1, "applications"),
+    ]));
+    expect(afterResume.session!.spaceId).toBe(wasm.makeSpaceId(address, 1, "applications"));
+    expect(approval.ackId).toBeDefined();
+    expect(ackEvidence.filter(entry => entry.requestId === approval.id)).toHaveLength(1);
     const repeated = await onboardWithApprovals("agent", () => { throw new Error("Completed onboarding requested another approval"); });
     expect(repeated.exitCode).toBe(0);
     expect(repeated.offered).toHaveLength(0);
@@ -519,27 +533,96 @@ globalThis.fetch = ((input: Parameters<typeof fetch>[0], init?: Parameters<typeo
     expect((await cli("agent", ["kv", "get", "--space", "account", "outside-prefix"])).stderr).toContain("Unauthorized Action");
   });
 
-  test("a signed result for a different wallet is refused and onboarding retains its saved applications step", async () => {
+  test("a different wallet's multi-space approval is refused and the saved applications session stays intact", async () => {
     await mkdir(home("forged"), { recursive: true, mode: 0o700 });
+    const manifest = join(root, "applications-only.json");
+    await writeFile(manifest, JSON.stringify({ app_id: "onboard-refusal", name: "Applications", space: "applications", prefix: "", defaults: false,
+      includePublicSpace: false, permissions: [{ service: "tinycloud.kv", space: "applications", path: "", actions: ["tinycloud.kv/get", "tinycloud.kv/list"] }] }), { mode: 0o600 });
+    expect((await cli("forged", ["init", "--key-only"])).exitCode).toBe(0);
+    const original = await onboardWithApprovals("forged", () => ownerSigner,
+      ["auth", "login", "--manifest", manifest, "--expiry", "30d", "--no-popup"]);
+    expect(original.exitCode, original.stderr + original.stdout).toBe(0);
+    const applications = await savedState("forged");
+    expect((await cli("forged", ["kv", "get", "--space", "account", "spaces/applications"])).stderr).toContain("Unauthorized Action");
     const forger = new PrivateKeySigner("59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d");
-    let applications: SavedState | undefined;
-    const forged = await onboardWithApprovals("forged", async (request) => {
-      if (spaceOf(request) === "applications") return ownerSigner;
-      if (spaceOf(request) !== "account") throw new Error("Unexpected onboarding space");
-      applications = await savedState("forged");
-      return forger;
-    });
-    expect(forged.offered.map((entry) => spaceOf(entry.request!))).toEqual(["applications", "account"]);
+    const forged = await onboardWithApprovals("forged", () => forger);
+    expect(forged.offered).toHaveLength(1);
+    expect(spacesOf(forged.offered[0]!.request!)).toEqual(["account", "applications"]);
     expect(forged.exitCode).not.toBe(0);
-    expect(forged.stderr.includes("OPENKEY_OWNER_MISMATCH")).toBe(true);
+    expect(forged.stderr).toContain("OPENKEY_OWNER_MISMATCH");
     expect(forged.stdout).toBe("");
-    const rejected = forged.offered[1]!;
+    const rejected = forged.offered[0]!;
     expect(rejected.resultRef).toBeDefined();
     expect(rejected.ackId).toBeUndefined();
     const after = await savedState("forged");
-    expect(after.session?.delegationCid).toBe(applications!.session?.delegationCid);
-    expect(after.profile?.ownerDid).toBe(applications!.profile?.ownerDid);
-    expect(after.grants.some((entry) => entry.delegation.cid === rejected.delegation!.delegationCid)).toBe(false);
+    expect(after.session?.delegationCid).toBe(applications.session?.delegationCid);
+    expect(after.profile?.ownerDid).toBe(applications.profile?.ownerDid);
+    expect(after.grants.some(entry => entry.delegation.cid === rejected.delegation!.delegationCid)).toBe(false);
     expect(rejected.ackId).toBeUndefined();
+  });
+
+  test("a narrowed multi-space approval stores no partial session and is not acknowledged", async () => {
+    const narrowed = await onboardWithApprovals("narrowed", () => ownerSigner, ["onboard"], request => request.permissions.map(permission =>
+      permission.space === "account" && permission.path === "spaces/"
+        ? { ...permission, actions: permission.actions.filter(action => action !== "tinycloud.kv/list") } : permission));
+    expect(narrowed.offered).toHaveLength(1);
+    expect(narrowed.exitCode).not.toBe(0);
+    expect(narrowed.stderr).toContain("OPENKEY_APPROVAL_NARROWER");
+    expect(narrowed.stdout).toBe("");
+    const rejected = narrowed.offered[0]!;
+    expect(rejected.resultRef).toBeDefined();
+    expect(rejected.ackId).toBeUndefined();
+    const after = await savedState("narrowed");
+    expect(after.session).toBeNull();
+    expect(after.grants).toEqual([]);
+  });
+
+  test("onboard --with feed: one approval for the feed set for 7 days with no account listing, then an agent connects, imports its grant and publishes a card", async () => {
+    await mkdir(home("feed-owner"), { recursive: true, mode: 0o700 });
+    const onboarded = await onboardWithApprovals("feed-owner", () => ownerSigner, ["onboard", "--with", "feed"]);
+    expect(onboarded.exitCode, onboarded.stderr).toBe(0);
+    expect(onboarded.offered).toHaveLength(1);
+    const approval = onboarded.offered[0]!;
+    expect(approval.request).toMatchObject({ reason: "Set up TinyCloud on this computer: use your Feed, for 7 days." });
+    expect(spacesOf(approval.request!)).toEqual(["applications"]);
+    expect(approval.request!.permissions.map(permission => [permission.service, permission.path])).toEqual([
+      ["tinycloud.capabilities", ""],
+      ["tinycloud.hooks", "sql/xyz.tinycloud.tinychat/feed/"],
+      ["tinycloud.sql", "xyz.tinycloud.tinychat/feed/"],
+      ["tinycloud.sql", "xyz.tinycloud.tinychat/home_feed"],
+    ]);
+    expect(approval.request!.grantLifetimeSeconds).toBe(7 * 86400);
+    expect(approval.signedLifetimeSeconds).toBe(7 * 86400);
+    expect(JSON.parse(onboarded.stdout)).toMatchObject({ onboarded: true });
+    // The owner's own profile holds no kv grant and no account access: only the feed set.
+    expect((await cli("feed-owner", ["kv", "get", "--space", "applications", "anything"])).stderr).toContain("Unauthorized Action");
+    expect((await cli("feed-owner", ["kv", "get", "--space", "account", "spaces/applications"])).stderr).toContain("Unauthorized Action");
+
+    // The /feed guide's steps, with no account step and no second approval before connecting.
+    await mkdir(home("feed-agent"), { recursive: true, mode: 0o700 });
+    const created = await cli("feed-agent", ["profile", "create", "feed-demo", "--posture", "delegate-session", "--operator", "agent"]);
+    expect(created.exitCode, created.stderr).toBe(0);
+    const agentDid = (JSON.parse(created.stdout) as { did: string }).did;
+    const connected = await cli("feed-owner", ["feed", "connect", "--agent", "demo", "--to", agentDid, "--label", "Demo agent", "--space", "applications", "--expiry", "7d"]);
+    expect(connected.exitCode, connected.stderr).toBe(0);
+    const grantFile = join(home("feed-agent"), "feed-demo-grant.json");
+    await writeFile(grantFile, connected.stdout, { mode: 0o600 });
+    const imported = await cli("feed-agent", ["--profile", "feed-demo", "auth", "import", grantFile]);
+    expect(imported.exitCode, imported.stderr).toBe(0);
+    expect(JSON.parse(imported.stdout)).toMatchObject({ imported: true });
+    const cardFile = join(home("feed-agent"), "card.json");
+    await writeFile(cardFile, JSON.stringify({
+      cardId: "demo-card-1", revision: 1, issuanceId: "demo-card-1-r1", kind: "update", needsResponse: false,
+      title: "Feed works", body: "Posted by an agent that onboarded with --with feed.", urgency: 1, createdAt: new Date().toISOString().replace(/\.\d+Z$/, "Z"),
+      payload: { summary: "Posted without the account step.", agent: { kind: "claude", model: "test", runsOn: "test", job: "e2e" }, priority: 4, render: "post" },
+    }), { mode: 0o600 });
+    const published = await cli("feed-agent", ["--profile", "feed-demo", "feed", "publish", "--agent", "demo", "--file", cardFile]);
+    expect(published.exitCode, published.stderr + published.stdout).toBe(0);
+    const agentList = await cli("feed-agent", ["--profile", "feed-demo", "feed", "list", "--agent", "demo"]);
+    expect(agentList.exitCode, agentList.stderr).toBe(0);
+    expect(agentList.stdout).toContain("demo-card-1");
+    const ownerList = await cli("feed-owner", ["feed", "list", "--agent", "demo", "--space", "applications"]);
+    expect(ownerList.exitCode, ownerList.stderr).toBe(0);
+    expect(ownerList.stdout).toContain("demo-card-1");
   });
 });

@@ -182,6 +182,7 @@ import {
   resolveRegistryResource,
   warnRegistryDefaultNode,
   NodeNotFoundError,
+  isKnownTinyCloudNode,
   exactHttpOrigin,
   createInMemoryRegistrySequenceStore,
   createInMemoryRegistryCacheStore,
@@ -1437,6 +1438,8 @@ export class TinyCloudNode {
   private wasmBindings: IWasmBindings;
   private sessionManager: ISessionManager;
   private _serviceGraph!: ServiceGraphLifetime;
+  /** The node-verified renewed end recorded by {@link restoreSessionWithRenewal}, for the service graph it restored. */
+  private renewedSessionEnd?: { graph: ServiceGraphLifetime; end: Date };
   private readonly _requestLog?: RequestLog;
   private _serviceContext?: ServiceContext;
   private _kv?: KVService;
@@ -2183,6 +2186,7 @@ export class TinyCloudNode {
       createPlacement: this.config.sharePlacementSigner || this.config.privateKey
         ? share => this.createPlacementForShare(receiveOnlyGraph, share) : undefined,
       receivedPlacementTransport: share => this.transportForPlacedShare(receiveOnlyGraph, share),
+      receivedHostHintTransport: host => this.transportForShareHost(receiveOnlyGraph, host),
       hosts: [this.config.host!],
       // session: undefined - not needed for receive()
       invoke: receiveOnlyGraph.invoke,
@@ -2428,8 +2432,19 @@ export class TinyCloudNode {
     return this.createResourceTransport(graph, undefined, { record, parent });
   }
 
+  /**
+   * A received v1 share's own host as the no-record destination. Only a known
+   * node (production, or one the recipient configured) is accepted; the
+   * registry record still decides whenever the owner has one.
+   */
+  private transportForShareHost(graph: ServiceGraphLifetime, host: string): ResourceTransport | undefined {
+    const { newUserHost, tinycloudFallbackHosts } = this.config;
+    if (!isKnownTinyCloudNode(host, [this.explicitHost, newUserHost, ...(tinycloudFallbackHosts ?? [])])) return undefined;
+    return this.createResourceTransport(graph, undefined, undefined, [host]);
+  }
+
   private createResourceTransport(graph: ServiceGraphLifetime, session?: ServiceSession,
-    placement?: { record: SharePlacement; parent: SharePlacementParent }): ResourceTransport {
+    placement?: { record: SharePlacement; parent: SharePlacementParent }, noEntryHosts?: readonly string[]): ResourceTransport {
     const rawFetch = this.fetchForGraph(graph);
     return async (resources, send, options) => {
       graph.assertActive();
@@ -2442,7 +2457,7 @@ export class TinyCloudNode {
               cacheStore: this.config.registryCacheStore, registryChainId: this.config.registryChainId,
               fetch: rawFetch as typeof fetch,
             }).then((destinations) => endToEnd ? destinations.map((destination) => ({ ...destination, url: endToEndNodeHost(destination.url) })) : destinations)
-            : await this.routingDestinations(requestedResource, requestedAccess, undefined, dataRead, endToEnd);
+            : await this.routingDestinations(requestedResource, requestedAccess, noEntryHosts, dataRead, endToEnd);
           graph.assertActive();
           return targets;
         },
@@ -2784,6 +2799,7 @@ export class TinyCloudNode {
       }
       this.assertSessionEpoch(epoch, "Session renewal restore");
       await this.restoreSessionInternal(sessionData, { allowExpired: true, effectiveExpiry: effectiveExpiryDate });
+      this.renewedSessionEnd = { graph: this._serviceGraph, end: effectiveExpiryDate };
     } finally {
       candidate._serviceGraph.retire();
       (candidate.tc as { retireServices?: () => void } | null)?.retireServices?.();
@@ -3006,6 +3022,22 @@ export class TinyCloudNode {
    */
   get restorableSession(): TinyCloudSession | undefined {
     return this.currentTinyCloudSession();
+  }
+
+  /**
+   * When the current session's authority ends: after {@link restoreSessionWithRenewal}, the renewed end the node
+   * reported at that restore; otherwise the signed expiry. Undefined without a session or a signed expiry.
+   * Delegations from this session end by it.
+   */
+  get sessionEnd(): Date | undefined {
+    const session = this.currentTinyCloudSession();
+    return session ? this.sessionAuthorityEnd(session) : undefined;
+  }
+
+  private sessionAuthorityEnd(session: TinyCloudSession): Date | undefined {
+    const signed = extractSiweExpiration(session.siwe);
+    const renewed = this.renewedSessionEnd;
+    return renewed && renewed.graph === this._serviceGraph && signed && renewed.end > signed ? renewed.end : signed;
   }
 
   /** The active, verified replica stamp. Undefined when the replica is refused or the session has ended. */
@@ -5493,6 +5525,7 @@ export class TinyCloudNode {
       createPlacement: this.config.sharePlacementSigner || this.config.privateKey
         ? share => this.createPlacementForShare(graph, share) : undefined,
       receivedPlacementTransport: share => this.transportForPlacedShare(graph, share),
+      receivedHostHintTransport: host => this.transportForShareHost(graph, host),
       hosts: [input.host],
       invoke: graph.invoke,
       fetch: graph.fetch,
@@ -6689,6 +6722,7 @@ export class TinyCloudNode {
       createPlacement: this.config.sharePlacementSigner || this.config.privateKey
         ? share => this.createPlacementForShare(graph, share) : undefined,
       receivedPlacementTransport: share => this.transportForPlacedShare(graph, share),
+      receivedHostHintTransport: host => this.transportForShareHost(graph, host),
       hosts: [this.config.host!],
       session: serviceSession,
       invoke: graph.invoke,
@@ -8391,7 +8425,7 @@ export class TinyCloudNode {
     if (!session) {
       throw new SessionExpiredError(new Date(0));
     }
-    const sessionExpiry = extractSiweExpiration(session.siwe);
+    const sessionExpiry = this.sessionAuthorityEnd(session);
     if (sessionExpiry !== undefined) {
       const now = Date.now();
       const marginMs = TinyCloudNode.SESSION_EXPIRY_SAFETY_MARGIN_MS;
@@ -8633,7 +8667,7 @@ export class TinyCloudNode {
       return { refused: "SESSION_EXPIRING", expiredAt: new Date(0) };
     }
     const nowMs = Date.now();
-    const sessionExpiry = extractSiweExpiration(session.siwe);
+    const sessionExpiry = this.sessionAuthorityEnd(session);
     if (
       sessionExpiry !== undefined &&
       sessionExpiry.getTime() <= nowMs + TinyCloudNode.SESSION_EXPIRY_SAFETY_MARGIN_MS

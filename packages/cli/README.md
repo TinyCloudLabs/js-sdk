@@ -155,7 +155,7 @@ tinycloud space create
 tinycloud delegation create --to did:pkh:eip155:1:0x...
 ```
 
-## Home feed
+## TinyCloud One feed
 
 `tinycloud feed` uses separate owner-provisioned SQLite databases for each agent's
 cards/handling and the owner's append-only responses. Owner registry and view
@@ -210,7 +210,7 @@ tinycloud --profile feed-agent feed watch --agent writer --recipient agent-runti
 ```
 
 Run `watch` in the agent terminal, then save `response.json` from the owner
-profile in another terminal, or answer the card through Home.
+profile in another terminal, or answer the card in TinyCloud One.
 
 Without `--runner`, `watch` prints each new response as one JSON line on stdout.
 With `--once`, it exits after the first batch of new responses, which wakes an
@@ -427,7 +427,7 @@ History reads use the existing output read capability and perform no DDL or writ
 
 ### Raw owner-only source export
 
-`feed export` captures raw KV source bytes, not resolved Home cards or a restore plan.
+`feed export` captures raw KV source bytes, not resolved TinyCloud One feed cards or a restore plan.
 Supply the full approved source space, a space-relative namespace ending in `/`,
 and an unused output path. There is no installed-legacy or production default:
 
@@ -502,7 +502,7 @@ evaluate legacy expiry, restore state, or dispatch pending responses.
 | `tinycloud sql query <sql>` | Run a SQLite SELECT query |
 | `tinycloud sql execute <sql>` | Run a SQLite write or schema statement |
 | `tinycloud sql export` | Export a SQLite database file |
-| `tinycloud feed` | Connect an agent, publish cards, save responses, record handling, and watch for runtime handoff; see [Home feed](#home-feed) |
+| `tinycloud feed` | Connect an agent, publish cards, save responses, record handling, and watch for runtime handoff; see [TinyCloud One feed](#tinycloud-one-feed) |
 | `tinycloud space list` | List your spaces |
 | `tinycloud space create` | Create a new space |
 | `tinycloud delegation create` | Grant access to another user |
@@ -517,7 +517,7 @@ evaluate legacy expiry, restore state, or dispatch pending responses.
 | `tinycloud secrets` | Manage network-encrypted secrets |
 | `tinycloud secrets network show` | Show a secrets decryption network |
 | `tinycloud secrets network init` | Create or fetch the default secrets network |
-| `tinycloud secrets network grant` | Grant `tinycloud.encryption/decrypt` on a secrets network |
+| `tinycloud secrets network grant` | Let someone read every secret in an encryption network (`tinycloud.encryption/decrypt` on the whole network) |
 | `tinycloud secrets run` | Run a command with secrets in its environment |
 | `tinycloud secrets request` | Print a Secret Manager link asking the owner to add secrets (offline) |
 | `tinycloud secrets wait` | Wait until secrets exist and are readable (never signs in; needs a stored session; exit 8 pending, 130 interrupted) |
@@ -530,8 +530,9 @@ evaluate legacy expiry, restore state, or dispatch pending responses.
 Secret names are env-style uppercase identifiers such as `FIREFLIES_API_KEY`.
 `tinycloud secrets network show` accepts either a short network name or a full
 `urn:tinycloud:encryption:<ownerDid>:<network>` identifier. `tinycloud secrets
-network grant` takes the short name, resolves the network, and grants
-`tinycloud.encryption/decrypt`.
+network grant` takes the short network name, resolves the network, and grants
+`tinycloud.encryption/decrypt` on the whole network: every secret in it,
+including secrets added later. The JSON output carries `"scope":"whole-network"`.
 
 `tinycloud apps install` re-creates the pinned views on every run (reported as
 `viewsRecreated`). Knowledge notes whose bytes differ from the pinned version
@@ -651,10 +652,11 @@ The one-hour request expiry is independent of the requested grant lifetime and
 result retention. A manifest login without `--expiry` requests one hour (seven
 days for `builtin:share-publishing`), a login without a manifest keeps its
 seven-day default, and onboarding requests
-30 days explicitly. `--paste` remains an explicit manual fallback with a
+30 days explicitly (7 days when the Feed is among the tasks, or the `--expiry` given, at most 30 days), in one approval for every task it asks for
+(`tinycloud onboard --with apps|feed|apps,feed`; `apps` when omitted). `--paste` remains an explicit manual fallback with a
 five-minute, single-use return code, not the automatic short-link transport.
 
-`tinycloud onboard --timeout 60s` and `tinycloud auth grant REQUEST.json --timeout 60s` bound the wait for the owner's OpenKey approval (more than 0, at most 9m; longer values, 0 and garbage are usage errors, exit 2 `INVALID_TIMEOUT`). Use `60s` where a command may not run past 2 minutes. **Exit 8 WITH a `pending` object is not a failure:** `{"pending":{"step":N,"of":M,"approvalUrl":"<link>","expiresAt":"<ISO time>"}}` on stdout means send the owner the `approvalUrl` (only the owner, privately: the link lets anyone who has it view the request), ask them to approve, and re-run the same command with the same `--timeout`; when the link changes at step 2 of 2, send the NEW link. It is printed once as soon as a new link has been created (so it can be sent at once), and again when the wait ends with a resumed link still unanswered. `auth grant req.json --timeout 60s > grant.json` writes that object into `grant.json` on exit 8; check the exit code before using the file. stderr keeps its human text. A pending link is reused, never replaced, and a second approval is never requested. `onboard` has 2 steps; `auth grant` is step 1 of 1 (an agent grant covers exactly one space). On a profile that does not sign in through OpenKey, `auth grant --timeout` is accepted and has nothing to bound. `onboard` refuses `--timeout` together with `--code` (exit 2): running it again would send the same code to the next step. Exit 0 prints the normal result. Exit 3 `APPROVAL_REQUEST_EXPIRED` means the link expired: run the command again. The usual end is one OpenKey call: its HTTP 400 `invalid_request` answer to a status check after the link's own expiry is exit 3 and the saved request is dropped, so the next run makes a new request with a new link (exit 3 can appear twice before that, once when the link expires while the wait is on and once for the 400). A request approved just before its expiry is still collected: OpenKey serves an approved result until its own retention ends (production `APPROVAL_RESULT_RETENTION_SECONDS=600`, `docker-compose.prod.yml:28` in the OpenKey repo). Only a saved request that expired more than 11 minutes ago (10 min retention + 1 min clock skew) and holds no result is dropped without asking OpenKey. Exit 8 WITHOUT a `pending` object (`APPROVAL_REQUEST_UNAVAILABLE`, `APPROVAL_RESULT_UNAVAILABLE`, `APPROVAL_ACK_PENDING`, `APPROVAL_RESULT_ACKNOWLEDGED`) means OpenKey could not be reached or could not confirm in time; run the same command again, the saved state resumes. An HTTP 400 `APPROVAL_REQUEST_UNAVAILABLE` before the link's own `expiresAt` is not an expiry and could be a real fault: if it repeats, ask for help (do not delete anything). A network failure while waiting for a link that is still valid is reported as `pending` too, so check its `expiresAt`. Once the owner has approved, the command never reports that approval as pending: it collects, verifies, saves and acknowledges the result even past the timeout, for up to 30 s more (an acknowledgement whose reply was lost is re-sent on the next run with the same id). The total is at most the timeout plus 30 s plus up to 3 s plus local and node work; an `onboard` that moves on to step 2 also creates that link, one request of up to 10 s, so `--timeout 60s` ends in about 105 s at the most for an existing account. A new account's storage can take a moment: after step 1 the call also waits for OpenKey to host the space, for the time left of the timeout plus the 30 s grace (at least 15 s, instead of the 150 s an unbounded `onboard` waits); on a new account that is about 90 s for `--timeout 60s`, at worst a little under 2 minutes. If the space isn't ready by then, the call ends with exit 1 `SPACE_SETUP_PENDING`. A re-run checks the space first and waits for it (up to the same bound), then continues with step 2. A storage command that says `Space not found` right after setup can succeed a minute later. OpenKey keeps an approved result for 10 minutes, so run the command again right after sending the link. A stale `.lock` left by a killed run is reclaimed after 30 s: wait 30 s and run it again (exit 1 `PROFILE_LOCK_TIMEOUT`). Without `--timeout` the command waits until the approval is answered.
+`tinycloud onboard --timeout 60s` and `tinycloud auth grant REQUEST.json --timeout 60s` bound the wait for the owner's OpenKey approval (more than 0, at most 9m; longer values, 0 and garbage are usage errors, exit 2 `INVALID_TIMEOUT`). Use `60s` where a command may not run past 2 minutes. **Exit 8 WITH a `pending` object is not a failure:** `{"pending":{"step":N,"of":M,"approvalUrl":"<link>","expiresAt":"<ISO time>"}}` on stdout means send the owner the `approvalUrl` (only the owner, privately: the link lets anyone who has it view the request), ask them to approve, and re-run the same command with the same `--timeout`; if the link changes, send the new link. It is printed once as soon as a new link has been created (so it can be sent at once), and again when the wait ends with a resumed link still unanswered. `auth grant req.json --timeout 60s > grant.json` writes that object into `grant.json` on exit 8; check the exit code before using the file. stderr keeps its human text. A pending link is reused, never replaced, and a second approval is never requested. `onboard` and `auth grant` are step 1 of 1: onboarding asks for every task in one approval, and an agent grant covers exactly one space. On a profile that does not sign in through OpenKey, `auth grant --timeout` is accepted and has nothing to bound. `onboard` refuses `--timeout` together with `--code` (exit 2). Exit 0 prints the normal result. Exit 3 `APPROVAL_REQUEST_EXPIRED` means the link expired: run the command again. The usual end is one OpenKey call: its HTTP 400 `invalid_request` answer to a status check after the link's own expiry is exit 3 and the saved request is dropped, so the next run makes a new request with a new link (exit 3 can appear twice before that, once when the link expires while the wait is on and once for the 400). A request approved just before its expiry is still collected: OpenKey serves an approved result until its own retention ends (production `APPROVAL_RESULT_RETENTION_SECONDS=600`, `docker-compose.prod.yml:28` in the OpenKey repo). Only a saved request that expired more than 11 minutes ago (10 min retention + 1 min clock skew) and holds no result is dropped without asking OpenKey. Exit 8 WITHOUT a `pending` object (`APPROVAL_REQUEST_UNAVAILABLE`, `APPROVAL_RESULT_UNAVAILABLE`, `APPROVAL_ACK_PENDING`, `APPROVAL_RESULT_ACKNOWLEDGED`) means OpenKey could not be reached or could not confirm in time; run the same command again, the saved state resumes. An HTTP 400 `APPROVAL_REQUEST_UNAVAILABLE` before the link's own `expiresAt` is not an expiry and could be a real fault: if it repeats, ask for help (do not delete anything). A network failure while waiting for a link that is still valid is reported as `pending` too, so check its `expiresAt`. Once the owner has approved, the command never reports that approval as pending: it collects, verifies, saves and acknowledges the result even past the timeout, for up to 30 s more (an acknowledgement whose reply was lost is re-sent on the next run with the same id). The total is at most the timeout plus 30 s plus up to 3 s plus local and node work, so `--timeout 60s` ends in about 95 s at the most for an existing account. A new account's storage can take a moment: after the approval the call also waits for OpenKey to host each requested space (those stderr lines start with the space id), for the time left of the timeout plus the 30 s grace (at least 15 s, instead of the 150 s an unbounded `onboard` waits); on a new account that is about 90 s for `--timeout 60s`, at worst a little under 2 minutes. If a space isn't ready by then, the call ends with exit 1 `SPACE_SETUP_PENDING`. A re-run checks the spaces first and waits for them (up to the same bound), without a new approval. A storage command that says `Space not found` right after setup can succeed a minute later. OpenKey keeps an approved result for 10 minutes, so run the command again right after sending the link. A stale `.lock` left by a killed run is reclaimed after 30 s: wait 30 s and run it again (exit 1 `PROFILE_LOCK_TIMEOUT`). Without `--timeout` the command waits until the approval is answered.
 
 A resumed approval completes at least one status check of OpenKey whatever the `--timeout`, even a very short one (a new link exits 8 at once, with no check): the command can take up to about 10 s longer than the timeout (with the 30 s collect grace, at most about 9m40s for `--timeout 9m`), and if OpenKey does not answer that check it exits 6 instead of reporting the approval as pending.
 
@@ -688,6 +690,15 @@ equivalent yet (TC-1309). On macOS and Windows, `replica reset --purge` and
 `auth logout` with a legacy `replicas/` tree refuse local removal rather than
 delete through an unpinned path; leave that tree intact and retry on a supported
 platform.
+
+An agent (delegate-session) profile with no local replica state keeps its key on
+`auth logout`; only `session.json` is removed, and the output says "Signed out.
+The key is kept, so a new grant can be imported for it. Grants already made for
+this key stay valid until they expire unless the owner revokes them." (`keyKept: true`).
+`tinycloud auth import` of a grant addressed to that key then makes it the
+profile's session, replacing a live, expired or signed-out one. Every other
+logout deletes the key: "Signed out. The key was deleted; the next sign-in
+creates a new one." (`keyKept: false`).
 
 `auth logout` durably fences replica reads, removes both legacy replicas and the
 flag-owned `replication/` root, and shreds `session.json` and `key.json`. If
@@ -724,7 +735,7 @@ record (for example, restored from an older copy) refuses logout; switch the
 default profile if needed, then run `tinycloud profile delete <name>` and sign in
 again.
 
-`auth logout`, `auth rotate`, and replica-enabled `auth login` that replaces the
+`auth logout` (when it deletes the key), `auth rotate`, and replica-enabled `auth login` that replaces the
 profile's share-history key check the sender share history first. If it records
 unexpired shares, or cannot be read, the command refuses with exit 5
 (`SHARE_HISTORY_UNEXPIRED` or `SHARE_HISTORY_UNAVAILABLE`) and changes nothing.

@@ -43,6 +43,7 @@ import {
 } from "./artifacts.js";
 import { redactOperationError } from "./redaction.js";
 import { safeOriginHost } from "./safe-values.js";
+import { OWNER_SESSION_EXPIRY_MS } from "./session-lifetime.js";
 import { withTinyCloudStateRoot } from "./state.js";
 import type { InvocationRuntimeResolution } from "./runtime.js";
 import {
@@ -260,6 +261,7 @@ async function retryWithLocalAuthority(
     const grantRuntimePermissions = (operationContext.runtime.node as {
       grantRuntimePermissions?: (
         permissions: PermissionEntry[],
+        options?: { expiry?: string | number },
       ) => Promise<unknown>;
     }).grantRuntimePermissions;
     if (typeof grantRuntimePermissions !== "function") {
@@ -268,6 +270,7 @@ async function retryWithLocalAuthority(
     await grantRuntimePermissions.call(
       operationContext.runtime.node,
       first.missing as unknown as PermissionEntry[],
+      { expiry: OWNER_SESSION_EXPIRY_MS },
     );
 
     const resolveSpace = operationSpaceResolver(

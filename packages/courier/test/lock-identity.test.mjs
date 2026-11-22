@@ -7,7 +7,6 @@ import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
 import { acquireLock, formatRemovalCommand, lockRefusal, machineIdentity } from '../dist/file-lock.js';
-import { removalCommand } from './support/lock-identity.mjs';
 
 const HOME = process.env.COURIER_HOME;
 fs.mkdirSync(HOME, { recursive: true, mode: 0o700 });
@@ -102,8 +101,9 @@ test('the host is compared before the boot: a renamed host after a reboot keeps 
   const run = await take('renamed', content, here('M', LINUX_NEW));
   assert.equal(run.taken, false);
   assert.equal(run.kept, content);
-  assert.match(run.message, /only after confirming no Courier command is running/);
-  assert.ok(run.message.endsWith(removalCommand(run.file)), run.message);
+  assert.match(run.message, /cannot tell/);
+  assert.match(run.message, /old-name/);
+  assert.doesNotMatch(run.message, /rm -f|Remove-Item/);
 });
 
 test('a machine-id shared by two hosts (a cloned image) never lets one judge the other\'s lock', async () => {
@@ -190,15 +190,12 @@ test('a record without a machine (an old pid-only lock) is never judged', async 
 // ---- the refusal line ----
 
 test('the recovery command matches the platform: POSIX rm, or PowerShell Remove-Item with the path quoted literally', () => {
-  const info = { file: '/home/u/.courier/profile.json.lock', reason: 'unknown', pid: 7, host: 'h' };
-  assert.ok(lockRefusal(info, 'linux').endsWith("rm -f -- '/home/u/.courier/profile.json.lock'"));
-  assert.ok(lockRefusal({ ...info, file: "/tmp/it's.lock" }, 'darwin').endsWith("rm -f -- '/tmp/it'\\''s.lock'"));
-  const win = lockRefusal({ ...info, file: "C:\\Users\\o'brien\\.courier\\profile.json.lock" }, 'win32');
-  assert.ok(win.endsWith("Remove-Item -LiteralPath 'C:\\Users\\o''brien\\.courier\\profile.json.lock' -Force"), win);
+  assert.equal(formatRemovalCommand('/home/u/.courier/profile.json.lock', 'linux'), "rm -f -- '/home/u/.courier/profile.json.lock'");
+  const win = formatRemovalCommand("C:\\Users\\o'brien\\.courier\\profile.json.lock", 'win32');
+  assert.equal(win, "Remove-Item -LiteralPath 'C:\\Users\\o''brien\\.courier\\profile.json.lock' -Force");
   assert.equal(formatRemovalCommand("/tmp/it's.lock", 'darwin'), "rm -f -- '/tmp/it'\\''s.lock'");
   const quotedWinPath = "C:\\Users\\o'brien\\.courier\\\u2018file\u2019.json";
   assert.equal(formatRemovalCommand(quotedWinPath, 'win32'), "Remove-Item -LiteralPath 'C:\\Users\\o''brien\\.courier\\\u2018\u2018file\u2019\u2019.json' -Force");
-  assert.ok(win.includes('only after confirming no Courier command is running anywhere'));
   assert.ok(!win.includes('rm -f'));
 });
 
@@ -260,24 +257,23 @@ function powershellLiteral(command) {
 
 test('windows recovery: every PowerShell single-quote character in the path is doubled, so the path stays one literal', () => {
   for (const file of ["C:\\Users\\o'brien\\p.lock", 'C:\\Users\\o\u2019brien\\p.lock', 'C:\\a\u2018b\u201Ac\u201Bd\u201Ce\\p.lock'.replace('\u201C', "'")]) {
-    const line = lockRefusal({ file, reason: 'unknown', pid: 7, host: 'h' }, 'win32');
-    const command = line.slice(line.indexOf('Remove-Item'));
+    const command = formatRemovalCommand(file, 'win32');
     assert.equal(powershellLiteral(command), file);
   }
 });
 
 // ---- test-ruling: TC-2384 ----
-// A holder is dead only on (a) a different true boot id on the same host, or (b) ESRCH. A pid that exists is `unknown` and the lock is kept,
+// A holder is dead only on (a) a different true boot id on the same host, or (b) ESRCH. A pid that exists is `alive` and the lock is kept,
 // whatever its start time, state or owner. The earlier tests that took a differing start time, a zombie state or a foreign /proc as proof of
 // death (and the /proc namespace machinery they needed) were removed with that machinery.
 
-test('test-ruling: a pid that exists is kept even when the record carries a start time that differs (a reused pid needs the manual fix)', async () => {
+test('test-ruling: a pid that exists is kept even when the record carries a start time that differs', async () => {
   const content = record({ pid: process.pid, machine: 'M', boot: LINUX_HERE, start: '1', timens: 'time:[4026539999]' });
   const run = await take('exists-start', content, here('M', LINUX_HERE));
   assert.equal(run.taken, false);
   assert.equal(run.kept, content);
-  assert.match(run.message, /cannot tell/);
-  assert.match(run.message, /only after confirming no Courier command is running/);
+  assert.match(run.message, new RegExp(`running Courier command \\(pid ${process.pid}\\b`));
+  assert.doesNotMatch(run.message, /rm -f|Remove-Item/);
 });
 
 test('test-ruling: a pid that exists is kept even when /proc reports it as exited (zombie)', linux, async (t) => {

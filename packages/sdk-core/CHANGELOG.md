@@ -1,5 +1,72 @@
 # @tinycloudlabs/sdk-core
 
+## 3.14.0-beta.3
+
+### Patch Changes
+
+- 628be3c: User-facing text in the CLI and SDK names the product TinyCloud One. `AccountSetupRequiredError` sends people to https://tinycloud.one/ to finish setting up their account. The CLI README's feed section is titled "TinyCloud One feed" (anchor `#tinycloud-one-feed`), and `tinycloud feed --help` and the CLI auth skill say TinyCloud One.
+
+  Upgrading: `AccountSetupRequiredError.setupUrl` is "https://tinycloud.one/". Code that compared it with "https://home.tinycloud.xyz/" needs this value.
+
+  Details: TC-3659
+
+## 3.14.0-beta.2
+
+### Patch Changes
+
+- 18a0e38: Browser sign-in through OpenKey's versioned approval works in bundles that do not provide Node's `Buffer`. `extractRecapAttenuations` decodes the signed message's recap with `atob` and `TextDecoder`; a recap payload that is not valid base64 is refused with the error "Failed to decode urn:recap: payload".
+
+  Details: TC-3639
+
+- 81884ce: A share link's host is used when the owner has no registry record and the host is a known TinyCloud node: a production node, or a host the recipient configured (`host`, `newUserHost` or `tinycloudFallbackHosts`). Share links to owners without a registry record open from recipients that have no `newUserHost`, including `TinyCloudWeb.receiveShare`. The owner's registry record decides whenever it exists, and v2 shares and receives that delegate to the current session don't use the link host. `@tinycloud/sdk-core` exports `isKnownTinyCloudNode`, and `SharingService` takes an optional `receivedHostHintTransport` callback that `TinyCloudNode` supplies.
+
+  Details: TC-3661
+
+## 3.13.0
+
+### Minor Changes
+
+- 2395340: Share one item made of several resources with a single link, and open it in an app.
+  - `sharing.generate({ resources: [{ path, actions? }, …] })` grants up to 16 distinct paths in one share, with one owner approval when a new root is needed. `path`/`actions` keep working for a single resource. `onRootDelegationNeeded` now also receives `resources`, and a root it returns must be the owner's signature over every resource.
+  - `sharing.delegateReceivedShare` signs one child over every shared resource (or narrows to one with `path`), and reports a node refusal for a revoked chain as `REVOKED` and an expired one as `AUTH_EXPIRED`.
+  - `inspectShareToken(token)` checks a share token offline against the owner's wallet signature and returns the owner, the exact resources, when access ends and the root delegation's CID. Use it for anything shown before a share is claimed.
+  - `useDelegation` on a delegation of several resources gives a `kv` that takes full keys; `DelegatedAccess.resources` and `ShareAccess.resources` list every resource.
+  - `@tinycloud/share-sdk/native-link` adds `publishNativeShareLink` and `openNativeShareLink`: a short link to a sealed record carrying the share and up to 8 KiB of app display data, opened without reading the owner's node. The display data is not signed by the owner.
+
+  Details: TC-3194
+
+- 400cf7f: A secret can carry an optional type: `secret` (the default), `totp`, `username` or `password`. `secrets.put(name, value, { type })` stores the type inside the encrypted secret. The new `secrets.getEntry(name)` returns `{ value, type, createdAt, updatedAt }`; a secret with no stored type, or with a type the client doesn't know, reads as `secret`.
+
+  `secrets.get` is unchanged, and older clients still read typed secrets, since they only need `value`. Storing `secret`, or no type, writes the same payload as before.
+
+  `@tinycloud/sdk-services/secrets/totp` (not exported from the package root) adds `parseTotpSeed` (an `otpauth://totp/` link or a bare base32 seed), `generateTotp` (RFC 6238, SHA1/SHA256/SHA512) and `totpSecondsRemaining`.
+
+  `tinycloud secrets put --type <secret|totp|username|password>` sets the type. For `totp`, the value must be a valid seed: an `otpauth://totp/` link or a bare base32 seed.
+
+  Details: TC-3285
+
+### Patch Changes
+
+- c7741ab: `DelegationManager.revokeIssued` reports `NOT_FOUND` only for the node's own `404 Space not found` answer. Any other 404 (a proxy page, an empty body, another route's text) is now a failed request (`NETWORK_ERROR` with `meta.status` 404), so a caller can no longer mistake it for "the delegation is gone". `tinycloud feed disconnect` relies on this: it removes the registry row only for the node's answer, and keeps it on any other failure.
+
+  Details: TC-3150
+
+- 1f961e4: A share link no longer carries `tinycloud.delegation` actions, so whoever holds a link can't revoke, create, list or renew delegations with it. `sharing.generate`, and `delegateReceivedShare` (or `receive` when it sub-delegates) for a received link, now refuse any `tinycloud.delegation/*` action with `INVALID_INPUT`, before anything is signed or sent. `sharing.preflightGenerate` reports such a link as `"not-covered"`, so it never says `"ok"` for a link `generate` refuses. Read, list and edit shares are unchanged.
+
+  Details: TC-3286
+
+- 7399b14: Vault and secrets requests to the production node now go to its dedicated address, including listings of the whole key space. So do grants that name or cover vault data, and sessions that name vault entries. Self-hosted nodes are unchanged.
+
+  Details: TC-2944
+
+- Updated dependencies [0490f71]
+- Updated dependencies [2395340]
+- Updated dependencies [313b056]
+- Updated dependencies [400cf7f]
+- Updated dependencies [7399b14]
+  - @tinycloud/sdk-services@3.13.0
+  - @tinycloud/share-sdk@1.6.0
+
 ## 3.13.0-beta.9
 
 ### Patch Changes

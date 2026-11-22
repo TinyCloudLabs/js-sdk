@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { LOCAL, removalCommand } from './support/lock-identity.mjs';
+import { LOCAL } from './support/lock-identity.mjs';
 import { acquireLock, emptyState, ensureRealDir, readState, writeNew, writeReplace } from '../dist/intake/queue.js';
 
 const DEAD_PID = 2147483646;
@@ -184,7 +184,7 @@ test('release leaves a lock with the same pid but another nonce', () => {
   assert.equal(fs.readFileSync(file, 'utf8'), `${process.pid}\n`);
 });
 
-test('an intake lock held by an unknown holder is kept, and the refusal is one line with the lock path, the holder and the safe command', () => {
+test('an intake lock held by an unknown holder is kept, and the refusal is one line with the lock path, the holder and inspection advice', () => {
   const file = path.join(tempDir(), 'intake.lock');
   const body = `${JSON.stringify({ pid: 4242, nonce: 'foreign0001', host: 'other-host.example', machine: 'm' })}\n`;
   fs.writeFileSync(file, body);
@@ -192,8 +192,8 @@ test('an intake lock held by an unknown holder is kept, and the refusal is one l
     assert.equal(e.code, 'locked');
     assert.equal(e.message.includes('\n'), false, 'one line');
     assert.ok(e.message.includes(file) && e.message.includes('4242') && e.message.includes('other-host.example'), e.message);
-    assert.ok(e.message.endsWith(removalCommand(file)), e.message);
-    assert.match(e.message, /only after confirming no Courier command is running/);
+    assert.match(e.message, /cannot tell/);
+    assert.doesNotMatch(e.message, /rm -f|Remove-Item/);
     return true;
   });
   assert.equal(fs.readFileSync(file, 'utf8'), body, 'the lock stays');

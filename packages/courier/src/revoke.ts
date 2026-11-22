@@ -48,4 +48,19 @@ export async function revokePeer(node: TinyCloudNode, profile: Profile, handle: 
     profile.peers[handle]!.outbound.find((e) => e.cid === record.cid)!.revokedAt = new Date().toISOString();
     save();
   }
+  // A renewal may have signed and persisted a child just before activation, then lost the local-save race to this
+  // revoke (the SDK aborts activation on that save's refusal) or crashed between the two: best-effort, so a prepared
+  // CID this revoke's own inventory pass never saw (not yet active, or the node hasn't indexed it yet) is not left live.
+  const preparing = profile.peers[handle]!.interim?.preparing;
+  if (preparing && !profile.peers[handle]!.outbound.some((e) => e.cid === preparing.cid && e.revokedAt)) {
+    const result = await node.delegationManager.revokeIssued(preparing.cid).catch(() => undefined);
+    if (result?.ok) {
+      const current = profile.peers[handle]!;
+      const revokedAt = new Date().toISOString();
+      const entry = current.outbound.find((e) => e.cid === preparing.cid);
+      if (entry) entry.revokedAt = revokedAt;
+      if (current.interim?.preparing?.cid === preparing.cid) delete current.interim.preparing;
+      save();
+    }
+  }
 }

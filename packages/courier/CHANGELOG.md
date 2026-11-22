@@ -1,5 +1,107 @@
 # @tinycloud/courier
 
+## 0.8.0-beta.4
+
+### Minor Changes
+
+- 4e4d845: OpenKey sign-in through an approval link asks the owner to let the grant renew itself.
+  - `tc auth login` asks for a 30-day renewal by default. A sign-in that asks for any encryption permission (decrypt included) or for the secrets space asks for no renewal unless `--renew` names one. `--renew <duration>` asks for another length (longer than `--expiry` and at most 365d) and `--no-renew` asks for none. `tc status` shows when a renewing sign-in stops renewing.
+  - `courier init --request` and `courier init --wait` ask for a 90-day renewal by default. `--renew <duration>` asks for another length and `--renew off` asks for none.
+  - The owner can approve with or without renewal. A saved request is resumed only by a run that asks for the same renewal.
+  - A renewing Courier grant keeps its peers' access going past the grant's signed end, up to the end the node has renewed it to.
+  - `TinyCloudNode.sessionEnd` gives when the session's authority ends. After `restoreSessionWithRenewal` it is the renewed end the node reported, and `delegateTo` can delegate up to it.
+
+  Details: TC-3522
+
+### Patch Changes
+
+- Updated dependencies [4e4d845]
+  - @tinycloud/node-sdk@3.14.0-beta.4
+
+## 0.7.1-beta.3
+
+### Patch Changes
+
+- Updated dependencies [628be3c]
+  - @tinycloud/sdk-core@3.14.0-beta.3
+  - @tinycloud/node-sdk@3.14.0-beta.3
+
+## 0.7.1-beta.2
+
+### Patch Changes
+
+- Updated dependencies [18a0e38]
+- Updated dependencies [81884ce]
+  - @tinycloud/sdk-core@3.14.0-beta.2
+  - @tinycloud/node-sdk@3.14.0-beta.2
+
+## 0.7.1-beta.1
+
+### Patch Changes
+
+- 13853a9: Revoking a Courier pairing while it is being renewed also ends the access the renewal grants.
+
+  Details: TC-3485
+
+## 0.7.1-beta.0
+
+### Patch Changes
+
+- Updated dependencies
+  - @tinycloud/node-sdk@3.14.0-beta.1
+
+## 0.7.0
+
+### Minor Changes
+
+- 0576031: The CLI, the hosted MCP server and Courier now use `https://node.tinycloud.xyz` as the default TinyCloud node, in place of `https://tee.node.tinycloud.xyz`. Profiles that already store a host keep it. To choose a node: for the CLI, pass `--host <url>`, set `TC_HOST` or create a profile with `tinycloud profile create <name> --host <url>`; for the MCP server, set `TC_HOST`; for Courier, pass `--host <url>` or set `COURIER_HOST`.
+
+  Details: TC-2923
+
+- b228ca4: Read exact messages with `read <thread> --peer <peer> --message <id>` (repeat up to 20 ids), without downloading the thread archive. Each side reports found, missing or incomplete outcomes; message reads use a 64 KiB per-value limit and a shared 10-second data-read deadline. Receipt-update warnings use fixed text.
+
+  Details: TC-2749
+
+### Patch Changes
+
+- 08fec32: Courier holds `profile.json.lock` only while it reads or saves the profile, not during network operations, and saves are safe when several Courier commands run at once. When a running process holds the lock, the error names its pid. `watch` logs a profile lock timeout and retries.
+
+  Details: TC-3431
+
+- 7caf1da: `courier watch` now reads its state back after a state write whose outcome is unknown (a timeout, a dropped connection or `outcome_unknown`). If the stored state is unchanged or is its own write, it keeps running. A write by any other process is still a `state-conflict`: the watcher stands by (`--once` exits).
+
+  Details: TC-2802
+
+- Updated dependencies [9f3ca26]
+- Updated dependencies [2395340]
+- Updated dependencies [634753d]
+- Updated dependencies [b758e71]
+- Updated dependencies [c7741ab]
+- Updated dependencies [9f3ca26]
+- Updated dependencies [1f961e4]
+- Updated dependencies [313b056]
+- Updated dependencies [400cf7f]
+- Updated dependencies [7399b14]
+  - @tinycloud/node-sdk@3.13.0
+  - @tinycloud/sdk-core@3.13.0
+  - @tinycloud/share-sdk@1.6.0
+
+## 0.7.0-beta.12
+
+### Patch Changes
+
+- 08fec32: Courier holds `profile.json.lock` only while it reads or saves the profile, not during network operations, and saves are safe when several Courier commands run at once. When a running process holds the lock, the error names its pid. `watch` logs a profile lock timeout and retries.
+
+  Details: TC-3431
+
+## 0.7.0-beta.11
+
+### Patch Changes
+
+- 7caf1da: `courier watch` now reads its state back after a state write whose outcome is unknown (a timeout, a dropped connection or `outcome_unknown`). If the stored state is unchanged or is its own write, it keeps running. A write by any other process is still a `state-conflict`: the watcher stands by (`--once` exits).
+
+  Details: TC-2802
+
 ## 0.7.0-beta.10
 
 ### Patch Changes

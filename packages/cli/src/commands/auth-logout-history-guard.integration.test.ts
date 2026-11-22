@@ -140,3 +140,20 @@ test("logout --revoke skips the share history check on unreadable history", asyn
   expect(revoked.exitCode).not.toBe(5);
   expect(revoked.stderr).not.toContain("SHARE_HISTORY_");
 }, CHILD_TIMEOUT_MS);
+
+// TC-3434: an agent profile's plain logout keeps its key, so it skips the check; --keep-replicas deletes the key.
+test.each([
+  [["auth", "logout"], 0, true],
+  [["auth", "logout", "--keep-replicas"], 5, false],
+] as const)("delegate-session %p on unreadable history exits %p (skips the check: %p)", async (args, exitCode, skipped) => {
+  const home = await scratchHome("tc3434-logout-guard-agent-");
+  const paths = await seedOpenKeyProfile(home, "not-json-history");
+  await withTinyCloudStateRoot(home, async () => {
+    const profile = JSON.parse(await readFile(profileConfigPath(PROFILE), "utf8")) as Record<string, unknown>;
+    await writeJsonAtomic(profileConfigPath(PROFILE), { ...profile, posture: "delegate-session" });
+  });
+  const result = await run(home, [...args]);
+  expect(result.exitCode, result.stderr).toBe(exitCode);
+  expect(result.stderr.includes("SHARE_HISTORY_UNAVAILABLE")).toBe(!skipped);
+  expect(await readFile(paths.key, "utf8")).toBe(SESSION_KEY);
+}, CHILD_TIMEOUT_MS);

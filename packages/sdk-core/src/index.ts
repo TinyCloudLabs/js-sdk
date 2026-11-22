@@ -1038,6 +1038,7 @@ export {
   createLocalStorageLocalNodeIdentityStore,
   discoverLocalTinyCloudNode,
   exactHttpOrigin,
+  isKnownTinyCloudNode,
   fetchLocationRecord,
   httpUrlToMultiaddr,
   locationPayloadForRecord,
@@ -1243,7 +1244,6 @@ export {
   genericAppManifest,
   genericAppManifestWarning,
   ownerFullAccess,
-  warnOnceWithoutAppHost,
 } from "./owner-access";
 export { FIRST_PARTY_ORIGINS, FIRST_PARTY_PAGES_SUBDOMAINS, isFirstPartyOrigin } from "@tinycloud/bootstrap";
 export { verifiedDelegationRouting, delegationTouchesVault, sessionTouchesVault, spaceIdsEqual } from "./delegations/portable";

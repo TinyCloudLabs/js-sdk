@@ -27,10 +27,8 @@ import {
   DEFAULT_MANIFEST_SPACE,
   ENCRYPTION_PERMISSION_SERVICE,
   composeManifestRequest,
-  GENERIC_APP_ID_WITHOUT_HOST,
   genericAppManifest,
   genericAppManifestWarning,
-  warnOnceWithoutAppHost,
   principalDidEquals,
   resourceCapabilitiesToAbilitiesMap,
   resourceCapabilitiesToSpaceAbilitiesMap,
@@ -240,11 +238,11 @@ function addRawAbility(
   }
 }
 
-/** Prefer an app space; an account-only manifest must sign into its authorized account space. */
+/** Primary route only: applications when requested, otherwise the first canonical requested space. */
 function primaryManifestSpace(resources: readonly ResourceCapability[]): string {
-  return resources.find((entry) => entry.space !== "account")?.space ??
-    resources[0]?.space ??
-    DEFAULT_MANIFEST_SPACE;
+  const spaces = [...new Map(resources.map(entry => [pkhSpaceIdentity(entry.space), entry.space])).entries()]
+    .sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).map(([, space]) => space);
+  return spaces.find(space => space === "applications" || space.endsWith(":applications")) ?? spaces[0] ?? DEFAULT_MANIFEST_SPACE;
 }
 
 function cloneAbilitiesMap(actions: AbilitiesMap): AbilitiesMap {
@@ -963,17 +961,11 @@ export class NodeUserAuthorization implements IUserAuthorization {
     return this._capabilityRequest;
   }
 
-  /**
-   * One console line per sign-in that falls back to the generic manifest, and
-   * once per process when that folder is the shared one for apps without a domain.
-   */
+  /** One console line per sign-in that falls back to the generic manifest. */
   private warnIfGenericManifest(): void {
     const request = this.getCapabilityRequest();
     if (request !== undefined && request === this.genericRequest?.request) {
       console.warn(genericAppManifestWarning(this.genericRequest.manifest));
-      if (this.genericRequest.manifest.app_id === GENERIC_APP_ID_WITHOUT_HOST) {
-        warnOnceWithoutAppHost(GENERIC_APP_ID_WITHOUT_HOST);
-      }
     }
   }
 
@@ -998,6 +990,20 @@ export class NodeUserAuthorization implements IUserAuthorization {
         ? []
         : (manifest.keys ?? []).map((entry) => "path" in entry ? entry.path : entry.prefix),
     );
+  }
+
+  private primaryRequestedSpace(
+    request: ComposedManifestRequest, fallback: readonly ResourceCapability[], address: string, chainId: number,
+  ): string {
+    // Registry permissions are signed companions, not a request to route the app
+    // through account. Choose among the manifest's own requested spaces first.
+    const requested = request.manifests.length === 0 ? []
+      : composeManifestRequest(request.manifests, { includeAccountRegistryPermissions: false }).resources
+        .filter(entry => entry.service !== ENCRYPTION_PERMISSION_SERVICE);
+    const grantedSpaces = new Set(fallback.map(entry => pkhSpaceIdentity(this.resolveSpaceName(entry.space, address, chainId))));
+    const candidates = requested.filter(entry => grantedSpaces.has(pkhSpaceIdentity(this.resolveSpaceName(entry.space, address, chainId))));
+    return primaryManifestSpace((candidates.length ? candidates : fallback)
+      .map(entry => ({ ...entry, space: this.resolveSpaceName(entry.space, address, chainId) })));
   }
 
   private resolveSpaceName(space: string, address: string, chainId: number): string {
@@ -1093,7 +1099,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
     const spaceResources = request.resources.filter(
       (entry) => entry.service !== ENCRYPTION_PERMISSION_SERVICE,
     );
-    const primarySpaceName = primaryManifestSpace(spaceResources);
+    const primarySpaceName = this.primaryRequestedSpace(request, spaceResources, address, chainId);
     const primarySpaceId = this.resolveSpaceName(
       primarySpaceName,
       address,
@@ -1283,7 +1289,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
       return false;
     });
 
-    const primarySpaceName = primaryManifestSpace(spaceResources);
+    const primarySpaceName = this.primaryRequestedSpace(request, spaceResources, address, chainId);
     const primarySpaceId = this.resolveSpaceName(
       primarySpaceName,
       address,

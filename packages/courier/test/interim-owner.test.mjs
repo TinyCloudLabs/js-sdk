@@ -116,6 +116,7 @@ test('structured owner 401/403 stops issuance and makes subsequent runtime start
     writeSecure(path.join(f.home, 'profile.json'), profile);
     let queries = 0;
     const node = { credentialHolderDid: profile.courierDid, restorableSession: { delegationCid: f.grant.delegationCid, siwe: f.grant.siwe },
+      get sessionEnd() { return new Date(/Expiration Time: (.+)/.exec(this.restorableSession.siwe)[1]); },
       delegationManager: { queryAllIssued: async () => { queries++; return { ok: false, error: { meta: { status } } }; } } };
     await assert.rejects(maintainPeerSet(node), { code: 'owner-authority-refused' });
     assert.equal(queries, 1);
@@ -134,6 +135,7 @@ test('an unavailable issued listing cannot cause an automatic owner approval bef
     outbound: [{ cid: 'prior', expiresAt: f.grant.expiresAt, issuedAt: new Date().toISOString() }] };
   writeSecure(path.join(f.home, 'profile.json'), profile);
   const node = { credentialHolderDid: profile.courierDid, restorableSession: { delegationCid: f.grant.delegationCid, siwe: f.grant.siwe },
+    get sessionEnd() { return new Date(/Expiration Time: (.+)/.exec(this.restorableSession.siwe)[1]); },
     delegationManager: { queryAllIssued: async () => ({ ok: false, error: { meta: { status: 503 } } }) } };
   await withoutNetwork(async calls => { await maintainPeerSet(node); assert.equal(calls(), 0); });
   assert.equal(loadOwnerEpisode(), undefined);

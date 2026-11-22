@@ -2921,28 +2921,30 @@ function isSharePublishingPrefixDecrypt(permission2) {
 function isDeviceDefaultDecrypt(permission2) {
   return permission2.service === ENCRYPTION_PERMISSION_SERVICE && permission2.space === "default" && permission2.path === "" && permission2.actions.length === 1 && permission2.actions[0] === "tinycloud.encryption/decrypt" && !permission2.caveats?.length;
 }
+function isSecretsSpacePermission(permission2) {
+  return permission2.space === "secrets" || permission2.space?.endsWith(":secrets") === true;
+}
 function deviceRefusal(entries) {
   for (const entry of entries) {
-    if (entry.space === "secrets" || entry.space?.endsWith(":secrets") === true) return "secrets";
+    if (isSecretsSpacePermission(entry)) return "secrets";
     if (entry.service === ENCRYPTION_PERMISSION_SERVICE && !isDeviceDefaultDecrypt(entry)) return entry;
   }
   return void 0;
 }
-function deviceRefusalMessage(refused, subject, next) {
+function deviceRefusalMessage(refused, next) {
+  if (refused === "secrets") return DEVICE_SECRETS_REFUSAL;
   const allowed = `The only encryption permission --device can ask for is ${DEVICE_DECRYPT_ALLOWED}.`;
-  if (refused === "secrets") {
-    return `--device can't authorize the secrets space, and ${subject} asks for it. ${allowed} ${next}`;
-  }
   const actions = refused.actions.slice(0, 5).map((action) => safeClipped(action)).join(", ") || "no actions";
   return `--device can't ask for ${actions} on space "${safeClipped(refused.space ?? "")}", path "${safeClipped(refused.path)}"${refused.caveats?.length ? " with extra limits" : ""}. ${allowed} ${next}`;
 }
-var DEVICE_DECRYPT_ALLOWED;
+var DEVICE_DECRYPT_ALLOWED, DEVICE_SECRETS_REFUSAL;
 var init_raw_encryption = __esm({
   "src/lib/raw-encryption.ts"() {
     "use strict";
     init_manifest();
     init_safe_text();
     DEVICE_DECRYPT_ALLOWED = 'tinycloud.encryption/decrypt on the default network (space "default", path "")';
+    DEVICE_SECRETS_REFUSAL = "--device can't read secrets yet. Use tinycloud auth login --paste instead.";
   }
 });
 
@@ -3312,14 +3314,14 @@ async function loadManifestPermissions(source, profile, options = {}) {
   if (options.device && typeof manifest.app_id === "string") {
     const refused = manifest.secrets !== void 0 || manifest.space === "secrets" || typeof manifest.space === "string" && manifest.space.endsWith(":secrets") ? "secrets" : deviceRefusal(appManifestEntries(manifest));
     if (refused !== void 0) {
-      throw new CLIError("DEVICE_AUTH_UNSUPPORTED_SCOPE", deviceRefusalMessage(refused, "this manifest", DEVICE_MANIFEST_NEXT), ExitCode.USAGE_ERROR);
+      throw new CLIError("DEVICE_AUTH_UNSUPPORTED_SCOPE", deviceRefusalMessage(refused, DEVICE_MANIFEST_NEXT), ExitCode.USAGE_ERROR);
     }
   }
   if (typeof manifest.id === "string") {
     const resolved = resolveManifest(manifest);
     const refused = options.device ? deviceRefusal(resolved.resources) : void 0;
     if (refused !== void 0) {
-      throw new CLIError("DEVICE_AUTH_UNSUPPORTED_SCOPE", deviceRefusalMessage(refused, "this manifest", DEVICE_MANIFEST_NEXT), ExitCode.USAGE_ERROR);
+      throw new CLIError("DEVICE_AUTH_UNSUPPORTED_SCOPE", deviceRefusalMessage(refused, DEVICE_MANIFEST_NEXT), ExitCode.USAGE_ERROR);
     }
     return resolvePermissionSpaces(resolved.resources, profile, options);
   }
@@ -6080,8 +6082,8 @@ function fetched(key, result, request) {
   }
   return { bytes: result.data.data, etag: result.data.headers.etag ?? "" };
 }
-function kvSyncTransport(kv2, options = {}) {
-  const host = options.host ?? kv2.host;
+function kvSyncTransport(kv3, options = {}) {
+  const host = options.host ?? kv3.host;
   const fetchFn = options.fetch ?? globalThis.fetch.bind(globalThis);
   return {
     async syncPage({ prefix, cursor, limit, retentionGrant, signal }) {
@@ -6100,7 +6102,7 @@ function kvSyncTransport(kv2, options = {}) {
           );
         }
       }
-      const result = await kv2.changes({
+      const result = await kv3.changes({
         prefix,
         limit,
         ...cursor === void 0 ? {} : { cursor },
@@ -6115,7 +6117,7 @@ function kvSyncTransport(kv2, options = {}) {
       if (keys.length === 0) return contents;
       const signal = options2?.signal;
       const ordered = [...keys].sort(compareKeyBytes);
-      const batch = await kv2.batchGet(ordered, { binary: true, ...signal === void 0 ? {} : { signal } });
+      const batch = await kv3.batchGet(ordered, { binary: true, ...signal === void 0 ? {} : { signal } });
       if (batch.ok) {
         for (const item of batch.data.results) {
           const result = item.result;
@@ -6128,7 +6130,7 @@ function kvSyncTransport(kv2, options = {}) {
       for (const key of keys) {
         if (contents.has(key)) continue;
         const request = `Failed to get key ${JSON.stringify(key)}`;
-        contents.set(key, fetched(key, await kv2.get(key, { binary: true, ...signal === void 0 ? {} : { signal } }), request));
+        contents.set(key, fetched(key, await kv3.get(key, { binary: true, ...signal === void 0 ? {} : { signal } }), request));
       }
       return contents;
     }
@@ -7070,20 +7072,20 @@ function effectiveAuthority2(input) {
 }
 function wrap(native) {
   const statements = /* @__PURE__ */ new Map();
-  const prepared = (sql2) => {
-    let statement = statements.get(sql2);
+  const prepared = (sql3) => {
+    let statement = statements.get(sql3);
     if (statement === void 0) {
-      statement = native.prepare(sql2);
-      statements.set(sql2, statement);
+      statement = native.prepare(sql3);
+      statements.set(sql3, statement);
     }
     return statement;
   };
   return {
-    exec: (sql2) => native.exec(sql2),
-    run: (sql2, ...params) => void prepared(sql2).run(...params),
+    exec: (sql3) => native.exec(sql3),
+    run: (sql3, ...params) => void prepared(sql3).run(...params),
     // bun:sqlite answers a missing row with null, node:sqlite with undefined.
-    get: (sql2, ...params) => prepared(sql2).get(...params) ?? void 0,
-    all: (sql2, ...params) => prepared(sql2).all(...params),
+    get: (sql3, ...params) => prepared(sql3).get(...params) ?? void 0,
+    all: (sql3, ...params) => prepared(sql3).all(...params),
     close: () => {
       let failure;
       try {
@@ -7776,11 +7778,11 @@ CREATE TABLE IF NOT EXISTS grant_install (
       "pending_grant_consent_anchor_at REAL",
       "pending_grant_consent_anchor_source TEXT"
     ];
-    normalizeSchema = (sql2) => sql2.replace(" IF NOT EXISTS", "").replace(/\s+/g, " ").trim();
-    SOURCE_SCHEMA = SCHEMA.trim().split(";").map((sql2) => sql2.trim()).filter(Boolean).map((sql2) => {
-      const match = /^CREATE (TABLE|INDEX) IF NOT EXISTS ([a-z_]+)/.exec(sql2);
+    normalizeSchema = (sql3) => sql3.replace(" IF NOT EXISTS", "").replace(/\s+/g, " ").trim();
+    SOURCE_SCHEMA = SCHEMA.trim().split(";").map((sql3) => sql3.trim()).filter(Boolean).map((sql3) => {
+      const match = /^CREATE (TABLE|INDEX) IF NOT EXISTS ([a-z_]+)/.exec(sql3);
       if (match === null) throw new Error("Invalid source replica schema.");
-      return { type: match[1].toLowerCase(), name: match[2], sql: normalizeSchema(sql2) };
+      return { type: match[1].toLowerCase(), name: match[2], sql: normalizeSchema(sql3) };
     });
     V1_SCHEMA = SOURCE_SCHEMA.filter((entry) => entry.name !== "grant_install");
     POLICY_REPLICA = V1_SCHEMA.find((entry) => entry.name === "replica").sql.replace(/\) STRICT$/, `, ${POLICY_COLUMNS.join(", ")}) STRICT`);
@@ -9631,19 +9633,29 @@ async function assertPendingRemoteLogoutSession(name, expected) {
     }
   }, { requireProfile: true });
 }
-async function clearProfileCredentials(name, syncDirectory = false, legacyCleanup = false) {
+function logoutKeepsKey(profile) {
+  return resolveProfilePosture(profile) === "delegate-session" && profile.legacyReplicaCleanup !== true;
+}
+async function clearProfileCredentials(name, syncDirectory = false, legacyCleanup = false, keepKey = false) {
   await ProfileManager.withLock(name, async () => {
     const profile = await ProfileManager.getProfile(name);
-    const { namedKeys: _namedKeys, ...signedOutProfile } = profile;
+    const { namedKeys: _namedKeys, authKeyRetained: _authKeyRetained, ...signedOutProfile } = profile;
     await rm5(join10(profilePath4(name), "approval-pending.json"), { force: true });
-    await ProfileManager.setProfileDurable(name, { ...signedOutProfile, authSignedOut: true, ...legacyCleanup ? { legacyReplicaCleanup: true } : {} });
+    await ProfileManager.setProfileDurable(name, {
+      ...signedOutProfile,
+      authSignedOut: true,
+      ...keepKey ? { authKeyRetained: true } : {},
+      ...legacyCleanup ? { legacyReplicaCleanup: true } : {}
+    });
     let failed = false;
     let error;
-    try {
-      await ProfileManager.removeKey(name);
-    } catch (cause) {
-      failed = true;
-      error = cause;
+    if (!keepKey) {
+      try {
+        await ProfileManager.removeKey(name);
+      } catch (cause) {
+        failed = true;
+        error = cause;
+      }
     }
     try {
       await ProfileManager.clearSession(name);
@@ -9668,7 +9680,7 @@ async function finishSignedOutCredentialRemoval(name) {
     throw error;
   });
   if (profile?.authSignedOut !== true) return;
-  for (const file of ["session.json", "key.json"]) {
+  for (const file of profile.authKeyRetained === true ? ["session.json"] : ["session.json", "key.json"]) {
     try {
       await lstat5(join10(profilePath4(name), file));
     } catch (error) {
@@ -9676,8 +9688,9 @@ async function finishSignedOutCredentialRemoval(name) {
       throw error;
     }
     await ProfileManager.withLock(name, async () => {
-      if ((await ProfileManager.getProfile(name)).authSignedOut === true) {
-        await clearProfileCredentials(name, true);
+      const current = await ProfileManager.getProfile(name);
+      if (current.authSignedOut === true) {
+        await clearProfileCredentials(name, true, false, current.authKeyRetained === true);
       }
     }, { requireProfile: true });
     return;
@@ -9802,6 +9815,7 @@ var init_logout_pending = __esm({
     init_profile_gate();
     init_profiles();
     init_constants();
+    init_types();
     init_errors();
     init_profile_replicas();
     init_replication_log();
@@ -9823,7 +9837,7 @@ __export(sdk_exports, {
   selectSignerJwk: () => selectSignerJwk,
   storedSessionVerifiesLocally: () => storedSessionVerifiesLocally
 });
-import { createProfileRegistryCacheStore, createProfileRegistrySequenceStore } from "@tinycloud/operations/state";
+import { createProfileRegistryCacheStore, createProfileRegistrySequenceStore, profilePath as profilePath5 } from "@tinycloud/operations/state";
 import { TinyCloudNode, signedCompactUcanExpiry } from "@tinycloud/node-sdk";
 import { CLI_NAME as CLI_NAME7 } from "@tinycloud/operations/cli-name";
 import { liveStoredLease, ownerSessionLacksProof, restoreStoredSession } from "@tinycloud/operations/profile";
@@ -10062,7 +10076,7 @@ async function createSDKInstance(ctx, options) {
   }
   return node;
 }
-async function bootstrapDelegatedSession(ctx, delegation) {
+async function bootstrapDelegatedSession(ctx, delegation, options = {}) {
   const written = await ProfileManager.withLock(ctx.profile, async () => {
     const previousProfile = await ProfileManager.getProfile(ctx.profile);
     if (resolveProfilePosture(previousProfile) !== "delegate-session") {
@@ -10080,7 +10094,8 @@ async function bootstrapDelegatedSession(ctx, delegation) {
         ExitCode.PERMISSION_DENIED
       );
     }
-    if (await ProfileManager.getSession(ctx.profile) !== null) {
+    const previousSession = await ProfileManager.getSession(ctx.profile);
+    if (previousSession !== null && options.replaceSession !== true) {
       throw new CLIError(
         "PROFILE_CHANGED_DURING_IMPORT",
         `Profile "${ctx.profile}" gained a session (another login or import) after this import checked it. Nothing was saved; run the import again.`,
@@ -10088,7 +10103,11 @@ async function bootstrapDelegatedSession(ctx, delegation) {
       );
     }
     if (signedLifetimePassed(delegation)) throw delegationExpiredError();
-    const jwk = signerJwkForProfile(ctx.profile, void 0, await ProfileManager.getKey(ctx.profile));
+    const jwk = signerJwkForProfile(
+      ctx.profile,
+      previousSession && "jwk" in previousSession ? previousSession.jwk : void 0,
+      await ProfileManager.getStoredKey(ctx.profile)
+    );
     const session = {
       delegationHeader: delegation.delegationHeader,
       delegationCid: delegation.cid,
@@ -10096,15 +10115,25 @@ async function bootstrapDelegatedSession(ctx, delegation) {
       jwk,
       verificationMethod: sessionDid
     };
-    const { namedKeys: _namedKeys, ...previousFields } = previousProfile;
+    const {
+      namedKeys: _namedKeys,
+      authSignedOut: _authSignedOut,
+      authKeyRetained: _authKeyRetained,
+      ...previousFields
+    } = previousProfile;
     const profile = { ...previousFields, sessionDid, spaceId: delegation.spaceId };
     try {
       await ProfileManager.setSession(ctx.profile, session);
-      await ProfileManager.setProfile(ctx.profile, profile);
+      if (previousProfile.authSignedOut === true) {
+        await syncAuthCredentialFiles(profilePath5(ctx.profile));
+        await ProfileManager.setProfileDurable(ctx.profile, profile);
+      } else {
+        await ProfileManager.setProfile(ctx.profile, profile);
+      }
     } catch (error) {
-      throw annotate(error, await restoreBeforeBootstrap(ctx.profile, previousProfile));
+      throw annotate(error, await restoreBeforeBootstrap(ctx.profile, previousProfile, previousSession));
     }
-    return { previousProfile, profile, session };
+    return { previousProfile, previousSession, profile, session };
   });
   const abandon = async (cause) => {
     const reported = cause instanceof CLIError && cause.code === "AUTH_REQUIRED" && signedLifetimePassed(delegation) ? delegationExpiredError() : cause;
@@ -10117,7 +10146,7 @@ async function bootstrapDelegatedSession(ctx, delegation) {
       if (profile === null || BOOTSTRAP_PROFILE_FIELDS.some((field) => profile[field] !== written.profile[field]) || JSON.stringify(session) !== JSON.stringify(written.session)) {
         return `Profile "${ctx.profile}" changed while the import was pending (another login, logout or profile update), so its newer state was kept and the provisional session was not rolled back.`;
       }
-      return restoreBeforeBootstrap(ctx.profile, written.previousProfile);
+      return restoreBeforeBootstrap(ctx.profile, written.previousProfile, written.previousSession);
     }, { timeoutMs: PROFILE_COMMIT_LOCK_TIMEOUT_MS }).catch((error) => (
       // The lock or a read failed: the import's error stays the one reported.
       `Rolling back the provisional session of profile "${ctx.profile}" could not run (${failureName(error)}); check \`${CLI_NAME7} --profile ${ctx.profile} context\`.`
@@ -10132,15 +10161,15 @@ async function bootstrapDelegatedSession(ctx, delegation) {
   }
   return { node, abandon };
 }
-async function restoreBeforeBootstrap(profileName2, previousProfile) {
+async function restoreBeforeBootstrap(profileName2, previousProfile, previousSession) {
   const failures = [];
   for (const write2 of [
-    () => ProfileManager.clearSession(profileName2),
+    () => previousSession === null ? ProfileManager.clearSession(profileName2) : ProfileManager.setSession(profileName2, previousSession),
     () => ProfileManager.updateProfile(profileName2, (current) => {
       const restored = { ...current };
       for (const field of BOOTSTRAP_PROFILE_FIELDS) {
         if (previousProfile[field] === void 0) delete restored[field];
-        else restored[field] = previousProfile[field];
+        else Object.assign(restored, { [field]: previousProfile[field] });
       }
       return restored;
     })
@@ -10192,6 +10221,7 @@ var init_sdk = __esm({
   "src/lib/sdk.ts"() {
     "use strict";
     init_profiles();
+    init_storage();
     init_types();
     init_errors();
     init_constants();
@@ -10204,7 +10234,7 @@ var init_sdk = __esm({
     init_replication_registry();
     init_logout_pending();
     init_replication_registry();
-    BOOTSTRAP_PROFILE_FIELDS = ["sessionDid", "spaceId"];
+    BOOTSTRAP_PROFILE_FIELDS = ["sessionDid", "spaceId", "authSignedOut", "authKeyRetained"];
   }
 });
 
@@ -10360,7 +10390,7 @@ import {
   assertRealProfileDirectory,
   ProfileSymlinkError as ProfileSymlinkError2,
   namedProfilePath as namedProfilePath2,
-  profilePath as profilePath5,
+  profilePath as profilePath6,
   readSession,
   recordProfileDeletion,
   refuseWriteToDeletedProfile as refuseWriteToDeletedProfile2,
@@ -10464,7 +10494,7 @@ var init_profiles = __esm({
       }
       /** Owner-only profile directory (0700), created or tightened before any write into it. */
       static async ensureProfileDir(name) {
-        const profileDir = profilePath5(name);
+        const profileDir = profilePath6(name);
         if (profileDir !== join11(PROFILES_DIR, name)) {
           await chmod3(profileDir, PRIVATE_DIR_MODE);
           return profileDir;
@@ -10530,7 +10560,7 @@ var init_profiles = __esm({
       }
       /** Removes profile.json under the profile lock (rollback of a profile a failed login created). */
       static async removeProfileConfig(name) {
-        await _ProfileManager.withLock(name, () => rm6(join11(profilePath5(name), "profile.json"), { force: true }));
+        await _ProfileManager.withLock(name, () => rm6(join11(profilePath6(name), "profile.json"), { force: true }));
       }
       /**
        * Returns true if a profile directory exists.
@@ -10585,7 +10615,7 @@ var init_profiles = __esm({
           return;
         }
         await _ProfileManager.withLock(name, async () => {
-          const directory = profilePath5(name);
+          const directory = profilePath6(name);
           for (const file of ["session.json", "key.json"]) await rm6(join11(directory, file), { force: true });
           for (const entry of await readdir5(directory)) {
             if (entry !== ".lock" && entry !== "profile.json") await rm6(join11(directory, entry), { recursive: true, force: true });
@@ -10596,7 +10626,8 @@ var init_profiles = __esm({
       }
       // ── Key management ──────────────────────────────────────────────────
       /**
-       * Returns the parsed JWK for a profile, or null if no key exists.
+       * Returns the parsed JWK for a profile, or null if no key exists or the
+       * profile is signed out.
        */
       static async getKey(name) {
         return withPinnedProfileDirectory2(name, async (directory) => {
@@ -10606,6 +10637,14 @@ var init_profiles = __esm({
           const key = await readJson(join11(directory, "key.json"));
           return (await readJson(profileFile))?.authSignedOut === true ? null : key;
         });
+      }
+      /**
+       * Returns the parsed JWK for a profile even while it is signed out, or null
+       * if no key exists. Logout keeps the key; only sign-in reads it this way, so
+       * the next sign-in keeps the key that the profile's grants are bound to.
+       */
+      static async getStoredKey(name) {
+        return withPinnedProfileDirectory2(name, async (directory) => directory ? readJson(join11(directory, "key.json")) : null);
       }
       /**
        * Saves a JWK key under the profile lock (0600, in an owner-only profile
@@ -10620,7 +10659,7 @@ var init_profiles = __esm({
       }
       /** Removes key.json under the profile lock (rollback of a key a failed login created). */
       static async removeKey(name) {
-        await _ProfileManager.withLock(name, () => rm6(join11(profilePath5(name), "key.json"), { force: true }));
+        await _ProfileManager.withLock(name, () => rm6(join11(profilePath6(name), "key.json"), { force: true }));
       }
       // ── Session management ──────────────────────────────────────────────
       /**
@@ -10653,7 +10692,7 @@ var init_profiles = __esm({
        * created or tightened to 0700.
        */
       static async getCacheDir(name) {
-        const alreadyPinned = profilePath5(name) !== namedProfilePath2(name);
+        const alreadyPinned = profilePath6(name) !== namedProfilePath2(name);
         return _ProfileManager.withLock(name, async () => {
           const cacheDir = join11(await _ProfileManager.ensureProfileDir(name), "cache");
           await ensureDir(cacheDir);
@@ -18982,13 +19021,14 @@ function validateLoginPermissions(permissions) {
   const spaced = permissions.filter((p) => !isRawEncryptionPermission(p));
   if (!spaced.length || permissions.some(
     (p) => !p.service?.startsWith("tinycloud.") || !p.space || (isRawEncryptionPermission(p) ? p.space !== ENCRYPTION_MANIFEST_SPACE : !p.space.startsWith("tinycloud:") && !/^[A-Za-z0-9_-]+$/.test(p.space)) || typeof p.path !== "string" || !p.actions?.length || p.actions.some((action) => !action.startsWith(`${p.service}/`))
-  ) || new Set(spaced.map((p) => normalizePkhIdentifier(p.space ?? ""))).size !== 1) {
-    throw new CLIError("INVALID_LOGIN_SCOPE", "First login requires non-empty permissions in one TinyCloud space (raw tinycloud.encryption network entries may accompany them). Request additional spaces after login.", ExitCode.USAGE_ERROR);
+  )) {
+    throw new CLIError("INVALID_LOGIN_SCOPE", "Sign-in needs permissions in at least one named TinyCloud space (encryption network entries can be included too).", ExitCode.USAGE_ERROR);
   }
 }
 function scopedLoginPermissions(permissions) {
   assertNoCaveatLimits(permissions);
-  return withCapabilitiesRead(permissions, permissions.find((p) => !isRawEncryptionPermission(p)).space ?? "");
+  const spaces = [...new Set(permissions.filter((p) => !isRawEncryptionPermission(p) && !isRawCidRevocationPermission(p)).map((p) => p.space))].sort();
+  return canonicalSpaceOrder(spaces.reduce((entries, space) => withCapabilitiesRead(entries, space), permissions));
 }
 function grantRequestPermissions(group, anchorSpace) {
   assertNoCaveatLimits(group);
@@ -18996,7 +19036,17 @@ function grantRequestPermissions(group, anchorSpace) {
   const capabilitySpace = request.find(
     (permission2) => !isRawEncryptionPermission(permission2) && !isRawCidRevocationPermission(permission2)
   )?.space ?? anchorSpace;
-  return withCapabilitiesRead(request, capabilitySpace);
+  const spaces = [...new Set(request.filter((p) => !isRawEncryptionPermission(p) && !isRawCidRevocationPermission(p)).map((p) => p.space))].sort();
+  return canonicalSpaceOrder((spaces.length ? spaces : [capabilitySpace]).reduce((entries, space) => withCapabilitiesRead(entries, space), request));
+}
+function canonicalSpaceOrder(permissions) {
+  const spaces = new Set(permissions.filter((p) => !isRawEncryptionPermission(p) && !isRawCidRevocationPermission(p)).map((p) => (p.space ?? "").split(":").at(-1)));
+  if (spaces.size <= 1) return permissions;
+  return [...permissions].sort((a, b) => {
+    const left = (a.space ?? "").split(":").at(-1);
+    const right = (b.space ?? "").split(":").at(-1);
+    return left < right ? -1 : left > right ? 1 : 0;
+  });
 }
 function withCapabilitiesRead(permissions, space) {
   const hasRead = permissions.some((p) => p.service === "tinycloud.capabilities" && p.path === "" && p.actions.includes(CAPABILITIES_READ) && normalizePkhIdentifier(p.space ?? "") === normalizePkhIdentifier(space));
@@ -19089,6 +19139,7 @@ function withoutRequestedKeyRow(signed, keys, signerDid) {
 }
 function verifyScopedLogin(data, key, sessionDid, requested, expected = {}) {
   const notStored = expected.purpose === "grant" ? "No grant was stored." : "No scoped session was saved.";
+  const soNotStored = expected.purpose === "grant" ? "so no grant was stored." : "so no session was saved.";
   let signed;
   try {
     signed = verifySignedSession(data, key, sessionDid, expected);
@@ -19104,10 +19155,15 @@ function verifyScopedLogin(data, key, sessionDid, requested, expected = {}) {
     throw error;
   }
   const spaceId = data.spaceId;
-  for (const permission2 of requested) {
-    if (isRawEncryptionPermission(permission2) || isRawCidRevocationPermission(permission2)) continue;
-    if (normalizePkhIdentifier(ownerSpaceId(permission2.space ?? "", signed.ownerDid)) !== normalizePkhIdentifier(spaceId)) {
-      throw new CLIError("OPENKEY_SCOPE_MISMATCH", `The approved space differs from the requested space. ${notStored}`, ExitCode.PERMISSION_DENIED);
+  const spaces = [...new Set(requested.filter((p) => !isRawEncryptionPermission(p) && !isRawCidRevocationPermission(p)).map((p) => normalizePkhIdentifier(ownerSpaceId(p.space ?? "", signed.ownerDid))))].sort();
+  const primary = spaces.find((space) => space.endsWith(":applications")) ?? spaces[0];
+  if (primary && normalizePkhIdentifier(spaceId) !== primary) {
+    throw new CLIError("OPENKEY_SCOPE_MISMATCH", `OpenKey approved a different space than the one requested, ${soNotStored}`, ExitCode.PERMISSION_DENIED);
+  }
+  if (spaces.length > 1 || data.requestedSpaces !== void 0) {
+    const entries = data.requestedSpaces;
+    if (!Array.isArray(entries) || entries.length !== spaces.length || new Set(entries.map((entry) => typeof entry?.spaceId === "string" ? normalizePkhIdentifier(entry.spaceId) : entry?.spaceId)).size !== spaces.length || entries.some((entry) => !entry || typeof entry.space !== "string" || typeof entry.spaceId !== "string" || !spaces.includes(normalizePkhIdentifier(entry.spaceId)) || normalizePkhIdentifier(ownerSpaceId(entry.space, signed.ownerDid)) !== normalizePkhIdentifier(entry.spaceId) || ![true, false, null].includes(entry.spaceReady) || entry.spacePending !== void 0 && entry.spacePending !== true || entry.spaceError !== void 0 && typeof entry.spaceError !== "string") || data.spaceReady === true !== entries.every((entry) => entry.spaceReady === true)) {
+      throw new CLIError("OPENKEY_SCOPE_MISMATCH", `OpenKey's approval doesn't match the requested spaces, ${soNotStored}`, ExitCode.PERMISSION_DENIED);
     }
   }
   const legacyNested = [];
@@ -19121,11 +19177,14 @@ function verifyScopedLogin(data, key, sessionDid, requested, expected = {}) {
       throw new CLIError("OPENKEY_SCOPE_MISMATCH", `OpenKey signed decrypt for a network not owned by the approving identity. ${notStored}`, ExitCode.PERMISSION_DENIED);
     }
   }
-  if (!scopeCovers(requested, approved, signed.ownerDid)) {
+  if (!expected.exactApproval && !scopeCovers(requested, approved, signed.ownerDid)) {
     throw new CLIError("OPENKEY_GRANT_BROADENED", `The signed grant contains authority beyond the requested ${expected.purpose === "grant" ? "grant" : "manifest"}. ${notStored}`, ExitCode.PERMISSION_DENIED);
   }
-  if (expected.exactApproval && !scopeCovers(approved, requested, signed.ownerDid)) {
-    throw new CLIError("OPENKEY_APPROVAL_NARROWER", `The approval was narrower than the request. Approve all of it, or ask the agent to request less. ${notStored}`, ExitCode.PERMISSION_DENIED);
+  if ((expected.exactApproval || spaces.length > 1) && !scopeCovers(approved, requested, signed.ownerDid)) {
+    const approvedSpaces = new Set(approved.filter((permission2) => !isRawEncryptionPermission(permission2) && !isRawCidRevocationPermission(permission2)).map((permission2) => normalizePkhIdentifier(ownerSpaceId(permission2.space ?? "default", signed.ownerDid))));
+    const missingSpaces = [...new Set(requested.filter((permission2) => !isRawEncryptionPermission(permission2) && !isRawCidRevocationPermission(permission2)).filter((permission2) => !approvedSpaces.has(normalizePkhIdentifier(ownerSpaceId(permission2.space ?? "default", signed.ownerDid)))).map((permission2) => permission2.space ?? "default"))];
+    const message = missingSpaces.length > 0 ? `The owner didn't approve access to ${missingSpaces.map((space) => `"${space}"`).join(", ")}, and this task needs every requested space, ${soNotStored}` : `The approval was narrower than the request, ${soNotStored}`;
+    throw new CLIError("OPENKEY_APPROVAL_NARROWER", message, ExitCode.PERMISSION_DENIED);
   }
   const session = withVerifiedAuthority({ ...data, jwk: key }, { ...signed, permissions: approved });
   return { session, legacyNested };
@@ -19159,12 +19218,12 @@ import { createHash as createHash2 } from "crypto";
 import { constants as fsConstants6 } from "fs";
 import { open as open13, rm as rm7 } from "fs/promises";
 import { join as join14 } from "path";
-import { profilePath as profilePath7 } from "@tinycloud/operations/state";
+import { profilePath as profilePath8 } from "@tinycloud/operations/state";
 function hashOf(code5) {
   return createHash2("sha256").update(code5.trim().toLowerCase()).digest("hex");
 }
 function fileOf(profile) {
-  return join14(profilePath7(profile), FILE);
+  return join14(profilePath8(profile), FILE);
 }
 async function write(profile, records) {
   if (records.length === 0) await rm7(fileOf(profile), { force: true });
@@ -19339,7 +19398,7 @@ import { join as join15 } from "path";
 import { REPLICA_LOGOUT_PENDING_FILE as REPLICA_LOGOUT_PENDING_FILE3 } from "@tinycloud/node-sdk";
 import { CLI_NAME as CLI_NAME14 } from "@tinycloud/operations/cli-name";
 import { isLocalOwnerProfile as isLocalOwnerProfile3, ownerSessionLacksProof as ownerSessionLacksProof3 } from "@tinycloud/operations/profile";
-import { ProfileLockTimeoutError as ProfileLockTimeoutError2, profilePath as profilePath8 } from "@tinycloud/operations/state";
+import { ProfileLockTimeoutError as ProfileLockTimeoutError2, profilePath as profilePath9 } from "@tinycloud/operations/state";
 function assertNotLocalOwner(profileName2, profile, flow) {
   if (profile === null || !isLocalOwnerProfile3(profile)) return;
   throw new CLIError(
@@ -19355,7 +19414,7 @@ async function readProfileSnapshot(profileName2) {
   });
   return {
     profile,
-    key: await ProfileManager.getKey(profileName2),
+    key: await ProfileManager.getStoredKey(profileName2),
     session: await ProfileManager.getSession(profileName2)
   };
 }
@@ -19434,7 +19493,7 @@ async function commitLogin(profileName2, snapshot, commit) {
       );
     }
     try {
-      await lstat7(join15(profilePath8(profileName2), REPLICA_LOGOUT_PENDING_FILE3));
+      await lstat7(join15(profilePath9(profileName2), REPLICA_LOGOUT_PENDING_FILE3));
       throw new CLIError(
         "REPLICA_GATED",
         "A durable logout started while sign-in was awaiting approval; no session or key was saved. Finish logout and start a fresh sign-in.",
@@ -19452,8 +19511,9 @@ async function commitLogin(profileName2, snapshot, commit) {
       await ProfileManager.setKey(profileName2, commit.key);
       await ProfileManager.setSession(profileName2, commit.session);
       if (current.profile?.authSignedOut === true || commit.durable === true) {
-        await syncAuthCredentialFiles(profilePath8(profileName2));
-        await ProfileManager.setProfileDurable(profileName2, { ...profile, authSignedOut: false });
+        await syncAuthCredentialFiles(profilePath9(profileName2));
+        const { authKeyRetained: _authKeyRetained, ...signedIn } = profile;
+        await ProfileManager.setProfileDurable(profileName2, { ...signedIn, authSignedOut: false });
       } else {
         await ProfileManager.setProfile(profileName2, profile);
       }
@@ -19532,7 +19592,7 @@ var init_owner_key = __esm({
 
 // src/auth/refused-approval.ts
 import { rmdir as rmdir4 } from "fs/promises";
-import { profilePath as profilePath9 } from "@tinycloud/operations/state";
+import { profilePath as profilePath10 } from "@tinycloud/operations/state";
 async function discardRefusedApproval(site, error, result) {
   if (!isPermanentRefusal(error)) return false;
   if (result === void 0 && !wasRefusedAfterApproval(error)) return false;
@@ -19575,7 +19635,7 @@ async function deleteCreatedProfileKey(site) {
     }
     return { kind: "deleted" };
   });
-  if (removedProfile) await rmdir4(profilePath9(site.profileName)).catch(() => void 0);
+  if (removedProfile) await rmdir4(profilePath10(site.profileName)).catch(() => void 0);
   return outcome;
 }
 async function refusing(site, step) {
@@ -19836,14 +19896,21 @@ function writeApprovalPrompt(prompt) {
 `
   );
 }
+function validateDevicePermissions(permissions) {
+  validateLoginPermissions(permissions);
+  const spaces = new Set(permissions.filter((permission2) => !isRawEncryptionPermission(permission2)).map((permission2) => normalizePkhIdentifier(permission2.space)));
+  if (spaces.size !== 1) {
+    throw new CLIError("INVALID_LOGIN_SCOPE", "Device sign-in needs permissions in exactly one TinyCloud space.", ExitCode.USAGE_ERROR);
+  }
+}
 async function acquireDeviceDelegation(input) {
   assertNoCaveatLimits(input.permissions);
-  validateLoginPermissions(input.permissions);
+  validateDevicePermissions(input.permissions);
   const refused = deviceRefusal(input.permissions);
   if (refused !== void 0) {
     throw new CLIError(
       "DEVICE_AUTH_UNSUPPORTED_SCOPE",
-      deviceRefusalMessage(refused, "this request", "Use another OpenKey approval method for this request."),
+      deviceRefusalMessage(refused, "Use another OpenKey approval method for this request."),
       ExitCode.USAGE_ERROR
     );
   }
@@ -19983,7 +20050,7 @@ async function loginWithDeviceAuthorization(input) {
   const existing = snapshot.profile;
   assertNotLocalOwner(input.profileName, existing, "Device login");
   const expectedOwner = expectedOwnerFor(input.profileName, existing, input.expectedOwner);
-  validateLoginPermissions(input.permissions);
+  validateDevicePermissions(input.permissions);
   const permissions = scopedLoginPermissions(input.permissions);
   if (input.replaceSession !== true) {
     const estimatedExpiry = new Date(Date.now() + (input.expiry?.durationMs ?? DEVICE_DELEGATION_MAX_SECONDS * 1e3)).toISOString();
@@ -20033,6 +20100,7 @@ var init_device_auth = __esm({
     init_constants();
     init_errors();
     init_caveat_refusal();
+    init_space();
     init_raw_encryption();
     init_local_key();
     init_browser_auth();
@@ -20161,7 +20229,7 @@ var init_approval_wait = __esm({
     REQUEST_TIMEOUT_MS2 = 1e4;
     MIN_REQUEST_TIMEOUT_MS2 = 1e3;
     MIN_SPACE_SETUP_MS = 15e3;
-    APPROVAL_TIMEOUT_OPTION_DESCRIPTION = `Wait at most this long for the owner's OpenKey approval (Ns or Nm, more than 0, at most 9m; for example 60s). Exits 8 with {"pending":{"step","of","approvalUrl","expiresAt"}} on stdout as soon as a new approval link exists, and again if the wait ends while the approval is still pending: that is not a failure, so send the owner the link and run the same command again. A link that expired ends as exit 3 and its saved request is dropped once OpenKey says it is expired (or 11 minutes after its expiry); until then the next run asks OpenKey once more, so exit 3 can repeat once before a new request is made. An approval already given is still collected after the timeout, for at most 30 s more (plus up to 3 s, and in onboard the next link). A resumed approval completes one status check of OpenKey whatever the --timeout, even a very short one (a new link exits 8 at once, with no check): the command can take up to about 10 s longer than the timeout; if OpenKey does not answer that check at all, the command exits 6 instead of reporting the approval as pending. On a new account onboard also waits for OpenKey to host the space, for the time left of timeout + 30 s grace (at least 15 s; about 90 s in all for 60s, at worst a little under 2 minutes); if it is not ready, exit 1 SPACE_SETUP_PENDING: wait a minute and run it again (the re-run continues with step 2; if a storage command later says Space not found, wait and retry). Without it the command waits until the approval is answered.`;
+    APPROVAL_TIMEOUT_OPTION_DESCRIPTION = `Wait at most this long for the owner's OpenKey approval (Ns or Nm, more than 0, at most 9m; for example 60s). Exits 8 with {"pending":{"step","of","approvalUrl","expiresAt"}} on stdout as soon as a new approval link exists, and again if the wait ends while the approval is still pending: that is not a failure, so send the owner the link and run the same command again. A link that expired ends as exit 3 and its saved request is dropped once OpenKey says it is expired (or 11 minutes after its expiry); until then the next run asks OpenKey once more, so exit 3 can repeat once before a new request is made. An approval already given is still collected after the timeout, for at most 30 s more (plus up to 3 s). A resumed approval completes one status check of OpenKey whatever the --timeout, even a very short one (a new link exits 8 at once, with no check): the command can take up to about 10 s longer than the timeout; if OpenKey does not answer that check at all, the command exits 6 instead of reporting the approval as pending. On a new account onboard also waits for OpenKey to host each requested space, for the time left of timeout + 30 s grace (at least 15 s; about 90 s in all for 60s, at worst a little under 2 minutes); if one is not ready, exit 1 SPACE_SETUP_PENDING: wait a minute and run it again (the re-run checks the spaces again without a new approval; if a storage command later says Space not found, wait and retry). Without it the command waits until the approval is answered.`;
   }
 });
 
@@ -20282,6 +20350,7 @@ __export(approval_request_exports, {
   acquireApprovalRequest: () => acquireApprovalRequest,
   approvalCommandIntent: () => approvalCommandIntent,
   approvalHoldsKey: () => approvalHoldsKey,
+  approvalRenewalChoiceOf: () => approvalRenewalChoiceOf,
   approvalRenewalOf: () => approvalRenewalOf,
   approvalResultNeedsAck: () => approvalResultNeedsAck,
   approvalSessionProof: () => approvalSessionProof2,
@@ -20289,6 +20358,7 @@ __export(approval_request_exports, {
   completeApprovalResult: () => completeApprovalResult,
   dropApprovalsHoldingKey: () => dropApprovalsHoldingKey,
   dropRefusedApproval: () => dropRefusedApproval,
+  grantLifetimeSeconds: () => grantLifetimeSeconds,
   invitationGrantOf: () => invitationGrantOf,
   pendingApprovalKey: () => pendingApprovalKey,
   pendingInvitationContext: () => pendingInvitationContext,
@@ -20300,7 +20370,7 @@ import { createECDH as createECDH2, createHash as createHash4, createPrivateKey,
 import { open as open14 } from "fs/promises";
 import { join as join16 } from "path";
 import { setTimeout as wait } from "timers/promises";
-import { additionalDelegationsPath as additionalDelegationsPath3, profilePath as profilePath10 } from "@tinycloud/operations/state";
+import { additionalDelegationsPath as additionalDelegationsPath3, profilePath as profilePath11 } from "@tinycloud/operations/state";
 import { principalDidEquals as principalDidEquals2 } from "@tinycloud/node-sdk";
 import { canonicalizeRecapCaveats, parseSignedCompactUcanAttenuation as parseSignedCompactUcanAttenuation3 } from "@tinycloud/sdk-core";
 import { admitOwnerRenewalLease, RENEWAL_LEASE_ORIGINAL_EXPIRED } from "@tinycloud/sdk-core/delegations/renewal";
@@ -20311,6 +20381,10 @@ function trackApprovalResult(source, verified) {
 }
 function approvalRenewalOf(delegation) {
   return renewals.get(delegation);
+}
+function approvalRenewalChoiceOf(delegation) {
+  if (!acquisitions.get(delegation)?.request.renewal) return void 0;
+  return renewals.has(delegation) ? "leased" : "finite";
 }
 function approvalResultNeedsAck(delegation) {
   return acquisitions.has(delegation);
@@ -20361,7 +20435,7 @@ async function syncCommandFiles(profile, result) {
   if (!stored || canonicalJson(JSON.parse(JSON.stringify(stored.delegation))) !== canonicalJson(JSON.parse(JSON.stringify(result.delegation))) || !history) {
     throw invalid2("The verified command result and history have not both been saved.");
   }
-  for (const path of [localGrantArtifactsPath(profile), grantHistoryPath(profile), profilePath10(profile)]) {
+  for (const path of [localGrantArtifactsPath(profile), grantHistoryPath(profile), profilePath11(profile)]) {
     const handle = await open14(path, "r");
     try {
       await handle.sync();
@@ -20386,7 +20460,7 @@ async function recoverApprovalCommand(profile, approval, request) {
   const acquired = acquisitions.get(approval);
   if (!acquired) return void 0;
   return ProfileManager.withLock(profile, async () => {
-    const entries = await readJson(join16(profilePath10(profile), STATE_FILE)) ?? [];
+    const entries = await readJson(join16(profilePath11(profile), STATE_FILE)) ?? [];
     const matching = entries.filter((item) => item.commandIntent === approvalCommandIntent(request));
     if (matching.length !== 1 || matching[0].requestId !== acquired.requestId) throw invalid2("Ambiguous command approval.");
     const entry = matching[0];
@@ -20402,7 +20476,7 @@ async function commitApprovalCommand(profile, approval, request, result) {
   const acquired = acquisitions.get(approval);
   if (!acquired) throw invalid2("Command approval is not tracked.");
   await ProfileManager.withLock(profile, async () => {
-    const entries = await readJson(join16(profilePath10(profile), STATE_FILE)) ?? [];
+    const entries = await readJson(join16(profilePath11(profile), STATE_FILE)) ?? [];
     const matching = entries.filter((item) => item.commandIntent === approvalCommandIntent(request));
     if (matching.length !== 1 || matching[0].requestId !== acquired.requestId) throw invalid2("Ambiguous command approval.");
     const entry = matching[0];
@@ -20411,7 +20485,7 @@ async function commitApprovalCommand(profile, approval, request, result) {
       throw invalid2("A different result is already saved for this command.");
     }
     entry.command = { request, result };
-    await writeJsonDurable(join16(profilePath10(profile), STATE_FILE), entries);
+    await writeJsonDurable(join16(profilePath11(profile), STATE_FILE), entries);
     await persistCommandFiles(profile, result);
     acquisitions.set(approval, entry);
   }, { requireProfile: true });
@@ -20446,7 +20520,7 @@ async function updatePending(profile, update) {
   }, { requireProfile: true });
 }
 async function activePending(profile) {
-  const path = join16(profilePath10(profile), STATE_FILE);
+  const path = join16(profilePath11(profile), STATE_FILE);
   if (!(await readJson(path))?.length) return [];
   return ProfileManager.withLock(profile, async () => {
     const entries = await readJson(path) ?? [];
@@ -20928,7 +21002,7 @@ async function completeApprovalResult(profile, delegation) {
       if (current.ownerDid?.toLowerCase() !== verifiedSession.ownerDid.toLowerCase()) return;
       const session = await ProfileManager.getSession(profile);
       if (session && session.delegationCid === verifiedDelegation.delegationCid && session.signature === verifiedDelegation.signature && session.siwe === verifiedDelegation.siwe) {
-        await syncAuthCredentialFiles(profilePath10(profile));
+        await syncAuthCredentialFiles(profilePath11(profile));
         await ProfileManager.setProfileDurable(profile, current);
         saved = true;
       } else {
@@ -20941,7 +21015,7 @@ async function completeApprovalResult(profile, delegation) {
           } finally {
             await file.close();
           }
-          const directory = await open14(profilePath10(profile), "r");
+          const directory = await open14(profilePath11(profile), "r");
           try {
             await directory.sync();
           } finally {
@@ -21560,11 +21634,11 @@ function registerAccountCommand(program) {
       return handleError(error);
     }
   });
-  index.command("query <sql>").description("Query the materialized account SQLite index").option("--params <json>", "Bind parameters as a JSON array for ? placeholders").action(async (sql2, options, cmd) => {
+  index.command("query <sql>").description("Query the materialized account SQLite index").option("--params <json>", "Bind parameters as a JSON array for ? placeholders").action(async (sql3, options, cmd) => {
     try {
       const node = await authenticatedNode(cmd);
       const params = parseParams(options.params);
-      const result = await node.account.index.query(sql2, params);
+      const result = await node.account.index.query(sql3, params);
       assertOk(result);
       outputJson(result.data);
     } catch (error) {
@@ -21652,7 +21726,7 @@ import { createInterface } from "readline/promises";
 import { stderr, stdin } from "process";
 var MAX_BODY_BYTES = 256 * 1024;
 var MAX_CONTENT_BYTES = 128 * 1024;
-var ATTACHMENT_URL = "https://bugs.tinycloud.xyz/reports";
+var ATTACHMENT_URL = "https://feedback.tinycloud.xyz/reports";
 async function readToken(useStdin) {
   if (useStdin && stdin.isTTY) throw new CLIError("BUG_REPORT_TOKEN_INPUT", "Give the attachment token by piping it to --token-stdin or setting TINYCLOUD_BUG_ATTACH_TOKEN.");
   const token = useStdin ? await new Promise((resolve10) => {
@@ -21829,7 +21903,7 @@ import { createInterface as createInterface5 } from "readline";
 import { TinyCloudNode as TinyCloudNode3, grantAuthRequest, principalDidEquals as principalDidEquals3, REPLICA_LOGOUT_PENDING_FILE as REPLICA_LOGOUT_PENDING_FILE4, signedCompactUcanExpiry as signedCompactUcanExpiry3 } from "@tinycloud/node-sdk";
 import { composeManifestRequest } from "@tinycloud/sdk-core";
 import { invokeOperation } from "@tinycloud/operations";
-import { createProfileRegistryCacheStore as createProfileRegistryCacheStore4, createProfileRegistrySequenceStore as createProfileRegistrySequenceStore4, namedProfilePath as namedProfilePath3, profilePath as profilePath11 } from "@tinycloud/operations/state";
+import { createProfileRegistryCacheStore as createProfileRegistryCacheStore4, createProfileRegistrySequenceStore as createProfileRegistrySequenceStore4, namedProfilePath as namedProfilePath3, profilePath as profilePath12 } from "@tinycloud/operations/state";
 import { REPLICA_GATE_FILE as REPLICA_GATE_FILE3 } from "@tinycloud/sdk-services/kv/replication/contractConstants";
 
 // src/lib/logout-revocation.ts
@@ -21839,7 +21913,7 @@ init_permissions();
 import { readFile as readFile8 } from "fs/promises";
 import { join as join12 } from "path";
 import { principalDidEquals } from "@tinycloud/node-sdk";
-import { additionalDelegationsPath as additionalDelegationsPath2, profilePath as profilePath6 } from "@tinycloud/operations/state";
+import { additionalDelegationsPath as additionalDelegationsPath2, profilePath as profilePath7 } from "@tinycloud/operations/state";
 import { withoutBearer } from "@tinycloud/operations/delegation-binding";
 import { parseSignedCompactUcanAttenuation, parseSignedSiweCacao } from "@tinycloud/sdk-core";
 function inventoryError(cid, detail) {
@@ -21880,7 +21954,7 @@ async function signedGrantOwner(cid, authorization, ownerDid, issuer) {
   return resources.length > 0 && resources.every((resource) => /^tinycloud:pkh:eip155:[1-9]\d*:0x[0-9a-fA-F]{40}:[^/]+\//.test(resource) && !ownerSpaceResource(resource, ownerDid)) ? "other" : "unknown";
 }
 async function logoutInventorySnapshot(profileName2) {
-  const root = profilePath6(profileName2);
+  const root = profilePath7(profileName2);
   return JSON.stringify(await Promise.all([
     optionalFile(join12(root, "auth-grant-artifacts.json")),
     optionalFile(additionalDelegationsPath2(profileName2)),
@@ -21901,7 +21975,7 @@ async function planLogoutRevocations(input) {
   const { profileName: profileName2, profile, session, node } = input;
   const sessionCid = session.delegationCid;
   if (!session.ownerDid || !sessionCid) throw inventoryError(sessionCid || "session", "the active session has no owner or CID");
-  const root = profilePath6(profileName2);
+  const root = profilePath7(profileName2);
   const included = /* @__PURE__ */ new Set();
   const unresolved = /* @__PURE__ */ new Set();
   const excluded = [];
@@ -34563,12 +34637,12 @@ async function verifyEnvelopeV3(envelope, options) {
   const nativeProjection2 = sortedCapabilities.map((capability) => capability.kind === "encryption" ? { service: "tinycloud.encryption", space: capability.resource, path: capability.resource, actions: [capability.action] } : { service: "tinycloud.kv", space: capability.resource.slice(0, capability.resource.indexOf("/kv/")), path: capability.resource.split("/kv/")[1], actions: [...capability.actions], caveat: { type: "xyz.tinycloud.resource/selector", kind: capability.selector, value: capability.resource } }).sort((left, right) => canonicalize2(left).localeCompare(canonicalize2(right)));
   const nativeProjectionHashHex = hex(sha2562(new TextEncoder().encode(`${NATIVE_PROJECTION_V1_DOMAIN}${canonicalize2(nativeProjection2)}`)));
   const expectedAttenuation = Object.fromEntries(sortedCapabilities.map((capability) => capability.kind === "encryption" ? [capability.resource, { [capability.action]: [{}] }] : [capability.resource, Object.fromEntries(capability.actions.map((action) => [action, [{ kind: capability.selector, type: "xyz.tinycloud.resource/selector", value: capability.resource }]]))]));
-  const kv2 = policy.capabilityCeiling.find((capability) => capability.kind === "kv");
+  const kv3 = policy.capabilityCeiling.find((capability) => capability.kind === "kv");
   const expectedKvActions = parsed.actions.flatMap((action) => action === "read" ? ["tinycloud.kv/get", "tinycloud.kv/metadata"] : action === "list" ? ["tinycloud.kv/list"] : ["tinycloud.kv/put"]);
   const marker = parsed.contentSource.kvResource.indexOf("/kv/");
   const resourceSpace = marker < 1 ? "" : parsed.contentSource.kvResource.slice(0, marker);
   const resourcePath = marker < 1 ? "" : parsed.contentSource.kvResource.slice(marker + 4);
-  if (parsed.shareId !== parsed.contentSource.shareId || resourceSpace !== parsed.target.spaceId || resourcePath !== parsed.resource.path.replace(/\/$/, "") || parsed.resource.kind !== parsed.contentSource.selector || kv2?.kind !== "kv" || expectedKvActions.some((action) => !kv2.actions.includes(action)) || parsed.encryptionNetwork !== parsed.contentSource.encryptionNetwork || parsed.contentSource.keyVersion <= 0 || policy.expiresAt !== void 0 && Date.parse(parsed.expiry) > Date.parse(policy.expiresAt)) return false;
+  if (parsed.shareId !== parsed.contentSource.shareId || resourceSpace !== parsed.target.spaceId || resourcePath !== parsed.resource.path.replace(/\/$/, "") || parsed.resource.kind !== parsed.contentSource.selector || kv3?.kind !== "kv" || expectedKvActions.some((action) => !kv3.actions.includes(action)) || parsed.encryptionNetwork !== parsed.contentSource.encryptionNetwork || parsed.contentSource.keyVersion <= 0 || policy.expiresAt !== void 0 && Date.parse(parsed.expiry) > Date.parse(policy.expiresAt)) return false;
   const binding = parsed.attestedEnforcerBinding;
   const { signature: bindingSignature, ...unsignedBinding } = binding;
   const expectedBindingDigestHex = hex(sha2562(new TextEncoder().encode(canonicalize2({ enforcerDid: binding.enforcerDid, nodeAudience: binding.nodeAudience }))));
@@ -36632,9 +36706,45 @@ function storedGrantsCovering(stored, requested, ownerDid, now = Date.now()) {
 
 // src/commands/auth.ts
 init_approval_request();
+
+// src/auth/renewal-lease.ts
+init_links();
+init_manifest();
+init_constants();
+init_raw_encryption();
+init_errors();
+init_scoped_login();
+var DEFAULT_RENEWAL_LEASE_SECONDS = 30 * 86400;
+function withoutDefaultRenewal(permissions) {
+  return permissions.some((entry) => entry.service === ENCRYPTION_PERMISSION_SERVICE || entry.service === "encryption" || isSecretsSpacePermission(entry));
+}
+function parseRenewOption(value4) {
+  let durationMs;
+  try {
+    durationMs = parseRequestedExpiry(value4).durationMs;
+  } catch {
+    throw new CLIError("INVALID_RENEW", `Invalid --renew "${value4}". Use a duration such as 30d or 12w.`, ExitCode.USAGE_ERROR);
+  }
+  const seconds = Math.floor(durationMs / 1e3);
+  if (!Number.isSafeInteger(seconds) || seconds <= 0 || seconds > MAX_APPROVAL_LEASE_SECONDS) {
+    throw new CLIError("INVALID_RENEW", "--renew must be a duration of at most one year (365d).", ExitCode.USAGE_ERROR);
+  }
+  return seconds;
+}
+function renewalLeaseFor(choice, grantSeconds) {
+  if (choice === false) return void 0;
+  if (choice === void 0) return grantSeconds < DEFAULT_RENEWAL_LEASE_SECONDS ? DEFAULT_RENEWAL_LEASE_SECONDS : void 0;
+  if (choice <= grantSeconds) {
+    throw new CLIError("INVALID_RENEW", "--renew must be longer than the sign-in's --expiry: a renewal counts from the approval, so a shorter one adds no time.", ExitCode.USAGE_ERROR);
+  }
+  return choice;
+}
+
+// src/commands/auth.ts
 init_device_auth();
 
 // src/auth/space-setup.ts
+init_space();
 init_constants();
 init_sdk();
 init_errors();
@@ -36730,23 +36840,26 @@ function hasKvAction(permission2, action) {
   return permission2.actions.some((entry) => entry === action || entry === `tinycloud.kv/${action}`);
 }
 function readTarget(permissions) {
-  const kv2 = (permissions ?? []).filter((permission2) => permission2.service === "tinycloud.kv" || permission2.service === "kv");
-  const list = kv2.find((permission2) => hasKvAction(permission2, "list"));
+  const kv3 = (permissions ?? []).filter((permission2) => permission2.service === "tinycloud.kv" || permission2.service === "kv");
+  const list = kv3.find((permission2) => hasKvAction(permission2, "list"));
   if (list) return { op: "list", prefix: list.path };
-  const get = kv2.find((permission2) => hasKvAction(permission2, "get"));
+  const get = kv3.find((permission2) => hasKvAction(permission2, "get"));
   if (!get) return void 0;
   return { op: "get", key: get.path === "" || get.path.endsWith("/") ? `${get.path}.tinycloud-space-probe` : get.path };
 }
 var UNHOSTED = /space not found/i;
-function kvSpaceProbe(ctx, permissions, restore2 = restoreProfileSessionNode) {
+function kvSpaceProbe(ctx, permissions, restore2 = restoreProfileSessionNode, spaceId, ownSpaceThroughNode = false) {
   const target = readTarget(permissions);
+  const sql3 = permissions?.find((p) => (p.service === "tinycloud.sql" || p.service === "sql") && p.actions.some((a) => a === "read" || a === "tinycloud.sql/read") && p.path !== "" && !p.path.endsWith("/"));
   let restored;
   return async () => {
-    if (!target) return "unreadable";
+    if (!target && !sql3) return "unreadable";
     restored ??= await restore2(ctx);
     if ("unavailable" in restored) return "unreadable";
-    const kv2 = restored.node.kv;
-    const result = target.op === "list" ? await kv2.list({ prefix: target.prefix, limit: 1 }) : await kv2.get(target.key);
+    const primary = restored.node.spaceId;
+    const scoped = Boolean(spaceId) && (!ownSpaceThroughNode || primary !== void 0 && normalizePkhIdentifier(spaceId) !== normalizePkhIdentifier(primary));
+    const kv3 = scoped ? restored.node.space(spaceId).kv : restored.node.kv;
+    const result = target ? target.op === "list" ? await kv3.list({ prefix: target.prefix, limit: 1 }) : await kv3.get(target.key) : await restored.node.sqlForSpace(spaceId ?? restored.node.spaceId).db(sql3.path).query("SELECT 1");
     if (result.ok) return "hosted";
     const status = result.error.meta?.status;
     if (status === 404 && UNHOSTED.test(result.error.message)) return "unhosted";
@@ -36754,10 +36867,27 @@ function kvSpaceProbe(ctx, permissions, restore2 = restoreProfileSessionNode) {
     return result.error.code === "KV_NOT_FOUND" || status === 404 ? "hosted" : "transient";
   };
 }
-async function ensureSpaceSetup(ctx, delegation, permissions, timeoutMs) {
+async function ensureSpaceSetup(ctx, delegation, permissions, timeoutMs, restore2 = restoreProfileSessionNode) {
+  if (Array.isArray(delegation.requestedSpaces)) {
+    const deadline = Date.now() + (timeoutMs ?? SPACE_SETUP_TIMEOUT_MS);
+    for (const entry of delegation.requestedSpaces) {
+      const report2 = spaceSetupReport(entry);
+      if (!report2) continue;
+      const id = entry.spaceId;
+      const scoped = permissions?.filter((p) => normalizePkhIdentifier(p.space ?? "") === normalizePkhIdentifier(id) || p.space === entry.space);
+      await awaitSpaceSetup(report2, {
+        probe: kvSpaceProbe(ctx, scoped, restore2, id),
+        timeoutMs: Math.max(0, deadline - Date.now()),
+        write: (line) => process.stderr.write(`${id}: ${line}
+`)
+      });
+    }
+    return;
+  }
   const report = spaceSetupReport(delegation);
   if (!report) return;
-  await awaitSpaceSetup(report, { probe: kvSpaceProbe(ctx, permissions), ...timeoutMs === void 0 ? {} : { timeoutMs } });
+  const spaceId = typeof delegation.spaceId === "string" ? delegation.spaceId : void 0;
+  await awaitSpaceSetup(report, { probe: kvSpaceProbe(ctx, permissions, restore2, spaceId, true), ...timeoutMs === void 0 ? {} : { timeoutMs } });
 }
 async function recheckSpaceHosting(ctx, sessionSpaceId, permissions, options) {
   if (options.confirmed.has(sessionSpaceId)) return;
@@ -37568,6 +37698,7 @@ async function revokeDelegationOnNode(params) {
         node,
         requested: [revokePermission],
         expiryOption: REVOKE_AUTHORITY_EXPIRY,
+        reason: `Revoke the access grant ${cid}.`,
         persist: false,
         openKeyAcquisition: params.openKeyAcquisition
       });
@@ -37612,6 +37743,7 @@ async function revokeDelegationOnNode(params) {
           actions: ["tinycloud.delegation/revoke"]
         }],
         expiryOption: REVOKE_AUTHORITY_EXPIRY,
+        reason: `Revoke the access grant ${cid}.`,
         persist: false,
         openKeyAcquisition: params.openKeyAcquisition
       });
@@ -38076,7 +38208,7 @@ async function promptAuthMethod() {
 }
 async function hasGatedReplicaState(profile, name, replicationEnabled) {
   if (replicationEnabled || profile.replication !== void 0) return true;
-  const root = profilePath11(name);
+  const root = profilePath12(name);
   for (const path of [join17(root, REPLICA_GATE_FILE3), join17(root, REPLICA_LOGOUT_PENDING_FILE4), join17(root, "replication")]) {
     try {
       await lstat8(path);
@@ -38096,7 +38228,7 @@ async function existingReplicaRoots(profile) {
   const roots = [];
   for (const name of ["replicas", "replication"]) {
     try {
-      await lstat8(join17(profilePath11(profile), name));
+      await lstat8(join17(profilePath12(profile), name));
       roots.push(name);
     } catch (error) {
       if (typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT") continue;
@@ -38104,6 +38236,19 @@ async function existingReplicaRoots(profile) {
     }
   }
   return roots;
+}
+async function logoutWillKeepKey(name) {
+  if (!logoutKeepsKey(await ProfileManager.getProfile(name))) return false;
+  for (const child of [REPLICA_GATE_FILE3, REPLICA_LOGOUT_PENDING_FILE4, "replicas", "replication"]) {
+    try {
+      await lstat8(join17(profilePath12(name), child));
+      return false;
+    } catch (error) {
+      if (typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT") continue;
+      throw error;
+    }
+  }
+  return true;
 }
 function displayLogoutInventory(approval, discardLocalChanges) {
   if (approval.unknownPaths.length === 0 && !discardLocalChanges) return;
@@ -38124,7 +38269,7 @@ async function preflightLogout(purge, principal, discardLocalChanges) {
 }
 async function logoutGateSnapshot(profile) {
   const files = await Promise.all([REPLICA_GATE_FILE3, REPLICA_DENY_FLOOR_FILE].map(async (name) => {
-    const path = join17(profilePath11(profile), name);
+    const path = join17(profilePath12(profile), name);
     try {
       const file = await lstat8(path, { bigint: true });
       return { bytes: await readFile10(path, "utf8"), dev: String(file.dev), ino: String(file.ino) };
@@ -38339,7 +38484,7 @@ async function finishProfileLogout(ctx, options = {}) {
           let remotePending = false;
           try {
             const pending = JSON.parse(await readFile10(
-              join17(profilePath11(ctx.profile), REPLICA_LOGOUT_PENDING_FILE4),
+              join17(profilePath12(ctx.profile), REPLICA_LOGOUT_PENDING_FILE4),
               "utf8"
             ));
             pendingMarker = pending;
@@ -38451,7 +38596,7 @@ async function finishProfileLogout(ctx, options = {}) {
             options.discardLocalChanges === true
           );
         } else {
-          const gate = await readGateSnapshot(profilePath11(ctx.profile));
+          const gate = await readGateSnapshot(profilePath12(ctx.profile));
           if (roots.length || gate && (gate.principalHash !== null || gate.intents.length)) {
             throw new CLIError(
               "REPLICA_GATED",
@@ -38459,7 +38604,7 @@ async function finishProfileLogout(ctx, options = {}) {
               ExitCode.ERROR
             );
           }
-          await clearProfileCredentials(ctx.profile, true);
+          await clearProfileCredentials(ctx.profile, true, false, logoutKeepsKey(profile));
         }
       }
     } catch (error) {
@@ -38472,10 +38617,14 @@ async function finishProfileLogout(ctx, options = {}) {
 function registerAuthCommand(program, options) {
   const auth = program.command("auth").description("Authentication management");
   registerAuthGrantsCommand(auth, { openKeyAcquisition: options?.openKeyAcquisition });
-  auth.command("login").description("Authenticate with TinyCloud").option("--device", "Approve on another device (e.g. a phone) through OpenKey device authorization; requires a KV-scoped --manifest (SQL and secret decrypt need browser or --paste login)").option("--paste", "Use manual paste mode; OpenKey return codes expire after 5 minutes").option("--no-popup", "Print the OpenKey URL without opening a browser").option("--method <method>", "Authentication method: local or openkey").option("--manifest <fileOrBase64>", `Request only this manifest's permissions (one space, plus raw encryption network entries such as a secrets decrypt grant); ${SHARE_PUBLISHING_MANIFEST_REF} covers \`${CLI_NAME21} share publish\``).option("--expiry <duration>", `OpenKey session lifetime, e.g. 1h or 7d (with --manifest: default 1h, or 7d for ${SHARE_PUBLISHING_MANIFEST_REF} so Share links keep their 7-day life; device login: at most 30d, default 30d)`).option("--owner <did>", "Sign in as this owner (did:pkh:eip155:CHAIN:ADDRESS): OpenKey preselects that key, e.g. one that is not the account's primary key, and an approval by any other identity is refused. With --manifest, also names the secrets owner for a manifest's `secrets` on a profile with no recorded owner").option("--replace-session", "Scoped or device login: replace this profile's live session even though the new scope would narrow, change or shorten it (prefer a new profile)").option("--force", "Replica-enabled OpenKey login: replace the stored session key even when recorded shares could not be checked or hold unexpired shares that need the current key").option("--keys <folder>", "Also let this sign-in create and use encryption keys in this folder (for example `qa`). The node must support named keys. With OpenKey, the first time on a profile also needs `--owner`.").option("--replication-prefix <prefix>", "Add replication get+sync authority for a folder prefix ending in /, or root (repeatable)", (prefix, values = []) => [...values, prefix]).option("--replication-allow-secrets", "Allow replication of secret material (network-wide decrypt warning)").action(async (options2, cmd) => {
+  auth.command("login").description("Authenticate with TinyCloud").option("--device", "Approve on another device, such as a phone, through OpenKey. Needs a KV-scoped --manifest. It can ask for decrypt on the default network, which covers every encrypted item in it. Secrets and SQL need browser or --paste login.").option("--paste", "Use manual paste mode; OpenKey return codes expire after 5 minutes").option("--no-popup", "Print the OpenKey URL without opening a browser").option("--method <method>", "Authentication method: local or openkey").option("--manifest <fileOrBase64>", `Request only this manifest's permissions (one space, plus raw encryption network entries such as a secrets decrypt grant); ${SHARE_PUBLISHING_MANIFEST_REF} covers \`${CLI_NAME21} share publish\``).option("--expiry <duration>", `OpenKey session lifetime, e.g. 1h or 7d (with --manifest: default 1h, or 7d for ${SHARE_PUBLISHING_MANIFEST_REF} so Share links keep their 7-day life; device login: at most 30d, default 30d)`).option("--renew <duration>", "Ask the owner to let this sign-in renew itself for up to this long after approval, for example 30d. Default 30d, or none when the sign-in asks for encryption or secrets permissions. Must be longer than --expiry and at most 365d. The owner can approve it without renewal.").option("--no-renew", "Ask for a sign-in that ends at its --expiry, with no renewal").option("--owner <did>", "Sign in as this owner (did:pkh:eip155:CHAIN:ADDRESS): OpenKey preselects that key, e.g. one that is not the account's primary key, and an approval by any other identity is refused. With --manifest, also names the secrets owner for a manifest's `secrets` on a profile with no recorded owner").option("--replace-session", "Scoped or device login: replace this profile's live session even though the new scope would narrow, change or shorten it (prefer a new profile)").option("--force", "Replica-enabled OpenKey login: replace the stored session key even when recorded shares could not be checked or hold unexpired shares that need the current key").option("--keys <folder>", "Also let this sign-in create and use encryption keys in this folder (for example `qa`). The node must support named keys. With OpenKey, the first time on a profile also needs `--owner`.").option("--replication-prefix <prefix>", "Add replication get+sync authority for a folder prefix ending in /, or root (repeatable)", (prefix, values = []) => [...values, prefix]).option("--replication-allow-secrets", "Allow replication of secret material (network-wide decrypt warning)").action(async (options2, cmd) => {
     try {
       if (options2.device && options2.paste) {
         throw new CLIError("INVALID_ARGUMENT", "--device and --paste are mutually exclusive.", ExitCode.USAGE_ERROR);
+      }
+      const renew = options2.renew === void 0 || options2.renew === false ? options2.renew : parseRenewOption(options2.renew);
+      if (typeof renew === "number" && (options2.device || options2.paste || options2.method === "local")) {
+        throw new CLIError("INVALID_ARGUMENT", "--renew needs OpenKey sign-in through an approval link: it can't be used with --device, --paste or --method local.", ExitCode.USAGE_ERROR);
       }
       const scoped = options2.device || options2.manifest || options2.expiry || options2.owner;
       if (scoped && options2.method === "local") {
@@ -38554,7 +38703,10 @@ function registerAuthCommand(program, options) {
       } else if (options2.keys !== void 0) {
         method = profileConfig?.authMethod === "openkey" || options2.paste || options2.owner ? "openkey" : "local";
       } else {
-        method = scoped ? "openkey" : await promptAuthMethod();
+        method = scoped || typeof renew === "number" ? "openkey" : await promptAuthMethod();
+      }
+      if (method === "local" && typeof renew === "number") {
+        throw new CLIError("INVALID_ARGUMENT", "--renew needs OpenKey sign-in through an approval link: it can't be used with --method local.", ExitCode.USAGE_ERROR);
       }
       if (method === "openkey" && (options2.keys !== void 0 || replicationOptions.prefixes.length > 0) && !options2.paste && options2.popup !== false && !process.stdin.isTTY && !process.stderr.isTTY) {
         throw new CLIError(
@@ -38586,6 +38738,7 @@ function registerAuthCommand(program, options) {
           persistHost,
           force: options2.force === true,
           keys: options2.keys,
+          ...renew === void 0 ? {} : { renew },
           ...created === void 0 ? {} : { createdProfile: { previousDefaultProfile: created.previousDefaultProfile } }
         });
         if (!preparedCommitted) await persistReplicationLogin(ctx.profile, replicationOptions);
@@ -38595,7 +38748,7 @@ function registerAuthCommand(program, options) {
       return handleError(error);
     }
   });
-  auth.command("logout").description(`Clear the local session and remove local replicas. With --revoke, revoke owner-controlled node grants and the session CID before deleting local files.`).option("--keep-replicas", "Keep legacy replicas only when this profile has no replica gate or flag-owned state").option("--revoke", "Revoke owner-controlled grants and the session CID on the node before local logout").option("--discard-local-changes", "Approve deletion of the exact local replica paths and identities listed before logout; with --revoke, deletion waits for every node receipt").option("--approve-inventory <token>", "After a refused pending remote logout, confirm the exact changed paths printed by the previous command; requires --discard-local-changes").option("--force", "Log out even when recorded shares could not be checked or hold unexpired shares that need the current session key").action(async (options2, cmd) => {
+  auth.command("logout").description(`Clear the local session and remove local replicas. An agent (delegate-session) profile with no local replica state keeps its key, so a new grant can be imported for it; other profiles' keys are deleted and the next sign-in creates a new one. With --revoke, revoke owner-controlled node grants and the session CID before deleting local files.`).option("--keep-replicas", "Keep legacy replicas only when this profile has no replica gate or flag-owned state").option("--revoke", "Revoke owner-controlled grants and the session CID on the node before local logout").option("--discard-local-changes", "Approve deletion of the exact local replica paths and identities listed before logout; with --revoke, deletion waits for every node receipt").option("--approve-inventory <token>", "After a refused pending remote logout, confirm the exact changed paths printed by the previous command; requires --discard-local-changes").option("--force", "Log out even when recorded shares could not be checked or hold unexpired shares that need the current session key (no effect when the key is kept)").action(async (options2, cmd) => {
     try {
       const globalOpts = cmd.optsWithGlobals();
       const ctx = await ProfileManager.resolveContext(globalOpts, { storedSession: "unused" });
@@ -38623,7 +38776,9 @@ function registerAuthCommand(program, options) {
           ExitCode.USAGE_ERROR
         );
       }
-      if (!options2.revoke && !options2.force) await assertShareHistoryAllowsKeyDrop(ctx.profile, "logout");
+      if (!options2.revoke && !options2.force && (options2.keepReplicas || !await logoutWillKeepKey(ctx.profile))) {
+        await assertShareHistoryAllowsKeyDrop(ctx.profile, "logout");
+      }
       const online = options2.revoke ? await revokeForLogout(ctx, options2.discardLocalChanges === true) : void 0;
       const replicasRemoved = await finishProfileLogout(ctx, {
         keepReplicas: options2.keepReplicas,
@@ -38631,9 +38786,12 @@ function registerAuthCommand(program, options) {
         approveInventory: options2.approveInventory,
         online
       });
+      const keyKept = await ProfileManager.getStoredKey(ctx.profile) !== null;
       outputJson({
         profile: ctx.profile,
         authenticated: false,
+        keyKept,
+        message: keyKept ? "Signed out. The key is kept, so a new grant can be imported for it. Grants already made for this key stay valid until they expire unless the owner revokes them." : "Signed out. The key was deleted; the next sign-in creates a new one.",
         replicasRemoved,
         replicasKept: options2.keepReplicas === true,
         warning: online ? `The node confirmed revocation of the listed CIDs before local logout. Files you already shared stay available until each share expires or you revoke it (\`${CLI_NAME21} share revoke <id>\`).` : options2.keepReplicas ? "Legacy replica files remain on disk; this local logout clears the session but does not revoke node grants. Purge the files before a future sign-in if they must not be reused." : `Logout is local; delegations and grants on the node stay valid until they expire. Use \`${CLI_NAME21} delegation revoke <cid>\` to end access now.`,
@@ -38727,7 +38885,7 @@ ${signInAgainHint(ctx.profile, posture ?? void 0)}
   ).option("--permission <file>", 'JSON permission request: { "permissions": PermissionEntry[] }').option("--manifest <fileOrBase64>", "Manifest file, base64:<json>, or raw base64 JSON").option(
     "--expiry <duration>",
     `Lifetime of the granted delegation. ms-format string (e.g. "7d", "30m") or raw milliseconds. Defaults to 7d, capped by the active session's expiry.`
-  ).option("--emit [file]", "Emit the request artifact to stdout, or write it to file when provided").option("--grant", "Grant the requested permissions immediately with this owner profile; OpenKey shows the permission list separately, and no generated free-text reason is sent").option("--yes", UNNEEDED_YES_DESCRIPTION, false).option("--no-popup", "Print the OpenKey URL without opening a browser when granting with OpenKey").option("--device", "With --grant: approve on another device (e.g. a phone) through OpenKey device authorization (KV-scoped; SQL needs browser login)").option(
+  ).option("--emit [file]", "Emit the request artifact to stdout, or write it to file when provided").option("--grant", "Grant the requested permissions immediately with this owner profile").option("--yes", UNNEEDED_YES_DESCRIPTION, false).option("--no-popup", "Print the OpenKey URL without opening a browser when granting with OpenKey").option("--device", "With --grant: approve on another device (e.g. a phone) through OpenKey device authorization (KV-scoped; SQL needs browser login)").option(
     "--preset <name>",
     `Request a named permission set instead of --cap: ${APPS_AGENT_PRESET} is READ-ONLY on the applications space (kv get/list + sql read, ${APPS_AGENT_EXPIRY_DAYS} days); add --write --app <app_id> to also let the agent change that app's data (see --write)`
   ).option(
@@ -38784,7 +38942,7 @@ ${appsAgentScopeNotice(preset.mode, preset.appIds)}
       }
       const session = initialSnapshot ? initialSnapshot.session : await ProfileManager.getSession(ctx.profile);
       const key = initialSnapshot ? initialSnapshot.key : await ProfileManager.getKey(ctx.profile);
-      const keyOnlyOpenKey = !session && profile.authMethod !== "local" && key !== null && !options2.device;
+      const keyOnlyOpenKey = !session && profile.authMethod !== "local" && key !== null && profile.authSignedOut !== true && !options2.device;
       if (profile.authMethod === "openkey" || options2.device || keyOnlyOpenKey) assertNoCaveatLimits(requested);
       await completeApprovalResult(ctx.profile);
       let node;
@@ -38973,13 +39131,19 @@ ${appsAgentScopeNotice(preset.mode, preset.appIds)}
       const profile = await ProfileManager.getProfile(ctx.profile);
       let bootstrap;
       let node;
-      try {
-        node = await ensureAuthenticated(ctx);
-      } catch (error) {
-        const session = await ProfileManager.getSession(ctx.profile);
-        if (session || resolveProfilePosture(profile) !== "delegate-session") throw error;
-        bootstrap = await bootstrapDelegatedSession(ctx, imported.delegation);
+      if (delegationTargetsDelegateSessionKey(profile, imported.delegation.delegateDID)) {
+        await recoverPendingLogout(ctx.profile);
+        bootstrap = await bootstrapDelegatedSession(ctx, imported.delegation, { replaceSession: true });
         node = bootstrap.node;
+      } else {
+        try {
+          node = await ensureAuthenticated(ctx);
+        } catch (error) {
+          const session = await ProfileManager.getSession(ctx.profile);
+          if (session || resolveProfilePosture(profile) !== "delegate-session") throw error;
+          bootstrap = await bootstrapDelegatedSession(ctx, imported.delegation);
+          node = bootstrap.node;
+        }
       }
       const signedAudience = kind === "compact" ? verifiedCompactAudience(node, imported.delegation) : void 0;
       let transportMatchesAudience = false;
@@ -39439,20 +39603,22 @@ function isRequestBoundDelegationEnvelope(value4) {
   const candidate = value4;
   return candidate.kind === "tinycloud.auth.delegation" && candidate.version === 1 && Object.hasOwn(candidate, "requestId");
 }
+function delegationTargetsDelegateSessionKey(profile, delegateDid) {
+  return resolveProfilePosture(profile) === "delegate-session" && delegateDid.split("#", 1)[0] === (profile.sessionDid ?? profile.did).split("#", 1)[0];
+}
 async function importRequestBoundDelegationWithBootstrap(ctx, artifact) {
-  const session = await ProfileManager.getSession(ctx.profile);
-  if (session !== null) {
-    await importRequestBoundDelegation(ctx, artifact);
-    return;
-  }
   const profile = await ProfileManager.getProfile(ctx.profile);
-  if (resolveProfilePosture(profile) !== "delegate-session") {
+  const transport = typeof artifact === "object" && artifact !== null && "delegation" in artifact ? artifact.delegation : void 0;
+  const delegateDid = typeof transport === "object" && transport !== null && "delegateDID" in transport ? transport.delegateDID : void 0;
+  const replaceSession = typeof delegateDid === "string" && delegationTargetsDelegateSessionKey(profile, delegateDid);
+  if (!replaceSession && (resolveProfilePosture(profile) !== "delegate-session" || await ProfileManager.getSession(ctx.profile) !== null)) {
     await importRequestBoundDelegation(ctx, artifact);
     return;
   }
   const candidate = artifact;
   const delegation = normalizePortableDelegation(candidate.delegation);
-  const bootstrap = await bootstrapDelegatedSession(ctx, delegation);
+  if (replaceSession) await recoverPendingLogout(ctx.profile);
+  const bootstrap = await bootstrapDelegatedSession(ctx, delegation, { replaceSession });
   try {
     await importRequestBoundDelegation(ctx, artifact);
   } catch (error) {
@@ -39656,7 +39822,8 @@ async function ensureDelegationAuthority(params) {
     };
     const anchorSpace = params.anchorSpace ?? params.profile.spaceId ?? params.profile.spaceName;
     const grants = [];
-    for (const group of groupPermissionsBySpace(params.requested)) {
+    const readiness = [];
+    for (const group of [params.requested]) {
       const request = grantRequestPermissions(group, anchorSpace);
       const delegation = await refusing({ profileName: params.ctx.profile, key, storedKey: key }, async (seen) => {
         const delegationData = await acquireOpenKey(params.profile.did, {
@@ -39671,11 +39838,15 @@ async function ensureDelegationAuthority(params) {
           noPopup: params.noPopup
         });
         seen.result = delegationData;
+        readiness.push(delegationData);
         return portableFromOpenKeyDelegation(delegationData, request, params.ctx.host, proof);
       });
       grants.push({ delegation, effective: permissionsFromDelegation(delegation) });
     }
     await activateAndStoreOpenKeyGrants(params.ctx.profile, params.ctx.host, params.node, grants, "cli");
+    for (const [index, data] of readiness.entries()) {
+      await ensureSpaceSetup(params.ctx, data, grants[index].effective, params.spaceSetupTimeoutMs?.(), async () => ({ node: params.node }));
+    }
     return;
   }
   const delegations = await params.node.grantRuntimePermissions(
@@ -39818,7 +39989,7 @@ function verifyOpenKeyApproval(data, requested, host, proof) {
   const primary = spaced.find((permission2) => permission2.service !== "tinycloud.capabilities") ?? spaced[0] ?? effective[0];
   const resources = effective.map((permission2) => ({
     service: permission2.service.slice("tinycloud.".length),
-    space: isRawCidRevocationPermission(permission2) ? permission2.space : isVerifiedRawEncryptionPermission(permission2) ? "encryption" : returnedSpace,
+    space: isRawCidRevocationPermission(permission2) ? permission2.space : isVerifiedRawEncryptionPermission(permission2) ? "encryption" : permission2.space,
     path: permission2.path,
     actions: [...permission2.actions],
     ...permission2.caveats === void 0 ? {} : { caveats: structuredClone(permission2.caveats) }
@@ -39912,7 +40083,7 @@ async function persistCurrentLocalSession(profileName2, profile, session, replic
       );
     }
     try {
-      await lstat8(join17(profilePath11(profileName2), REPLICA_LOGOUT_PENDING_FILE4));
+      await lstat8(join17(profilePath12(profileName2), REPLICA_LOGOUT_PENDING_FILE4));
       throw new CLIError(
         "PROFILE_CHANGED_DURING_LOGIN",
         "A durable logout started while the local grant was in flight; its session and key were not restored.",
@@ -40133,7 +40304,7 @@ async function refreshPreparedOpenKeySession(params) {
   let handoff;
   let preparedDid;
   let handedBackSiwe;
-  const gateWasActive = await readGateSnapshot(profilePath11(profileName2)).then((gate) => gate !== void 0 && gate.principalHash !== null, () => true);
+  const gateWasActive = await readGateSnapshot(profilePath12(profileName2)).then((gate) => gate !== void 0 && gate.principalHash !== null, () => true);
   try {
     if (namedKeys !== void 0) process.stderr.write(KEYS_APPROVAL_NOTE(namedKeys.prefix));
     await node.signInWithOpenKey(async (prepared) => {
@@ -40318,7 +40489,7 @@ async function refreshPreparedKeysSession(params) {
 async function undoPreparedAttempt(profileName2, node, owner, gateWasActive) {
   if (!gateWasActive) {
     const undone = await ProfileManager.withLock(profileName2, async () => {
-      const gate = await readGateSnapshot(profilePath11(profileName2));
+      const gate = await readGateSnapshot(profilePath12(profileName2));
       if (gate === void 0 || gate.principalHash !== await principalHashOf(gate.salt, owner)) return false;
       if (await ProfileManager.getSession(profileName2) !== null) return false;
       await node.signOut();
@@ -40363,6 +40534,11 @@ async function refreshOpenKeySession(profileName2, host, options = {}) {
     assertNotLocalOwner(profileName2, profile, "Scoped browser login");
   }
   const plainPasteLink = options.paste === true && replication.prefixes.length === 0 && options.keys === void 0;
+  const approvalRequestPath = options.paste !== true && replication.prefixes.length === 0 && options.keys === void 0;
+  if (!approvalRequestPath && typeof options.renew === "number") {
+    throw new CLIError("INVALID_ARGUMENT", "--renew needs OpenKey sign-in through an approval link: it can't be used with --paste, --keys or --replication-prefix.", ExitCode.USAGE_ERROR);
+  }
+  const renewalLeaseSeconds = approvalRequestPath ? renewalLeaseFor(options.renew ?? (withoutDefaultRenewal(permissions ?? ownerLoginPermissions(expectedOwner)) ? false : void 0), grantLifetimeSeconds(openKeyExpiry)) : void 0;
   if (permissions !== void 0 && options.replaceSession !== true) {
     const estimatedExpiry = expiry === void 0 || plainPasteLink ? void 0 : new Date(Date.now() + expiry.durationMs).toISOString();
     assertSessionReplaceable(profileName2, snapshot, expectedOwner, permissions, estimatedExpiry);
@@ -40412,7 +40588,8 @@ async function refreshOpenKeySession(profileName2, host, options = {}) {
       expiry: openKeyExpiry,
       // The plain paste link lets the user pick the lifetime; the signed result has no `--expiry` ceiling.
       ...plainPasteLink ? { expiryChangeable: true } : {},
-      ...permissions && options.reason ? { reason: options.reason } : {}
+      ...permissions && options.reason ? { reason: options.reason } : {},
+      ...renewalLeaseSeconds === void 0 ? {} : { renewalLeaseSeconds }
     });
     seen.result = delegationData;
     let sanitizedSession;
@@ -40458,7 +40635,12 @@ async function refreshOpenKeySession(profileName2, host, options = {}) {
     });
     return { delegationData, sanitizedSession, verifiedOwner, ownerKeyPrimary, updatedProfile, declined, legacyNested };
   });
+  const renewalChoice = approvalRenewalChoiceOf(committed.delegationData);
   await completeApprovalResult(profileName2, committed.delegationData);
+  if (renewalChoice === "finite") {
+    process.stderr.write(`The owner approved this sign-in without renewal, so it ends at ${String(committed.sanitizedSession.expiresAt)}. Sign in again after that.
+`);
+  }
   warnIfNotPrimaryKey(committed.verifiedOwner, committed.ownerKeyPrimary);
   announceFirstOwner(profileName2, expectedOwner, committed.verifiedOwner);
   return { profile: committed.updatedProfile, delegationData: committed.sanitizedSession, declined: committed.declined, legacyNested: committed.legacyNested };
@@ -40945,6 +41127,7 @@ function registerEnableCommand(program) {
         nodeOrigin: context2.host,
         shareOrigin: DEFAULT_SHARE_ORIGIN,
         permissions: sharePublishingPermissions(),
+        reason: "Let the TinyCloud CLI on this computer publish Share links.",
         replaceSession: options.replaceSession === true,
         persistHost: globalOptions.host !== void 0
       });
@@ -41064,14 +41247,14 @@ function verifyBytes(file, bytes) {
     throw new AppsInstallError("INTEGRITY_FAILED", `${file.path} does not match the pinned sha256 and size`);
   }
 }
-function splitStatements(sql2) {
+function splitStatements(sql3) {
   let stripped = "";
   let inQuote = false;
-  for (let i = 0; i < sql2.length; i++) {
-    const ch = sql2[i];
+  for (let i = 0; i < sql3.length; i++) {
+    const ch = sql3[i];
     if (ch === "'") inQuote = !inQuote;
-    if (!inQuote && ch === "-" && sql2[i + 1] === "-") {
-      while (i < sql2.length && sql2[i] !== "\n") i++;
+    if (!inQuote && ch === "-" && sql3[i + 1] === "-") {
+      while (i < sql3.length && sql3[i] !== "\n") i++;
       stripped += "\n";
       continue;
     }
@@ -41259,7 +41442,7 @@ Examples:
     }
   });
 }
-function appsInstallIo(kv2, db) {
+function appsInstallIo(kv3, db) {
   return {
     async fetchBytes(url) {
       const response = await fetch(url, { redirect: "error" });
@@ -41267,7 +41450,7 @@ function appsInstallIo(kv2, db) {
       return new Uint8Array(await response.arrayBuffer());
     },
     async kvGet(key) {
-      const result = await kv2.get(key, { binary: true });
+      const result = await kv3.get(key, { binary: true });
       if (result.ok) {
         const bytes = result.data.data;
         if (bytes instanceof Uint8Array) return bytes;
@@ -41277,7 +41460,7 @@ function appsInstallIo(kv2, db) {
       throw new Error(result.error.code ?? "KV_GET_FAILED");
     },
     async kvCreate(key, bytes) {
-      const result = await kv2.put(key, bytes, { ifNoneMatch: "*" });
+      const result = await kv3.put(key, bytes, { ifNoneMatch: "*" });
       if (result.ok) return "created";
       if (result.error.code === "KV_PRECONDITION_FAILED") return "exists";
       throw new Error(result.error.code ?? "KV_PUT_FAILED");
@@ -41383,25 +41566,25 @@ async function openFeedHandoff(path) {
     ok: false,
     error: { code: "SQL_ERROR", message: error instanceof Error ? error.message : "Local handoff SQLite operation failed", service: "sql" }
   });
-  const run2 = (sql2, params = []) => {
-    const result = database.prepare(sql2).run(...params);
+  const run2 = (sql3, params = []) => {
+    const result = database.prepare(sql3).run(...params);
     return { changes: Number(result.changes), lastInsertRowId: Number(result.lastInsertRowid) };
   };
   return {
     close: () => database.close(),
     handle: {
-      query: async (sql2, params = []) => {
+      query: async (sql3, params = []) => {
         try {
-          const records = database.prepare(sql2).all(...params);
+          const records = database.prepare(sql3).all(...params);
           const columns = records[0] ? Object.keys(records[0]) : [];
           return { ok: true, data: { columns, rows: records.map((row) => columns.map((column) => row[column])), rowCount: records.length } };
         } catch (error) {
           return failure(error);
         }
       },
-      execute: async (sql2, params) => {
+      execute: async (sql3, params) => {
         try {
-          return { ok: true, data: run2(sql2, params) };
+          return { ok: true, data: run2(sql3, params) };
         } catch (error) {
           return failure(error);
         }
@@ -41996,10 +42179,10 @@ function value2(result) {
 }
 function privateDatabase(database) {
   return {
-    query(sql2, params, options) {
-      return database.query(sql2, params, { ...options, redactErrors: true });
+    query(sql3, params, options) {
+      return database.query(sql3, params, { ...options, redactErrors: true });
     },
-    execute: (sql2, params, options) => database.execute(sql2, params, { ...options, redactErrors: true }),
+    execute: (sql3, params, options) => database.execute(sql3, params, { ...options, redactErrors: true }),
     batch: (statements, options) => database.batch(statements, { ...options, redactErrors: true })
   };
 }
@@ -42427,15 +42610,15 @@ async function context(command) {
   const space = await resolveFeedSpace(node.spaceId, opts.space ?? "applications", profile.profile);
   if (!space) throw new Error("Feed requires an explicit owner space");
   const resources = value3(feedResourceNames2(FEED_PREFIX2, opts.agent));
-  const sql2 = node.sqlForSpace(space);
+  const sql3 = node.sqlForSpace(space);
   return {
     profile,
     node,
     space,
     resources,
-    sql: sql2,
-    output: sql2.db(resources.outputResource),
-    responses: sql2.db(resources.responseResource)
+    sql: sql3,
+    output: sql3.db(resources.outputResource),
+    responses: sql3.db(resources.responseResource)
   };
 }
 function agentOptions(command) {
@@ -42455,7 +42638,7 @@ function registerFeedCommand(program) {
   const feed = program.command("feed").description("SQLite agent cards, owner responses and durable runtime handoff").addHelpText("after", `
 Owner connection provisions separate output and response databases and activates one
 bundled delegation. Agent labels and tokens select resources, never confer authority.
-Home's owner grant uses ${FEED_PREFIX2}/ (trailing slash namespace); agent grants
+TinyCloud One's owner grant uses ${FEED_PREFIX2}/ (trailing slash namespace); agent grants
 name exact output, response and response-hook resources. No agent schema or response write.
 
 publish/respond/message/handling read JSON files carrying full card/revision/issuance
@@ -42522,7 +42705,7 @@ slash prefix and output are explicit; source get/sync grants are separate from f
   });
   agentOptions(feed.command("connect").description("Owner: provision an agent feed and activate its exact bundled grant")).requiredOption("--to <did>", "Authenticated agent DID receiving the grant").requiredOption("--label <label>", "Owner registry display label").option("--expiry <duration>", "Delegation expiry duration", "24h").action(async (options, command) => {
     try {
-      const { node, space, sql: sql2, resources, output: output2, responses } = await context(command);
+      const { node, space, sql: sql3, resources, output: output2, responses } = await context(command);
       const did2 = options.to.split("#")[0];
       const source = {
         sourceId: options.agent,
@@ -42531,9 +42714,9 @@ slash prefix and output are explicit; source get/sync grants are separate from f
         output: { spaceId: space, database: resources.outputResource },
         responses: { spaceId: space, database: resources.responseResource }
       };
-      const delegation = await connectFeedAgent(sql2.db(REGISTRY), source, async () => {
+      const delegation = await connectFeedAgent(sql3.db(REGISTRY), source, async () => {
         value3(await initializeFeedDatabases2({ output: output2, responses }));
-        await copyCardMdToAgent(sql2.db(CARD_MD_RESOURCE), responses);
+        await copyCardMdToAgent(sql3.db(CARD_MD_RESOURCE), responses);
         const expiry = parseExpiry3(options.expiry).getTime() - Date.now();
         const { delegation: delegation2 } = await node.delegateTo(did2, feedAgentPermissions(space, resources), { expiry, requireActivation: true });
         return delegation2;
@@ -42549,8 +42732,8 @@ needed. Run it with the profile that ran feed connect: a profile can revoke only
 row is removed only after the revoke succeeds; the token stays reserved for the same agent DID.
 `).action(async (options, command) => {
     try {
-      const { node, sql: sql2, profile } = await context(command);
-      outputJson(await disconnectFeedAgent(sql2.db(REGISTRY), options.agent, async (cid) => {
+      const { node, sql: sql3, profile } = await context(command);
+      outputJson(await disconnectFeedAgent(sql3.db(REGISTRY), options.agent, async (cid) => {
         await revokeIssuedDelegation(node, profile, cid);
       }));
     } catch (error) {
@@ -42951,25 +43134,25 @@ async function readStdin2() {
 }
 async function kvHandle(node, spaceInput, profileName2) {
   const spaceUri = await resolveSpaceUri(spaceInput, profileName2);
-  const kv2 = spaceUri ? node.kvForSpace(spaceUri) : node.kv;
-  return { kv: kv2, spaceUri };
+  const kv3 = spaceUri ? node.kvForSpace(spaceUri) : node.kv;
+  return { kv: kv3, spaceUri };
 }
 function retryFields(retry) {
   return retry ? { attempts: retry.attempts, backoffMs: retry.backoffMs } : {};
 }
 function registerKvCommand(program) {
-  const kv2 = program.command("kv").description("Key-value store operations");
-  kv2.command("get <key>").description("Get a value by key").option("--raw", "Output raw value (no JSON wrapping)").option("-o, --output <file>", "Write value to file").option("--space <name|uri>", "Target a non-primary space (short name or full URI)").action(async (key, options, cmd) => {
+  const kv3 = program.command("kv").description("Key-value store operations");
+  kv3.command("get <key>").description("Get a value by key").option("--raw", "Output raw value (no JSON wrapping)").option("-o, --output <file>", "Write value to file").option("--space <name|uri>", "Target a non-primary space (short name or full URI)").action(async (key, options, cmd) => {
     try {
       assertAddressableKey(key);
       const globalOpts = cmd.optsWithGlobals();
       const ctx = await ProfileManager.resolveContext(globalOpts);
       const node = await ensureAuthenticated(ctx);
-      const { kv: kv3, spaceUri } = await kvHandle(node, options.space, ctx.profile);
+      const { kv: kv4, spaceUri } = await kvHandle(node, options.space, ctx.profile);
       const wantBytes = !!options.output || !!options.raw;
       const result = await withSpinner(
         `Getting ${key}...`,
-        () => kv3.get(key, wantBytes ? { binary: true } : void 0)
+        () => kv4.get(key, wantBytes ? { binary: true } : void 0)
       );
       if (!result.ok) {
         const hosted = await unhostedSpaceError(result.error, spaceUri, ctx.profile);
@@ -43005,7 +43188,7 @@ function registerKvCommand(program) {
       return handleError(error);
     }
   });
-  kv2.command("put <key> [value]").description("Set a value").option("--file <path>", "Read value from file").option("--stdin", "Read value from stdin").option("--if-none-match <value>", "`--if-none-match '*'`: Write only if the key doesn't exist yet; never overwrite").option("--space <name|uri>", "Target a non-primary space (short name or full URI)").action(async (key, value4, options, cmd) => {
+  kv3.command("put <key> [value]").description("Set a value").option("--file <path>", "Read value from file").option("--stdin", "Read value from stdin").option("--if-none-match <value>", "`--if-none-match '*'`: Write only if the key doesn't exist yet; never overwrite").option("--space <name|uri>", "Target a non-primary space (short name or full URI)").action(async (key, value4, options, cmd) => {
     try {
       assertAddressableKey(key);
       if (options.ifNoneMatch !== void 0 && options.ifNoneMatch !== "*") {
@@ -43033,8 +43216,8 @@ function registerKvCommand(program) {
           putValue = value4;
         }
       }
-      const { kv: kv3, spaceUri } = await kvHandle(node, options.space, ctx.profile);
-      const result = await withSpinner(`Writing ${key}...`, () => kv3.put(
+      const { kv: kv4, spaceUri } = await kvHandle(node, options.space, ctx.profile);
+      const result = await withSpinner(`Writing ${key}...`, () => kv4.put(
         key,
         putValue,
         options.ifNoneMatch === "*" ? { ifNoneMatch: "*" } : void 0
@@ -43050,14 +43233,14 @@ function registerKvCommand(program) {
       return handleError(error);
     }
   });
-  kv2.command("delete <key>").description("Delete a key").option("--space <name|uri>", "Target a non-primary space (short name or full URI)").action(async (key, options, cmd) => {
+  kv3.command("delete <key>").description("Delete a key").option("--space <name|uri>", "Target a non-primary space (short name or full URI)").action(async (key, options, cmd) => {
     try {
       assertAddressableKey(key);
       const globalOpts = cmd.optsWithGlobals();
       const ctx = await ProfileManager.resolveContext(globalOpts);
       const node = await ensureAuthenticated(ctx);
-      const { kv: kv3, spaceUri } = await kvHandle(node, options.space, ctx.profile);
-      const result = await withSpinner(`Deleting ${key}...`, () => kv3.delete(key));
+      const { kv: kv4, spaceUri } = await kvHandle(node, options.space, ctx.profile);
+      const result = await withSpinner(`Deleting ${key}...`, () => kv4.delete(key));
       if (!result.ok) {
         await throwKvError(result.error, spaceUri, ctx.profile);
       }
@@ -43066,7 +43249,7 @@ function registerKvCommand(program) {
       return handleError(error);
     }
   });
-  kv2.command("list").description("List keys").option("--prefix <prefix>", "Filter by key prefix").option("--space <name|uri>", "Target a non-primary space (short name or full URI)").option("--limit <n>", "Keys per page, 1-1000 (the node's default otherwise)").option("--cursor <cursor>", "Continue from a previous page's nextCursor").option("--all", "Follow nextCursor until the listing is complete").action(async (options, cmd) => {
+  kv3.command("list").description("List keys").option("--prefix <prefix>", "Filter by key prefix").option("--space <name|uri>", "Target a non-primary space (short name or full URI)").option("--limit <n>", "Keys per page, 1-1000 (the node's default otherwise)").option("--cursor <cursor>", "Continue from a previous page's nextCursor").option("--all", "Follow nextCursor until the listing is complete").action(async (options, cmd) => {
     try {
       if (options.prefix) assertAddressableKey(options.prefix);
       const limit = options.limit === void 0 ? void 0 : Number(options.limit);
@@ -43076,13 +43259,13 @@ function registerKvCommand(program) {
       const globalOpts = cmd.optsWithGlobals();
       const ctx = await ProfileManager.resolveContext(globalOpts);
       const node = await ensureAuthenticated(ctx);
-      const { kv: kv3, spaceUri } = await kvHandle(node, options.space, ctx.profile);
+      const { kv: kv4, spaceUri } = await kvHandle(node, options.space, ctx.profile);
       const keyList = [];
       let cursor = options.cursor;
       let truncated;
       const seenCursors = /* @__PURE__ */ new Set();
       for (; ; ) {
-        const result = await withSpinner("Listing keys...", () => kv3.list({
+        const result = await withSpinner("Listing keys...", () => kv4.list({
           ...options.prefix ? { prefix: options.prefix } : {},
           ...limit === void 0 ? {} : { limit },
           ...cursor === void 0 ? {} : { cursor }
@@ -43137,14 +43320,14 @@ function registerKvCommand(program) {
       return handleError(error);
     }
   });
-  kv2.command("head <key>").description("Get metadata for a key (no body)").option("--space <name|uri>", "Target a non-primary space (short name or full URI)").action(async (key, options, cmd) => {
+  kv3.command("head <key>").description("Get metadata for a key (no body)").option("--space <name|uri>", "Target a non-primary space (short name or full URI)").action(async (key, options, cmd) => {
     try {
       assertAddressableKey(key);
       const globalOpts = cmd.optsWithGlobals();
       const ctx = await ProfileManager.resolveContext(globalOpts);
       const node = await ensureAuthenticated(ctx);
-      const { kv: kv3, spaceUri } = await kvHandle(node, options.space, ctx.profile);
-      const result = await withSpinner(`Checking ${key}...`, () => kv3.head(key));
+      const { kv: kv4, spaceUri } = await kvHandle(node, options.space, ctx.profile);
+      const result = await withSpinner(`Checking ${key}...`, () => kv4.head(key));
       if (!result.ok) {
         const hosted = await unhostedSpaceError(result.error, spaceUri, ctx.profile);
         if (hosted) throw hosted;
@@ -43553,6 +43736,57 @@ init_scoped_login();
 init_approval_request();
 init_approval_wait();
 import { CLI_NAME as CLI_NAME30 } from "@tinycloud/operations/cli-name";
+
+// src/auth/onboarding-scope.ts
+init_errors();
+init_constants();
+init_duration();
+var kv = (space, path, actions) => ({ service: "tinycloud.kv", space, path, actions: actions.map((a) => `tinycloud.kv/${a}`) });
+var sql = (path, actions = ["read", "write"]) => ({ service: "tinycloud.sql", space: "applications", path, actions: actions.map((a) => `tinycloud.sql/${a}`) });
+var ONBOARD_EXPIRY = "30d";
+var FEED_EXPIRY = "7d";
+var MAX_EXPIRY_MS = 30 * 24 * 60 * 60 * 1e3;
+function parseOnboardExpiry(raw) {
+  if (raw === void 0) return void 0;
+  const match = typeof raw === "string" ? /^([1-9]\d*)([mhdw])$/.exec(raw.trim()) : null;
+  if (!match) {
+    throw new CLIError("INVALID_EXPIRY", `--expiry takes a number and a unit, such as 12h, 7d or 2w (m, h, d or w), not ${JSON.stringify(raw)}.`, ExitCode.USAGE_ERROR);
+  }
+  const expiry = match[0];
+  if (parseDuration(expiry) > MAX_EXPIRY_MS) {
+    throw new CLIError("INVALID_EXPIRY", `--expiry can be at most 30 days (30d), the longest an OpenKey approval lasts.`, ExitCode.USAGE_ERROR);
+  }
+  const unit = { m: "minute", h: "hour", d: "day", w: "week" }[match[2]];
+  return { expiry, words: `${match[1]} ${unit}${match[1] === "1" ? "" : "s"}` };
+}
+function onboardingPlan(selector = "apps", expiryOption) {
+  const tasks = [...new Set(selector.split(",").map((s) => s.trim()))].sort();
+  if (!tasks.length || tasks.some((task) => task !== "apps" && task !== "feed")) {
+    throw new CLIError("INVALID_ONBOARD_TASK", "--with accepts apps, feed or apps,feed.", ExitCode.USAGE_ERROR);
+  }
+  const feedOnly = tasks.length === 1 && tasks[0] === "feed";
+  const requested = parseOnboardExpiry(expiryOption);
+  const expiry = requested?.expiry ?? (tasks.includes("feed") ? FEED_EXPIRY : ONBOARD_EXPIRY);
+  const lifetime = requested?.words ?? (tasks.includes("feed") ? "7 days" : "30 days");
+  const entries = feedOnly ? [] : [kv("account", "spaces/", ["get", "list"]), kv("account", "applications/", ["get", "list"])];
+  if (tasks.includes("apps")) entries.push(kv("applications", "", ["get", "list", "put", "del", "metadata"]), sql(""));
+  if (tasks.includes("feed")) {
+    const actions = tasks.includes("apps") ? ["schema"] : ["read", "write", "schema"];
+    entries.push(
+      sql("xyz.tinycloud.tinychat/home_feed", actions),
+      sql("xyz.tinycloud.tinychat/feed/", actions),
+      { service: "tinycloud.hooks", space: "applications", path: "sql/xyz.tinycloud.tinychat/feed/", actions: ["tinycloud.hooks/subscribe"] }
+    );
+  }
+  const asks = feedOnly ? `Set up TinyCloud on this computer: use your Feed, for ${lifetime}.` : tasks.includes("feed") ? `Set up TinyCloud on this computer: use your apps and your Feed, and see your spaces, for ${lifetime}.` : `Set up TinyCloud on this computer: use your apps and see your spaces, for ${lifetime}.`;
+  return {
+    permissions: entries.sort((a, b) => `${a.space}\0${a.service}\0${a.path}`.localeCompare(`${b.space}\0${b.service}\0${b.path}`)),
+    asks,
+    expiry
+  };
+}
+
+// src/commands/onboard.ts
 init_constants();
 init_profiles();
 init_types();
@@ -43560,35 +43794,36 @@ init_permissions();
 init_sdk();
 init_errors();
 init_formatter();
-var ONBOARD_EXPIRY = "30d";
-var kv = (actions) => actions.map((action) => `tinycloud.kv/${action}`);
-var sql = (actions) => actions.map((action) => `tinycloud.sql/${action}`);
+var kv2 = (actions) => actions.map((action) => `tinycloud.kv/${action}`);
+var sql2 = (actions) => actions.map((action) => `tinycloud.sql/${action}`);
 var ONBOARD_STEPS = [
   {
     space: "applications",
     asks: "Read, change and delete your apps' data for 30 days.",
     permissions: [
-      { service: "tinycloud.kv", space: "applications", path: "", actions: kv(["get", "list", "put", "del", "metadata"]) },
-      { service: "tinycloud.sql", space: "applications", path: "", actions: sql(["read", "write"]) }
+      { service: "tinycloud.kv", space: "applications", path: "", actions: kv2(["get", "list", "put", "del", "metadata"]) },
+      { service: "tinycloud.sql", space: "applications", path: "", actions: sql2(["read", "write"]) }
     ]
   },
   {
     space: "account",
     asks: "See which spaces and apps you have, read-only, for 30 days.",
     permissions: [
-      { service: "tinycloud.kv", space: "account", path: "spaces/", actions: kv(["get", "list"]) },
-      { service: "tinycloud.kv", space: "account", path: "applications/", actions: kv(["get", "list"]) }
+      { service: "tinycloud.kv", space: "account", path: "spaces/", actions: kv2(["get", "list"]) },
+      { service: "tinycloud.kv", space: "account", path: "applications/", actions: kv2(["get", "list"]) }
     ]
   }
 ];
 function registerOnboardCommand(program) {
-  program.command("onboard").description("Set up this computer with its owner's OpenKey approvals and a starting grant for 30 days. OpenKey displays the requested permissions separately; no generated free-text reason is sent. Prints a short approval link, automatically retrieves and verifies the result, saves it durably, then acknowledges delivery. Re-run an interrupted command to resume.").option("--code <code>", "Manual fallback return code only; automatic short-link approvals do not produce a code").option("--timeout <duration>", APPROVAL_TIMEOUT_OPTION_DESCRIPTION).action(async (options, cmd) => {
+  program.command("onboard").description("Sets up this computer with its owner's OpenKey approval and a 30-day starting grant; with --with feed, only what the Feed needs, for 7 days. Prints a short approval link, then collects, checks and saves the result. An interrupted run resumes when the same command runs again.").option("--with <tasks>", "Tasks to authorize: apps (default), feed (the Feed only) or apps,feed (keeps the account listing that apps needs)").option("--expiry <duration>", "How long the approval lasts: a number and m, h, d or w, at most 30d. Default: the shortest of the selected tasks' defaults (apps 30d, feed 7d), so 7d when --with includes feed").option("--code <code>", "Manual fallback return code only; automatic short-link approvals do not produce a code").option("--timeout <duration>", APPROVAL_TIMEOUT_OPTION_DESCRIPTION).action(async (options, cmd) => {
     try {
+      const { permissions, asks, expiry } = onboardingPlan(options.with, options.expiry);
+      const steps = [{ permissions, asks }];
       const deadlineMs = options.timeout === void 0 ? void 0 : Date.now() + parseApprovalTimeout(options.timeout);
       if (options.timeout !== void 0 && typeof options.code === "string" && options.code.trim() !== "") {
         throw new CLIError(
           "INVALID_OPTIONS",
-          `--code and --timeout cannot be used together: running the command again would send the same code to the next approval step. Run \`${CLI_NAME30} onboard --code <code>\` without --timeout.`,
+          "--timeout can't be used with --code.",
           ExitCode.USAGE_ERROR
         );
       }
@@ -43616,7 +43851,7 @@ function registerOnboardCommand(program) {
           ...flow,
           profileName: ctx.profile,
           noPopup: true,
-          ...deadlineMs === void 0 ? {} : { approvalWait: { deadlineMs, step: currentStep, of: ONBOARD_STEPS.length } },
+          ...deadlineMs === void 0 ? {} : { approvalWait: { deadlineMs, step: currentStep, of: steps.length } },
           onApprovalRequest: ({ approvalUrl }) => {
             console.error(`Approve in OpenKey (open the complete link):
 ${approvalUrl}
@@ -43625,13 +43860,15 @@ ${deadlineMs === void 0 ? "\nWaiting for approval. Re-run this command after an 
         });
       };
       const spaceRecheck = createSpaceRecheck();
-      for (const [index, step] of ONBOARD_STEPS.entries()) {
+      for (const [index, step] of steps.entries()) {
+        const reason = step.asks;
         currentStep = index + 1;
         const session2 = await ProfileManager.getSession(ctx.profile);
         if (!sessionStateIsUsable(storedSessionState(session2, profile).state)) {
           const { delegationData } = await refreshOpenKeySession(ctx.profile, ctx.host, {
             permissions: step.permissions,
-            expiry: ONBOARD_EXPIRY,
+            reason,
+            expiry,
             persistHost: globalOpts.host !== void 0,
             openKeyAcquisition: acquire,
             ...created === void 0 ? {} : { createdProfile: { previousDefaultProfile: created.previousDefaultProfile } }
@@ -43640,7 +43877,7 @@ ${deadlineMs === void 0 ? "\nWaiting for approval. Re-run this command after an 
             { profile: ctx.profile, host: ctx.host },
             delegationData,
             delegationData.permissions,
-            deadlineMs === void 0 ? void 0 : spaceSetupTimeoutMs({ deadlineMs, step: currentStep, of: ONBOARD_STEPS.length })
+            deadlineMs === void 0 ? void 0 : spaceSetupTimeoutMs({ deadlineMs, step: currentStep, of: steps.length })
           );
           spaceRecheck.settle();
           profile = await ProfileManager.getProfile(ctx.profile);
@@ -43650,17 +43887,35 @@ ${deadlineMs === void 0 ? "\nWaiting for approval. Re-run this command after an 
           { profile: ctx.profile, host: ctx.host },
           String(session2?.spaceId),
           step.permissions,
-          deadlineMs === void 0 ? {} : { timeoutMs: spaceSetupTimeoutMs({ deadlineMs, step: currentStep, of: ONBOARD_STEPS.length }) }
+          deadlineMs === void 0 ? {} : { timeoutMs: spaceSetupTimeoutMs({ deadlineMs, step: currentStep, of: steps.length }) }
         );
+        const node = await ensureAuthenticated(ctx);
+        const requested = await resolvePermissionSpaces(step.permissions, ctx.profile);
         await ensureDelegationAuthority({
           ctx,
           profile,
-          node: await ensureAuthenticated(ctx),
-          requested: await resolvePermissionSpaces(step.permissions, ctx.profile),
-          expiryOption: ONBOARD_EXPIRY,
+          node,
+          requested,
+          expiryOption: expiry,
+          reason,
           exactApproval: true,
+          ...deadlineMs === void 0 ? {} : { spaceSetupTimeoutMs: () => spaceSetupTimeoutMs({ deadlineMs, step: currentStep, of: steps.length }) },
           openKeyAcquisition: acquire
         });
+        await ensureSpaceSetup(
+          ctx,
+          {
+            requestedSpaces: [...new Set(requested.map((p) => p.space))].map((spaceId) => ({
+              space: spaceId,
+              spaceId,
+              spaceReady: null,
+              spacePending: true
+            }))
+          },
+          requested,
+          deadlineMs === void 0 ? void 0 : spaceSetupTimeoutMs({ deadlineMs, step: currentStep, of: steps.length }),
+          async () => ({ node })
+        );
       }
       profile = await ProfileManager.getProfile(ctx.profile);
       const session = await ProfileManager.getSession(ctx.profile);
@@ -43669,10 +43924,10 @@ ${deadlineMs === void 0 ? "\nWaiting for approval. Re-run this command after an 
         profile: ctx.profile,
         ownerDid: profile.ownerDid ?? null,
         host: ctx.host,
-        granted: ONBOARD_STEPS.map(({ space, asks }) => ({ space, asks })),
+        granted: [...new Set(permissions.map((p) => p.space))].map((space) => ({ space, asks })),
         expiresAt: storedSessionState(session, profile).expiresAt
       }, () => `Onboarded: profile ${ctx.profile} acts for ${profile.ownerDid ?? "the owner"}.
-${ONBOARD_STEPS.map(({ asks }) => `  ${asks}`).join("\n")}`);
+${steps.map(({ asks: asks2 }) => `  ${asks2}`).join("\n")}`);
     } catch (error) {
       return handleError(error);
     }
@@ -44038,7 +44293,7 @@ init_theme();
 import {
   ProfileSymlinkError as ProfileSymlinkError3,
   ProfileDeletedError as ProfileDeletedError3,
-  profilePath as profilePath12,
+  profilePath as profilePath13,
   readAdditionalDelegations as readAdditionalDelegations2,
   readSession as readSession2,
   withProfileLock as withProfileLock5,
@@ -44140,7 +44395,7 @@ function assertName(name) {
   return name;
 }
 async function withReplicaRoot(profile, action, create5 = false) {
-  const profileDirectory = profilePath12(profile);
+  const profileDirectory = profilePath13(profile);
   const readRoot = async (directory, recheckProfile) => {
     if (create5) {
       if (recheckProfile) await recheckProfile();
@@ -44244,7 +44499,7 @@ function assertLegacyLogoutClear(dir) {
 }
 async function withLegacyReplicaRead(profile, action) {
   await withProfileLock5(profile, async () => {
-    const dir = profilePath12(profile);
+    const dir = profilePath13(profile);
     assertLegacyLogoutClear(dir);
     const session = await readSession2(profile);
     let checkDelivery;
@@ -44371,9 +44626,9 @@ async function grantTransports(input) {
       fetch: globalThis.fetch.bind(globalThis),
       hosts: [input.host]
     });
-    const kv2 = new KVService({});
-    kv2.initialize(context2);
-    context2.registerService("kv", kv2);
+    const kv3 = new KVService({});
+    kv3.initialize(context2);
+    context2.registerService("kv", kv3);
     context2.setSession({
       delegationHeader: { Authorization: new TextDecoder().decode(grant.bytes) },
       delegationCid: grant.cid,
@@ -44381,7 +44636,7 @@ async function grantTransports(input) {
       verificationMethod: input.deviceDid,
       jwk: input.jwk
     });
-    const client = kv2;
+    const client = kv3;
     return kvSyncTransport(client);
   };
 }
@@ -45661,6 +45916,18 @@ async function ensureSecretsNode(ctx, options, openKeyAcquisition, selectedProfi
   }
   return ensureAuthenticated(ctx, auth);
 }
+function secretCommandReason(action, name) {
+  switch (action) {
+    case "list":
+      return "See the names of your secrets.";
+    case "get":
+      return name ? `Read the secret ${name}.` : "Read your secrets.";
+    case "put":
+      return name ? `Save the secret ${name}.` : "Save secrets.";
+    case "del":
+      return name ? `Delete the secret ${name}.` : "Delete secrets.";
+  }
+}
 async function runSecretOperation(params) {
   const first = await runSecretOperationAttempt(params.label, params.operation);
   if (first.ok || !shouldRequestSecretPermissions(first.error)) {
@@ -45686,6 +45953,7 @@ async function runSecretOperation(params) {
       node: params.node,
       requested,
       expiryOption: void 0,
+      reason: secretCommandReason(params.action, params.name),
       force: true,
       anchorSpace: params.space ?? SECRETS_SPACE2,
       openKeyAcquisition: params.openKeyAcquisition
@@ -45707,6 +45975,10 @@ function assertOwnerApprovalPossible(profileName2, profile, action, name, missin
 }
 function scopedSecretLoginHint(profileName2) {
   return `Have the owner approve a scoped login whose manifest names the secret: ${CLI_NAME34} --profile ${profileName2} auth login --method openkey --paste --manifest <manifest.json>. Pass the owner's code on stdin, newline-terminated.`;
+}
+function networkGrantNotice(recipientDid, networkName, expiry) {
+  const until = expiry instanceof Date && Number.isFinite(expiry.getTime()) ? `until ${expiry.toISOString().slice(0, 16).replace("T", " ")} UTC` : "for as long as this grant lasts";
+  return `${safeInline(recipientDid)} can read every secret in the "${safeInline(networkName)}" network, including secrets added later, ${until}.`;
 }
 async function runSecretOperationAttempt(label, operation) {
   try {
@@ -45803,6 +46075,7 @@ async function canonicalSecretGet(params, collect) {
       node,
       requested: first.missing,
       expiryOption: void 0,
+      reason: secretCommandReason("get", params.name),
       force: true,
       anchorSpace: params.space ?? SECRETS_SPACE2,
       openKeyAcquisition: params.openKeyAcquisition
@@ -46713,7 +46986,7 @@ function registerSecretsCommand(program, openKeyAcquisition) {
       return handleError(error);
     }
   });
-  network.command("grant <recipientDid> [name]").description("Grant decrypt permission for a secrets encryption network").option("--private-key <hex>", "Ethereum private key override (or set TC_PRIVATE_KEY)").action(async (recipientDid, name, options, cmd) => {
+  network.command("grant").argument("<recipientDid>").argument("[name]", "network name (default: default)").description("Let someone read every secret in an encryption network").option("--private-key <hex>", "Ethereum private key override (or set TC_PRIVATE_KEY)").action(async (recipientDid, name, options, cmd) => {
     try {
       const globalOpts = cmd.optsWithGlobals();
       const ctx = await ProfileManager.resolveContext(globalOpts);
@@ -46729,16 +47002,18 @@ function registerSecretsCommand(program, openKeyAcquisition) {
         actions: ["decrypt"]
       };
       const result = await withSpinner(
-        `Granting decrypt permission to ${recipientDid}...`,
+        `Granting ${safeInline(recipientDid)} access to read secrets...`,
         () => node.delegateTo(recipientDid, [permission2])
       );
+      process.stderr.write(networkGrantNotice(recipientDid, networkName, result.delegation.expiry) + "\n");
       outputJson({
         networkId: descriptor.networkId,
         recipientDid,
         cid: result.delegation.cid,
         prompted: result.prompted,
         path: result.delegation.path,
-        actions: result.delegation.actions
+        actions: result.delegation.actions,
+        scope: "whole-network"
       });
     } catch (error) {
       return handleError(error);
@@ -49081,8 +49356,8 @@ import { writeFile as writeFile7 } from "fs/promises";
 import { resolve as resolve9 } from "path";
 async function dbHandle(node, dbName, spaceInput, profileName2) {
   const spaceUri = await resolveSpaceUri(spaceInput, profileName2);
-  const sql2 = spaceUri ? node.sqlForSpace(spaceUri) : node.sql;
-  return { handle: sql2.db(dbName), spaceUri };
+  const sql3 = spaceUri ? node.sqlForSpace(spaceUri) : node.sql;
+  return { handle: sql3.db(dbName), spaceUri };
 }
 async function throwSqlError(error, spaceUri, profileName2, prefix) {
   const storageFull = storageFullError(error, prefix);
@@ -49093,7 +49368,7 @@ async function throwSqlError(error, spaceUri, profileName2, prefix) {
   throw cliErrorFromService(error, message);
 }
 function registerSqlCommand(program) {
-  const sql2 = program.command("sql").description("SQLite database operations for your TinyCloud space").addHelpText("after", `
+  const sql3 = program.command("sql").description("SQLite database operations for your TinyCloud space").addHelpText("after", `
 
 TinyCloud SQL gives each space isolated SQLite databases. Use the default
 database for simple apps, or pass --db to target a named database. Pass
@@ -49119,7 +49394,7 @@ Tips:
   - --space accepts a short name ("applications") or full URI ("tinycloud:pkh:eip155:1:0x...:applications").
   - Add --json for scripting-friendly output.
 `);
-  sql2.command("query <sql>").description("Run a read-only SELECT query").option("--db <name>", "SQLite database name within the current space", "default").option("--space <name|uri>", "Target a non-primary space (short name or full URI)").option("--params <json>", "Bind parameters as a JSON array for ? placeholders").addHelpText("after", `
+  sql3.command("query <sql>").description("Run a read-only SELECT query").option("--db <name>", "SQLite database name within the current space", "default").option("--space <name|uri>", "Target a non-primary space (short name or full URI)").option("--params <json>", "Bind parameters as a JSON array for ? placeholders").addHelpText("after", `
 
 Examples:
   $ ${CLI_NAME37} sql query "SELECT * FROM notes ORDER BY id"
@@ -49163,7 +49438,7 @@ ${rowCount} row${rowCount === 1 ? "" : "s"} returned`) + "\n");
       return handleError(error);
     }
   });
-  sql2.command("execute <sql>").description("Run a write or schema statement").option("--db <name>", "SQLite database name within the current space", "default").option("--space <name|uri>", "Target a non-primary space (short name or full URI)").option("--params <json>", "Bind parameters as a JSON array for ? placeholders").addHelpText("after", `
+  sql3.command("execute <sql>").description("Run a write or schema statement").option("--db <name>", "SQLite database name within the current space", "default").option("--space <name|uri>", "Target a non-primary space (short name or full URI)").option("--params <json>", "Bind parameters as a JSON array for ? placeholders").addHelpText("after", `
 
 Examples:
   $ ${CLI_NAME37} sql execute "CREATE TABLE IF NOT EXISTS notes (id INTEGER PRIMARY KEY, body TEXT)"
@@ -49196,7 +49471,7 @@ Output:
       return handleError(error);
     }
   });
-  sql2.command("export").description("Export a SQLite database as a binary .db file").option("--db <name>", "SQLite database name within the current space", "default").option("--space <name|uri>", "Target a non-primary space (short name or full URI)").option("-o, --output <file>", "Output file path", "export.db").addHelpText("after", `
+  sql3.command("export").description("Export a SQLite database as a binary .db file").option("--db <name>", "SQLite database name within the current space", "default").option("--space <name|uri>", "Target a non-primary space (short name or full URI)").option("-o, --output <file>", "Output file path", "export.db").addHelpText("after", `
 
 Examples:
   $ ${CLI_NAME37} sql export
@@ -49231,7 +49506,7 @@ Output:
       return handleError(error);
     }
   });
-  sql2.command("copy").description("Copy rows between SQL databases (optionally across spaces)").requiredOption("--from-db <name>", "Source database name").requiredOption("--to-db <name>", "Destination database name").option("--from-space <name|uri>", "Source space (defaults to primary)").option("--to-space <name|uri>", "Destination space (defaults to primary)").option("--table <name...>", "Restrict copy to specific tables (repeat or comma-separated)").option("--dry-run", "Print the plan without writing", false).addHelpText("after", `
+  sql3.command("copy").description("Copy rows between SQL databases (optionally across spaces)").requiredOption("--from-db <name>", "Source database name").requiredOption("--to-db <name>", "Destination database name").option("--from-space <name|uri>", "Source space (defaults to primary)").option("--to-space <name|uri>", "Destination space (defaults to primary)").option("--table <name...>", "Restrict copy to specific tables (repeat or comma-separated)").option("--dry-run", "Print the plan without writing", false).addHelpText("after", `
 
 Examples:
   $ ${CLI_NAME37} sql copy --from-db com.tinycloud.conversation-sync/conversations \\
@@ -49401,13 +49676,15 @@ async function inspectProfile(params) {
   const storedDelegations = await readDelegations(params.name, issues);
   const sessionPermissions = session ? sessionPermissionsFromRecap(session) : [];
   const signedExpiry = session ? extractSessionExpiry(session) : null;
-  const lease = session && signedExpiry !== null && signedExpiry.getTime() <= Date.now() ? liveStoredLease4(session) : void 0;
+  const liveLease = session ? liveStoredLease4(session) : void 0;
+  const lease = signedExpiry !== null && signedExpiry.getTime() <= Date.now() ? liveLease : void 0;
   const sessionExpiry = lease !== void 0 ? new Date(lease.expiresAt) : signedExpiry;
   const sessionExpired = sessionExpiry === null ? null : sessionExpiry.getTime() <= Date.now();
   const statusSession = {
     present: session !== null,
     expired: session === null ? null : sessionExpired,
     expiresAt: sessionExpiry?.toISOString() ?? null,
+    renewsUntil: liveLease === void 0 ? null : new Date(liveLease.expiresAt).toISOString(),
     permissions: sessionPermissions,
     permissionsCompact: compactPermissions(sessionPermissions)
   };
@@ -49687,9 +49964,12 @@ function formatSession(session) {
     return `${theme.warn("expired")}${formatExpiresAt(session.expiresAt)}`;
   }
   if (session.expired === false) {
-    return `${theme.success("active")}${formatExpiresAt(session.expiresAt)}`;
+    return `${theme.success("active")}${formatExpiresAt(session.expiresAt)}${formatRenewsUntil(session)}`;
   }
-  return `${theme.success("present")}${formatExpiresAt(session.expiresAt)}`;
+  return `${theme.success("present")}${formatExpiresAt(session.expiresAt)}${formatRenewsUntil(session)}`;
+}
+function formatRenewsUntil(session) {
+  return session.renewsUntil !== null && session.renewsUntil !== session.expiresAt ? `, renews until ${session.renewsUntil}` : "";
 }
 function formatDelegation2(delegation) {
   const state2 = delegation.expired === true ? theme.warn("expired") : theme.success("active");

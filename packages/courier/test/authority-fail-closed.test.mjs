@@ -123,6 +123,7 @@ test('maintainPeerSet: a strict check of a peer whose issued listing answers 503
   const node = {
     credentialHolderDid: courierDid,
     restorableSession: { delegationCid: session.delegationCid, siwe: prepared.siwe },
+    get sessionEnd() { return new Date(/Expiration Time: (.+)/.exec(this.restorableSession.siwe)[1]); },
     delegationManager: { queryAllIssued: async () => { queries++; return { ok: false, error: { meta: { status: 503 } } }; } },
   };
   await assert.rejects(maintainPeerSet(node, 'bob', false, true), { code: 'authority-unverified' });

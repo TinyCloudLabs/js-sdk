@@ -1,7 +1,7 @@
 import { afterEach, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-const { PrivateKeySigner, TinyCloudNode } = await import(new URL("../../../node-sdk/src/index.ts", import.meta.url).href) as typeof import("@tinycloud/node-sdk");
+const { PrivateKeySigner, TinyCloudNode, ownerFullAccess } = await import(new URL("../../../node-sdk/src/index.ts", import.meta.url).href) as typeof import("@tinycloud/node-sdk");
 import { extractRecapAttenuations } from "@tinycloud/sdk-core";
 
 const PROFILE = "owner";
@@ -130,7 +130,7 @@ test("the prepared ReCap equals a prepared sign-in without --keys plus exactly t
   const r = await keysLogin("all");
   const bare = new TinyCloudNode({
     host: r.node.url.origin, tinycloudRegistryUrl: r.node.url.origin, signer: new PrivateKeySigner(OWNER_KEY),
-    includeAccountRegistryPermissions: false, autoBootstrapAccount: false,
+    includeAccountRegistryPermissions: false, autoBootstrapAccount: false, ...ownerFullAccess(),
   });
   let plain: string | undefined;
   await bare.signInWithOpenKey(async (prepared: { siwe: string }) => { plain = prepared.siwe; throw new Error("stop"); }).catch(() => undefined);

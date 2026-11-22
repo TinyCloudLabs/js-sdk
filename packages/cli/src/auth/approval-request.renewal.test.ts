@@ -149,7 +149,7 @@ async function stage(delegation: Record<string, unknown>, result: Record<string,
 const acquireOptions = (askRenewal = true) => ({
   profileName: "renewal", jwk: key, host, permissions: requested, expectedOwner: ownerDid, expiry: "1h",
   openkeyHost: "https://openkey.example", openkeyApiHost: server.url.origin, noPopup: true,
-  ...(askRenewal ? { renewalLeaseSeconds: LEASE_SECONDS } : {}),
+  ...(askRenewal ? { renewalLeaseSeconds: LEASE_SECONDS } : { renewalLeaseSeconds: undefined }),
   onApprovalRequest: () => { throw new Error("The approval was already given"); },
 });
 const acquire = (askRenewal = true) => acquireApprovalRequest(did, acquireOptions(askRenewal));

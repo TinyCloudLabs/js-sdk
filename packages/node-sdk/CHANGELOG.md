@@ -1,5 +1,106 @@
 # @tinycloudlabs/node-sdk
 
+## 3.14.0-beta.4
+
+### Minor Changes
+
+- 4e4d845: OpenKey sign-in through an approval link asks the owner to let the grant renew itself.
+  - `tc auth login` asks for a 30-day renewal by default. A sign-in that asks for any encryption permission (decrypt included) or for the secrets space asks for no renewal unless `--renew` names one. `--renew <duration>` asks for another length (longer than `--expiry` and at most 365d) and `--no-renew` asks for none. `tc status` shows when a renewing sign-in stops renewing.
+  - `courier init --request` and `courier init --wait` ask for a 90-day renewal by default. `--renew <duration>` asks for another length and `--renew off` asks for none.
+  - The owner can approve with or without renewal. A saved request is resumed only by a run that asks for the same renewal.
+  - A renewing Courier grant keeps its peers' access going past the grant's signed end, up to the end the node has renewed it to.
+  - `TinyCloudNode.sessionEnd` gives when the session's authority ends. After `restoreSessionWithRenewal` it is the renewed end the node reported, and `delegateTo` can delegate up to it.
+
+  Details: TC-3522
+
+## 3.14.0-beta.3
+
+### Patch Changes
+
+- Updated dependencies [628be3c]
+  - @tinycloud/sdk-core@3.14.0-beta.3
+
+## 3.14.0-beta.2
+
+### Patch Changes
+
+- 81884ce: A share link's host is used when the owner has no registry record and the host is a known TinyCloud node: a production node, or a host the recipient configured (`host`, `newUserHost` or `tinycloudFallbackHosts`). Share links to owners without a registry record open from recipients that have no `newUserHost`, including `TinyCloudWeb.receiveShare`. The owner's registry record decides whenever it exists, and v2 shares and receives that delegate to the current session don't use the link host. `@tinycloud/sdk-core` exports `isKnownTinyCloudNode`, and `SharingService` takes an optional `receivedHostHintTransport` callback that `TinyCloudNode` supplies.
+
+  Details: TC-3661
+
+- Updated dependencies [18a0e38]
+- Updated dependencies [81884ce]
+  - @tinycloud/sdk-core@3.14.0-beta.2
+
+## 3.14.0-beta.1
+
+### Minor Changes
+
+- `tinycloud onboard` asks for the whole task in one OpenKey approval. `--with apps` (the default), `--with feed` (the Feed only, without the general apps grant) or `--with apps,feed` chooses the task. `onboard --json` still lists `granted` as `{ space, asks }`, now in sorted space order (`account` before `applications`), and each entry carries the approval's text. If the owner approves fewer spaces than requested, the CLI names the missing space and saves nothing. Onboarding, Share publishing, `tinycloud secrets` and revoking access now send OpenKey a short line saying what the request is for; OpenKey still lists the permissions separately. Device sign-in stays limited to one space.
+
+  `@tinycloud/node-sdk` accepts a signed session grant that spans several of its owner's spaces and keeps each resource's own space in portable grants. A manifest sign-in now picks its primary space among the manifest's own requested spaces: `applications` when requested, otherwise the first in sorted space-id order (previously the first non-`account` space in request order).
+
+  Details: TC-2490
+
+## 3.13.0
+
+### Minor Changes
+
+- 9f3ca26: `DelegatedAccess` (from `useDelegation`) can read Secrets-app secrets through the delegation: `access.encryption` and `access.readSecret({ name, scope? })`, which returns the same `SecretReadResult` as `TinyCloudNode.readSecret`. A read needs `tinycloud.kv/get` on the secret's record and `tinycloud.encryption/decrypt` in the delegation. The decrypt permission isn't limited to that secret: it covers the owner's default network.
+
+  The new `@tinycloud/node-sdk/runtime-grants` and `@tinycloud/node-sdk/secret-read` entry points are internal: don't import them directly, as they can change in any release.
+
+  Details: TC-3338
+
+- 2395340: Share one item made of several resources with a single link, and open it in an app.
+  - `sharing.generate({ resources: [{ path, actions? }, …] })` grants up to 16 distinct paths in one share, with one owner approval when a new root is needed. `path`/`actions` keep working for a single resource. `onRootDelegationNeeded` now also receives `resources`, and a root it returns must be the owner's signature over every resource.
+  - `sharing.delegateReceivedShare` signs one child over every shared resource (or narrows to one with `path`), and reports a node refusal for a revoked chain as `REVOKED` and an expired one as `AUTH_EXPIRED`.
+  - `inspectShareToken(token)` checks a share token offline against the owner's wallet signature and returns the owner, the exact resources, when access ends and the root delegation's CID. Use it for anything shown before a share is claimed.
+  - `useDelegation` on a delegation of several resources gives a `kv` that takes full keys; `DelegatedAccess.resources` and `ShareAccess.resources` list every resource.
+  - `@tinycloud/share-sdk/native-link` adds `publishNativeShareLink` and `openNativeShareLink`: a short link to a sealed record carrying the share and up to 8 KiB of app display data, opened without reading the owner's node. The display data is not signed by the owner.
+
+  Details: TC-3194
+
+- 634753d: `TinyCloudNode.delegateTo` accepts `notBefore?: Date`, signed into the delegation's UCAN as `nbf` (whole seconds, floored like the expiry) on both the session-key and the runtime-grant paths, so a delegation can be backdated to cover an issuer clock that runs ahead of the node's. Without it nothing changes and no `nbf` is signed. It is refused when it is in the future (the node checks a delegation against its own clock with no leeway, so a future `nbf` fails activation), when it is not before the expiry that will actually be signed (including the session and runtime-grant caps), when it is not a valid `Date`, or when combined with `forceWalletSign`, whose SIWE path cannot carry it. `@tinycloud/web-sdk` re-exports the extended `DelegateToOptions`.
+
+  Details: TC-3172
+
+- 9f3ca26: `grantRuntimePermissions` (and `TinyCloudWeb.requestPermissions`) asks for one approval for a request across several spaces and returns one `PortableDelegation` per space. A requested space that isn't set up is never created: the call throws `MissingSpacesError` (`code: "SPACE_NOT_FOUND"`, `missingSpaceIds`, and `delegations` for the spaces that were granted). A space this account doesn't own throws before any approval (`code: "SPACE_NOT_OWNED"`). `MissingSpacesError` is exported from `@tinycloud/node-sdk`, `@tinycloud/node-sdk/core` and `@tinycloud/web-sdk`.
+
+  Details: TC-3338
+
+- 400cf7f: A secret can carry an optional type: `secret` (the default), `totp`, `username` or `password`. `secrets.put(name, value, { type })` stores the type inside the encrypted secret. The new `secrets.getEntry(name)` returns `{ value, type, createdAt, updatedAt }`; a secret with no stored type, or with a type the client doesn't know, reads as `secret`.
+
+  `secrets.get` is unchanged, and older clients still read typed secrets, since they only need `value`. Storing `secret`, or no type, writes the same payload as before.
+
+  `@tinycloud/sdk-services/secrets/totp` (not exported from the package root) adds `parseTotpSeed` (an `otpauth://totp/` link or a bare base32 seed), `generateTotp` (RFC 6238, SHA1/SHA256/SHA512) and `totpSecondsRemaining`.
+
+  `tinycloud secrets put --type <secret|totp|username|password>` sets the type. For `totp`, the value must be a valid seed: an `otpauth://totp/` link or a bare base32 seed.
+
+  Details: TC-3285
+
+### Patch Changes
+
+- b758e71: The account registry sync no longer retries a node's `NODE_BUSY` or `REQUEST_TIMEOUT` answer itself. The SDK has already retried it, under its retry policy and the node's `Retry-After`, so the sync's own three tries multiplied the requests a busy node got: a registry write cost it up to 12 requests and now costs at most 4. The sync stops with a warning (as it does for an authorization verdict or a full storage space) and the next sync tries again. Other failures keep the three tries.
+
+  Details: TC-3243
+
+- 7399b14: Vault and secrets requests to the production node now go to its dedicated address, including listings of the whole key space. So do grants that name or cover vault data, and sessions that name vault entries. Self-hosted nodes are unchanged.
+
+  Details: TC-2944
+
+- Updated dependencies [0490f71]
+- Updated dependencies [2395340]
+- Updated dependencies [c7741ab]
+- Updated dependencies [1f961e4]
+- Updated dependencies [313b056]
+- Updated dependencies [400cf7f]
+- Updated dependencies [7399b14]
+  - @tinycloud/sdk-services@3.13.0
+  - @tinycloud/sdk-core@3.13.0
+  - @tinycloud/share-sdk@1.6.0
+  - @tinycloud/replica@0.4.6
+
 ## 3.13.0-beta.9
 
 ### Patch Changes
