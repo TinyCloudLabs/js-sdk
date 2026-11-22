@@ -27,6 +27,8 @@ jobs:
     name: Beta Release
     if: github.event_name == 'push' && !contains(github.event.head_commit.message, '[skip ci]')
     runs-on: ubuntu-latest
+    # Publish credentials live only in the master-limited production environment.
+    environment: production
     # actions: read lets pre-publish read earlier Release runs' logs (TC-1457).
     # contents: read is all this job needs. beta-github-releases holds
     # contents: write and creates the GitHub Releases (O25).
@@ -315,6 +317,7 @@ jobs:
     name: Beta Resume
     if: github.event_name == 'workflow_dispatch' && github.event.inputs.resume == 'beta'
     runs-on: ubuntu-latest
+    environment: production
     permissions:
       actions: read
       contents: read
@@ -523,6 +526,7 @@ jobs:
     name: Stable Release
     if: github.event_name == 'workflow_dispatch' && github.event.inputs.confirm == 'release'
     runs-on: ubuntu-latest
+    environment: production
     permissions:
       actions: read
       contents: write
