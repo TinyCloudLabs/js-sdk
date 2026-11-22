@@ -2,17 +2,17 @@ import { TeeVerifyRefused } from "./errors.js";
 import { verifyService } from "./service.js";
 import type { ServiceName } from "./trust.js";
 
-const USAGE = `usage: tinycloud-tee-verify <url> [--service tinycloud-node|openkey] [--did <did>] [--json]
+const USAGE = `usage: tinycloud-tee-verify <url> [--service tinycloud-node|openkey] [--signer <signer>] [--json]
 
 Asks the service for a hardware quote over a fresh nonce and checks it:
 Intel's signature and TCB status, the production OS measurements, the
 released app ID and compose hash, and the signer the quote binds.
 Exit 0: verified. Exit 1: refused. Exit 2: usage.`;
 
-function parse(argv: string[]): { url: string; service: ServiceName; did?: string; json: boolean } | null {
+function parse(argv: string[]): { url: string; service: ServiceName; signer?: string; json: boolean } | null {
   let url: string | undefined;
   let service: ServiceName = "tinycloud-node";
-  let did: string | undefined;
+  let signer: string | undefined;
   let json = false;
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i]!;
@@ -21,13 +21,13 @@ function parse(argv: string[]): { url: string; service: ServiceName; did?: strin
       const value = argv[++i];
       if (value !== "tinycloud-node" && value !== "openkey") return null;
       service = value;
-    } else if (arg === "--did") {
-      did = argv[++i];
-      if (!did) return null;
+    } else if (arg === "--signer") {
+      signer = argv[++i];
+      if (!signer) return null;
     } else if (!arg.startsWith("-") && url === undefined) url = arg;
     else return null;
   }
-  return url ? { url, service, ...(did ? { did } : {}), json } : null;
+  return url ? { url, service, ...(signer ? { signer } : {}), json } : null;
 }
 
 async function main(): Promise<number> {
@@ -37,7 +37,7 @@ async function main(): Promise<number> {
     return 2;
   }
   try {
-    const v = await verifyService(args.url, { service: args.service, ...(args.did ? { identity: args.did } : {}) });
+    const v = await verifyService(args.url, { service: args.service, ...(args.signer ? { identity: args.signer } : {}) });
     if (args.json) process.stdout.write(`${JSON.stringify({ verified: true, ...v })}\n`);
     else {
       process.stdout.write(

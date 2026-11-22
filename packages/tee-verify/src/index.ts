@@ -1,4 +1,5 @@
 export { TeeVerifyRefused, type RefusalCode } from "./errors.js";
+export { jwkThumbprint, openkeyIdentity } from "./openkey.js";
 export { replayRtmr3, type DstackEvent, type Replayed } from "./replay.js";
 export { verifyService, type VerifyServiceOptions } from "./service.js";
 export {

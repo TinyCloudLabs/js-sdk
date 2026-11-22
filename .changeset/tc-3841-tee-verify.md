@@ -11,6 +11,6 @@ New package `@tinycloud/tee-verify` with a `tinycloud-tee-verify <url>` command.
 - the OS image and measurements are on the published production list;
 - the app ID and compose hash are a published release.
 
-The production OS list is empty until the node moves to the production OS, so the node is refused for now. OpenKey is refused until its attestation route is pinned. Nothing in the SDK or CLI calls this package yet.
+The production OS list is empty until the node moves to the production OS, so the node is refused for now. `--service openkey` checks OpenKey's route (`https://api.openkey.so`, signer derived from its JWKS); OpenKey has no published release yet, so it is refused too. Nothing in the SDK or CLI calls this package yet.
 
 Details: TC-3841

@@ -1,11 +1,15 @@
 import { bytesToHex, randomBytes } from "@noble/hashes/utils";
 import { refuse } from "./errors.js";
+import { openkeyIdentity } from "./openkey.js";
 import type { ServiceName, Trust } from "./trust.js";
-import { bindingDomain, verifyAttestation, type Verified } from "./verify.js";
+import { serviceBinding, verifyAttestation, type Verified } from "./verify.js";
 
 export interface VerifyServiceOptions {
   service?: ServiceName;
-  /** The signer you expect. Without it, the one the service names in `/info` is checked. */
+  /**
+   * The signer you expect. Without it, the node's `/info` `nodeId`, or for
+   * OpenKey the identity computed from `<url>/api/auth/jwks`, is checked.
+   */
   identity?: string;
   trust?: Trust;
   fetch?: typeof fetch;
@@ -33,13 +37,16 @@ async function getJson(fetcher: typeof fetch, url: URL): Promise<unknown> {
 export async function verifyService(baseUrl: string, options: VerifyServiceOptions = {}): Promise<Verified> {
   const service = options.service ?? "tinycloud-node";
   const fetcher = options.fetch ?? fetch;
-  bindingDomain(service);
+  serviceBinding(service);
   const base = new URL(baseUrl);
   if (base.protocol !== "https:" && base.hostname !== "localhost" && base.hostname !== "127.0.0.1") {
     refuse("response", "use an https:// URL");
   }
   let identity = options.identity;
-  if (identity === undefined) {
+  if (identity === undefined && service === "openkey") {
+    const issuer = new URL("/api/auth", base).href;
+    identity = openkeyIdentity(issuer, await getJson(fetcher, new URL(`${issuer}/jwks`)));
+  } else if (identity === undefined) {
     const info = (await getJson(fetcher, new URL("/info", base))) as { nodeId?: unknown } | null;
     if (typeof info?.nodeId !== "string") refuse("response", "/info names no nodeId; pass the signer you expect");
     identity = info.nodeId;

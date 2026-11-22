@@ -1,7 +1,16 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { verify, type Collateral } from "@phala/dcap-qvl";
-import { PUBLISHED_TRUST, TeeVerifyRefused, verifyAttestation, type RefusalCode, type Trust, type VerifyOptions } from "../src/index.js";
+import {
+  PUBLISHED_TRUST,
+  TeeVerifyRefused,
+  jwkThumbprint,
+  openkeyIdentity,
+  verifyAttestation,
+  type RefusalCode,
+  type Trust,
+  type VerifyOptions,
+} from "../src/index.js";
 
 const fixture = (name: string) => new URL(`./fixtures/${name}`, import.meta.url);
 const json = <T>(name: string): T => JSON.parse(readFileSync(fixture(name), "utf8")) as T;
@@ -124,13 +133,39 @@ describe("recorded node quote", () => {
     expect((await refusal({ ...response, compose_hash: "00".repeat(32) }, options({ trust: DEV_AS_PRODUCTION }))).code).toBe("response");
   });
 
-  test("a non-TEE answer, a short nonce and an unpinned service are refused before any quote check", async () => {
+  test("a non-TEE answer and a short nonce are refused before any quote check", async () => {
     expect((await refusal({ mode: "classic", message: "not in a TEE" }, options())).code).toBe("mode");
     expect((await refusal(response, options({ nonce: "abc" }))).code).toBe("nonce");
-    expect(await refusal(response, options({ service: "openkey" }))).toEqual({
-      code: "service",
-      message: "openkey: route shape not pinned",
-    });
+  });
+
+  test("a node quote does not pass as OpenKey's, even naming the same signer", async () => {
+    expect((await refusal({ ...response, identity: DID }, options({ service: "openkey" }))).code).toBe("binding");
+  });
+});
+
+describe("OpenKey identity", () => {
+  const okp = { kty: "OKP", crv: "Ed25519", x: "11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo", kid: "a", alg: "EdDSA", use: "sig" };
+  const ec = { kty: "EC", crv: "P-256", x: "f83OJ3D2xF1Bg8vub9tLe1gHMzV76e8Tus9uPHvRVEU", y: "x_FEzRu9m36HLN_tue659LNpXW6pCyStikYjKIWI5a0", kid: "b" };
+  // RFC 7638 §3.1 example key.
+  const rsa = {
+    kty: "RSA",
+    n: "0vx7agoebGcQSuuPiLJXZptN9nndrQmbXEps2aiAFbWhM78LhWx4cbbfAAtVT86zwu1RK7aPFFxuhDR1L6tSoc_BJECPebWKRXjBZCiFV4n3oknjhMstn64tZ_2W-5JsGY4Hc5n9yBXArwl93lqt7_RN5w6Cf0h4QyQ5v-65YGjQR0_FDW2QvzqY368QQMicAtaSqzs8KJZgnYb9c7d0zgdAZHzu6qMQvRL5hajrn1n91CbOpbISD08qNLyrdkt-bFTWhAI4vMQFh6WeZu0fM4lFd2NcRwr3XPksINHaQ-G_xBniIqbw0Ls1jF44-csFCur-kEgU8awapJzKnqDKgw",
+    e: "AQAB",
+    alg: "RS256",
+    kid: "2011-04-29",
+  };
+
+  test("thumbprints match RFC 7638 and jose's calculateJwkThumbprint", () => {
+    expect(jwkThumbprint(rsa)).toBe("NzbLsXh8uDCcd-6MNwXF4W_7noWXFZAfHkxZsRGC9Xs");
+    expect(jwkThumbprint(okp)).toBe("kPrK_qmxVWaYVA9wwBF6Iuo3vVzz7TxHCTwXBygrS4k");
+    expect(jwkThumbprint(ec)).toBe("oKIywvGUpTVTyxMQ3bwIIeQUudfr_CkLMjCE19ECD-U");
+  });
+
+  test("identity is the issuer and its keys' thumbprints, deduplicated and sorted", () => {
+    expect(openkeyIdentity("https://api.openkey.so/api/auth", { keys: [rsa, okp, ec, { ...okp, kid: "c" }] })).toBe(
+      "https://api.openkey.so/api/auth#NzbLsXh8uDCcd-6MNwXF4W_7noWXFZAfHkxZsRGC9Xs,kPrK_qmxVWaYVA9wwBF6Iuo3vVzz7TxHCTwXBygrS4k,oKIywvGUpTVTyxMQ3bwIIeQUudfr_CkLMjCE19ECD-U",
+    );
+    expect(() => openkeyIdentity("https://api.openkey.so/api/auth", { keys: [] })).toThrow(TeeVerifyRefused);
   });
 });
 

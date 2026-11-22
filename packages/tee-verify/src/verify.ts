@@ -8,32 +8,36 @@ import { checkTrust, PUBLISHED_TRUST, type ServiceName, type Trust } from "./tru
 /** Phala's PCCS, the collateral source the dstack stack itself uses. */
 export const PCCS_URL = "https://pccs.phala.network";
 
-/** The `/attestation` response (tinycloud-node docs/attestation.md). */
+/**
+ * A service's `/attestation` response: tinycloud-node `docs/attestation.md`,
+ * OpenKey `docs/tee-overview.md` ("Public attestation", TC-3842). The node names
+ * its signer in `enforcer_did`, OpenKey in `identity`.
+ */
 export interface AttestationResponse {
   mode: string;
   quote: string;
   event_log: string;
   compose_hash: string;
   app_id: string;
-  enforcer_did: string;
+  enforcer_did?: string;
+  identity?: string;
   key_binding: string;
   key_binding_sha256: string;
   timestamp?: string;
 }
 
-/** Key-binding domain per service. `null`: the service's route shape is not pinned yet. */
-const BINDING_DOMAIN: Record<ServiceName, string | null> = {
-  "tinycloud-node": "xyz.tinycloud.share/tee-key/v1",
-  // OpenKey's public route is TC-3842; its shape is pinned here once that PR is.
-  openkey: null,
+/** How each service binds its signer: `<domain>\0:<signer>:<nonce>`, signer in `field`. */
+const BINDING: Record<ServiceName, { domain: string; field: "enforcer_did" | "identity" }> = {
+  "tinycloud-node": { domain: "xyz.tinycloud.share/tee-key/v1", field: "enforcer_did" },
+  // openkey apps/api/src/routes/attestation.ts (openkey#706, TC-3842).
+  openkey: { domain: "so.openkey/tee-key/v1", field: "identity" },
 };
 
-/** The service's key-binding domain; refuses a service whose route shape is not pinned. */
-export function bindingDomain(service: ServiceName): string {
-  const domain = BINDING_DOMAIN[service];
-  if (domain === undefined) refuse("service", `unknown service ${JSON.stringify(service)}`);
-  if (domain === null) refuse("service", `${service}: route shape not pinned`);
-  return domain;
+/** The service's binding; refuses an unknown service. */
+export function serviceBinding(service: ServiceName): { domain: string; field: "enforcer_did" | "identity" } {
+  const binding = BINDING[service];
+  if (binding === undefined) refuse("service", `unknown service ${JSON.stringify(service)}`);
+  return binding;
 }
 
 /** 1-64 characters of A-Z a-z 0-9 - _ (the node's rule); at least 16 so it can't be guessed. */
@@ -87,7 +91,7 @@ export async function verifyAttestation(response: unknown, options: VerifyOption
   if (!response || typeof response !== "object") refuse("response", "response is not a JSON object");
   const r = structuredClone(response) as Record<string, unknown>;
 
-  const domain = bindingDomain(options.service);
+  const { domain, field: signerField } = serviceBinding(options.service);
 
   const mode = field(r, "mode");
   if (mode !== "dstack") refuse("mode", `service is not attesting from a TEE (mode ${JSON.stringify(mode)})`);
@@ -96,7 +100,7 @@ export async function verifyAttestation(response: unknown, options: VerifyOption
   if (!NONCE.test(options.nonce)) refuse("nonce", "nonce must be 16-64 characters of A-Z, a-z, 0-9, '-' or '_'");
   const preimage = `${domain}\\0:${options.identity}:${options.nonce}`;
   if (field(r, "key_binding") !== preimage) refuse("binding", "key binding is not for this nonce and signer");
-  if (field(r, "enforcer_did") !== options.identity) refuse("identity", `service signs as ${String(r.enforcer_did)}, not ${options.identity}`);
+  if (field(r, signerField) !== options.identity) refuse("identity", `service signs as ${String(r[signerField])}, not ${options.identity}`);
   const digest = sha256(utf8ToBytes(preimage));
   if (field(r, "key_binding_sha256") !== bytesToHex(digest)) refuse("binding", "key_binding_sha256 is not the binding's SHA-256");
 
