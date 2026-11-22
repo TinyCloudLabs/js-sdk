@@ -3527,5 +3527,22 @@
     "worker": { "delta": 54, "ceiling": 780957 },
     "replicaWorker": { "delta": 121, "ceiling": 774682 },
     "reason": "Sign-out asks the node to stop accepting the session's keys; the retire request is in a lazy chunk loaded at session start, and the validateSessionRoot WASM export is bundled into the replica and kv-storage workers; sdk-core and node-sdk are bundled into the web-sdk root. Canonical Node 22/Bun 1.3.14/Rust 1.99.0 CI on #1118 (6ca3c911, master 7d438ee4 merged in) measured index.mjs 1531668 and index.cjs 1464420 gzip -9 bytes: +1065 and +1083 over the TC-3688 ceilings 1530603 and 1463337; the kv-storage worker 780957 (+54 over 780903) and replica.worker.js 774682 (+121 over 774561). No other ceiling moves. Details: TC-3443"
+  },
+  "tc3443PortFolderRoot": {
+    "label": "an app without a manifest gets a folder that includes its port (TC-3443)",
+    "ruling": "size-ruling: TC-3443 row tc3443PortFolderRoot index.mjs 1532621 (+953), index.cjs 1465304 (+884) gzip bytes over the tc3443SessionRetireRoot ceilings; provisional until CI's canonical figures. Details: TC-3443",
+    "base": "d382af88a04cfe10c04ad70f82ffdc3c6cf3aa15",
+    "sourceCommits": ["3bb106314aa21a3c29d2d42cd1daa74cf1d3211b"],
+    "canonicalCI": {
+      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/provisional",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/provisional/job/provisional"
+      ]
+    },
+    "root": {
+      "delta": { "index.mjs": 953, "index.cjs": 884 },
+      "ceiling": { "index.mjs": 1532621, "index.cjs": 1465304 }
+    },
+    "reason": "provisional"
   }
 }
