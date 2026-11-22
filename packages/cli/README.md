@@ -530,8 +530,12 @@ evaluate legacy expiry, restore state, or dispatch pending responses.
 Secret names are env-style uppercase identifiers such as `FIREFLIES_API_KEY`.
 `tinycloud secrets network show` accepts either a short network name or a full
 `urn:tinycloud:encryption:<ownerDid>:<network>` identifier. `tinycloud secrets
-network grant` takes the short name, resolves the network, and grants
-`tinycloud.encryption/decrypt`.
+network grant` lets another key decrypt all your encrypted data that isn't on a
+key of its own, including every secret in the older format
+(`tinycloud.encryption/decrypt`). Your wallet signs the grant, so `tinycloud
+account delegations revoke <cid>` ends it. It lasts 1 hour unless you pass
+`--expiry`, and at most 7 days; a longer value is cut to 7 days. `expiresAt` in
+the JSON output shows when it ends.
 
 `tinycloud apps install` re-creates the pinned views on every run (reported as
 `viewsRecreated`). Knowledge notes whose bytes differ from the pinned version

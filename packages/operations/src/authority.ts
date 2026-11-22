@@ -97,7 +97,8 @@ export function evaluateOperationAuthority(
       operationSpacesEqual(candidate.space, requested.space)
     );
     if (!isCapabilitySubset([withChecksummedKeyOwner(requested)], sameScope.map(withChecksummedKeyOwner)).subset) {
-      missing.push(requested);
+      // A request for a secret's own key must name the owner the way the owner signs it (EIP-55), or approving it fails.
+      missing.push({ ...requested, path: withChecksummedKeyOwner(requested).path });
     }
   }
 
@@ -111,7 +112,7 @@ export function evaluateOperationAuthority(
  * The SDK compares a named encryption key (`<network>/<path>`, TC-3284) only with its owner in EIP-55 form, while
  * operation identity lowercases the owner. Restore the checksum for that comparison; identity stays lowercase.
  */
-function withChecksummedKeyOwner(permission: PermissionEntry): PermissionEntry {
+export function withChecksummedKeyOwner(permission: PermissionEntry): PermissionEntry {
   if (permission.service !== "tinycloud.encryption") return permission;
   const match = permission.path.match(/^urn:tinycloud:encryption:did:pkh:eip155:(\d+):(0x[0-9a-fA-F]{40})(:[^/:]+\/.+)$/);
   if (!match) return permission;

@@ -335,6 +335,7 @@ function makeFakeNode(overrides: {
             cid: "bafy-delegation",
             path: permissions[0]?.path ?? "",
             actions: permissions[0]?.actions ?? [],
+            expiry: new Date("2099-01-01T00:00:00.000Z"),
           },
           prompted: false,
         }
@@ -1373,6 +1374,7 @@ describe("CLI secrets commands", () => {
   });
 
   test("ensures a decryption network and grants tinycloud.encryption/decrypt", async () => {
+    currentProfile = { ...currentProfile, authMethod: "local", posture: "local-owner-key" };
     const descriptor = makeDescriptor("urn:tinycloud:encryption:did:key:z6MkPrincipal:shared");
     currentNode = makeFakeNode({ networkInitResult: descriptor });
 
@@ -1405,6 +1407,7 @@ describe("CLI secrets commands", () => {
         prompted: false,
         path: descriptor.networkId,
         actions: ["decrypt"],
+        expiresAt: "2099-01-01T00:00:00.000Z",
       },
     ]);
   });

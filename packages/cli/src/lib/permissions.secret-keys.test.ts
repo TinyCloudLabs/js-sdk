@@ -38,14 +38,12 @@ describe("per-secret keys in CLI manifests", () => {
       permission.space === "encryption" && permission.actions.join() === "tinycloud.encryption/decrypt")).toBe(true);
   });
 
-  test("a secret with no key of its own (name over 64 characters) gets only the network decrypt", async () => {
+  test("a secret name over 64 characters is refused by the manifest, never given the network decrypt", async () => {
     const long = `A${"B".repeat(64)}`;
-    const permissions = await loadManifestPermissions(
+    await expect(loadManifestPermissions(
       manifestSource({ app_id: "xyz.tinycloud.agent", secrets: { [long]: true } }),
       "agent", { allowLogicalSpaces: true },
-    );
-    expect(encryption(permissions).map((permission) => permission.path))
-      .toEqual([`urn:tinycloud:encryption:${OWNER_DID}:default`]);
+    )).rejects.toThrow(/must match/);
   });
 
   test("an explicit exact-key entry (the tc-secrets skill's manifest) is requested with its owner in EIP-55 form", async () => {

@@ -89,7 +89,8 @@ import {
   defaultManifestLoginExpiry,
 } from "../auth/scoped-login.js";
 import { assertNoCaveatLimits } from "../lib/caveat-refusal.js";
-import { isRawEncryptionPermission, isVerifiedRawEncryptionPermission } from "../lib/raw-encryption.js";
+import { isExactSecretKeyPermission, isRawEncryptionPermission, isVerifiedRawEncryptionPermission } from "../lib/raw-encryption.js";
+import { withExactKeyNode } from "../lib/exact-key-grant.js";
 import { canonicalOwnerDid } from "../lib/owner-did.js";
 import { assertNotLocalOwner, assertSessionReplaceable, commitLogin, readProfileSnapshot } from "../auth/login-commit.js";
 import { previousSignInNotice } from "../auth/previous-sign-in.js";
@@ -1488,18 +1489,29 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
             return;
           }
         } else {
-          await ensureDelegationAuthority({
-            ctx,
-            profile,
-            node,
-            requested,
-            expiryOption: parsed.requestedExpiry,
-          });
-
+          // A secret's own key has to be in the SIGNED session a grant is cut from, and the stored session never
+          // carries one. The owner's wallet key signs a one-use session that holds exactly the requested keys and
+          // ends with the grant; the stored session is not widened.
+          const keyEntries = requested.filter(isExactSecretKeyPermission);
+          const otherEntries = requested.filter((permission) => !isExactSecretKeyPermission(permission));
           // The grant logic lives in the SDK (grantAuthRequest) so it is callable
           // programmatically; this command is a thin wrapper. The CLI request
           // artifact is a structural superset of AuthRequestArtifact.
-          grant = await grantAuthRequest(node, resolvedRequest);
+          const signWith = async (signer: TinyCloudNode): Promise<AuthDelegationArtifact> => {
+            if (otherEntries.length > 0) {
+              await ensureDelegationAuthority({
+                ctx,
+                profile,
+                node: signer,
+                requested: otherEntries,
+                expiryOption: parsed.requestedExpiry,
+              });
+            }
+            return grantAuthRequest(signer, resolvedRequest);
+          };
+          grant = keyEntries.length === 0
+            ? await signWith(node)
+            : await withExactKeyNode({ ctx, profile, keyEntries, expiry: parsed.requestedExpiry }, signWith);
         }
         await appendLocalGrantArtifact(ctx.profile, grant.delegation);
         await appendGrantHistory(ctx.profile, {
@@ -2235,9 +2247,14 @@ export async function ensureDelegationAuthority(params: {
 /** OpenKey lifetime cap for an agent grant: the apps-agent default. */
 const OPENKEY_AGENT_MAX_LIFETIME_MS = parseRequestedExpiry(APPS_AGENT_EXPIRY).durationMs;
 
-/** An agent request is approved in OpenKey only if it covers one space and no raw authority. */
+/** An agent request is approved in OpenKey only if it covers one space and no raw authority but one secret's own key. */
 function assertOpenKeyAgentRequest(requested: PermissionEntry[]): void {
-  if (requested.some((permission) => isRawEncryptionPermission(permission) || isRawCidRevocationPermission(permission))) {
+  // One secret's own key, decrypt only, is the only raw encryption entry OpenKey signs for an agent: never a prefix, the
+  // whole network or key creation (until OpenKey's route for it is live).
+  if (requested.some((permission) =>
+    (isRawEncryptionPermission(permission) && !(isExactSecretKeyPermission(permission) &&
+      permission.actions.every((action) => action === "tinycloud.encryption/decrypt"))) ||
+    isRawCidRevocationPermission(permission))) {
     throw new CLIError(
       "RAW_RECAP_RESOURCE_UNSUPPORTED",
       "OpenKey cannot approve raw urn:cid or raw encryption authority for an agent request.",

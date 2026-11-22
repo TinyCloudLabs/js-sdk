@@ -103,13 +103,13 @@ const DECRYPT_BUILDERS: Record<string, string> = {
   "cli/src/auth/invitation-key-grant.ts": "checks a signed invitation grant: one exact share/<hex> key",
   "cli/src/auth/scoped-login.ts": "checks signed grants: network, share/, one share key or one exact secret key (rawEncryptionOwnerMatches)",
   "cli/src/commands/replica.ts": "warning text only",
-  "cli/src/commands/secrets.ts": "secretPermissionEntries (exact key, network root for legacy/long names), ownerSecretApproval (details.decrypt: exact key or network root), secretMigratePermissions (network root), secretMigrateKeyPermissions (exact keys), `secrets network grant` (network root)",
+  "cli/src/commands/secrets.ts": "secretPermissionEntries (exact key, network root for an older-format secret or a non-default network), ownerSecretApproval (details.decrypt: exact key or network root), secretMigratePermissions (network root), secretMigrateKeyPermissions (exact keys), `secrets network grant` (network root)",
   "cli/src/lib/permissions.ts": "secretPermissionsFromAppManifest (exact keys + network root), appManifestEntry and resolvePermissionSpaces (refuse secrets/ prefixes), share/ prefix (Share, not secrets), device default network root",
   "cli/src/lib/raw-encryption.ts": "matchers for the share/ prefix and device default network root",
   "cli/src/share/adapters.ts": "runtime check on the network root",
   "cli/src/share/publishing-manifest.ts": "default/share/ prefix (Share publishing, not secrets)",
   "operations/src/invoke.ts": "checks a planned decrypt is one raw encryption resource",
-  "operations/src/operations/secrets-get.ts": "planSecretDecrypt: exact key, or network root for a legacy/long-name secret",
+  "operations/src/operations/secrets-get.ts": "planSecretDecrypt: exact key, or network root when the session already holds it and not the key, or on a non-default network",
   "operations/src/secret-capabilities.ts": "the capability constant",
 };
 

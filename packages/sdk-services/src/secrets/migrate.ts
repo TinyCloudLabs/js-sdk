@@ -1,7 +1,7 @@
 import { ErrorCodes, err, type Result } from "../types";
 import type { VaultResealResult } from "../vault/types";
 import type { ISecretsService, SecretsError } from "./ISecretsService";
-import { canonicalizeSecretScope, resolveSecretPath, SECRET_NAME_RE } from "./paths";
+import { canonicalizeSecretScope, resolveSecretPath, SECRET_NAME_RE, type ResolvedSecretPath } from "./paths";
 
 export type SecretMigrateSkipReason = Extract<VaultResealResult, { status: "skipped" }>["reason"];
 
@@ -69,11 +69,17 @@ export async function migrateSecrets(
   const vault = secrets.vault;
   const moves: { vaultKey: string; keyPath: string }[] = [];
   for (const entry of selected) {
-    const { vaultKey, keyPath } = resolveSecretPath(entry.name, entry.scope === undefined ? {} : { scope: entry.scope });
-    if (keyPath === undefined) {
+    // A name or scope over 64 bytes has no key of its own, and one such secret must not stop the others moving.
+    let resolved: ResolvedSecretPath | undefined;
+    try {
+      resolved = resolveSecretPath(entry.name, entry.scope === undefined ? {} : { scope: entry.scope });
+    } catch {
+      resolved = undefined;
+    }
+    if (resolved === undefined || resolved.keyPath === undefined) {
       report.staysOnNetwork += 1;
     } else {
-      moves.push({ vaultKey, keyPath });
+      moves.push({ vaultKey: resolved.vaultKey, keyPath: resolved.keyPath });
     }
   }
   if (!dryRun && moves.length > 0) await options.authorizeKeys?.(moves.map((move) => move.keyPath));

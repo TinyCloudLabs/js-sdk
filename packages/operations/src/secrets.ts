@@ -1,6 +1,7 @@
 // Namespace-shaped so modules that bundle this one stay compatible with
 // lightweight node-sdk test doubles.
 import * as nodeSdk from "@tinycloud/node-sdk";
+import { MAX_SECRET_NAME_LENGTH, MAX_SECRET_SCOPE_LENGTH } from "@tinycloud/sdk-services";
 
 import { OperationInvocationError, operationError } from "./errors.js";
 
@@ -41,11 +42,15 @@ export function resolveSecretReference(
   input: SecretsGetInput,
 ): SecretReference {
   const name = input.name.trim();
-  if (!SECRET_NAME_RE.test(name)) {
+  // A name or scope over the cap has no key of its own, so it is refused rather than read with the network (TC-3284).
+  if (!SECRET_NAME_RE.test(name) || name.length > MAX_SECRET_NAME_LENGTH) {
     throw invalidSecretInput();
   }
 
   const scope = canonicalizeSecretScope(input.scope);
+  if (scope !== undefined && scope.length > MAX_SECRET_SCOPE_LENGTH) {
+    throw invalidSecretInput();
+  }
   const space = normalizeSecretsSpace(input.space);
   const vaultKey = scope === undefined
     ? `secrets/${name}`

@@ -14,7 +14,8 @@ import { openKeyDelegate } from "../test-support/openkey-delegate.js";
 // TC-3802 on a real node with per-secret keys on (`named_keys_v1`, node 1.26.21 / #703):
 //   - an OpenKey owner's `secrets put` then `secrets get` takes one approval (the put asks for the secret's exact key
 //     with key.create and decrypt, and to read it back);
-//   - a secret on its own key, read on the owner path, stores exactly one grant: its exact key, never the root.
+//   - a secret on its own key, read on the owner path, stores exactly one grant: its exact key, never the root;
+//   - `secrets network grant` is wallet-signed for 1 h by default, so the owner's `account delegations revoke` ends it.
 // The OpenKey stand-in signs what OpenKey #696 signs. Skipped without TC_NAMED_KEYS_E2E_NODE_BIN.
 const NODE_BIN = process.env.TC_NAMED_KEYS_E2E_NODE_BIN;
 setDefaultTimeout(120_000);
@@ -186,6 +187,94 @@ describe.skipIf(!NODE_BIN)("per-secret keys against a real node", () => {
     const value = `local-${randomBytes(12).toString("hex")}`;
     await ok(["--profile", "owner", "secrets", "put", "LOCAL_ROUNDTRIP", "--stdin"], value);
     const read = await tc(["--profile", "owner", "secrets", "get", "LOCAL_ROUNDTRIP"]);
+    expect({ exitCode: read.exitCode, stderr: read.stderr }).toEqual({ exitCode: 0, stderr: "" });
+    expect(JSON.parse(read.stdout).value).toBe(value);
+  });
+
+  test("a `secrets network grant` lasts 1 h by default and the owner's `account delegations revoke` ends it", async () => {
+    const recipient = wasm.createSessionManager().getDID("default").split("#")[0]!;
+    const before = Date.now();
+    const granted = await tc(["--profile", "owner", "secrets", "network", "grant", recipient]);
+    expect({ exitCode: granted.exitCode, stderr: granted.stderr }).toEqual({ exitCode: 0, stderr: "" });
+    const { cid, expiresAt } = JSON.parse(granted.stdout) as { cid: string; expiresAt: string };
+    expect(Date.parse(expiresAt)).toBeGreaterThan(before);
+    expect(Date.parse(expiresAt)).toBeLessThanOrEqual(Date.now() + 3_600_000);
+
+    // A session-signed encryption-only grant answers 403 here (the node lets an owner revoke it only as delegator).
+    const revoked = await tc(["--profile", "owner", "account", "delegations", "revoke", cid, "--space", "secrets"]);
+    expect({ exitCode: revoked.exitCode, stderr: revoked.stderr }).toEqual({ exitCode: 0, stderr: "" });
+    expect(JSON.parse(revoked.stdout)).toMatchObject({ cid, revoked: true });
+  });
+
+  test("a CLI agent asks for one secret, the owner grants exactly that, and the agent reads the value on its own key", async () => {
+    const value = `agent-${randomBytes(12).toString("hex")}`;
+    await ok(["--profile", "owner", "secrets", "put", "AGENT_V2", "--stdin"], value);
+    await ok(["profile", "create", "agent", "--posture", "delegate-session", "--host", host, "--registry-url", registry.url.origin]);
+
+    // The agent first holds a read of the secret's record, as an agent set up for it would.
+    const kvRequest = join(root, "agent-kv-request.json");
+    await ok(["--profile", "agent", "auth", "request", "--cap", `tinycloud.kv:${spaceId}:vault/secrets/AGENT_V2:get`, "--emit", kvRequest]);
+    const kvGrant = await tc(["--profile", "owner", "auth", "grant", kvRequest]);
+    expect(kvGrant.exitCode).toBe(0);
+    await Bun.write(join(root, "agent-kv-grant.json"), kvGrant.stdout);
+    await ok(["--profile", "agent", "auth", "import", join(root, "agent-kv-grant.json")]);
+
+    // The agent asks for the secret: the CLI stores the request it needs approved, on the secret's own key.
+    const asked = await tc(["--profile", "agent", "secrets", "get", "AGENT_V2"]);
+    expect(asked.exitCode).not.toBe(0);
+    const { readProfileStore } = await import("@tinycloud/operations/state");
+    const stored = (await readProfileStore<{ requested: Array<{ service: string; path: string }> }>("agent", "auth-requests")).records;
+    const request = stored.at(-1)!;
+    expect(request.requested.map(({ service, path }) => ({ service, path }))).toEqual([{
+      service: "tinycloud.encryption",
+      path: `urn:tinycloud:encryption:${ownerDid}:default/secrets/agent_v2`,
+    }]);
+
+    // The owner approves exactly the stored request with `tc auth grant`: the owner's wallet key signs a one-use
+    // session holding just that secret's key, and the grant is cut from it (1 h, the secret-key default).
+    const requestFile = join(root, "agent-secret-request.json");
+    await Bun.write(requestFile, JSON.stringify(request));
+    const before = Date.now();
+    const granted = await tc(["--profile", "owner", "auth", "grant", requestFile]);
+    expect({ exitCode: granted.exitCode, stderr: granted.stderr.slice(-300) }).toMatchObject({ exitCode: 0 });
+    const grant = JSON.parse(granted.stdout) as { delegation: { path: string }; expiry: string };
+    expect(grant.delegation.path).toBe(request.requested[0]!.path);
+    expect(Date.parse(grant.expiry)).toBeGreaterThan(before);
+    expect(Date.parse(grant.expiry)).toBeLessThanOrEqual(Date.now() + 3_600_000);
+    await Bun.write(join(root, "agent-secret-grant.json"), granted.stdout);
+    await ok(["--profile", "agent", "auth", "import", join(root, "agent-secret-grant.json")]);
+
+    const read = await tc(["--profile", "agent", "secrets", "get", "AGENT_V2"]);
+    expect({ exitCode: read.exitCode, stderr: read.stderr }).toEqual({ exitCode: 0, stderr: "" });
+    expect(JSON.parse(read.stdout).value).toBe(value);
+  });
+
+  test("one `tc auth grant` of a request holding the record read and the secret's key covers both", async () => {
+    const value = `agent-${randomBytes(12).toString("hex")}`;
+    await ok(["--profile", "owner", "secrets", "put", "AGENT_V2_ONCE", "--stdin"], value);
+    await ok(["profile", "create", "agent-once", "--posture", "delegate-session", "--host", host, "--registry-url", registry.url.origin]);
+
+    // The agent asks for the record read and the secret's own key in one request.
+    const permissionFile = join(root, "agent-once-permissions.json");
+    await Bun.write(permissionFile, JSON.stringify({
+      permissions: [
+        { service: "tinycloud.kv", space: spaceId, path: "vault/secrets/AGENT_V2_ONCE", skipPrefix: true, actions: ["tinycloud.kv/get"] },
+        {
+          service: "tinycloud.encryption",
+          path: `urn:tinycloud:encryption:${ownerDid}:default/secrets/agent_v2_once`,
+          actions: ["tinycloud.encryption/decrypt"],
+        },
+      ],
+    }));
+    const kvRequest = join(root, "agent-once-request.json");
+    await ok(["--profile", "agent-once", "auth", "request", "--permission", permissionFile, "--emit", kvRequest]);
+
+    const granted = await tc(["--profile", "owner", "auth", "grant", kvRequest]);
+    expect({ exitCode: granted.exitCode, stderr: granted.stderr.slice(-300) }).toMatchObject({ exitCode: 0 });
+    await Bun.write(join(root, "agent-once-grant.json"), granted.stdout);
+    await ok(["--profile", "agent-once", "auth", "import", join(root, "agent-once-grant.json")]);
+
+    const read = await tc(["--profile", "agent-once", "secrets", "get", "AGENT_V2_ONCE"]);
     expect({ exitCode: read.exitCode, stderr: read.stderr }).toEqual({ exitCode: 0, stderr: "" });
     expect(JSON.parse(read.stdout).value).toBe(value);
   });

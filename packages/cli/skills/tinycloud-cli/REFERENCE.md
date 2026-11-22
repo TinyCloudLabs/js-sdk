@@ -174,10 +174,14 @@ Secrets are stored as network-encrypted inline envelopes and read through
 `tinycloud.encryption/decrypt`. Secret names are env-style uppercase
 identifiers such as `FIREFLIES_API_KEY`. `tinycloud secrets network show` accepts
 either a short network name or a full
-`urn:tinycloud:encryption:<ownerDid>:<network>` identifier, and `tinycloud secrets
-network grant` takes the short name, resolves the network, and issues
-`tinycloud.encryption/decrypt` on that network. Share the decrypt grant
-separately from any KV or SQL reads the app also needs.
+`urn:tinycloud:encryption:<ownerDid>:<network>` identifier. `tinycloud secrets
+network grant` lets another key decrypt all your encrypted data that isn't on a
+key of its own, including every secret in the older format
+(`tinycloud.encryption/decrypt`). Your wallet signs the grant, so `tinycloud
+account delegations revoke <cid>` ends it. It lasts 1 hour unless you pass
+`--expiry`, and at most 7 days; a longer value is cut to 7 days. `expiresAt` in
+the JSON output shows when it ends. Share the decrypt grant separately from any
+KV or SQL reads the app also needs.
 
 ```bash
 tinycloud secrets network init

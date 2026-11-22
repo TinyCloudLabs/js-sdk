@@ -8,6 +8,8 @@ import {
   type PortableDelegation,
   type TinyCloudNode,
 } from "@tinycloud/node-sdk";
+// Namespace-shaped so tests that mock @tinycloud/node-sdk partially still load this module.
+import * as nodeSdk from "@tinycloud/node-sdk";
 import { appSecretScope, SECRET_TYPES } from "@tinycloud/sdk-core";
 import { invokeOperation } from "@tinycloud/operations";
 import { isLocalOwnerProfile, liveStoredLease, ownerSessionLacksProof } from "@tinycloud/operations/profile";
@@ -132,6 +134,10 @@ async function readStdin(): Promise<Buffer> {
   }
   return Buffer.concat(chunks);
 }
+
+/** Monica S2j (TC-3284): `secrets network grant` from an OpenKey profile, which has no wallet key to sign with. */
+export const NETWORK_GRANT_NEEDS_WALLET_KEY =
+  "This profile signs in through OpenKey, and `secrets network grant` needs your wallet's own key to sign the grant. Set `TC_PRIVATE_KEY` and rerun it, or use a profile set up with `tc init --key-only` and `tc auth login --method local`.";
 
 function authOptions(options: { privateKey?: string }): { privateKey?: string } | undefined {
   const privateKey = options.privateKey || process.env.TC_PRIVATE_KEY;
@@ -1156,9 +1162,9 @@ function secretKvAbility(action: SecretAction): SecretKvAbility {
 /**
  * What an owner approves for one secret command. A read asks to decrypt that secret's own key. A write asks to
  * create it (the key's descriptor carries the public key the value is sealed to) and, so the owner's put→get round
- * trip needs one approval, to read that same secret and decrypt that same key. A secret with no key of its own
- * (a name or scope over 64 characters, or a non-default network) is read with the network decrypt, as is a secret
- * still in the older format (`networkDecrypt`).
+ * trip needs one approval, to read that same secret and decrypt that same key. `resolveSecretPath` refuses a name
+ * or scope over 64 characters, so no network decrypt is built for one. A secret on a non-default network has no key
+ * of its own and is read with the network decrypt, as is a secret still in the older format (`networkDecrypt`).
  */
 function secretPermissionEntries(params: {
   action: SecretAction;
@@ -1933,11 +1939,20 @@ export function registerSecretsCommand(
   network
     .command("grant <recipientDid> [name]")
     .description("Grant decrypt permission for a secrets encryption network")
+    .option("--expiry <duration>", "How long the grant lasts, for example 30m, 1h or 2d. Default 1h, at most 7d; longer values are cut to 7d.")
     .option("--private-key <hex>", "Ethereum private key override (or set TC_PRIVATE_KEY)")
     .action(async (recipientDid: string, name: string | undefined, options, cmd) => {
       try {
+        // The same lifetime as a grant on a secret's key (N1): 1 h by default, capped at 7 d. Parsed before anything
+        // is signed; delegateTo also caps it at the session's end, and the output shows the expiry signed.
+        const expiryMs = nodeSdk.secretKeyGrantExpiryMs(options.expiry);
         const globalOpts = cmd.optsWithGlobals();
         const ctx = await ProfileManager.resolveContext(globalOpts);
+        // The wallet signs the grant (below), and an OpenKey profile holds no wallet key: refuse before any network call.
+        const profile = await ProfileManager.getProfile(ctx.profile).catch(() => null);
+        if (profile?.authMethod === "openkey" && !effectiveLocal(profile, options)) {
+          throw new CLIError("AUTH_REQUIRED", NETWORK_GRANT_NEEDS_WALLET_KEY, ExitCode.AUTH_REQUIRED);
+        }
         const node = await ensureAuthenticated(ctx, authOptions(options));
         const networkName = name ?? "default";
         const descriptor = await withSpinner(
@@ -1949,9 +1964,11 @@ export function registerSecretsCommand(
           path: descriptor.networkId,
           actions: ["decrypt"],
         };
+        // Wallet-signed, so its delegator is the owner and `account revoke` can end it: the node lets an owner revoke
+        // an encryption-only delegation only when the owner signed it (TC-3284).
         const result = await withSpinner(
           `Granting decrypt permission to ${recipientDid}...`,
-          () => node.delegateTo(recipientDid, [permission]),
+          () => node.delegateTo(recipientDid, [permission], { expiry: expiryMs, forceWalletSign: true }),
         );
 
         outputJson({
@@ -1961,6 +1978,7 @@ export function registerSecretsCommand(
           prompted: result.prompted,
           path: result.delegation.path,
           actions: result.delegation.actions,
+          expiresAt: result.delegation.expiry.toISOString(),
         });
       } catch (error) {
         return handleError(error);

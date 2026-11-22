@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { MAX_SECRET_NAME_LENGTH, MAX_SECRET_SCOPE_LENGTH } from "@tinycloud/sdk-services";
 
 import { evaluateOperationAuthority } from "../authority.js";
 import type { CapabilityRequirement, OperationContext, RuntimeOperationContext } from "../contract.js";
@@ -39,8 +40,22 @@ describe("tinycloud.secrets.get per-secret keys", () => {
     expect((await plan([decrypt(NETWORK), decrypt(KEY)]))[1]).toEqual(decrypt(KEY));
   });
 
-  test("a name over 64 bytes has no key of its own and plans the network decrypt", async () => {
-    expect((await plan([], `A${"B".repeat(64)}`))[1]).toEqual(decrypt(NETWORK));
+  test("a name or scope of 64 characters plans its own key; 65 is refused before any decrypt is planned", async () => {
+    const longest = `A${"B".repeat(MAX_SECRET_NAME_LENGTH - 1)}`;
+    const scope = "s".repeat(MAX_SECRET_SCOPE_LENGTH);
+    expect((await plan([], longest))[1]).toEqual(decrypt(`${NETWORK}/secrets/${longest.toLowerCase()}`));
+    const scoped = await secretsGetOperationDefinition.authority(
+      context([]) as RuntimeOperationContext,
+      secretsGetOperationDefinition.input.parse({ name: "API_KEY", scope }),
+    );
+    expect(scoped[1]).toEqual(decrypt(`${NETWORK}/secrets/scoped/${scope}/api_key`));
+
+    for (const input of [{ name: `${longest}C` }, { name: "API_KEY", scope: `${scope}s` }]) {
+      expect(secretsGetOperationDefinition.input.safeParse(input).success).toBe(false);
+      // Even past input parsing, the plan refuses rather than falling back to the network root.
+      await expect(Promise.resolve().then(() =>
+        secretsGetOperationDefinition.authority(context([]) as RuntimeOperationContext, input as never))).rejects.toThrow();
+    }
   });
 
   test("a held exact key satisfies the plan whatever the case of its owner address", () => {

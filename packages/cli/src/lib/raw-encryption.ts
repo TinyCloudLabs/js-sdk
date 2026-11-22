@@ -23,6 +23,23 @@ export function isSecretsKeyResource(path: string): boolean {
   return /^urn:tinycloud:encryption:did:[^/]+\/secrets(?:\/|$)/.test(path);
 }
 
+const EXACT_SECRET_KEY_RESOURCE =
+  /^urn:tinycloud:encryption:did:[^/]+:default\/secrets\/[a-z0-9][a-z0-9._-]{0,63}(?:\/[a-z0-9][a-z0-9._-]{0,63}){0,6}$/;
+
+/**
+ * One secret's own key and nothing wider: `<network>/secrets/<name>` (or `secrets/scoped/<scope>/<name>`), never the
+ * bare network, a `secrets/` prefix or a trailing `/`, and only decrypt and key creation on it. An owner's wallet
+ * signs such an entry for an agent; an OpenKey owner's agent request carries it with decrypt only (TC-3800).
+ */
+export function isExactSecretKeyPermission(
+  permission: Pick<PermissionEntry, "service" | "path" | "actions" | "caveats">,
+): boolean {
+  return isRawEncryptionPermission(permission) && EXACT_SECRET_KEY_RESOURCE.test(permission.path) &&
+    permission.actions.length > 0 &&
+    permission.actions.every((action) => action === "tinycloud.encryption/decrypt" || action === "tinycloud.encryption/key.create") &&
+    !permission.caveats?.length;
+}
+
 /**
  * The built-in Share publishing decrypt entry names the approving account's
  * `default/share/` encryption prefix before owner resolution.

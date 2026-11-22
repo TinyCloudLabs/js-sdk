@@ -139,14 +139,10 @@ function planSecretDecrypt(
     }
   }
   const network = resolveEncryptionNetworkId(node, networkSpace);
-  let key: string | undefined;
-  if (network.endsWith(":default")) {
-    try {
-      key = `${network}/${secretKeyPath(reference.name, reference.scope)}`;
-    } catch {
-      // A name or scope over 64 bytes has no key of its own.
-    }
-  }
+  // `resolveSecretReference` refuses a name or scope over the cap, so every secret on the default network has a key.
+  const key = network.endsWith(":default")
+    ? `${network}/${secretKeyPath(reference.name, reference.scope)}`
+    : undefined;
   const granted = (context.runtime?.granted ?? []) as unknown as PermissionEntry[];
   const holds = (path: string) =>
     evaluateOperationAuthority(granted, [decryptRequirement(path) as unknown as PermissionEntry]).satisfied;
