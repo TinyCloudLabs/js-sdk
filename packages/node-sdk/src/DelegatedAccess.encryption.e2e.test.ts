@@ -126,18 +126,35 @@ describe.skipIf(!nodeBinary)(
       registry?.stop(true);
     });
 
-    test("a session-only child decrypts and reads a secret with only the delegation", async () => {
+    test("a session-only child decrypts a secret on its own key with only the delegation, and is refused a raw network decrypt", async () => {
       const recipient = sessionOnlyChild();
       expect(recipient.isSessionOnly).toBe(true);
       const { access } = await grant(recipient, secretsEntries());
 
+      // The stored record is sealed to API_KEY's own key, never to the network.
+      const record = await access.kv.get<unknown>("vault/secrets/API_KEY");
+      if (!record.ok) throw new Error(JSON.stringify(record.error));
+      const raw = record.data.data;
+      const stored = (typeof raw === "string" ? JSON.parse(raw) : raw) as Record<string, unknown>;
+      expect({ v: stored.v, keyPath: stored.keyPath, networkId: stored.networkId }).toEqual({
+        v: 2,
+        keyPath: "secrets/api_key",
+        networkId,
+      });
+
+      // Opening it is one decrypt on exactly that key, under the delegation.
       expect(await access.readSecret({ name: "API_KEY" })).toEqual({
         status: "ok",
         value: "secrets-space-value",
       });
+
+      // The delegation names one secret's key, not the network: the node
+      // refuses a raw network decrypt.
       const decrypted = await decrypt(access);
-      expect(decrypted.ok, JSON.stringify(decrypted.ok ? undefined : decrypted.error)).toBe(true);
-      expect(decrypted.ok && new TextDecoder().decode(decrypted.data)).toBe("delegated plaintext");
+      expect(decrypted.ok ? undefined : decrypted.error).toMatchObject({
+        code: "DECRYPT_DENIED",
+        permissionHint: { service: "tinycloud.encryption", path: networkId, actions: ["tinycloud.encryption/decrypt"] },
+      });
       // The child never became signed in: nothing outside the access gained authority.
       expect(recipient.isSessionOnly).toBe(true);
       expect(recipient.restorableSession).toBeUndefined();

@@ -11,7 +11,7 @@ Each secret is sealed to its own key, `secrets/<name>` (or `secrets/scoped/<scop
 
 Breaking for node-sdk: `secrets.get` and `secrets.getEntry` no longer ask the wallet for missing authority. Pass `requestPermission: true` for a read the user started. Without a live grant on the secret's own key the read is `DECRYPT_DENIED` with `permissionHint` naming that key, and a node refusing that key gives the same code. `namedKeyOnly: true` opens only a copy sealed to the secret's own key. Both are on the new `SecretGetOptions`. `put`, `delete` and `list` still ask as before.
 
-web-sdk keeps approved grants for one secret's own key across reloads, like panel grants. A node-sdk node restored without a signer no longer reports that it can ask for authority.
+web-sdk keeps approved grants for one secret's own key across reloads, like panel grants. In web-sdk, `secrets.get` and `secrets.getEntry` with `requestPermission: true` ask the page's permission prompt for exactly that key, then read once more. A declined or closed prompt returns `PERMISSION_DENIED`, and the next opted-in read asks again. Without the flag they never ask. A node-sdk node restored without a signer no longer reports that it can ask for authority.
 
 `delegateTo` of a secret's key needs that key in the signed session: sign in with an explicit `capabilityRequest` that includes `<network>/secrets/` (decrypt, key.create). The default sign-in does not include it.
 
