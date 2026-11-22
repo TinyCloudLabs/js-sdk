@@ -119,84 +119,134 @@ Undo: `gh api -X PUT repos/TinyCloudLabs/js-sdk/rulesets/13730837 --input before
 Ruling (Naomi, 2026-11-22 10:05Z): deploy and publish tokens live only in
 master-limited `production` environments.
 
-### Before
+### Before: every secret js-sdk workflows can read (names only)
 
-- Environment `production`: deployment branch policy = branch `master` only, no
-  reviewers. Secrets: `BETTERSTACK_SOURCE_TOKEN`, `CLOUDFLARE_API_TOKEN`,
-  `PHALA_CLOUD_API_KEY`, `TC_MCP_INTROSPECTION_CLIENT_ID`,
-  `TC_MCP_INTROSPECTION_CLIENT_SECRET`, `TC_MCP_NATIVE_SERVICE_CREDENTIAL`,
-  `TC_MCP_STATE_SECRET`. Used by `mcp-image.yml` (`preflight`, `deploy`).
-- Repository secrets (readable by a workflow on any branch): `GH_TOKEN`,
-  `RELEASE_DEPLOY_KEY`, `TC_MCP_INTROSPECTION_CLIENT_ID`,
-  `TC_MCP_INTROSPECTION_CLIENT_SECRET`.
-- Organization secrets this repository can read: `NPM_TOKEN` (visibility
-  `all`), `NPM_CONFIG_TOKEN`, `DISPATCH_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`
-  (visibility `selected`, js-sdk included).
-- Jobs that read publish credentials, none with an environment:
+Taken with `gh api` on 2026-11-22. "Env?" says whether the job that reads the
+secret declares `environment: production` on master today.
 
-  | Workflow / job | Secrets |
-  |---|---|
-  | `changesets.yml` `beta`, `stable` | `NPM_TOKEN`, `RELEASE_DEPLOY_KEY` |
-  | `changesets.yml` `beta-resume` | `NPM_TOKEN` |
-  | `raw-publish.yml` `publish` | `NPM_TOKEN` |
-  | `npm-latest-rollback.yml` `rollback` | `NPM_TOKEN` |
-  | `manual-release.yml` `release` | `NPM_TOKEN`, `GH_TOKEN` |
+**Repository secrets** (readable by a workflow on any branch, including a PR
+branch pushed to this repository):
+
+| Secret | Updated | Read by (workflow / job) | Env? | Purpose |
+|---|---|---|---|---|
+| `GH_TOKEN` | 2026-03-14 | `manual-release.yml` / `release` (checkout token, `git push` remote URL, `GITHUB_TOKEN` for the release script) | no | push + GitHub release for the legacy manual release (last run 2026-04-09, failed) |
+| `RELEASE_DEPLOY_KEY` | 2026-10-17 | `changesets.yml` / `beta`, `stable` (`.github/scripts/release-deploy-key.sh`) | no | SSH deploy key (id 166801705, write) that pushes version commits to master; bypasses the ruleset as `DeployKey` |
+| `TC_MCP_INTROSPECTION_CLIENT_ID` | 2026-10-26 | `mcp-image.yml` / `deploy` | yes | shadowed: `production` has an environment secret of the same name, which wins |
+| `TC_MCP_INTROSPECTION_CLIENT_SECRET` | 2026-10-26 | `mcp-image.yml` / `deploy` | yes | shadowed, as above |
+
+There is also an organization `GH_TOKEN` (visibility `selected`), but js-sdk is
+not among its repositories, so `secrets.GH_TOKEN` here is the repository secret
+alone. No repository Dependabot secrets.
+
+**Organization secrets visible to js-sdk:**
+
+| Secret | Org visibility | Read by (workflow / job) | Env? |
+|---|---|---|---|
+| `NPM_TOKEN` | `all` | `changesets.yml` / `beta`, `beta-resume`, `stable`; `raw-publish.yml` / `publish`; `npm-latest-rollback.yml` / `rollback`; `manual-release.yml` / `release` | no |
+| `NPM_CONFIG_TOKEN` | `selected` | nothing in js-sdk | n/a |
+| `DISPATCH_TOKEN` | `selected` | nothing in js-sdk | n/a |
+| `CLOUDFLARE_ACCOUNT_ID` | `all` | nothing in js-sdk (an account id, not a credential) | n/a |
+
+**Environment `production`** (branch policy: `master` only; no required
+reviewers): `BETTERSTACK_SOURCE_TOKEN`, `CLOUDFLARE_API_TOKEN`,
+`PHALA_CLOUD_API_KEY`, `TC_MCP_INTROSPECTION_CLIENT_ID`,
+`TC_MCP_INTROSPECTION_CLIENT_SECRET`, `TC_MCP_NATIVE_SERVICE_CREDENTIAL`,
+`TC_MCP_STATE_SECRET`; read by `mcp-image.yml` `preflight` and `deploy`, which
+both declare it. Environment `github-pages`: no secrets.
+
+**Publish jobs and what they read** (none declares an environment today):
+
+| Workflow / job | Trigger | Secrets |
+|---|---|---|
+| `changesets.yml` / `beta` | push to master | `NPM_TOKEN`, `RELEASE_DEPLOY_KEY` |
+| `changesets.yml` / `beta-resume` | dispatch (`resume: beta`) | `NPM_TOKEN` |
+| `changesets.yml` / `stable` | dispatch (`confirm: release`) | `NPM_TOKEN`, `RELEASE_DEPLOY_KEY` |
+| `raw-publish.yml` / `publish` | dispatch, any branch | `NPM_TOKEN` |
+| `npm-latest-rollback.yml` / `rollback` | dispatch (refuses non-master in a step) | `NPM_TOKEN` |
+| `manual-release.yml` / `release` | dispatch, any branch | `NPM_TOKEN`, `GH_TOKEN` |
 
 ### After
 
-**Where #1130 expects `NPM_TOKEN`: an environment secret named `NPM_TOKEN`
-in the `production` environment of TinyCloudLabs/js-sdk.** Not a repository
-secret and not an organization secret. The workflows keep reading
-`secrets.NPM_TOKEN`; with `environment: production` on the job, GitHub
-resolves the environment secret first. The same holds for `RELEASE_DEPLOY_KEY`
-and `GH_TOKEN`.
+**Where #1130 expects the publish tokens: environment secrets in the
+`production` environment of TinyCloudLabs/js-sdk,** named `NPM_TOKEN`,
+`RELEASE_DEPLOY_KEY` and `GH_TOKEN`. Not repository secrets and not
+organization secrets. The workflows keep reading `secrets.<NAME>`; with
+`environment: production` on the job, GitHub resolves the environment secret
+first.
 
-- The six jobs above declare `environment: production` (the last commit of
-  this PR). They then run only from `master`; a dispatch from another branch is
-  refused by the environment's branch policy before any step runs.
-- Environment `production` (exists today: branch policy `master` only, no
-  required reviewers; keep it that way) additionally holds these environment
-  secrets:
-  - `NPM_TOKEN`: the new npm granular token, publish rights on the
-    `@tinycloud` scope only;
-  - `RELEASE_DEPLOY_KEY`: a new deploy key pair, the public half added as a
-    write deploy key, the private half here;
-  - `GH_TOKEN`: a new token, only if `manual-release.yml` is kept.
-- Repository secrets `GH_TOKEN`, `RELEASE_DEPLOY_KEY`,
-  `TC_MCP_INTROSPECTION_CLIENT_ID` and `TC_MCP_INTROSPECTION_CLIENT_SECRET`
-  deleted (the last two already exist in `production`, which is the only place
-  they are used: `mcp-image.yml` `deploy`). The old deploy key is removed from
-  the repository's deploy keys, and the old npm token revoked.
-- js-sdk removed from the repository access of the organization secrets
-  `NPM_TOKEN`, `NPM_CONFIG_TOKEN` and `DISPATCH_TOKEN` (no js-sdk workflow
-  reads the last two). `NPM_TOKEN` is visibility `all`, so this means switching
-  it to `selected` with every other repository that needs it: an org-wide
-  change for Bobbie to approve.
+- The six publish jobs declare `environment: production` (the last workflow
+  commit of this PR). They then run only from `master`; a dispatch from another
+  branch is refused by the branch policy before any step runs. Behaviour
+  change: `raw-publish.yml` last ran from `fix/cli-1.7.0-release-base`
+  (2026-11-19). That is no longer possible; a branch release goes through
+  master, or needs an explicit, temporary branch-policy exception from Bobbie.
+- Environment `production` (exists: `master` only, no reviewers; keep it so)
+  holds, in addition to today's secrets:
+  - `NPM_TOKEN`: a new npm granular token, publish rights on the `@tinycloud`
+    scope only;
+  - `RELEASE_DEPLOY_KEY`: a new deploy key pair, public half a write deploy
+    key, private half here;
+  - `GH_TOKEN`: only if `manual-release.yml` is kept (it last ran 2026-04-09
+    and failed; deleting that workflow instead removes the need for the token).
+- No repository secrets remain: `GH_TOKEN`, `RELEASE_DEPLOY_KEY`,
+  `TC_MCP_INTROSPECTION_CLIENT_ID`, `TC_MCP_INTROSPECTION_CLIENT_SECRET`
+  deleted (the last two are already shadowed by `production`). Old deploy key
+  166801705 removed; old npm token revoked.
+- js-sdk loses access to the organization secrets `NPM_TOKEN`,
+  `NPM_CONFIG_TOKEN` and `DISPATCH_TOKEN`. `NPM_TOKEN` is visibility `all`, so
+  narrowing it means switching it to `selected` with every other repository
+  that needs it, which re-enters its value: an org-wide change for Bobbie to
+  approve, best done with the npm token rotation.
 
 ### Order (Naomi, 2026-11-22 10:12Z)
 
 The publish path (tarball audit, environment) and the npm credential must not
-change at once, so this PR stays open until step 2.
+change at once, so this PR stays open until step 2. All commands are run by
+Amos; values are entered at the prompt or from a file and never echoed.
 
-1. With master as it is today, the new `NPM_TOKEN` is used for the first
+1. With master as it is today, the new npm token is used for the first
    successful beta publish (`@tinycloud/cli` 1.9.0-beta.0 / SDK
    3.14.0-beta.1). On today's master the jobs have no environment, so that run
    reads the repository or organization `NPM_TOKEN`.
-2. Amos confirms the `production` environment (master only, no reviewers) and
-   adds the environment secrets above, with `NPM_TOKEN` holding the same new
-   token as step 1.
-3. Merge this PR. The next beta run publishes with the `production`
-   environment's `NPM_TOKEN` and `RELEASE_DEPLOY_KEY`, after the tarball audit.
-4. After that run is green: delete the repository secrets and the old deploy
-   key, revoke the old npm token, and narrow the organization secrets'
-   repository access. Then add the required checks (ruleset section above).
+2. Put the publish tokens in `production` (confirm the environment first:
+   `gh api repos/TinyCloudLabs/js-sdk/environments/production`, branch policy
+   `master`, no reviewers):
+   ```sh
+   R=TinyCloudLabs/js-sdk
+   gh secret set NPM_TOKEN --env production -R "$R"          # same new token as step 1
+   d=$(mktemp -d)                                              # umask 077
+   ssh-keygen -q -t ed25519 -N '' -C js-sdk-release-2026-11 -f "$d/id"
+   gh repo deploy-key add "$d/id.pub" -R "$R" --allow-write --title release-deploy-key-2026-11
+   gh secret set RELEASE_DEPLOY_KEY --env production -R "$R" < "$d/id"
+   rm -rf "$d"
+   gh secret set GH_TOKEN --env production -R "$R"           # only if manual-release.yml stays
+   ```
+   Master is unaffected: its jobs declare no environment yet and keep reading
+   the repository and organization secrets.
+3. Merge this PR. The next beta run publishes with the `production` secrets,
+   after the tarball audit, and pushes with the new deploy key.
+4. After that run is green, remove the old copies:
+   ```sh
+   gh secret delete RELEASE_DEPLOY_KEY -R "$R"
+   gh secret delete GH_TOKEN -R "$R"
+   gh secret delete TC_MCP_INTROSPECTION_CLIENT_ID -R "$R"
+   gh secret delete TC_MCP_INTROSPECTION_CLIENT_SECRET -R "$R"
+   gh repo deploy-key delete 166801705 -R "$R"
+   ```
+   Revoke the old npm token and the old `GH_TOKEN` at their issuers. Narrow the
+   organization secrets (previous section) with Bobbie's approval. Then add the
+   required checks (ruleset section above).
 
 ### Undo
 
-- Revert the `environment: production` commit (the jobs then read repository
-  and organization secrets again).
-- Recreate the repository secrets `RELEASE_DEPLOY_KEY` and `GH_TOKEN` with the
-  values from step 2 (the old values were rotated, so they are not restored),
-  and add js-sdk back to the organization secrets' repository access.
-- The environment secrets can stay; they are only read by jobs that name the
-  environment.
+- After step 2 only: `gh secret delete <NAME> --env production -R "$R"` for
+  each secret added, and `gh repo deploy-key delete <new id> -R "$R"`. Master is
+  unchanged.
+- After step 3: revert the `environment: production` commit; the jobs read the
+  repository and organization secrets again (still present until step 4).
+- After step 4: revert the `environment: production` commit, recreate the
+  repository secrets (`gh secret set <NAME> -R "$R"`): `GH_TOKEN` with the step 2
+  token, `RELEASE_DEPLOY_KEY` with a fresh deploy key pair made as in step 2
+  (its private half was not kept), and add js-sdk back to the organization
+  secrets' repository access. The revoked old values are not restored. The
+  environment secrets can stay; only jobs that name the environment read them.
