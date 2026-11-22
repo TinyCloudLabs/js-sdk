@@ -93,6 +93,10 @@ jobs:
       - name: Verify manage-key reference clients
         run: bun run --cwd apps/manage-key-reference-clients typecheck && bun run --cwd apps/manage-key-reference-clients test
 
+      # Offline: recorded quotes and collateral, fixed verification clock.
+      - name: Test the TEE attestation verifier
+        run: timeout 300 bun run --cwd packages/tee-verify test
+
       - name: Save Rust/Cargo cache
         if: github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/')
         uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0

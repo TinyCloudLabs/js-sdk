@@ -1,0 +1,15 @@
+{
+  "production": [],
+  "refused": [
+    {
+      "name": "dstack-dev-0.5.15",
+      "osImageHash": "432b8a1e82ec8a90b3d30bb201e5d20a8bc5c05b69f1d8ba13687232dda5aebd",
+      "why": "dev image: the host can log in to it"
+    },
+    {
+      "name": "dstack-dev-0.5.12",
+      "osImageHash": "e866e987221db357129ebc3f066b6706ef955889ea95e5510acbdf3d3055186b",
+      "why": "dev image: the host can log in to it"
+    }
+  ]
+}
