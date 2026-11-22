@@ -37,6 +37,8 @@
     "secrets-network-grant-whole-network",
     "tc-2490-one-approval",
     "tc-3293-with-feed-narrow",
+    "tc-3443-sign-out-retires-key",
+    "tc-3443-validate-session-root",
     "tc-3485-courier-revoke-renewal-fence",
     "tc-3522-renewal-lease-ask",
     "tc-3639-recap-decode-without-buffer",
