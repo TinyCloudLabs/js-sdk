@@ -63,13 +63,52 @@ describe("NodeSecretsService.put on a node without per-secret keys", () => {
     expect(h.base.delete).toHaveBeenCalledTimes(1);
   });
 
-  test("a node that lists named keys, or one not yet known, still asks and then writes", async () => {
-    for (const supported of [true, undefined]) {
+  test("a node that lists named keys still asks and then writes", async () => {
+    const h = setup(true);
+    const result = await h.secrets.put("API_KEY", "v");
+    expect(result.ok).toBe(true);
+    expect(h.grantPermissions).toHaveBeenCalledTimes(1);
+    expect(h.base.put).toHaveBeenCalledTimes(1);
+  });
+
+  test("a node that cannot be asked fails closed: NAMED_KEYS_CHECK_FAILED, retryable, nothing asked, signed or written", async () => {
+    const h = setup(undefined);
+    const result = await h.secrets.put("API_KEY", "v");
+    expect(result.ok ? undefined : result.error).toMatchObject({
+      code: "NAMED_KEYS_CHECK_FAILED",
+      service: "secrets",
+      message: "Couldn't reach this TinyCloud node to check that it can save secrets. Nothing was saved. Try again in a moment.",
+      meta: { retryable: true },
+    });
+    expect(h.grantPermissions).not.toHaveBeenCalled();
+    expect(h.base.put).not.toHaveBeenCalled();
+  });
+});
+
+describe("NodeSecretsService.put with a name over 64 characters (TC-3801)", () => {
+  test("is refused with the name's length in the words, before the node is asked, anything is requested or written", async () => {
+    for (const supported of [true, false, undefined]) {
+      const asked = mock(() => supported);
       const h = setup(supported);
-      const result = await h.secrets.put("API_KEY", "v");
-      expect(result.ok).toBe(true);
-      expect(h.grantPermissions).toHaveBeenCalledTimes(1);
-      expect(h.base.put).toHaveBeenCalledTimes(1);
+      const secrets = new NodeSecretsService({
+        getService: () => h.base as unknown as ISecretsService,
+        getManifest: () => undefined,
+        hasPermissions: () => false,
+        uncoveredEntries: (entries) => entries,
+        grantPermissions: h.grantPermissions,
+        canEscalate: () => true,
+        namedKeysSupported: asked,
+      });
+      const name = `A${"B".repeat(64)}`;
+      const result = await secrets.put(name, "v");
+      expect(result.ok ? undefined : result.error).toMatchObject({
+        code: "INVALID_INPUT",
+        service: "secrets",
+        message: "This secret wasn't saved: its name is 65 characters, and names can be at most 64. Choose a shorter name.",
+      });
+      expect(asked).not.toHaveBeenCalled();
+      expect(h.grantPermissions).not.toHaveBeenCalled();
+      expect(h.base.put).not.toHaveBeenCalled();
     }
   });
 });

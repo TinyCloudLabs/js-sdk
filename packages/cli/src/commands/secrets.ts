@@ -10,7 +10,7 @@ import {
 } from "@tinycloud/node-sdk";
 // Namespace-shaped so tests that mock @tinycloud/node-sdk partially still load this module.
 import * as nodeSdk from "@tinycloud/node-sdk";
-import { appSecretScope, SECRET_TYPES } from "@tinycloud/sdk-core";
+import { appSecretScope, SECRET_TYPES, secretNameTooLongRefusal } from "@tinycloud/sdk-core";
 import { invokeOperation } from "@tinycloud/operations";
 import { isLocalOwnerProfile, liveStoredLease, ownerSessionLacksProof } from "@tinycloud/operations/profile";
 import {
@@ -1847,6 +1847,10 @@ export function registerSecretsCommand(
     .action(async (name: string, value: string | undefined, options, cmd) => {
       try {
         const secretType = parseSecretTypeOption(options.type);
+        // A name that only fails on length gets the SDK's words, before any sign-in or prompt. A name that fails the
+        // pattern keeps the pattern message from `resolveSecretPath`.
+        const tooLong = SECRET_NAME_RE.test(name.trim()) ? secretNameTooLongRefusal(name) : undefined;
+        if (tooLong) throw new CLIError("INVALID_SECRET_NAME", tooLong.error.message, ExitCode.USAGE_ERROR);
         const globalOpts = cmd.optsWithGlobals();
         const ctx = await ProfileManager.resolveContext(globalOpts);
         const node = await ensureSecretsNode(ctx, options, openKeyAcquisition);

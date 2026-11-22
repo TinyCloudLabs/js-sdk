@@ -16,3 +16,24 @@ export function namedKeysUnsupportedResult(): Result<never, ServiceError> {
     error: { code: NAMED_KEYS_UNSUPPORTED, service: "secrets", message: NAMED_KEYS_UNSUPPORTED_MESSAGE },
   };
 }
+
+/** `put` could not learn whether the node has per-secret keys: nothing was asked, signed or saved, and a retry may work (TC-3801). */
+export const NAMED_KEYS_CHECK_FAILED = "NAMED_KEYS_CHECK_FAILED";
+
+/** The words a person sees for {@link NAMED_KEYS_CHECK_FAILED}. */
+export const NAMED_KEYS_CHECK_FAILED_MESSAGE =
+  "Couldn't reach this TinyCloud node to check that it can save secrets. Nothing was saved. Try again in a moment.";
+
+/**
+ * What a secrets `put` does with the node's answer to "has per-secret keys?": a refusal for `false` (unsupported)
+ * and for `undefined` (could not be checked, so it fails closed: a put on such a node would otherwise ask the
+ * wallet to sign first), `undefined` when the node has them.
+ */
+export function namedKeysPutRefusal(supported: boolean | undefined): Result<never, ServiceError> | undefined {
+  if (supported === true) return undefined;
+  if (supported === false) return namedKeysUnsupportedResult();
+  return {
+    ok: false,
+    error: { code: NAMED_KEYS_CHECK_FAILED, service: "secrets", message: NAMED_KEYS_CHECK_FAILED_MESSAGE, meta: { retryable: true } },
+  };
+}

@@ -4,6 +4,9 @@ export type { SecretMigrateOptions, SecretMigrateReport, SecretMigrateSkipReason
 export {
   NAMED_KEYS_UNSUPPORTED,
   NAMED_KEYS_UNSUPPORTED_MESSAGE,
+  NAMED_KEYS_CHECK_FAILED,
+  NAMED_KEYS_CHECK_FAILED_MESSAGE,
+  namedKeysPutRefusal,
   namedKeysUnsupportedResult,
 } from "./namedKeysUnsupported";
 export {
@@ -22,6 +25,9 @@ export {
   MAX_SECRET_NAME_LENGTH,
   TC832_RESERVED_SCOPES,
   parseSecretCatalogKey,
+  parseStoredSecretCatalogKey,
+  secretNameTooLongMessage,
+  secretNameTooLongRefusal,
   resolveSecretListPrefix,
   resolveSecretPath,
   parseSecretKeyPath,

@@ -1,3 +1,4 @@
+import { ErrorCodes, err, type Result, type ServiceError } from "../types";
 import type { SecretType } from "./secretTypes";
 
 /** Longest secret name: one key-path segment on the node, 64 bytes (TC-3801). */
@@ -151,6 +152,42 @@ export function secretReadPermissions(
 export interface ParsedSecretCatalogKey {
   name: string;
   scope?: string;
+  /** Set when the name is over {@link MAX_SECRET_NAME_LENGTH}: listed, but `get`, `put` and `delete` refuse it. */
+  nameTooLong?: true;
+  /** Set when the scope is over {@link MAX_SECRET_SCOPE_LENGTH}: listed under its stored scope, but `get`, `put` and `delete` refuse it. */
+  scopeTooLong?: true;
+}
+
+const STORED_SECRET_NAME_RE = /^[A-Z][A-Z0-9_]*$/;
+
+/** A name as it may already be stored: the secret-name grammar without the length limit. */
+export function isStoredSecretName(name: string): boolean {
+  return STORED_SECRET_NAME_RE.test(name);
+}
+
+/** A scope in canonical form that is over {@link MAX_SECRET_SCOPE_LENGTH}: one that may already be stored, and that nothing can write or read. */
+export function isStoredTooLongScope(scope: string): boolean {
+  return scope.length > MAX_SECRET_SCOPE_LENGTH && SECRET_SCOPE_RE.test(scope);
+}
+
+function tooLongFlag(name: string): { nameTooLong?: true } {
+  return name.length > MAX_SECRET_NAME_LENGTH ? { nameTooLong: true } : {};
+}
+
+/** The words a person sees when a `put` names a secret longer than {@link MAX_SECRET_NAME_LENGTH}. `length` is the name's length. */
+export function secretNameTooLongMessage(length: number): string {
+  return `This secret wasn't saved: its name is ${length} characters, and names can be at most ${MAX_SECRET_NAME_LENGTH}. Choose a shorter name.`;
+}
+
+/**
+ * A `put` of a name that fails only on length is refused before any permission request or write; `undefined` for any
+ * other name (a name that also fails the pattern keeps the pattern's own message).
+ */
+export function secretNameTooLongRefusal(name: string): Result<never, ServiceError> | undefined {
+  const trimmed = name.trim();
+  const length = trimmed.length;
+  if (length <= MAX_SECRET_NAME_LENGTH || !isStoredSecretName(trimmed)) return undefined;
+  return err({ code: ErrorCodes.INVALID_INPUT, service: "secrets", message: secretNameTooLongMessage(length) });
 }
 
 export function canonicalizeSecretScope(
@@ -237,7 +274,27 @@ export function resolveSecretListPrefix(
 export function parseSecretCatalogKey(
   key: string,
 ): ParsedSecretCatalogKey | undefined {
-  if (SECRET_NAME_RE.test(key)) {
+  return parseCatalogKey(key, SECRET_NAME_RE);
+}
+
+/**
+ * {@link parseSecretCatalogKey} for listing what is stored: a name over {@link MAX_SECRET_NAME_LENGTH} or a scope over
+ * {@link MAX_SECRET_SCOPE_LENGTH} (stored before the limits) comes back with `nameTooLong` / `scopeTooLong` instead of
+ * being hidden; the scope is the raw stored one. It has no key of its own, and no path here resolves one for it.
+ */
+export function parseStoredSecretCatalogKey(
+  key: string,
+): ParsedSecretCatalogKey | undefined {
+  const parsed = parseCatalogKey(key, STORED_SECRET_NAME_RE, true);
+  return parsed && { ...parsed, ...tooLongFlag(parsed.name) };
+}
+
+function parseCatalogKey(
+  key: string,
+  nameRe: RegExp,
+  storedScopes = false,
+): ParsedSecretCatalogKey | undefined {
+  if (nameRe.test(key)) {
     return { name: key };
   }
 
@@ -247,8 +304,12 @@ export function parseSecretCatalogKey(
   }
 
   const [, rawScope, name] = parts;
-  if (!name || !SECRET_NAME_RE.test(name)) {
+  if (!name || !nameRe.test(name)) {
     return undefined;
+  }
+
+  if (storedScopes && rawScope && isStoredTooLongScope(rawScope)) {
+    return { name, scope: rawScope, scopeTooLong: true };
   }
 
   try {

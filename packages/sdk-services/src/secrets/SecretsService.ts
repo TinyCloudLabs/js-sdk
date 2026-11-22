@@ -16,9 +16,11 @@ import {
 } from "./secretTypes";
 import {
   canonicalizeSecretScope,
-  parseSecretCatalogKey,
+  isStoredSecretName,
+  isStoredTooLongScope,
+  parseStoredSecretCatalogKey,
   resolveSecretPath,
-  SECRET_NAME_RE,
+  secretNameTooLongRefusal,
   type ResolvedSecretPath,
   type SecretGetOptions,
   type SecretScopeOptions,
@@ -117,6 +119,8 @@ export class SecretsService implements ISecretsService {
     value: string,
     options?: SecretPutOptions,
   ): Promise<Result<void, SecretsError>> {
+    const tooLong = secretNameTooLongRefusal(name);
+    if (tooLong) return tooLong;
     const secretPath = resolveSecretPathResult(name, options);
     if ("ok" in secretPath) return secretPath;
     if (options?.type !== undefined && !isSecretType(options.type)) {
@@ -156,13 +160,19 @@ export class SecretsService implements ISecretsService {
     options?: SecretScopeOptions,
   ): Promise<Result<string[], SecretsError>> {
     let prefix: string;
-    try {
-      const scope = canonicalizeSecretScope(options?.scope);
-      prefix = scope === undefined ? "secrets/" : `secrets/scoped/${scope}/`;
-    } catch (error) {
-      return invalidSecretInput(
-        error instanceof Error ? error.message : String(error),
-      );
+    const stored = options?.scope?.trim();
+    if (stored !== undefined && isStoredTooLongScope(stored)) {
+      // A scope stored before the length limit is still listed; nothing can get, put or delete under it.
+      prefix = `secrets/scoped/${stored}/`;
+    } else {
+      try {
+        const scope = canonicalizeSecretScope(options?.scope);
+        prefix = scope === undefined ? "secrets/" : `secrets/scoped/${scope}/`;
+      } catch (error) {
+        return invalidSecretInput(
+          error instanceof Error ? error.message : String(error),
+        );
+      }
     }
 
     const result = await this.vault.list({
@@ -175,7 +185,7 @@ export class SecretsService implements ISecretsService {
     }
     return {
       ok: true,
-      data: result.data.filter((name) => SECRET_NAME_RE.test(name)),
+      data: result.data.filter((name) => isStoredSecretName(name)),
     };
   }
 
@@ -199,7 +209,7 @@ export class SecretsService implements ISecretsService {
       }
 
       for (const key of result.data.keys) {
-        const entry = parseSecretCatalogKey(key);
+        const entry = parseStoredSecretCatalogKey(key);
         if (!entry) continue;
         entries.set(`${entry.scope ?? ""}\u0000${entry.name}`, entry);
       }

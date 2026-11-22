@@ -1,6 +1,7 @@
 import {
   ErrorCodes,
-  namedKeysUnsupportedResult,
+  namedKeysPutRefusal,
+  secretNameTooLongRefusal,
   resolveSecretPath,
   resolveManifest,
   type IDataVaultService,
@@ -133,7 +134,7 @@ export interface WebSecretsServiceConfig {
   requestPermissions: RequestPermissions;
   /** The encryption network of this secrets space; an opted-in read asks only for a key on it. */
   getEncryptionNetworkId?: () => string | undefined;
-  /** `false` when the node lacks named keys: `put` is then refused before any prompt. `undefined`: not known. */
+  /** Whether the node has named keys. `put` is refused before any prompt when it does not (`false`) and when it cannot be checked (`undefined`). */
   namedKeysSupported?: () => boolean | undefined | Promise<boolean | undefined>;
   resolveSpace?: (space: string) => string;
   getUnlockSigner?: () => unknown;
@@ -218,7 +219,10 @@ export class WebSecretsService implements ISecretsService {
     value: string,
     options?: SecretPutOptions,
   ): ReturnType<ISecretsService["put"]> {
-    if ((await this.config.namedKeysSupported?.()) === false) return namedKeysUnsupportedResult();
+    const tooLong = secretNameTooLongRefusal(name);
+    if (tooLong) return tooLong;
+    const refusal = this.config.namedKeysSupported ? namedKeysPutRefusal(await this.config.namedKeysSupported()) : undefined;
+    if (refusal) return refusal;
     const permission = await this.ensureMutationPermission(
       name,
       options,

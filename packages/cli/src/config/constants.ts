@@ -41,6 +41,8 @@ export const ExitCode = {
   PENDING: 8,
   /** A write was refused because the owner's TinyCloud storage is full. */
   STORAGE_FULL: 10,
+  /** A secrets write was refused because the node has no per-secret keys (`NAMED_KEYS_UNSUPPORTED`); nothing was saved. */
+  NAMED_KEYS_UNSUPPORTED: 11,
   /** Interrupted by SIGINT/SIGTERM (`CANCELLED`). */
   CANCELLED: 130,
 } as const;

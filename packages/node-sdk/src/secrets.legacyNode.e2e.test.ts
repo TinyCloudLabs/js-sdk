@@ -140,4 +140,43 @@ describe.skipIf(!legacyBinary)("secrets against a real node without per-secret k
       }, 120_000);
     });
   }
+
+  // A restored session (the CLI's) never learned the node's features, and the node's /info may be unreachable.
+  // The put cannot tell this node from one with per-secret keys, and on this one it would ask the wallet to sign
+  // before the node refuses it with 401. So it fails closed: retryable, no signature, nothing written.
+  describe("a session that never learned the node's features, with /info unreachable", () => {
+    let owner: TinyCloudNode;
+    let space: string;
+
+    beforeAll(async () => {
+      ({ owner, space } = await ownerFor(undefined));
+    }, 120_000);
+
+    test("put fails closed with NAMED_KEYS_CHECK_FAILED: 0 signatures, nothing written; once /info answers it is the unsupported refusal", async () => {
+      const secrets = owner.secretsForSpace(space);
+      const before = await secrets.list();
+      (owner as unknown as { auth: { _nodeFeaturesKnown: boolean } }).auth._nodeFeaturesKnown = false;
+      const realFetch = globalThis.fetch;
+      globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+        if (String(input).endsWith("/info")) throw new Error("info unreachable");
+        return realFetch(input, init);
+      }) as typeof fetch;
+      const counter = countSignatures(owner);
+      try {
+        const put = await secrets.put("API_KEY", "new-value");
+        expect(put.ok ? undefined : put.error).toMatchObject({
+          code: "NAMED_KEYS_CHECK_FAILED", service: "secrets", meta: { retryable: true },
+          message: "Couldn't reach this TinyCloud node to check that it can save secrets. Nothing was saved. Try again in a moment.",
+        });
+        expect(counter.signatures).toBe(0);
+      } finally {
+        counter.restore();
+        globalThis.fetch = realFetch;
+      }
+      expect(await secrets.list()).toEqual(before);
+      const retried = await secrets.put("API_KEY", "new-value");
+      expect(retried.ok ? undefined : retried.error.code).toBe("NAMED_KEYS_UNSUPPORTED");
+      expect(await secrets.list()).toEqual(before);
+    }, 120_000);
+  });
 });
