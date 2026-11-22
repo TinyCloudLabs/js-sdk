@@ -794,6 +794,99 @@ test("past its signed end, a leased session asks again once its renewer changed,
   expect(await exists(sessionPath)).toBe(true);
 });
 
+test("a scoped approval asks for the lease and keeps it with the grant, which works past its signed end only while renewed", async () => {
+  const hermetic = await createHermeticNode();
+  const store = await testStore(hermetic.host);
+  const requester = hermetic.ownerDid;
+  const tenantRoot = store.tenantStateRoot("openkey-user-a");
+  const connect = await store.connectStatus("openkey-user-a", [requester]);
+  const bootstrap = await openKeyDelegation({
+    tenantStateRoot: tenantRoot, privateKey: hermetic.ownerPrivateKey, space: "account", abilities: BOOTSTRAP_ABILITIES,
+  });
+  await activateOnNode(hermetic.host, bootstrap);
+  expect(await deliver(store, "openkey-user-a", [requester], stateOf(connect.approvalUrl!), bootstrap))
+    .toEqual({ status: "stored" });
+  const read = () => invokeOperation(
+    "tinycloud.kv.get",
+    1,
+    { profile: "agent", stateRoot: tenantRoot },
+    { space: "applications", key: "agents/demo/profile", representation: "json" },
+  );
+  const authority = await read();
+  const decorated = await store.decorateAuthorityResult("openkey-user-a", [requester], authority) as {
+    approval: { url: string };
+  };
+  const link = await store.approvalLink(stateOf(decorated.approval.url));
+  expect((await openkey.requestFor(link)).request.renewal)
+    .toEqual({ version: 1, leaseLifetimeSeconds: BOOTSTRAP_LEASE_SECONDS });
+
+  // A 20-minute grant the producer already posted, and its lease; the loopback node admits only that lease.
+  const scoped = await openKeyDelegation({
+    tenantStateRoot: tenantRoot, privateKey: hermetic.ownerPrivateKey, space: "applications",
+    abilities: { kv: { "agents/demo/profile": ["tinycloud.kv/get"] } },
+    expiresAt: new Date(Date.now() + 20 * 60_000),
+  });
+  await activateOnNode(hermetic.host, scoped);
+  const identity = renewerIdentity();
+  const renewal = await ownerRenewalLease({
+    privateKey: hermetic.ownerPrivateKey, original: scoped, identity, lifetimeSeconds: BOOTSTRAP_LEASE_SECONDS,
+  });
+  const scopedAuthorization = record(scoped.delegationHeader).Authorization;
+  const admitted: string[] = [];
+  const nodeFetch = globalThis.fetch;
+  const transport = spyOn(globalThis, "fetch").mockImplementation(Object.assign(
+    async (input: Parameters<typeof fetch>[0], init?: RequestInit): Promise<Response> => {
+      const request = input instanceof Request ? input : new Request(input instanceof URL ? input.href : input, init);
+      const url = new URL(request.url);
+      if (url.origin === hermetic.host && url.pathname === "/.well-known/tinycloud/node-keys") return Response.json(identity);
+      const authorization = request.headers.get("authorization");
+      if (url.origin === hermetic.host && url.pathname === "/delegate") {
+        if (authorization === renewal.receipt.leaseAuthorization) {
+          admitted.push(authorization);
+          return Response.json({ cid: renewal.receipt.leaseCid, activated: [] });
+        }
+        // The node answers an already stored delegation as before, even past its signed expiry.
+        if (authorization === scopedAuthorization && Date.now() >= Date.parse(String(scoped.expiry))) {
+          return Response.json({ activated: [record(scoped).spaceId], skipped: [] });
+        }
+      }
+      return nodeFetch(input, init);
+    },
+    { preconnect: nodeFetch.preconnect },
+  ));
+  const clock = spyOn(Date, "now");
+  const renewed = spyOn(TinyCloudNode.prototype, "getDelegationRenewalEffectiveExpiry");
+  try {
+    const { id } = await openkey.approve(link, scoped, { renewal });
+    expect(await openkey.delivery(id, () => store.validateTenant("openkey-user-a", [requester])))
+      .toEqual({ status: "stored" });
+    expect(admitted).toEqual([renewal.receipt.leaseAuthorization]);
+    const stored = JSON.parse(await readFile(
+      join(tenantRoot, ".tinycloud/profiles/agent/additional-delegations.json"),
+      "utf8",
+    )) as Array<Record<string, unknown>>;
+    expect(stored).toMatchObject([{
+      delegation: { cid: scoped.delegationCid },
+      renewal: { receipt: { leaseCid: renewal.receipt.leaseCid, leaseExpiresAt: renewal.receipt.leaseExpiresAt } },
+    }]);
+
+    // Thirty minutes on, the session is live and the scoped grant is past its signed end.
+    const later = Date.now() + 30 * 60_000;
+    clock.mockReturnValue(later);
+    renewed.mockResolvedValue(Math.floor(later / 1000) + 3600);
+    expect(await read()).toMatchObject({ status: "ok", output: { value: { name: "Ada", role: "operator" } } });
+    expect(renewed.mock.calls.map(([delegation]) => delegation.cid)).toEqual([String(scoped.delegationCid)]);
+
+    // Once the renewal ends, the grant is asked for again.
+    renewed.mockRejectedValue(new RenewalRenewerChangedError());
+    expect(await read()).toMatchObject({ status: "authority_required" });
+  } finally {
+    renewed.mockRestore();
+    clock.mockRestore();
+    transport.mockRestore();
+  }
+});
+
 test("a link's background poll runs every 2 s for its first minute, then every 10 s", async () => {
   const store = await testStore();
   const requester = await ownerDid(REQUESTER_KEY);

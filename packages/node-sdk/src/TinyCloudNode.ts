@@ -2710,17 +2710,34 @@ export class TinyCloudNode {
    * Node-reported expiry can only shorten the result; it never grants access.
    */
   async getRenewalEffectiveExpiry(leaseAuthorization: string): Promise<number> {
+    const session = this.currentTinyCloudSession();
+    if (!session) throw new Error("A session is required to verify renewal authority");
+    return this.getDelegationRenewalEffectiveExpiry({
+      cid: session.delegationCid,
+      authorization: session.delegationHeader.Authorization,
+    }, leaseAuthorization);
+  }
+
+  /**
+   * {@link getRenewalEffectiveExpiry} for one CACAO delegation signed by this
+   * session's owner: the session grant itself or a scoped grant beside it.
+   * Returns the renewed end in Unix seconds.
+   */
+  async getDelegationRenewalEffectiveExpiry(
+    delegation: { readonly cid: string; readonly authorization: string },
+    leaseAuthorization: string,
+  ): Promise<number> {
     const { verifyRenewalHistory, RenewalLeaseExpiredError, RenewalAuthorityInactiveError, RenewalRenewerChangedError } = await import("@tinycloud/sdk-core/delegations/renewal");
     const session = this.currentTinyCloudSession();
     if (!session) throw new Error("A session is required to verify renewal authority");
     const original = await parseSignedSiweCacao(
-      session.delegationHeader.Authorization.replace(/^Bearer\s+/i, ""),
-      session.delegationCid,
+      delegation.authorization.replace(/^Bearer\s+/i, ""),
+      delegation.cid,
     );
     const ownerDid = pkhDid(session.address, session.chainId);
     const lease = await parseSignedSiweCacao(leaseAuthorization);
     const identity = await this.renewalNodeIdentity();
-    const target = `urn:cid:${session.delegationCid}`;
+    const target = `urn:cid:${delegation.cid}`;
     const resource = lease.attenuation[target];
     const caveats = resource?.["tinycloud.delegation/renew"];
     if (
@@ -2734,7 +2751,7 @@ export class TinyCloudNode {
       || typeof caveats[0] !== "object" || caveats[0] === null
       || Array.isArray(caveats[0]) || Object.keys(caveats[0]).length !== 0
     ) {
-      throw new Error("Renewal lease does not authorize only this session delegation");
+      throw new Error("Renewal lease does not authorize only this delegation");
     }
     // The lease names the renewer it was issued to; a node that rotated its renewer never renews it.
     if (lease.audience !== identity.renewerDid) throw new RenewalRenewerChangedError();
@@ -2743,7 +2760,7 @@ export class TinyCloudNode {
     if (!Number.isSafeInteger(leaseExpiresAt) || leaseExpiresAt <= now) {
       throw new RenewalLeaseExpiredError();
     }
-    const statusResult = await this.getDelegationStatus(session.delegationCid);
+    const statusResult = await this.getDelegationStatus(delegation.cid);
     if (!statusResult.ok) throw statusResult.error;
     const status = statusResult.data;
     if (
@@ -2754,7 +2771,7 @@ export class TinyCloudNode {
       throw new RenewalAuthorityInactiveError();
     }
     const verified = verifyRenewalHistory({
-      originalCid: session.delegationCid,
+      originalCid: delegation.cid,
       leaseCid: lease.cid,
       leaseExpiresAt,
       ancestorEffectiveExpiry: status.effective_expiry,
@@ -7721,11 +7738,15 @@ export class TinyCloudNode {
    * now, and its ReCap covers `spaceId` or names only raw encryption networks
    * (a decrypt-only grant has no space). Returns the signed ReCap and expiry.
    * Bindings without `validateSessionGrant` fall back to the session verifier,
-   * which also refuses decrypt-only grants.
+   * which also refuses decrypt-only grants. `allowExpired` verifies a grant
+   * past its signed expiry with the session renewal verifier, which also
+   * refuses decrypt-only grants; the caller must then prove a live renewal.
    */
-  verifySessionGrant(grant: SessionGrantProof): VerifiedSessionGrant {
+  verifySessionGrant(grant: SessionGrantProof, options: { readonly allowExpired?: boolean } = {}): VerifiedSessionGrant {
     const bindings = this.wasmBindings;
-    const validate = typeof bindings.validateSessionGrant === "function"
+    const validate = options.allowExpired
+      ? bindings.validatePersistedSessionForRenewal?.bind(bindings)
+      : typeof bindings.validateSessionGrant === "function"
       ? bindings.validateSessionGrant.bind(bindings)
       : bindings.validatePersistedSession?.bind(bindings);
     if (validate === undefined) {

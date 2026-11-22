@@ -91,6 +91,16 @@ export const DelegationImportArtifactSchema = z.object({
   permissions: z.array(PermissionEntrySchema).optional(),
   expiry: z.string().datetime({ offset: true }).optional(),
   prompted: z.boolean().optional(),
+  /**
+   * The owner's renewal lease for this delegation, stored with it. Metadata, not authority: replay past
+   * the signed end sends the signed lease to node-sdk, which checks it and the node's renewal record.
+   */
+  renewal: z.object({
+    receipt: z.object({
+      leaseAuthorization: z.string().min(1),
+      leaseExpiresAt: z.string().datetime({ offset: true }),
+    }).passthrough(),
+  }).passthrough().optional(),
 }).strict();
 
 /**

@@ -11,6 +11,7 @@ import { REGISTRY_NOT_FOUND_BODY, pkhDid, parseSignedSiweCacao } from "@tinyclou
 import { encodeDagCbor } from "../../sdk-core/src/delegations/cacao";
 import { signedRestorableSession } from "./test-support/signed-restorable-session";
 import { signedLocationRecordForTest } from "./test-support/restored-policy-node";
+import { activateValidatedRuntimeDelegation, siweRuntimeDelegation } from "./delegation";
 
 describe("TinyCloudNode renewal lease registration", () => {
   test("signs and admits only the exact renewal capability for its active node identity", async () => {
@@ -345,4 +346,164 @@ describe("TinyCloudNode renewal lease registration", () => {
     }
   });
 
+  test("installs a scoped grant past its signed expiry only until the end its verified renewal gives it", async () => {
+    const privateKey = Buffer.from(crypto.getRandomValues(new Uint8Array(32))).toString("hex");
+    const proof = await signedRestorableSession({ privateKey });
+    const ownerDid = pkhDid(proof.address!, proof.chainId!);
+    const nodeSeed = crypto.getRandomValues(new Uint8Array(32));
+    const nodeDid = `did:key:${bases.base58btc.encode(new Uint8Array([0xed, 0x01, ...ed25519.getPublicKey(nodeSeed)]))}`;
+    const renewerSeed = crypto.getRandomValues(new Uint8Array(32));
+    const renewerPublicKey = ed25519.getPublicKey(renewerSeed);
+    const renewerDid = `did:key:${bases.base58btc.encode(new Uint8Array([0xed, 0x01, ...renewerPublicKey]))}`;
+    const host = "https://node.renewal.test";
+    const registry = "https://registry.renewal.test";
+    const record = await signedLocationRecordForTest({
+      ownerDid, ownerPrivateKey: privateKey, host, nodeDid, spaces: [proof.spaceId], sequence: 1,
+    });
+    // A scoped grant beside the session, to the same session key, ending 30 minutes before the session does.
+    const wasm = new NodeWasmBindings();
+    const owner = new PrivateKeySigner(privateKey);
+    const issuedAt = new Date();
+    const prepared = wasm.prepareSession({
+      abilities: { kv: { "notes/": ["tinycloud.kv/get"] } },
+      address: proof.address!,
+      chainId: proof.chainId!,
+      domain: "openkey.test",
+      issuedAt: issuedAt.toISOString(),
+      expirationTime: new Date(issuedAt.getTime() + 30 * 60_000).toISOString(),
+      spaceId: proof.spaceId,
+      jwk: proof.jwk,
+    });
+    const signature = await owner.signMessage(prepared.siwe);
+    const scoped = wasm.completeSessionSetup({ ...prepared, signature });
+    const rotatedPublicKey = ed25519.getPublicKey(crypto.getRandomValues(new Uint8Array(32)));
+    let renewerOnNode = { did: renewerDid, publicKey: renewerPublicKey };
+    let status: Record<string, unknown> = { exists: false };
+    const statusCids: string[] = [];
+    const originalFetch = globalThis.fetch;
+    const originalNow = Date.now;
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const request = input instanceof Request ? input : new Request(input, init);
+      const url = new URL(request.url);
+      if (url.origin === registry) {
+        if (url.pathname === `/v2/locations/${encodeURIComponent(proof.address!)}`) return Response.json({ record });
+        return new Response(REGISTRY_NOT_FOUND_BODY, { status: 404 });
+      }
+      if (url.origin !== host) throw new Error(`Unexpected test origin: ${url.origin}`);
+      if (url.pathname === "/info") return Response.json({ protocol: 1, version: "test", features: [], nodeId: nodeDid });
+      if (url.pathname === "/.well-known/tinycloud/node-keys") {
+        return Response.json({
+          nodeDid,
+          shareInvitationPublicKey: "A".repeat(43),
+          renewerDid: renewerOnNode.did,
+          renewerPublicKey: Buffer.from(renewerOnNode.publicKey).toString("base64url"),
+          renewerEpoch: 1,
+        });
+      }
+      // The node answers an already stored delegation as before, even past its signed expiry.
+      if (url.pathname === "/delegate" && request.method === "POST") {
+        return Response.json({ activated: [proof.spaceId], skipped: [] });
+      }
+      if (url.pathname === "/delegation/status" && request.method === "POST") {
+        const body = await request.json() as { cid?: unknown };
+        if (typeof body.cid === "string") statusCids.push(body.cid);
+        return Response.json(status);
+      }
+      throw new Error(`Unexpected test route: ${request.method} ${url.pathname}`);
+    }) as typeof fetch;
+
+    try {
+      const node = new TinyCloudNode({
+        host,
+        signer: owner,
+        wasmBindings: new NodeWasmBindings(),
+        tinycloudRegistryUrl: registry,
+        autoDiscoverLocalNode: false,
+      });
+      await node.restoreSession({ ...proof, tinycloudHosts: [host] });
+      const delegation = siweRuntimeDelegation(node, {
+        authorization: scoped.delegationHeader.Authorization,
+        cid: scoped.delegationCid,
+        spaceId: proof.spaceId,
+        ownerAddress: proof.address!,
+        chainId: proof.chainId!,
+        siwe: prepared.siwe,
+        signature,
+        host,
+      });
+      const lease = await node.createOwnerDelegation({
+        delegateDid: renewerDid,
+        spaceId: proof.spaceId,
+        expiresAt: new Date(delegation.expiry.getTime() + 4 * 60 * 60_000),
+        permissions: [{
+          service: "tinycloud.delegation",
+          path: `urn:cid:${scoped.delegationCid}`,
+          actions: ["tinycloud.delegation/renew"],
+        }],
+      });
+      const leaseAuthorization = lease.delegation.authHeader!;
+      const stampEnd = Math.floor((delegation.expiry.getTime() + 3 * 60 * 60_000) / 1000);
+      const signedBytes = encodeDagCbor({
+        domain: "tinycloud/node/renewal-stamp/v1",
+        unsigned: {
+          type: "TinyCloudRenewalStamp",
+          newEnd: new Date(stampEnd * 1000).toISOString().replace(".000Z", "Z"),
+          nodeDid,
+          version: 1,
+          leaseCid: lease.delegationCid,
+          originalCid: scoped.delegationCid,
+          renewerEpoch: 1,
+          leaseGeneration: 1,
+          previousStampCid: lease.delegationCid,
+        },
+      });
+      const renewed = {
+        cid: scoped.delegationCid,
+        status: "active",
+        exists: true,
+        active: true,
+        revoked: false,
+        expired: false,
+        effective_expiry: stampEnd,
+        renewal_history: [{
+          cid: CID.createV1(0x55, createDigest(0x1e, blake3(signedBytes))).toString(),
+          lease_cid: lease.delegationCid,
+          generation: 1,
+          previous_stamp_cid: lease.delegationCid,
+          new_end: stampEnd,
+          signed_bytes: Buffer.from(signedBytes).toString("base64url"),
+          signature: Buffer.from(ed25519.sign(signedBytes, renewerSeed)).toString("base64url"),
+        }],
+      };
+      Date.now = () => delegation.expiry.getTime() + 60_000;
+      const activate = (renewal?: { leaseAuthorization: string }) =>
+        activateValidatedRuntimeDelegation(node, delegation, { host, ...(renewal === undefined ? {} : { renewal }) });
+
+      await expect(activate()).rejects.toMatchObject({ reason: "expired" });
+      // The node no longer reports the grant live: its renewal ended or was stopped.
+      status = { ...renewed, active: false, status: "expired", expired: true };
+      await expect(activate({ leaseAuthorization })).rejects.toMatchObject({ reason: "expired" });
+      // The node rotated its renewer: this lease is never renewed again.
+      status = renewed;
+      renewerOnNode = {
+        did: `did:key:${bases.base58btc.encode(new Uint8Array([0xed, 0x01, ...rotatedPublicKey]))}`,
+        publicKey: rotatedPublicKey,
+      };
+      await expect(activate({ leaseAuthorization })).rejects.toMatchObject({ reason: "expired" });
+      expect(node.getRuntimePermissionDelegations()).toEqual([]);
+
+      renewerOnNode = { did: renewerDid, publicKey: renewerPublicKey };
+      const activated = await activate({ leaseAuthorization });
+      expect(activated.expiry.getTime()).toBe(stampEnd * 1000);
+      expect(node.getRuntimePermissionDelegations().map(({ cid, expiry }) => ({ cid, end: expiry.getTime() })))
+        .toEqual([{ cid: scoped.delegationCid, end: stampEnd * 1000 }]);
+      expect(statusCids.every((cid) => cid === scoped.delegationCid) && statusCids.length > 0).toBe(true);
+
+      Date.now = () => stampEnd * 1000 + 1;
+      expect(node.getRuntimePermissionDelegations()).toEqual([]);
+    } finally {
+      Date.now = originalNow;
+      globalThis.fetch = originalFetch;
+    }
+  });
 });

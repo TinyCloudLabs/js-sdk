@@ -130,8 +130,14 @@ export interface RuntimeDelegationActivator {
   /**
    * Verify a wallet-signed session grant issued to this runtime's live session
    * key. Required to activate a CACAO grant; compact UCANs do not use it.
+   * `allowExpired` accepts a grant past its signed expiry (renewal only).
    */
-  verifySessionGrant?(grant: SessionGrantProof): VerifiedSessionGrant;
+  verifySessionGrant?(grant: SessionGrantProof, options?: { readonly allowExpired?: boolean }): VerifiedSessionGrant;
+  /** Unix-seconds end of an owner CACAO grant under the owner's renewal lease; required to renew one. */
+  getDelegationRenewalEffectiveExpiry?(
+    delegation: { readonly cid: string; readonly authorization: string },
+    leaseAuthorization: string,
+  ): Promise<number>;
   /** A verified full-resource registry host; undefined retains no-entry host binding. */
   resolveRegisteredDelegationHost?(
     permissions: readonly PermissionEntry[],
@@ -147,7 +153,7 @@ export interface ValidatedRuntimeDelegation {
   readonly delegation: PortableDelegation;
   /** Capabilities read from the signed compact UCAN attenuation or SIWE ReCap. */
   readonly effectivePermissions: readonly PermissionEntry[];
-  /** Expiry read from the signed compact UCAN payload or SIWE. */
+  /** The signed expiry, or for a renewed grant the end its verified renewal stamps give it. */
   readonly expiry: Date;
   /** Audience read from the signed compact UCAN payload or SIWE. */
   readonly audience: string;
@@ -530,6 +536,7 @@ function signedAuthorityFromSessionGrant(
   delegation: Pick<PortableDelegation, "siweProof" | "spaceId" | "ownerAddress" | "chainId">,
   authorization: string,
   cid: string,
+  allowExpired: boolean,
 ): SignedRuntimeAuthority {
   const proof = delegation.siweProof;
   if (
@@ -558,7 +565,7 @@ function signedAuthorityFromSessionGrant(
       chainId: delegation.chainId,
       siwe: proof.siwe,
       signature: proof.signature,
-    });
+    }, { allowExpired });
   } catch (error) {
     reject("proof_invalid", error instanceof Error ? error.message : String(error));
   }
@@ -681,6 +688,11 @@ function resourcesMatch(
  * anything is activated or installed; returning `false` refuses the
  * delegation.
  *
+ * `options.renewal` carries the owner's renewal lease for this exact
+ * delegation. A CACAO grant past its signed expiry is then installed until
+ * the end the node's verified renewal stamps give it; without a live renewal
+ * it is refused as `expired`.
+ *
  * Typed routing failures propagate unchanged; they do not invalidate the
  * signed authority or require another approval.
  */
@@ -690,6 +702,7 @@ export async function activateValidatedRuntimeDelegation(
   options: {
     host: string;
     authorize?: (effectivePermissions: readonly PermissionEntry[]) => boolean;
+    renewal?: { readonly leaseAuthorization: string };
   },
 ): Promise<ValidatedRuntimeDelegation> {
   let host = normalizedHost(options.host);
@@ -697,7 +710,8 @@ export async function activateValidatedRuntimeDelegation(
   if (!(delegation.expiry instanceof Date) || Number.isNaN(delegation.expiry.getTime())) {
     reject("authority_invalid", "Runtime delegation has an invalid expiry.");
   }
-  if (delegation.expiry.getTime() <= Date.now()) {
+  const pastSignedEnd = delegation.expiry.getTime() <= Date.now();
+  if (pastSignedEnd && options.renewal === undefined) {
     reject("expired", "Runtime delegation is expired.");
   }
 
@@ -715,12 +729,12 @@ export async function activateValidatedRuntimeDelegation(
   try {
     signed = compact
       ? signedAuthorityFromCompactUcan(authorization)
-      : signedAuthorityFromSessionGrant(node, delegation, authorization, cid);
+      : signedAuthorityFromSessionGrant(node, delegation, authorization, cid, pastSignedEnd);
   } catch (error) {
     if (error instanceof RuntimeDelegationRejectedError) throw error;
     reject("authority_invalid", error instanceof Error ? error.message : String(error));
   }
-  if (signed.expiry.getTime() <= Date.now()) {
+  if (signed.expiry.getTime() <= Date.now() && (options.renewal === undefined || compact)) {
     reject("expired", "Runtime delegation is expired.");
   }
   if (delegation.expiry.getTime() !== signed.expiry.getTime()) {
@@ -749,6 +763,9 @@ export async function activateValidatedRuntimeDelegation(
     }
     host = normalizedHost(registeredHost);
   }
+  const expiry = signed.expiry.getTime() > Date.now()
+    ? signed.expiry
+    : await renewedExpiry(node, cid, authorization, compact ? undefined : options.renewal);
   const previouslyInstalled = node
     .getRuntimePermissionDelegations()
     .find((candidate) => candidate.cid === cid);
@@ -787,7 +804,7 @@ export async function activateValidatedRuntimeDelegation(
       ...resource,
       actions: [...resource.actions],
     })),
-    expiry: new Date(signed.expiry),
+    expiry: new Date(expiry),
     delegateDID: signed.audience,
     host,
     ...(compact ? {} : { siweProof: delegation.siweProof }),
@@ -820,7 +837,7 @@ export async function activateValidatedRuntimeDelegation(
   if (
     installed.delegationHeader.Authorization !== authorization ||
     !didPrincipalsMatch(installed.delegateDID, signed.audience) ||
-    installed.expiry.getTime() !== signed.expiry.getTime() ||
+    installed.expiry.getTime() !== expiry.getTime() ||
     !resourcesMatch(
       canonicalResourcesFromPortableDelegation(installed),
       signed.resources,
@@ -838,10 +855,48 @@ export async function activateValidatedRuntimeDelegation(
     cid,
     delegation: installed,
     effectivePermissions: signed.permissions,
-    expiry: new Date(signed.expiry),
+    expiry: new Date(expiry),
     audience: signed.audience,
     host: normalizedHost(installed.host ?? host),
   };
+}
+
+/** node-sdk's coded refusals for a renewal that ended, was stopped, or names a renewer the node no longer runs. */
+const RENEWAL_ENDED: Record<string, true> = {
+  RENEWAL_LEASE_EXPIRED: true,
+  RENEWAL_AUTHORITY_INACTIVE: true,
+  RENEWAL_LEASE_ORIGINAL_EXPIRED: true,
+  RENEWAL_RENEWER_CHANGED: true,
+};
+
+/**
+ * The end a CACAO grant past its signed expiry has under the owner's renewal
+ * lease, from the node's live status and verified renewal stamps. A renewal
+ * that ended is `expired`; a node that cannot answer is `activation_unavailable`.
+ */
+async function renewedExpiry(
+  node: RuntimeDelegationActivator,
+  cid: string,
+  authorization: string,
+  renewal: { readonly leaseAuthorization: string } | undefined,
+): Promise<Date> {
+  if (renewal === undefined) reject("expired", "Runtime delegation is expired.");
+  if (typeof node.getDelegationRenewalEffectiveExpiry !== "function") {
+    reject("unsupported", "This runtime cannot verify a delegation's renewal.");
+  }
+  let effectiveSeconds: number;
+  try {
+    effectiveSeconds = await node.getDelegationRenewalEffectiveExpiry({ cid, authorization }, renewal.leaseAuthorization);
+  } catch (error) {
+    const code = typeof error === "object" && error !== null && "code" in error ? error.code : undefined;
+    if (typeof code === "string" && RENEWAL_ENDED[code]) {
+      reject("expired", "Runtime delegation's renewal has ended or was stopped.");
+    }
+    reject("activation_unavailable", error instanceof Error ? error.message : String(error));
+  }
+  const end = new Date(effectiveSeconds * 1000);
+  if (!(end.getTime() > Date.now())) reject("expired", "Runtime delegation is expired.");
+  return end;
 }
 
 /**
@@ -893,6 +948,7 @@ export function siweRuntimeDelegation(
     { siweProof: proof, spaceId: input.spaceId, ownerAddress: input.ownerAddress, chainId: input.chainId },
     input.authorization,
     cid,
+    false,
   );
   if (signed.expiry.getTime() <= Date.now()) {
     reject("expired", "Runtime delegation is expired.");
