@@ -32,7 +32,6 @@ import type { TinyCloudNode } from "@tinycloud/node-sdk";
  */
 export const REGISTRY_PUBLISH_ORIGINS: readonly string[] = [
   "https://tinycloud.one",
-  "https://app.tinycloud.one",
   "https://home.tinycloud.xyz",
 ];
 

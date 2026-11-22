@@ -64,7 +64,7 @@ function makeSigner(subject: string, account: PrivateKeyAccount) {
 }
 
 test("TinyCloud One and Home: unregistered owner is published, and the PUT lists only the SDK's active node", async () => {
-  expect([...REGISTRY_PUBLISH_ORIGINS].sort()).toEqual(["https://app.tinycloud.one", "https://home.tinycloud.xyz", "https://tinycloud.one"]);
+  expect([...REGISTRY_PUBLISH_ORIGINS].sort()).toEqual(["https://home.tinycloud.xyz", "https://tinycloud.one"]);
   for (const origin of REGISTRY_PUBLISH_ORIGINS) {
     const owner = makeWalletOwner();
     let seenPut: Record<string, unknown> | undefined;
