@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, setDefaultTimeout, spyOn, test } from "bun:test";
 import { spawn, type ChildProcess } from "node:child_process";
-import { randomBytes } from "node:crypto";
-import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
+import { createHash, randomBytes } from "node:crypto";
+import { mkdir, mkdtemp, readdir, readFile, rm } from "node:fs/promises";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -31,6 +31,18 @@ delete process.env.TC_HOST;
 const { profileConfigPath, profilePath, readAdditionalDelegations, sessionPath, writeJsonAtomic } =
   await import("@tinycloud/operations/state");
 const { registerSecretsCommand } = await import("./secrets.js");
+
+/** Every file under `dir` (relative path → sha256 and text), to see what a command wrote. */
+async function snapshotTree(dir: string): Promise<Map<string, { sha: string; text: string }>> {
+  const files = new Map<string, { sha: string; text: string }>();
+  for (const entry of await readdir(dir, { recursive: true, withFileTypes: true })) {
+    if (!entry.isFile()) continue;
+    const path = join(entry.parentPath, entry.name);
+    const bytes = await readFile(path);
+    files.set(path, { sha: createHash("sha256").update(bytes).digest("hex"), text: bytes.toString("utf8") });
+  }
+  return files;
+}
 
 async function freePort(): Promise<number> {
   const { promise, resolve, reject } = Promise.withResolvers<number>();
@@ -235,8 +247,20 @@ describe.skipIf(!NODE_BIN)("per-secret keys against a real node", () => {
     const requestFile = join(root, "agent-secret-request.json");
     await Bun.write(requestFile, JSON.stringify(request));
     const before = Date.now();
+    const treeBefore = await snapshotTree(home);
     const granted = await tc(["--profile", "owner", "auth", "grant", requestFile]);
     expect({ exitCode: granted.exitCode, stderr: granted.stderr.slice(-300) }).toMatchObject({ exitCode: 0 });
+    // The one-use session is never written: the owner's stored session and profile are byte-for-byte unchanged, and no
+    // file anywhere under the home holds a signed sign-in message or a private key that was not there before.
+    const treeAfter = await snapshotTree(home);
+    for (const stable of [sessionPath("owner"), profileConfigPath("owner")]) {
+      expect(treeAfter.get(stable)?.sha).toBe(treeBefore.get(stable)?.sha);
+    }
+    for (const [path, file] of treeAfter) {
+      if (treeBefore.get(path)?.sha === file.sha) continue;
+      expect({ path, signedSignIn: /wants you to sign in with your Ethereum account/.test(file.text) }).toEqual({ path, signedSignIn: false });
+      expect({ path, privateJwk: /"kty"\s*:\s*"OKP"[^}]*"d"\s*:/.test(file.text) || /"d"\s*:[^}]*"kty"\s*:\s*"OKP"/.test(file.text) }).toEqual({ path, privateJwk: false });
+    }
     const grant = JSON.parse(granted.stdout) as { delegation: { path: string }; expiry: string };
     expect(grant.delegation.path).toBe(request.requested[0]!.path);
     expect(Date.parse(grant.expiry)).toBeGreaterThan(before);
