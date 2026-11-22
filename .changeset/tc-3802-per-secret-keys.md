@@ -19,6 +19,8 @@ A `secrets:` block in a manifest now asks for each secret's own key as well as t
 
 `tc auth grant` can now approve an agent's request for one secret's own key. With a local key, the owner's wallet signs a one-use session that holds exactly the requested keys, cuts the grant from it (1 hour unless the request asks for longer, at most 7 days) and ends it; the stored session is unchanged. With an OpenKey owner, the request may carry decrypt on one exact `secrets/<name>` key; a `secrets/` prefix, the whole network and key creation are still refused.
 
+`tc secrets list` shows a secret whose name or scope is over 64 characters with a note that this version can't read or delete it and which CLI version can (`unreadable` in the JSON output); nothing is hidden. `migrateSecrets()` refuses a vault that cannot move secrets before asking for any key.
+
 Fixed: an agent's request for a secret named the owner in lowercase, which an owner could not sign; it now names the owner in checksummed form.
 
 Fixed: approving a secret command from an OpenKey owner profile failed with "invalid approval request", because the request carried a local-only `skipPrefix` field. The approval request now leaves it out.

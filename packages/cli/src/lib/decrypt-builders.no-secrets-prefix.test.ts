@@ -105,7 +105,7 @@ const DECRYPT_BUILDERS: Record<string, string> = {
   "cli/src/commands/replica.ts": "warning text only",
   "cli/src/commands/secrets.ts": "secretPermissionEntries (exact key, network root for an older-format secret or a non-default network), ownerSecretApproval (details.decrypt: exact key or network root), secretMigratePermissions (network root), secretMigrateKeyPermissions (exact keys), `secrets network grant` (network root)",
   "cli/src/lib/permissions.ts": "secretPermissionsFromAppManifest (exact keys + network root), appManifestEntry and resolvePermissionSpaces (refuse secrets/ prefixes), share/ prefix (Share, not secrets), device default network root",
-  "cli/src/lib/raw-encryption.ts": "matchers for the share/ prefix and device default network root",
+  "cli/src/lib/raw-encryption.ts": "matchers for the share/ prefix, the device default network root and one exact secret key (decrypt, key.create)",
   "cli/src/share/adapters.ts": "runtime check on the network root",
   "cli/src/share/publishing-manifest.ts": "default/share/ prefix (Share publishing, not secrets)",
   "operations/src/invoke.ts": "checks a planned decrypt is one raw encryption resource",

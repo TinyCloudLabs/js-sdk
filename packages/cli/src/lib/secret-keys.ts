@@ -17,3 +17,22 @@ export function secretKeyResourceForVaultPath(networkId: string, vaultPath: stri
 export function secretKeyResource(networkId: string, keyPath: string): string {
   return formatKeyResource(networkId, keyPath);
 }
+
+/**
+ * The last CLI release that can still read or delete a secret whose name or scope is over 64 characters (TC-3801 caps
+ * both). Shown in the list note below. MUST equal the last published CLI before the release that carries the cap:
+ * re-check it at publish.
+ */
+export const LAST_CLI_WITHOUT_NAME_CAP = "1.8.0";
+
+/** Monica's S1l lines, for a listed secret this version can't read or delete. */
+export function unreadableSecretNote(flags: { nameTooLong: boolean; scopeTooLong: boolean }): string | undefined {
+  const cli = `CLI version ${LAST_CLI_WITHOUT_NAME_CAP} or earlier.`;
+  const cannot = "so this version can't read or delete it.";
+  if (flags.nameTooLong && flags.scopeTooLong) {
+    return `Name and scope are longer than 64 characters, ${cannot} Rename it and move it to a shorter scope with ${cli}`;
+  }
+  if (flags.nameTooLong) return `Name is longer than 64 characters, ${cannot} Rename it with ${cli}`;
+  if (flags.scopeTooLong) return `Scope is longer than 64 characters, ${cannot} Move it to a shorter scope with ${cli}`;
+  return undefined;
+}
