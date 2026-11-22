@@ -29,6 +29,8 @@ export interface InterimState {
   inboundRefusedAt?: string;
   /** CID of the over-long delegation that was replaced by a shorter one. That same delegation is never shortened twice. */
   shortenedCid?: string;
+  /** CID Courier signed and is about to activate, persisted before the activation call so a concurrent revoke (or a later run, after a crash) can find and revoke it even if the local pairing is gone by the time activation's own save runs. */
+  preparing?: { cid: string; at: string };
   cleanup: Record<string, { intentAt: string; revokedAt?: string }>;
 }
 export type InterimPeer = StoredPeer & { interim?: InterimState };
@@ -165,7 +167,8 @@ async function issued(node: TinyCloudNode, profile: Profile): Promise<AccountDel
 async function cleanup(node: TinyCloudNode, peer: InterimPeer, cid: string, save: () => void): Promise<boolean> {
   const state = stateOf(peer);
   state.cleanup[cid] ??= { intentAt: new Date().toISOString() };
-  save(); // durable intent precedes every cleanup invocation
+  // The pairing may already be gone locally (a concurrent revoke won the race): the node-side revoke still has to run.
+  try { save(); } catch (error) { if (!(error instanceof CourierError) || error.code !== 'peer-revoked') throw error; }
   if (stateOf(peer).cleanup[cid].revokedAt) return true;
   const result = await node.delegationManager.revokeIssued(cid);
   if (!result.ok) return false;
@@ -173,7 +176,7 @@ async function cleanup(node: TinyCloudNode, peer: InterimPeer, cid: string, save
   stateOf(peer).cleanup[cid].revokedAt = revokedAt;
   const entry = peer.outbound.find(item => item.cid === cid) as LedgerEntry | undefined;
   if (entry) entry.revokedAt = revokedAt;
-  save();
+  try { save(); } catch (error) { if (!(error instanceof CourierError) || error.code !== 'peer-revoked') throw error; }
   return true;
 }
 
@@ -304,13 +307,20 @@ export async function maintainOutbound(node: TinyCloudNode, profile: Profile, pe
   // No grace: recheck the original and parent immediately before delegateTo signs.
   liveEnd(tip.expiresAt, Date.now());
   parentOf(node, profile, Date.now());
-  const result = await node.delegateTo(peer.courierDid, permissions(tip.resources), { expiry: limitMs, requireActivation: true });
+  const result = await node.delegateTo(peer.courierDid, permissions(tip.resources), {
+    expiry: limitMs, requireActivation: true,
+    // Persisted before activation: a concurrent revoke that already deleted the pairing makes this save refuse
+    // (peer-revoked), which aborts activation entirely (the SDK never activates on a rejected onPrepared); one that
+    // lands after this still lets a later run find and revoke this prepared CID even with no local ledger entry.
+    onPrepared: async prepared => { state.preparing = { cid: prepared.cid, at: new Date().toISOString() }; save(); },
+  });
   const next = result.delegation;
   if (next.cid === tip.cid) return { state: 'live', reason: 'no-extension' };
   const record = { cid: next.cid, priorCid: tip.cid, issuedAt: new Date().toISOString(), expiresAt: next.expiry.toISOString(), delegation: serializeDelegation(next) };
-  (peer.outbound as LedgerEntry[]).push(record);
-  save(); // even a rejected result is recorded before any cleanup/network action
   try {
+    (peer.outbound as LedgerEntry[]).push(record);
+    delete state.preparing;
+    save(); // even a rejected result is recorded before any cleanup/network action; peer-revoked here still reaches cleanup below
     assertSuccessor(profile, peer, tip, successorRecord(node, next), parentOf(node, profile, Date.now()));
     liveEnd(tip.expiresAt, Date.now());
     const rechecked = await checkSiblings(node, profile, peer, save, Date.now());
