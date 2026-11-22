@@ -35,6 +35,7 @@
     "device-refuses-secrets",
     "generic-app-manifest",
     "generic-folder-port",
+    "openkey-signs-permission-requests",
     "permission-prompt-on-behalf-of",
     "secrets-network-grant-whole-network",
     "tc-2490-one-approval",
