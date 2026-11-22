@@ -490,6 +490,7 @@ export type Ledger = {
   tc3448OnBehalfPromptRoot?: LogoutRatchet;
   tc2490OneApprovalRoot?: LogoutRatchet;
   tc3801NamedKeysRoot?: LogoutRatchet;
+  tc3802SecretKeyCapRoot?: LogoutRatchet;
   tc2773LazyRestoreReplicaWorker?: Omit<WorkerRatchet, "worker"> & { replicaWorker: { delta: number; ceiling: number } };
 };
 
@@ -1134,6 +1135,7 @@ export function ancestryPins(root: Ledger, hasGatedOnly: boolean): Array<{ row: 
   if (root.tc3448OnBehalfPromptRoot !== undefined) pins.push({ row: "tc3448OnBehalfPromptRoot", pin: root.tc3448OnBehalfPromptRoot.sourceCommits.at(-1)! });
   if (root.tc2490OneApprovalRoot !== undefined) pins.push({ row: "tc2490OneApprovalRoot", pin: root.tc2490OneApprovalRoot.sourceCommits.at(-1)! });
   if (root.tc3801NamedKeysRoot !== undefined) pins.push({ row: "tc3801NamedKeysRoot", pin: root.tc3801NamedKeysRoot.sourceCommits.at(-1)! });
+  if (root.tc3802SecretKeyCapRoot !== undefined) pins.push({ row: "tc3802SecretKeyCapRoot", pin: root.tc3802SecretKeyCapRoot.sourceCommits.at(-1)! });
   if (hasGatedOnly) pins.push({ row: "gatedOnlyRatchet", pin: approvedGatedOnlyRatchet.sourceCommit });
   return pins;
 }
@@ -1248,6 +1250,7 @@ export function rootCeilings(root: Ledger): Array<{ row: string; ceiling: GzipSi
     ["tc3448OnBehalfPromptRoot", root.tc3448OnBehalfPromptRoot?.root.ceiling],
     ["tc2490OneApprovalRoot", root.tc2490OneApprovalRoot?.root.ceiling],
     ["tc3801NamedKeysRoot", root.tc3801NamedKeysRoot?.root.ceiling],
+    ["tc3802SecretKeyCapRoot", root.tc3802SecretKeyCapRoot?.root.ceiling],
   ];
   return rows.flatMap(([row, ceiling]) => ceiling === undefined ? [] : [{ row, ceiling }]);
 }
@@ -3742,6 +3745,26 @@ export const approvedTc3801NamedKeysRoot: LogoutRatchet = {
   "reason": "Secret names seal to their own key, so a secret's decrypt grant covers only that secret: sdk-services (resealToKey, the named-key paths, the long-name catalogue), sdk-core (exact secret key paths in the manifest and policy), node-sdk (NodeSecretsService, DelegatedAccess, the fail-closed put on a node without named keys) and web-sdk (WebSecretsService); sdk-services, sdk-core and node-sdk are bundled into the web-sdk root. Canonical Node 22/Bun 1.3.14 CI on #1131 (6d1bfa61, master cb3edeab) measured index.mjs 1534477 and index.cjs 1466213 gzip -9 bytes: +4619 and +3364 over the TC-2490 ceilings 1529858 and 1462849. Local webpack build of the same sources, gzip -9, against master cb3edeab: root index.mjs +4604 and index.cjs +4353; standalone package index.js/index.cjs: sdk-services +2622/+2756, node-sdk +2520/+2575, sdk-core +632/+607 (the packages overlap in the root). No lazy-load path. No other ceiling moves. Details: TC-3801"
 };
 
+/** The exact TC-3802 secret-key name cap root allowance from canonical CI. */
+export const approvedTc3802SecretKeyCapRoot: LogoutRatchet = {
+  "label": "per-secret keys: secret names over 64 characters have no key of their own (TC-3802)",
+  "ruling": "size-ruling: TC-3802 row tc3802SecretKeyCapRoot index.mjs 1534486 (+9), index.cjs 1466217 (+4) gzip bytes over the tc3801 ceilings, CI's canonical figure. Details: TC-3802",
+  "base": "cb3edeab4f66ae2fc7f84243c7b8fdc3a15fc812",
+  "sourceCommits": ["fd14fa023d84e17436150e11fc198cfce3d09d18"],
+  "canonicalCI": {
+    "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45042684402",
+    "jobs": [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45042684402/job/137270407240",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45042684402/job/137270407315"
+    ]
+  },
+  "root": {
+    "delta": { "index.mjs": 9, "index.cjs": 4 },
+    "ceiling": { "index.mjs": 1534486, "index.cjs": 1466217 }
+  },
+  "reason": "A secret name over 64 characters has no key of its own, so the manifest's isSecretKeyPath refuses it: one added check in sdk-core, bundled into the web root. migrateSecrets ships at @tinycloud/sdk-services/secrets/migrate and is not part of the root bundle."
+};
+
 export const approvedLedgerRows: Record<string, unknown> = {
   phase2Ratchet: approvedPhase2,
   fixRequiredRatchet: approvedFixRequiredRatchet,
@@ -3853,6 +3876,7 @@ export const approvedLedgerRows: Record<string, unknown> = {
   tc3448OnBehalfPromptRoot: approvedTc3448OnBehalfPromptRoot,
   tc2490OneApprovalRoot: approvedTc2490OneApprovalRoot,
   tc3801NamedKeysRoot: approvedTc3801NamedKeysRoot,
+  tc3802SecretKeyCapRoot: approvedTc3802SecretKeyCapRoot,
 };
 
 /** Only a git merge-base ledger may retain the pre-correction toolchain. */
@@ -4366,6 +4390,11 @@ export function validateLedger(value: Ledger, historicalBase = false): void {
       (!value.tc2490OneApprovalRoot ||
         JSON.stringify(value.tc3801NamedKeysRoot) !== JSON.stringify(approvedTc3801NamedKeysRoot))) {
     throw new Error("Only the exact TC-3801 root admission is approved.");
+  }
+  if (value.tc3802SecretKeyCapRoot !== undefined &&
+      (!value.tc3801NamedKeysRoot ||
+        JSON.stringify(value.tc3802SecretKeyCapRoot) !== JSON.stringify(approvedTc3802SecretKeyCapRoot))) {
+    throw new Error("Only the exact TC-3802 root admission is approved.");
   }
 }
 
@@ -5331,5 +5360,13 @@ export function validateTc3801NamedKeysRootTransition(base?: LogoutRatchet, curr
   if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc3801NamedKeysRoot) ||
       base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
     throw new Error("The TC-3801 root admission may be introduced once and cannot change later.");
+  }
+}
+
+/** The exact TC-3802 secret-key name cap root admission is introduced once and immutable. */
+export function validateTc3802SecretKeyCapRootTransition(base?: LogoutRatchet, current?: LogoutRatchet): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc3802SecretKeyCapRoot) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The TC-3802 root admission may be introduced once and cannot change later.");
   }
 }

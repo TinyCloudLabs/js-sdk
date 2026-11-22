@@ -528,6 +528,7 @@ describe("TC-2481 Web routing exact optional admission", () => {
     delete root.tc2944VaultPathClassifierRoot;
     delete root.tc3448OnBehalfPromptRoot;
     delete root.tc2490OneApprovalRoot;
+    delete root.tc3802SecretKeyCapRoot;
     delete root.tc3801NamedKeysRoot;
     delete root.tc3030FirstPartyOriginsRoot;
     delete root.tc2937SharePlacementRoot;
@@ -716,6 +717,7 @@ describe("TC-2481 final3e0 optional accounting admission", () => {
     delete root.tc2944VaultPathClassifierRoot;
     delete root.tc3448OnBehalfPromptRoot;
     delete root.tc2490OneApprovalRoot;
+    delete root.tc3802SecretKeyCapRoot;
     delete root.tc3801NamedKeysRoot;
     delete root.tc3030FirstPartyOriginsRoot;
     delete root.tc2937SharePlacementRoot;
