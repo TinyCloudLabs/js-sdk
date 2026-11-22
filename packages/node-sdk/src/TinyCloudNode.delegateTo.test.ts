@@ -1026,5 +1026,17 @@ describe("TinyCloudNode.delegateTo terminal grants and recipient kind", () => {
         near((await lifetimeMs(entry, "30d")).ms, 30 * DAY);
       }
     });
+
+    test("planDelegation predicts the expiry delegateTo signs", async () => {
+      for (const [expiry, want] of [[undefined, HOUR], ["7d", 7 * DAY], ["30d", 7 * DAY]] as const) {
+        const node = longSession();
+        const before = Date.now();
+        const plan = node.planDelegation([secret], expiry === undefined ? undefined : { expiry });
+        if (!("effectiveExpiration" in plan)) throw new Error(`refused: ${JSON.stringify(plan)}`);
+        near(plan.effectiveExpiration.getTime() - before, want);
+        const { delegation } = await node.delegateTo(recipient, [secret], expiry === undefined ? undefined : { expiry });
+        near(delegation.expiry.getTime(), plan.effectiveExpiration.getTime());
+      }
+    });
   });
 });

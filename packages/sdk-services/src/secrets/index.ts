@@ -1,5 +1,10 @@
 export { SecretsService } from "./SecretsService";
 export {
+  NAMED_KEYS_UNSUPPORTED,
+  NAMED_KEYS_UNSUPPORTED_MESSAGE,
+  namedKeysUnsupportedResult,
+} from "./namedKeysUnsupported";
+export {
   DEFAULT_SECRET_TYPE,
   SECRET_TYPES,
   isSecretType,

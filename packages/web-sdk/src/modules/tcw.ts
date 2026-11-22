@@ -798,6 +798,7 @@ export class TinyCloudWeb {
           ? this.requestPermissions(additional)
           : this.requestPermissions(additional, options),
         getEncryptionNetworkId: () => this.node.getEncryptionNetworkIdForSpace(resolvedSpace),
+        namedKeysSupported: () => this.node.namedKeysSupported(),
         resolveSpace: (space) => space.startsWith("tinycloud:") ? space : this.node.spaces.get(space).id,
         getUnlockSigner: () => this.walletSigner,
       });

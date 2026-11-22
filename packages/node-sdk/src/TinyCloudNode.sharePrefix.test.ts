@@ -307,7 +307,7 @@ async function signInWithCapabilityRequest(resources: { path: string; actions: s
   (node as any).ensureEncryptionNetwork = mock(async () => ({}));
   await withFetchResponses(
     [
-      new Response(JSON.stringify({ protocol: 1, version: "test", features: ["encryption"], nodeId: "did:key:z6MkNode" }), { status: 200, headers: { "Content-Type": "application/json" } }),
+      new Response(JSON.stringify({ protocol: 1, version: "test", features: ["encryption", "encryption-named-keys-v1"], nodeId: "did:key:z6MkNode" }), { status: 200, headers: { "Content-Type": "application/json" } }),
       new Response(JSON.stringify({ activated: ["space://test"], skipped: [] }), { status: 200, headers: { "Content-Type": "application/json" } }),
     ],
     async () => { await node.signIn(); },
@@ -418,7 +418,7 @@ describe("sign-in: the current owner's secret keys", () => {
     Object.assign(node, { ensureEncryptionNetwork: mock(async () => ({})) });
     await withFetchResponses(
       [
-        new Response(JSON.stringify({ protocol: 1, version: "test", features: ["encryption"], nodeId: "did:key:z6MkNode" }), { status: 200, headers: { "Content-Type": "application/json" } }),
+        new Response(JSON.stringify({ protocol: 1, version: "test", features: ["encryption", "encryption-named-keys-v1"], nodeId: "did:key:z6MkNode" }), { status: 200, headers: { "Content-Type": "application/json" } }),
         new Response(JSON.stringify({ activated: ["space://test"], skipped: [] }), { status: 200, headers: { "Content-Type": "application/json" } }),
       ],
       async () => { await node.signIn(); },

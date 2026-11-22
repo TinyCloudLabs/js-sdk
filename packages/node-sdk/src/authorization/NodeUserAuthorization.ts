@@ -496,6 +496,8 @@ export class NodeUserAuthorization implements IUserAuthorization {
   private _chainId?: number;
   private _nodeFeatures: string[] = [];
   private _nodeFeaturesKnown = false;
+  /** The host whose `/info` this sign-in already read before it built the request; the read after the session is then skipped. */
+  private _signInNodeInfoHost: string | undefined;
   /**
    * `nodeId` from the `GET /info` performed during sign-in/restore, tagged with
    * the host it came from. Callers that need the node DID (encryption-network
@@ -878,6 +880,14 @@ export class NodeUserAuthorization implements IUserAuthorization {
     return this._nodeFeaturesKnown;
   }
 
+  /** The read after the session, unless this sign-in already read the same host's `/info` before building its request. */
+  private async refreshNodeInfoUnlessReadForSignIn(): Promise<void> {
+    const readHost = this._signInNodeInfoHost;
+    this._signInNodeInfoHost = undefined;
+    if (readHost !== undefined && readHost === this.primaryTinyCloudHost) return;
+    await this.refreshNodeInfo();
+  }
+
   async refreshNodeInfo(): Promise<void> {
     const infoHost = this.primaryTinyCloudHost;
     const nodeInfo = await checkNodeInfo(infoHost, this.wasm.protocolVersion());
@@ -968,13 +978,17 @@ export class NodeUserAuthorization implements IUserAuthorization {
   }
 
   private async refreshNamedKeyFeatureForSignIn(address: string, chainId: number): Promise<void> {
+    this._signInNodeInfoHost = undefined;
     const request = this.getCapabilityRequest();
     const siweDomain = this.siweConfig?.domain ?? this.domain;
     const hasNamedKeys = request?.manifests.some((manifest) =>
-      manifest.keys?.length && appKeyHostBinding(siweDomain, manifest.keys_app_id ?? manifest.app_id));
+      manifest.keys?.length && appKeyHostBinding(siweDomain, manifest.keys_app_id ?? manifest.app_id))
+      || request?.resources.some((entry) =>
+        entry.service === ENCRYPTION_PERMISSION_SERVICE && entry.path.includes("/secrets/"));
     if (hasNamedKeys) {
       await this.resolveTinyCloudHostsForSignIn(address, chainId);
       await this.refreshNodeInfo();
+      this._signInNodeInfoHost = this.primaryTinyCloudHost;
     }
   }
 
@@ -1282,6 +1296,12 @@ export class NodeUserAuthorization implements IUserAuthorization {
           : parsed.prefix === "secrets" && !MANIFEST_COMPOSED.has(request));
       if (parsed.kind !== "network" && !sharePrefix && !ownSecrets) {
         throw new ManifestValidationError("named keys go in manifest.keys");
+      }
+      // A node that does not list named keys cannot parent a grant on a secret's
+      // own key: the whole sign-in would be refused. Drop only those entries; the
+      // rest of the request, the network decrypt included, is signed as asked.
+      if (ownSecrets && this._nodeFeaturesKnown && !this._nodeFeatures.includes("encryption-named-keys-v1")) {
+        return false;
       }
       for (const action of entry.actions) {
         addRawAbility(rawAbilities, entry.path, action);
@@ -1996,7 +2016,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
     this._chainId = chainId;
 
     // Verify SDK-node protocol compatibility and discover supported features.
-    await this.refreshNodeInfo();
+    await this.refreshNodeInfoUnlessReadForSignIn();
     this.assertSignInCurrent(generation);
 
     // Call extension hooks
@@ -2248,7 +2268,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
     this._chainId = chainId;
 
     // Verify SDK-node protocol compatibility and discover supported features.
-    await this.refreshNodeInfo();
+    await this.refreshNodeInfoUnlessReadForSignIn();
     this.assertSignInCurrent(generation);
 
     // Call extension hooks
