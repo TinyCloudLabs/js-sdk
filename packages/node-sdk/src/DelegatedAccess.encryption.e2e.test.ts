@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import type { InlineEncryptedEnvelope } from "@tinycloud/sdk-services";
+import { secretReadPermissions, type InlineEncryptedEnvelope } from "@tinycloud/sdk-services";
 import type { DelegatedAccess } from "./DelegatedAccess";
 import { deserializeDelegation, serializeDelegation, type PortableDelegation } from "./delegation";
 import { NodeWasmBindings } from "./NodeWasmBindings";
@@ -61,9 +61,12 @@ describe.skipIf(!nodeBinary)(
       return { delegation, access: await recipient.useDelegation(delegation) };
     }
 
+    // Decrypt on the secret's own key (TC-3284), derived from the KV path. A
+    // child can't hold the `secrets/` key prefix (TC-2140), so the
+    // all-secrets grant names API_KEY's key: the one secret those tests read.
     const secretsEntries = (path = "vault/secrets/") => [
       { service: "tinycloud.kv", space: secretsSpace, path, actions: ["get"] },
-      { service: "tinycloud.encryption", path: networkId, actions: ["decrypt"] },
+      secretReadPermissions(networkId, path.slice("vault/secrets/".length) || "API_KEY")[1],
     ];
 
     const decrypt = (access: DelegatedAccess) =>
@@ -171,12 +174,43 @@ describe.skipIf(!nodeBinary)(
       expect(record.ok ? undefined : record.error.code).toBe("AUTH_UNAUTHORIZED");
     }, 120_000);
 
-    // Per-secret DECRYPT scoping needs secrets sealed to per-secret named keys
-    // and a delegation naming that key (TC-3284, js-sdk #1050, node feature
-    // `encryption-named-keys-v1`). Today every secret is sealed to the network
-    // root key, so a network decrypt grant opens any envelope the holder can
-    // read; the record's KV grant (above) is what scopes a delegation to one secret.
-    test.todo("a named-key grant for secret A decrypts A and is refused on B (needs #1050)");
+    test("a named-key grant for secret A decrypts A and is refused on B", async () => {
+      const { access } = await grant(sessionOnlyChild(), [
+        { service: "tinycloud.kv", space: secretsSpace, path: "vault/secrets/", actions: ["get"] },
+        secretReadPermissions(networkId, "API_KEY")[1],
+      ]);
+      expect(await access.readSecret({ name: "API_KEY" })).toEqual({ status: "ok", value: "secrets-space-value" });
+      // B's record is readable under the KV grant; its key is not.
+      expect(await access.readSecret({ name: "OTHER_KEY" })).toEqual({
+        status: "permission_required",
+        hint: {
+          service: "tinycloud.encryption",
+          path: `${networkId}/secrets/other_key`,
+          actions: ["tinycloud.encryption/decrypt"],
+        },
+      });
+    }, 120_000);
+
+    test("an exact-key grant refuses a network-sealed secret without a network decrypt; the owner reads both", async () => {
+      // A record an older client sealed to the network key. `getBaseVault` is
+      // private; only a vault write without a key path can make one now.
+      const ownerVaults = owner as unknown as {
+        getBaseVault(space: string): { put(key: string, value: unknown): Promise<{ ok: boolean }> };
+      };
+      const legacy = await ownerVaults.getBaseVault(secretsSpace).put("secrets/LEGACY_KEY", {
+        value: "legacy-value", createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:00:00.000Z",
+      });
+      expect(legacy.ok).toBe(true);
+      const { access } = await grant(sessionOnlyChild(), [
+        { service: "tinycloud.kv", space: secretsSpace, path: "vault/secrets/LEGACY_KEY", actions: ["get"] },
+        secretReadPermissions(networkId, "LEGACY_KEY")[1],
+      ]);
+      expect(await access.readSecret({ name: "LEGACY_KEY" })).toEqual({ status: "legacy_envelope" });
+
+      for (const [name, value] of [["API_KEY", "secrets-space-value"], ["LEGACY_KEY", "legacy-value"]] as const) {
+        expect(await owner.readSecret({ space: secretsSpace, name })).toEqual({ status: "ok", value });
+      }
+    }, 120_000);
 
     test("each access decrypts only with its own delegation", async () => {
       const recipient = sessionOnlyChild();

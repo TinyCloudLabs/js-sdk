@@ -443,6 +443,8 @@ export {
   parseSecretCatalogKey,
   resolveSecretListPrefix,
   resolveSecretPath,
+  secretKeyPath,
+  secretReadPermissions,
 } from "./secrets";
 export type {
   ISecretsService,

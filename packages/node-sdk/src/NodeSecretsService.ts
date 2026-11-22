@@ -78,11 +78,15 @@ function secretPermissionEntries(
     skipPrefix: true,
   });
 
-  if (action === "get" && encryptionNetworkId !== undefined) {
+  // A secret opens with decrypt on its own key and is written after
+  // key.create on it (TC-3284); only a secret with no key of its own
+  // (name or scope over 64 bytes, never writable) still reads through the network.
+  const keyPath = action === "list" ? undefined : resolveSecretPath(name, options).keyPath;
+  if ((action === "get" || (action === "put" && keyPath !== undefined)) && encryptionNetworkId !== undefined) {
     entries.push({
       service: "tinycloud.encryption",
-      path: encryptionNetworkId,
-      actions: ["decrypt"],
+      path: keyPath === undefined ? encryptionNetworkId : `${encryptionNetworkId}/${keyPath}`,
+      actions: [action === "get" ? "decrypt" : "key.create"],
       skipPrefix: true,
     });
   }
@@ -235,14 +239,9 @@ export class NodeSecretsService implements ISecretsService {
   ): Promise<Result<void, ServiceError | VaultError>> {
     const target = name || "secrets";
     let permissionEntries: PermissionEntry[];
+    const networkId = action === "get" || action === "put" ? this.config.getEncryptionNetworkId?.() : undefined;
     try {
-      permissionEntries = secretPermissionEntries(
-        name,
-        options,
-        action,
-        this.space,
-        action === "get" ? this.config.getEncryptionNetworkId?.() : undefined,
-      );
+      permissionEntries = secretPermissionEntries(name, options, action, this.space, networkId);
     } catch (error) {
       return secretsError(
         ErrorCodes.INVALID_INPUT,
@@ -250,8 +249,16 @@ export class NodeSecretsService implements ISecretsService {
         error instanceof Error ? error : undefined,
       );
     }
+    // A node that cannot sign for the secret's own key still reads a secret
+    // sealed to the network before TC-3284 when it opens the whole network;
+    // that is accepted, never asked for.
+    const [kvEntry, keyEntry] = permissionEntries;
+    const networkRead = action === "get" && networkId !== undefined && keyEntry !== undefined &&
+      keyEntry.path !== networkId && !this.config.canEscalate()
+      ? [kvEntry!, { ...keyEntry, path: networkId }]
+      : undefined;
 
-    if (this.hasPermission(permissionEntries)) {
+    if (this.hasPermission(permissionEntries) || (networkRead !== undefined && this.hasPermission(networkRead))) {
       return ok();
     }
 
@@ -259,6 +266,9 @@ export class NodeSecretsService implements ISecretsService {
     try {
       escalation =
         this.config.uncoveredEntries?.(permissionEntries) ?? permissionEntries;
+      if (escalation.length > 0 && networkRead !== undefined && this.config.uncoveredEntries?.(networkRead).length === 0) {
+        escalation = [];
+      }
     } catch (error) {
       return this.escalationError(action, target, error);
     }

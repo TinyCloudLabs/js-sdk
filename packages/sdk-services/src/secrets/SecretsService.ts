@@ -75,12 +75,13 @@ export class SecretsService implements ISecretsService {
     const secretPath = resolveSecretPathResult(name, options);
     if ("ok" in secretPath) return secretPath;
 
-    const result =
-      options?.source === undefined
-        ? await this.vault.get<SecretPayload>(secretPath.vaultKey)
-        : await this.vault.get<SecretPayload>(secretPath.vaultKey, {
-            source: options.source,
-          });
+    // A secret opens only from its own key, or from an old network-wrapped
+    // copy, and only when bound to this space and name (TC-3284).
+    const result = await this.vault.get<SecretPayload>(secretPath.vaultKey, {
+      expectAad: true,
+      ...(secretPath.keyPath === undefined ? {} : { keyPath: secretPath.keyPath }),
+      ...(options?.source === undefined ? {} : { source: options.source }),
+    });
     if (!result.ok) {
       return result;
     }
@@ -131,9 +132,15 @@ export class SecretsService implements ISecretsService {
         ? {}
         : { type: options.type }),
     } satisfies SecretPayload;
-    return options?.ifAbsent === true
-      ? this.vault.put(secretPath.vaultKey, payload, { ifNoneMatch: "*" })
-      : this.vault.put(secretPath.vaultKey, payload);
+    // Always sealed to the secret's own key (TC-3284), so a write never puts
+    // a network-wrapped copy over one already on its own key.
+    if (secretPath.keyPath === undefined) {
+      return invalidSecretInput("Secret name and scope must each be at most 64 bytes.");
+    }
+    return this.vault.put(secretPath.vaultKey, payload, {
+      keyPath: secretPath.keyPath,
+      ...(options?.ifAbsent === true ? { ifNoneMatch: "*" } : {}),
+    });
   }
 
   async delete(

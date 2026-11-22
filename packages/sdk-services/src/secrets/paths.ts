@@ -77,6 +77,50 @@ export interface ResolvedSecretPath {
   permissionPaths: {
     vault: string;
   };
+  /**
+   * Named key the secret is sealed to ({@link secretKeyPath}); absent when the
+   * name or scope is longer than one key segment (64 bytes). Such a secret
+   * can't be written, and only its old network-wrapped copy can be read.
+   */
+  keyPath?: string;
+}
+
+/** Longest secret name or scope that fits one key-path segment. */
+const MAX_KEY_SEGMENT = 64;
+
+/**
+ * The named key a secret is sealed to (TC-3284): `secrets/<lower(NAME)>`, or
+ * `secrets/scoped/<scope>/<lower(NAME)>`. Lowercasing a `SECRET_NAME_RE` name
+ * is injective. The scope must already be canonical (`SECRET_SCOPE_RE`); it is
+ * never normalised. Throws for a name or scope over 64 bytes.
+ */
+export function secretKeyPath(name: string, scope?: string): string {
+  if (!SECRET_NAME_RE.test(name) || name.length > MAX_KEY_SEGMENT ||
+      (scope !== undefined && (!SECRET_SCOPE_RE.test(scope) || scope.length > MAX_KEY_SEGMENT))) {
+    throw new Error("A secret's key needs a name and scope of at most 64 bytes, scope in canonical form");
+  }
+  return `${scope === undefined ? SECRET_PREFIX : `${SCOPED_SECRET_PREFIX}${scope}/`}${name.toLowerCase()}`;
+}
+
+/**
+ * The two permissions that read exactly one secret (TC-3284): `kv/get` on its
+ * vault record and `decrypt` on its own key, never the network. `networkId`
+ * is the owner's network (`urn:tinycloud:encryption:<owner>:default`);
+ * `space` defaults to `secrets`. Throws for a secret that has no key.
+ */
+export function secretReadPermissions(
+  networkId: string,
+  name: string,
+  options: { scope?: string; space?: string } = {},
+): [
+  { service: "tinycloud.kv"; space: string; path: string; actions: ["tinycloud.kv/get"]; skipPrefix: true },
+  { service: "tinycloud.encryption"; path: string; actions: ["tinycloud.encryption/decrypt"] },
+] {
+  const resolved = resolveSecretPath(name, options);
+  return [
+    { service: "tinycloud.kv", space: options.space ?? "secrets", path: resolved.permissionPaths.vault, actions: ["tinycloud.kv/get"], skipPrefix: true },
+    { service: "tinycloud.encryption", path: `${networkId}/${secretKeyPath(resolved.name, resolved.scope)}`, actions: ["tinycloud.encryption/decrypt"] },
+  ];
 }
 
 export interface ParsedSecretCatalogKey {
@@ -140,6 +184,9 @@ export function resolveSecretPath(
     permissionPaths: {
       vault: `vault/${vaultKey}`,
     },
+    ...(normalizedName.length > MAX_KEY_SEGMENT || (scope?.length ?? 0) > MAX_KEY_SEGMENT
+      ? {}
+      : { keyPath: secretKeyPath(normalizedName, scope) }),
   };
 }
 
