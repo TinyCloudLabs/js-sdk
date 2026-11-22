@@ -3816,22 +3816,23 @@ export const approvedTc3688AccountIndexGuardRoot: LogoutRatchet = {
 
 export const approvedTc3443SessionRetireRoot: NonNullable<Ledger["tc3443SessionRetireRoot"]> = {
   "label": "sign-out retires the session at the node, with the retire code in a lazy chunk (TC-3443)",
-  "ruling": "size-ruling: TC-3443 row tc3443SessionRetireRoot index.mjs 1531655 (+1052), index.cjs 1464389 (+1052) gzip bytes over the tc3688 ceilings; worker 780959 (+56) and replicaWorker 774682 (+121) gzip bytes over the tc2931 ceilings; provisional until CI's canonical figures. Details: TC-3443",
+  "ruling": "size-ruling: TC-3443 row tc3443SessionRetireRoot index.mjs 1531668 (+1065), index.cjs 1464420 (+1083) gzip bytes over the tc3688 ceilings, kv-storage worker 780957 (+54) and replica worker 774682 (+121) gzip bytes over the tc2931 ceilings, CI's canonical figures. Details: TC-3443",
   "base": "7d438ee4050498859d23ff3bb2f9022908b85b4c",
-  "sourceCommits": ["6f578b0844e6231f7a3492e630a44ee407d065ea"],
+  "sourceCommits": ["6ca3c9118bc045d731ae383523289a2c1e832741"],
   "canonicalCI": {
-    "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/provisional",
+    "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45067208416",
     "jobs": [
-      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/provisional/job/provisional"
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45067208416/job/137345926164",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45067208416/job/137345926173"
     ]
   },
   "root": {
-    "delta": { "index.mjs": 1052, "index.cjs": 1052 },
-    "ceiling": { "index.mjs": 1531655, "index.cjs": 1464389 }
+    "delta": { "index.mjs": 1065, "index.cjs": 1083 },
+    "ceiling": { "index.mjs": 1531668, "index.cjs": 1464420 }
   },
-  "worker": { "delta": 56, "ceiling": 780959 },
+  "worker": { "delta": 54, "ceiling": 780957 },
   "replicaWorker": { "delta": 121, "ceiling": 774682 },
-  "reason": "provisional"
+  "reason": "Sign-out asks the node to stop accepting the session's keys; the retire request is in a lazy chunk loaded at session start, and the validateSessionRoot WASM export is bundled into the replica and kv-storage workers; sdk-core and node-sdk are bundled into the web-sdk root. Canonical Node 22/Bun 1.3.14/Rust 1.99.0 CI on #1118 (6ca3c911, master 7d438ee4 merged in) measured index.mjs 1531668 and index.cjs 1464420 gzip -9 bytes: +1065 and +1083 over the TC-3688 ceilings 1530603 and 1463337; the kv-storage worker 780957 (+54 over 780903) and replica.worker.js 774682 (+121 over 774561). No other ceiling moves. Details: TC-3443"
 };
 
 export const approvedLedgerRows: Record<string, unknown> = {
