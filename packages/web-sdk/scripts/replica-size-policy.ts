@@ -489,6 +489,7 @@ export type Ledger = {
   tc2944VaultPathClassifierRoot?: LogoutRatchet;
   tc3448OnBehalfPromptRoot?: LogoutRatchet;
   tc2490OneApprovalRoot?: LogoutRatchet;
+  tc3801NamedKeysRoot?: LogoutRatchet;
   tc2773LazyRestoreReplicaWorker?: Omit<WorkerRatchet, "worker"> & { replicaWorker: { delta: number; ceiling: number } };
 };
 
@@ -1132,6 +1133,7 @@ export function ancestryPins(root: Ledger, hasGatedOnly: boolean): Array<{ row: 
   if (root.tc2944VaultPathClassifierRoot !== undefined) pins.push({ row: "tc2944VaultPathClassifierRoot", pin: root.tc2944VaultPathClassifierRoot.sourceCommits.at(-1)! });
   if (root.tc3448OnBehalfPromptRoot !== undefined) pins.push({ row: "tc3448OnBehalfPromptRoot", pin: root.tc3448OnBehalfPromptRoot.sourceCommits.at(-1)! });
   if (root.tc2490OneApprovalRoot !== undefined) pins.push({ row: "tc2490OneApprovalRoot", pin: root.tc2490OneApprovalRoot.sourceCommits.at(-1)! });
+  if (root.tc3801NamedKeysRoot !== undefined) pins.push({ row: "tc3801NamedKeysRoot", pin: root.tc3801NamedKeysRoot.sourceCommits.at(-1)! });
   if (hasGatedOnly) pins.push({ row: "gatedOnlyRatchet", pin: approvedGatedOnlyRatchet.sourceCommit });
   return pins;
 }
@@ -1245,6 +1247,7 @@ export function rootCeilings(root: Ledger): Array<{ row: string; ceiling: GzipSi
     ["tc2944VaultPathClassifierRoot", root.tc2944VaultPathClassifierRoot?.root.ceiling],
     ["tc3448OnBehalfPromptRoot", root.tc3448OnBehalfPromptRoot?.root.ceiling],
     ["tc2490OneApprovalRoot", root.tc2490OneApprovalRoot?.root.ceiling],
+    ["tc3801NamedKeysRoot", root.tc3801NamedKeysRoot?.root.ceiling],
   ];
   return rows.flatMap(([row, ceiling]) => ceiling === undefined ? [] : [{ row, ceiling }]);
 }
@@ -3719,6 +3722,26 @@ export const approvedTc2490OneApprovalRoot: LogoutRatchet = {
   "reason": "TinyCloudNode accepts a signed session grant spanning several of the owner's spaces, keeps each resource's own space in portable grants, and picks a manifest sign-in's primary space among its own requested spaces; node-sdk is bundled into the web-sdk root. Canonical Node 22/Bun 1.3.14 CI on #1060 (53e4dc78, master c5a7f854 merged in) measured index.mjs 1529858 and index.cjs 1462849 gzip -9 bytes: +186 and +180 over the TC-3448 ceilings 1529672 and 1462669. No other ceiling moves. Details: TC-2490"
 };
 
+/** The exact TC-3801 per-secret keys root allowance from canonical CI. */
+export const approvedTc3801NamedKeysRoot: LogoutRatchet = {
+  "label": "per-secret keys: secret names seal to their own key (TC-3801)",
+  "ruling": "size-ruling: TC-3801 row tc3801NamedKeysRoot index.mjs 1534477 (+4619), index.cjs 1466213 (+3364) gzip bytes over the tc2490 ceilings, CI's canonical figure, no lazy-load path (Naomi ruling 3 (ii)). Details: TC-3801",
+  "base": "cb3edeab4f66ae2fc7f84243c7b8fdc3a15fc812",
+  "sourceCommits": ["6d1bfa617057ea9ad1432b18a5ed91fe68162803"],
+  "canonicalCI": {
+    "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45036860065",
+    "jobs": [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45036860065/job/137252523301",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45036860065/job/137252523541"
+    ]
+  },
+  "root": {
+    "delta": { "index.mjs": 4619, "index.cjs": 3364 },
+    "ceiling": { "index.mjs": 1534477, "index.cjs": 1466213 }
+  },
+  "reason": "Secret names seal to their own key, so a secret's decrypt grant covers only that secret: sdk-services (resealToKey, the named-key paths, the long-name catalogue), sdk-core (exact secret key paths in the manifest and policy), node-sdk (NodeSecretsService, DelegatedAccess, the fail-closed put on a node without named keys) and web-sdk (WebSecretsService); sdk-services, sdk-core and node-sdk are bundled into the web-sdk root. Canonical Node 22/Bun 1.3.14 CI on #1131 (6d1bfa61, master cb3edeab) measured index.mjs 1534477 and index.cjs 1466213 gzip -9 bytes: +4619 and +3364 over the TC-2490 ceilings 1529858 and 1462849. Local webpack build of the same sources, gzip -9, against master cb3edeab: root index.mjs +4604 and index.cjs +4353; standalone package index.js/index.cjs: sdk-services +2622/+2756, node-sdk +2520/+2575, sdk-core +632/+607 (the packages overlap in the root). No lazy-load path. No other ceiling moves. Details: TC-3801"
+};
+
 export const approvedLedgerRows: Record<string, unknown> = {
   phase2Ratchet: approvedPhase2,
   fixRequiredRatchet: approvedFixRequiredRatchet,
@@ -3829,6 +3852,7 @@ export const approvedLedgerRows: Record<string, unknown> = {
   tc2944VaultPathClassifierRoot: approvedTc2944VaultPathClassifierRoot,
   tc3448OnBehalfPromptRoot: approvedTc3448OnBehalfPromptRoot,
   tc2490OneApprovalRoot: approvedTc2490OneApprovalRoot,
+  tc3801NamedKeysRoot: approvedTc3801NamedKeysRoot,
 };
 
 /** Only a git merge-base ledger may retain the pre-correction toolchain. */
@@ -4337,6 +4361,11 @@ export function validateLedger(value: Ledger, historicalBase = false): void {
       (!value.tc3448OnBehalfPromptRoot ||
         JSON.stringify(value.tc2490OneApprovalRoot) !== JSON.stringify(approvedTc2490OneApprovalRoot))) {
     throw new Error("Only the exact TC-2490 root admission is approved.");
+  }
+  if (value.tc3801NamedKeysRoot !== undefined &&
+      (!value.tc2490OneApprovalRoot ||
+        JSON.stringify(value.tc3801NamedKeysRoot) !== JSON.stringify(approvedTc3801NamedKeysRoot))) {
+    throw new Error("Only the exact TC-3801 root admission is approved.");
   }
 }
 
@@ -5294,5 +5323,13 @@ export function validateTc2490OneApprovalRootTransition(base?: LogoutRatchet, cu
   if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc2490OneApprovalRoot) ||
       base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
     throw new Error("The TC-2490 root admission may be introduced once and cannot change later.");
+  }
+}
+
+/** The exact TC-3801 per-secret keys root admission is introduced once and immutable. */
+export function validateTc3801NamedKeysRootTransition(base?: LogoutRatchet, current?: LogoutRatchet): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc3801NamedKeysRoot) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The TC-3801 root admission may be introduced once and cannot change later.");
   }
 }
