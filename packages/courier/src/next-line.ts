@@ -18,7 +18,7 @@ export function initRequestNextLine(): string {
 // pattern, a long token, a JWT-like token, any control character) makes the line say `this same command` and echo
 // nothing. Flags are those `init --wait` accepts and a pending run can carry.
 const VALUE_FLAGS: Record<string, true> = {
-  '--timeout': true, '--label': true, '--handle': true, '--expiry': true, '--host': true, '--openkey-host': true, '--openkey-api-host': true,
+  '--timeout': true, '--label': true, '--handle': true, '--expiry': true, '--renew': true, '--host': true, '--openkey-host': true, '--openkey-api-host': true,
 };
 const isKnown = (table: Record<string, true>, name: string): boolean => Object.hasOwn(table, name);
 const PLAIN_VALUE = /^[A-Za-z0-9._:@/+ -]{1,64}$/;

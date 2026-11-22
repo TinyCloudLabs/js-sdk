@@ -67,6 +67,12 @@ export function approvalRenewalOf(delegation: object): ApprovalRenewal | undefin
   return renewals.get(delegation);
 }
 
+/** The owner's answer to the lease this delegation's request asked for; undefined when the request asked for none. */
+export function approvalRenewalChoiceOf(delegation: object): "leased" | "finite" | undefined {
+  if (!acquisitions.get(delegation)?.request.renewal) return undefined;
+  return renewals.has(delegation) ? "leased" : "finite";
+}
+
 /** Remote results require the durable login commit before their delivery can be acknowledged. */
 export function approvalResultNeedsAck(delegation: object): boolean {
   return acquisitions.has(delegation);
@@ -205,7 +211,7 @@ function configuredOrigin(value: string, label: string): string {
   }
   return url.origin;
 }
-function grantLifetimeSeconds(expiry: AuthFlowOptions["expiry"]): number {
+export function grantLifetimeSeconds(expiry: AuthFlowOptions["expiry"]): number {
   const durationMs = typeof expiry === "string" && /^\d+s$/.test(expiry)
     ? Number(expiry.slice(0, -1)) * 1000
     : parseRequestedExpiry(expiry ?? "7d").durationMs;
