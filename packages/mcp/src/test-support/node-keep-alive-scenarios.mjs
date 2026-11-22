@@ -1,5 +1,5 @@
-// Runs the keep-alive scenarios under Node against the built module, because the
-// hosted MCP runs on Node's fetch and Bun substitutes its own for `undici`.
+// Runs the keep-alive scenarios under Node.js against the built module, because the
+// hosted MCP runs on Node.js's fetch and Bun substitutes its own for `undici`.
 // Prints one JSON object. Servers behave like the node ingress: an idle
 // connection is closed after `idleCloseMs` and no Keep-Alive header is sent.
 import { createServer } from "node:http";
@@ -94,7 +94,7 @@ results.errorStatus = await withServer(
   async (probe, agent) => ({ result: await retryReadOnConnectionReset(() => read(probe.url, agent)), ...probe.counts }),
 );
 
-// Node's own `fetch`, with only the installed dispatcher, keeps a connection idle for longer than the 4 s default.
+// Node.js's own `fetch`, with only the installed dispatcher, keeps a connection idle for longer than the 4 s default.
 results.installed = await (async () => {
   const probe = await startServer(10_000, respond);
   installNodeKeepAlive();

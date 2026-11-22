@@ -44,7 +44,7 @@ test("a read after the connection idled past the keep-alive limit opens a new co
   expect(results.expired).toEqual({ connections: 2, requests: 2, answers: [true, true] });
 });
 
-test("Node's own fetch keeps a connection across 4.6 s of idle time once the keep-alive pool is installed", () => {
+test("Node.js's own fetch keeps a connection across 4.6 s of idle time once the keep-alive pool is installed", () => {
   expect(results.installed).toEqual({ connections: 1, requests: 2, answers: [true, true] });
 });
 

@@ -56,7 +56,7 @@
     "skills"
   ],
   "engines": {
-    "node": ">=20"
+    "node": ">=20.18.1"
   },
   "scripts": {
     "build": "tsup",
