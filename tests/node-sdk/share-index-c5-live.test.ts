@@ -4,7 +4,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { ed25519 } from "@noble/curves/ed25519";
 import { getAddress, Wallet } from "ethers";
-import { PrivateKeySigner, TinyCloudNode } from "@tinycloud/node-sdk";
+import { PrivateKeySigner, TinyCloudNode, ownerFullAccess } from "@tinycloud/node-sdk";
 import {
   getPolicyRootStatusV3,
   parseSignedCompactUcanAttenuation,
@@ -74,6 +74,7 @@ function ownerClient(): TinyCloudNode {
     autoDiscoverLocalNode: false,
     enablePublicSpace: false,
     autoCreateSpace: true,
+    ...ownerFullAccess(),
   });
 }
 

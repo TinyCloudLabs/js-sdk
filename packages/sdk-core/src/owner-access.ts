@@ -1,22 +1,56 @@
+import { sha256 } from "@noble/hashes/sha256";
+import { bytesToHex } from "@noble/hashes/utils";
 import { CAPABILITIES, DUCKDB, HOOKS, KV, SQL } from "@tinycloud/bootstrap";
 import type { AbilitiesMap, Manifest } from "./manifest";
 
 /** App id of the generic manifest when sign-in has no web address to name it. */
 export const GENERIC_APP_ID_WITHOUT_HOST = "node.app";
 
+// DNS labels only: no `_`, so no host name can spell a `_<port>` or `o_<hash>` id.
 const HOST_LABEL = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
+const HOST_AND_PORT = /^(.*?)(?::(\d{1,5}))?$/;
+const DEFAULT_PORTS = new Set([80, 443]);
 
 /**
  * The app id the generic manifest uses for a sign-in from `host`: the host
- * name reversed (`notes.example.com` → `com.example.notes`), port dropped.
- * {@link GENERIC_APP_ID_WITHOUT_HOST} when there is no usable host name.
+ * name reversed (`notes.example.com` → `com.example.notes`), with a
+ * non-default port after `_` (`notes.example.com:8443` →
+ * `com.example.notes_8443`; 80 and 443 are dropped). A host that is not a DNS
+ * name (an IPv6 literal, a label with `_`) gets `o_` and the first 16 hex of
+ * the SHA-256 of the lowercased host and port. {@link GENERIC_APP_ID_WITHOUT_HOST}
+ * when there is no host.
  */
 export function genericAppId(host: string | null | undefined): string {
-  const name = host?.trim().toLowerCase().replace(/:\d+$/, "").replace(/\.$/, "");
+  const value = host?.trim().toLowerCase();
+  if (!value) return GENERIC_APP_ID_WITHOUT_HOST;
+  const [, rawName = "", rawPort] = HOST_AND_PORT.exec(value)!;
+  const name = rawName.replace(/\.$/, "");
   if (!name) return GENERIC_APP_ID_WITHOUT_HOST;
+  const port = rawPort === undefined || DEFAULT_PORTS.has(Number(rawPort)) ? undefined : String(Number(rawPort));
   const labels = name.split(".");
-  if (!labels.every((label) => HOST_LABEL.test(label))) return GENERIC_APP_ID_WITHOUT_HOST;
-  return labels.reverse().join(".");
+  if (!labels.every((label) => HOST_LABEL.test(label))) {
+    const origin = port === undefined ? name : `${name}:${port}`;
+    return `o_${bytesToHex(sha256(new TextEncoder().encode(origin))).slice(0, 16)}`;
+  }
+  const appId = labels.reverse().join(".");
+  return port === undefined ? appId : `${appId}_${port}`;
+}
+
+const WARNED_WITHOUT_APP_HOST = Symbol.for("tinycloud.warnedWithoutAppHost");
+
+/**
+ * Once per process: a sign-in without a manifest and without a domain uses a
+ * folder every such app shares (`node.app`, or `xyz.tinycloud.app` for the web
+ * SDK outside a browser), so tell the developer how to get one of its own.
+ */
+export function warnOnceWithoutAppHost(appId: string): void {
+  const state = globalThis as { [WARNED_WITHOUT_APP_HOST]?: true };
+  if (state[WARNED_WITHOUT_APP_HOST]) return;
+  state[WARNED_WITHOUT_APP_HOST] = true;
+  console.warn(
+    `TinyCloud: this app has no domain, so it shares the folder applications/${appId}/ with every other app ` +
+    'that has none. Set `domain` (for example `domain: "notes.example.com"`) or pass a manifest to give it a folder of its own.',
+  );
 }
 
 /**

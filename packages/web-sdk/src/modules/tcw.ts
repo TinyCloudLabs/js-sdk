@@ -78,6 +78,8 @@ import {
   SignInOptions,
   ACCOUNT_MANIFEST_PERMISSIONS,
   isFirstPartyOrigin,
+  genericAppId,
+  warnOnceWithoutAppHost,
   composeManifestRequest,
   createLocalStorageLocalNodeIdentityStore,
   createLocalStorageRegistrySequenceStore,
@@ -132,6 +134,9 @@ declare global {
     ethereum?: any;
   }
 }
+
+/** The SIWE domain outside a browser when the app sets no `domain`. */
+const DOMAIN_WITHOUT_HOST = "app.tinycloud.xyz";
 
 // Config
 
@@ -549,6 +554,14 @@ export class TinyCloudWeb {
     };
   }
 
+  /** Outside a browser, an app with no domain and no manifest gets the folder every such app shares. */
+  private warnIfWithoutAppHost(): void {
+    if (this._manifest !== undefined || this._capabilityRequest !== undefined) return;
+    if (this.config.domain !== undefined || this.config.siweConfig?.domain !== undefined) return;
+    if (typeof window !== "undefined" && window.location?.host) return;
+    warnOnceWithoutAppHost(genericAppId(DOMAIN_WITHOUT_HOST));
+  }
+
   /**
    * Async initialization: ensure WASM is ready, then create TinyCloudNode.
    * @internal
@@ -587,7 +600,7 @@ export class TinyCloudWeb {
       localNodeIdentityStore:
         this.config.localNodeIdentityStore ??
         createLocalStorageLocalNodeIdentityStore(),
-      domain: this.config.domain ?? loc?.host ?? 'app.tinycloud.xyz',
+      domain: this.config.domain ?? loc?.host ?? DOMAIN_WITHOUT_HOST,
       uri: this.config.domain === undefined ? loc?.origin : undefined,
       prefix: this.config.spacePrefix,
       autoCreateSpace: this.config.autoCreateSpace ?? true,
@@ -1324,6 +1337,7 @@ export class TinyCloudWeb {
   }
 
   signIn = (options?: SignInOptions): Promise<ClientSession> => {
+    this.warnIfWithoutAppHost();
     if (!this.config.openkey) return this.performSignIn(options);
     const client = this.config.openkey.client;
     const state: {
