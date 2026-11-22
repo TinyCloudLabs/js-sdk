@@ -21,7 +21,7 @@ import { sha256 } from "@noble/hashes/sha256";
 
 import { fromBase64Url, toBase64Url, utf8Bytes } from "../bytes.js";
 import type { LinkRecord } from "./header.js";
-import type { Ed25519PrivateJwk } from "./signer.js";
+import { signerFromJwk, type Ed25519PrivateJwk } from "./signer.js";
 
 /** The `client_id` OpenKey expects in the session proof of every approval-result call. */
 export const APPROVAL_RESULT_CLIENT_ID = "openkey-approval-result-v1";
@@ -80,8 +80,14 @@ export interface ApprovalRequesterState {
   readonly record: Pick<LinkRecord, "header" | "signature">;
   /** OpenKey API origin, e.g. `https://api.openkey.so`. */
   readonly apiOrigin: string;
-  /** The Ed25519 key that issued the request. */
+  /** The Ed25519 target key (`targetPublicJwk`): signs `fetch`/`ack`, and signs `discover` for v1 requests. */
   readonly signingKey: Ed25519PrivateJwk;
+  /**
+   * The Ed25519 requester key (`header.issuer`) for v2 requests whose link issuer differs from the target key.
+   * Signs `discover` proofs only; `fetch` and `ack` always sign with `signingKey`. Required when
+   * `record.header.issuer` differs from `signingKey` (v2), and refused when it matches `signingKey` (v1).
+   */
+  readonly requesterSigningKey?: Ed25519PrivateJwk;
 }
 
 export interface ApprovalTransportOptions {
@@ -94,17 +100,50 @@ function pathFor(action: ApprovalAction, requestId: string, resultRef: string): 
   return action === "discover" ? `/api/approval-requests/${requestId}/result` : `/api/approval-results/${resultRef}/${action}`;
 }
 
+function validatedKeyDid(jwk: Ed25519PrivateJwk): string {
+  try {
+    return signerFromJwk(jwk).did;
+  } catch {
+    throw new ApprovalClientError("request_binding", "Approval requester signing key is invalid.");
+  }
+}
+
+function proofSigningKey(
+  state: Pick<ApprovalRequesterState, "signingKey" | "requesterSigningKey"> & { readonly record?: Pick<LinkRecord, "header" | "signature"> },
+  action: ApprovalAction,
+): Ed25519PrivateJwk {
+  const targetDid = validatedKeyDid(state.signingKey);
+  const headerIssuer = typeof state.record?.header?.issuer === "string" ? state.record.header.issuer : undefined;
+  if (state.requesterSigningKey !== undefined) {
+    const requesterDid = validatedKeyDid(state.requesterSigningKey);
+    if (requesterDid === targetDid) {
+      throw new ApprovalClientError("request_binding", "requesterSigningKey is not allowed for a v1 same-key approval request.");
+    }
+    if (headerIssuer !== undefined && requesterDid !== headerIssuer) {
+      throw new ApprovalClientError("request_binding", "requesterSigningKey does not match the approval request header issuer.");
+    }
+    return action === "discover" ? state.requesterSigningKey : state.signingKey;
+  }
+  if (headerIssuer !== undefined && headerIssuer !== targetDid) {
+    throw new ApprovalClientError("request_binding", "A v2 approval request requires requesterSigningKey for discover proofs.");
+  }
+  return state.signingKey;
+}
+
 /**
- * The `OpenKey-Session-Proof` header value: an EdDSA JWT signed by the requester key, bound to the action, the
- * request, its body CID, the result reference and the ACK id, and to the exact URL it is sent to.
+ * The `OpenKey-Session-Proof` header value: an EdDSA JWT bound to the action, the request, its body CID,
+ * the result reference and the ACK id, and to the exact URL it is sent to. Signed by `requesterSigningKey`
+ * for v2 `discover` calls and by `signingKey` (the target key) for `fetch`, `ack`, and v1 `discover`.
  */
 export function approvalSessionProof(
-  state: Pick<ApprovalRequesterState, "requestId" | "bodyCid" | "apiOrigin" | "signingKey">,
+  state: Pick<ApprovalRequesterState, "requestId" | "bodyCid" | "apiOrigin" | "signingKey" | "requesterSigningKey"> & {
+    readonly record?: Pick<LinkRecord, "header" | "signature">;
+  },
   action: ApprovalAction,
   resultRef = "",
   ackId = "",
 ): string {
-  const jwk = state.signingKey;
+  const jwk = proofSigningKey(state, action);
   const thumbprint = toBase64Url(sha256(utf8Bytes(JSON.stringify({ crv: "Ed25519", kty: "OKP", x: jwk.x }))));
   const header = toBase64Url(utf8Bytes(JSON.stringify({ alg: "EdDSA", kid: thumbprint, typ: "openkey-session-proof+jwt" })));
   const payload = toBase64Url(utf8Bytes(JSON.stringify({
@@ -126,6 +165,7 @@ async function post(
   ackId: string,
   options: ApprovalTransportOptions,
 ): Promise<Response> {
+  const proof = approvalSessionProof(state, action, resultRef, ackId);
   const body = action === "discover"
     ? { bodyCid: state.bodyCid, header: state.record.header, signature: state.record.signature }
     : { requestId: state.requestId, bodyCid: state.bodyCid, ...(action === "ack" ? { ackId } : {}) };
@@ -135,7 +175,7 @@ async function post(
       method: "POST", credentials: "omit", redirect: "error", cache: "no-store", referrerPolicy: "no-referrer",
       headers: {
         "content-type": "application/json",
-        "OpenKey-Session-Proof": approvalSessionProof(state, action, resultRef, ackId),
+        "OpenKey-Session-Proof": proof,
       },
       body: JSON.stringify(body),
       signal: options.signal ? AbortSignal.any([timeout, options.signal]) : timeout,

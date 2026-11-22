@@ -5,11 +5,13 @@ import { canonicalize } from "../src/jcs.js";
 import { didKeyFromEd25519PublicKey } from "../src/didkey.js";
 import {
   ackApprovalResult,
+  ApprovalClientError,
   approvalRequestRequester,
   approvalSessionProof,
   buildShareInvitationApprovalSpec,
   buildShortLink,
   checkApprovalResultBinding,
+  collectApprovalResult,
   createApprovalRequest,
   discoverApprovalResult,
   fetchApprovalResult,
@@ -24,8 +26,12 @@ import {
   resolveApprovalRequest,
   resolveLink,
   signerFromSeed,
+  validateLinkHeader,
+  verifyHeader,
+  type ApprovalRequesterState,
   type Ed25519PrivateJwk,
   type LinkRecord,
+  type OpenKeyApprovalRequest,
   type OpenKeyApprovalRequestV1,
   type OpenKeyApprovalRequestV2,
 } from "../src/links/index.js";
@@ -59,6 +65,8 @@ const relay = generateRelayKey();
 const targetPublicJwk = jwkOf(targetSigner.did);
 const targetPrivateJwk = privateJwkOf(targetSeed, targetSigner.did);
 const requesterPublicJwk = jwkOf(requesterSigner.did);
+const requesterPrivateJwk = privateJwkOf(requesterSeed, requesterSigner.did);
+const thirdPrivateJwk = privateJwkOf(thirdSeed, thirdSigner.did);
 
 const v1Request: OpenKeyApprovalRequestV1 = {
   issuer: targetSigner.did,
@@ -109,6 +117,16 @@ async function asyncRefusalOf(fn: () => Promise<unknown>): Promise<LinkError> {
   throw new Error("expected a LinkError");
 }
 
+async function clientRefusalOf(fn: () => Promise<unknown>): Promise<ApprovalClientError> {
+  try {
+    await fn();
+  } catch (error) {
+    expect(error).toBeInstanceOf(ApprovalClientError);
+    return error as ApprovalClientError;
+  }
+  throw new Error("expected an ApprovalClientError");
+}
+
 function makeLinkTransport() {
   let stored: LinkRecord | undefined;
   let posts = 0;
@@ -139,6 +157,141 @@ function makeLinkTransport() {
     getPosts: () => posts,
     setStored: (record: LinkRecord) => { stored = record; },
   };
+}
+
+/**
+ * Independent verifier for an `OpenKey-Session-Proof` JWT using `node:crypto` against one explicit Ed25519 JWK.
+ */
+function verifySessionProof(
+  proof: string | undefined,
+  expectedJwk: { kty: "OKP"; crv: "Ed25519"; x: string },
+  expected: { action: "discover" | "fetch" | "ack"; requestId: string; bodyCid: string; resultRef: string; ackId: string; url: string },
+): boolean {
+  if (!proof) return false;
+  const parts = proof.split(".");
+  if (parts.length !== 3) return false;
+  const [headerPart, payloadPart, sigPart] = parts as [string, string, string];
+  try {
+    const parsedHeader = JSON.parse(Buffer.from(headerPart, "base64url").toString("utf8")) as Record<string, unknown>;
+    const claims = JSON.parse(Buffer.from(payloadPart, "base64url").toString("utf8")) as Record<string, unknown>;
+    const jkt = createHash("sha256").update(JSON.stringify({ crv: "Ed25519", kty: "OKP", x: expectedJwk.x })).digest("base64url");
+    const credHash = createHash("sha256")
+      .update(JSON.stringify([expected.action, expected.requestId, expected.bodyCid, expected.resultRef, expected.ackId]))
+      .digest("base64url");
+    return (
+      verify(
+        null,
+        Buffer.from(`${headerPart}.${payloadPart}`),
+        createPublicKey({ key: expectedJwk, format: "jwk" }),
+        Buffer.from(sigPart, "base64url"),
+      ) &&
+      parsedHeader.alg === "EdDSA" &&
+      parsedHeader.typ === "openkey-session-proof+jwt" &&
+      parsedHeader.kid === jkt &&
+      claims.client_id === "openkey-approval-result-v1" &&
+      claims.htm === "POST" &&
+      claims.htu === expected.url &&
+      claims.cred_hash === credHash
+    );
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Models OpenKey's two-phase approval lifecycle:
+ * - Pre-load `discover`: OpenKey has no stored record yet and verifies the proof against `header.issuer`.
+ * - Browser `/load` + approve: OpenKey resolves the link and stores `{ issuer, request, resultRef, ... }`.
+ * - Post-load `discover`: OpenKey verifies v2 against `record.issuer` (`header.issuer`) and v1 against `targetPublicJwk`.
+ * - `fetch` and `ack`: OpenKey always verifies against `record.request.targetPublicJwk`.
+ */
+function makePhasedOpenKey(options: {
+  readonly link: string;
+  readonly linkTransport: ReturnType<typeof makeLinkTransport>;
+  readonly requestId: string;
+  readonly resultRef: string;
+  readonly resultExpiresAt: string;
+  readonly loadAfterPreLoadPolls: number;
+}) {
+  let loaded: { issuer: string; bodyCid: string; request: OpenKeyApprovalRequest } | null = null;
+  let approved = false;
+  let preLoadPolls = 0;
+  const phases: Array<{ phase: string; verifiedBy: "header-issuer" | "target"; status: number }> = [];
+
+  const fetchFn = Object.assign(
+    async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+      const url = String(input);
+      const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      const headers = init?.headers as Record<string, string>;
+      const proof = headers["OpenKey-Session-Proof"];
+
+      if (url === `${OPENKEY_API_ORIGIN}/api/approval-requests/${options.requestId}/result`) {
+        if (!loaded) {
+          // Pre-load discover: OpenKey verifies only the signed header and checks proof against header.issuer.
+          const header = validateLinkHeader(body.header, { mode: "signed", audience: API_ORIGIN });
+          const issuerKeyBytes = linkIssuerPublicKey(header.issuer);
+          if (!issuerKeyBytes || !verifyHeader(header, body.signature) || header.type !== "openkey-approval-request" || header.bodyCid !== body.bodyCid) {
+            return Response.json({ code: "invalid_request" }, { status: 400 });
+          }
+          const headerIssuerJwk = { kty: "OKP" as const, crv: "Ed25519" as const, x: Buffer.from(issuerKeyBytes).toString("base64url") };
+          const ok = verifySessionProof(proof, headerIssuerJwk, {
+            action: "discover", requestId: options.requestId, bodyCid: header.bodyCid, resultRef: "", ackId: "", url,
+          });
+          phases.push({ phase: "discover-preload", verifiedBy: "header-issuer", status: ok ? 202 : 401 });
+          if (!ok) return Response.json({ code: "invalid_proof" }, { status: 401 });
+          preLoadPolls += 1;
+          if (preLoadPolls >= options.loadAfterPreLoadPolls) {
+            const resolved = await resolveApprovalRequest(options.link, {
+              trustedOrigins: [OPENKEY_ORIGIN], apiOrigin: API_ORIGIN, now: NOW, fetch: options.linkTransport.fetch,
+            });
+            loaded = { issuer: resolved.header.issuer, bodyCid: resolved.header.bodyCid, request: resolved.request };
+            approved = true;
+          }
+          return new Response(null, { status: 202 });
+        }
+
+        // Post-load discover: v2 verifies against header issuer (requester), v1 against targetPublicJwk.
+        const isV2 = isApprovalRequestV2(loaded.request);
+        const discoverKey = isV2 ? jwkOf(loaded.issuer) : loaded.request.targetPublicJwk;
+        const ok = verifySessionProof(proof, discoverKey, {
+          action: "discover", requestId: options.requestId, bodyCid: loaded.bodyCid, resultRef: "", ackId: "", url,
+        });
+        phases.push({ phase: "discover-postload", verifiedBy: isV2 ? "header-issuer" : "target", status: ok ? (approved ? 200 : 202) : 401 });
+        if (!ok) return Response.json({ code: "invalid_proof" }, { status: 401 });
+        if (!approved) return new Response(null, { status: 202 });
+        return Response.json({ resultRef: options.resultRef, expiresAt: options.resultExpiresAt });
+      }
+
+      if (url === `${OPENKEY_API_ORIGIN}/api/approval-results/${options.resultRef}/fetch`) {
+        if (!loaded || !approved) return Response.json({ code: "not_found" }, { status: 404 });
+        const ok = verifySessionProof(proof, loaded.request.targetPublicJwk, {
+          action: "fetch", requestId: options.requestId, bodyCid: loaded.bodyCid, resultRef: options.resultRef, ackId: "", url,
+        });
+        phases.push({ phase: "fetch", verifiedBy: "target", status: ok ? 200 : 401 });
+        if (!ok) return Response.json({ code: "invalid_proof" }, { status: 401 });
+        return Response.json({
+          requestId: options.requestId, bodyCid: loaded.bodyCid, resultRef: options.resultRef,
+          expiresAt: options.resultExpiresAt, relay: { version: 1, marker: "encrypted" },
+        });
+      }
+
+      if (url === `${OPENKEY_API_ORIGIN}/api/approval-results/${options.resultRef}/ack`) {
+        if (!loaded || !approved) return Response.json({ code: "not_found" }, { status: 404 });
+        const ackId = String(body.ackId ?? "");
+        const ok = verifySessionProof(proof, loaded.request.targetPublicJwk, {
+          action: "ack", requestId: options.requestId, bodyCid: loaded.bodyCid, resultRef: options.resultRef, ackId, url,
+        });
+        phases.push({ phase: "ack", verifiedBy: "target", status: ok ? 200 : 401 });
+        if (!ok) return Response.json({ code: "invalid_proof" }, { status: 401 });
+        return Response.json({ ackId, status: "acknowledged" });
+      }
+
+      throw new Error(`unexpected OpenKey URL: ${url}`);
+    },
+    { preconnect: () => {} },
+  ) as typeof globalThis.fetch;
+
+  return { fetch: fetchFn, phases };
 }
 
 describe("approval request v2 with distinct stable requester key", () => {
@@ -192,10 +345,10 @@ describe("approval request v2 with distinct stable requester key", () => {
     expect(invitationV2.permissions).toEqual([]);
   });
 
-  test("createApprovalRequest with requesterKey signs header with requester, emits v2, and round-trips through resolveApprovalRequest", async () => {
+  test("createApprovalRequest with explicit v2 body and requesterKey signs header with requester, returns normalized request, and round-trips", async () => {
     const transport = makeLinkTransport();
     const created = await createApprovalRequest({
-      request: v1Request,
+      request: v2Request,
       issuerKey: targetSigner,
       requesterKey: requesterSigner,
       apiOrigin: API_ORIGIN,
@@ -206,6 +359,7 @@ describe("approval request v2 with distinct stable requester key", () => {
 
     expect(created.record.header.issuer).toBe(requesterSigner.did);
     expect(created.record.header.issuer).not.toBe(targetSigner.did);
+    expect(created.request).toEqual(v2Request);
 
     const resolved = await resolveApprovalRequest(created.link, {
       trustedOrigins: [OPENKEY_ORIGIN],
@@ -228,16 +382,17 @@ describe("approval request v2 with distinct stable requester key", () => {
     expect(opened.value).toEqual(v2Request);
   });
 
-  test("createApprovalRequest accepts requesterKey without issuerKey and also accepts an explicit v2 request with issuerKey=requester", async () => {
+  test("createApprovalRequest accepts explicit v2 with requesterKey alone and with issuerKey=requester", async () => {
     const t1 = makeLinkTransport();
     const c1 = await createApprovalRequest({
-      request: v1Request,
+      request: v2Request,
       requesterKey: requesterSigner,
       apiOrigin: API_ORIGIN,
       openkeyOrigin: OPENKEY_ORIGIN,
       now: NOW,
       fetch: t1.fetch,
     });
+    expect(c1.request).toEqual(v2Request);
     const r1 = await resolveApprovalRequest(c1.link, {
       trustedOrigins: [OPENKEY_ORIGIN],
       apiOrigin: API_ORIGIN,
@@ -255,6 +410,7 @@ describe("approval request v2 with distinct stable requester key", () => {
       now: NOW,
       fetch: t2.fetch,
     });
+    expect(c2.request).toEqual(v2Request);
     const r2 = await resolveApprovalRequest(c2.link, {
       trustedOrigins: [OPENKEY_ORIGIN],
       apiOrigin: API_ORIGIN,
@@ -264,82 +420,67 @@ describe("approval request v2 with distinct stable requester key", () => {
     expect(r2.request).toEqual(v2Request);
   });
 
-  test("discover, fetch, and ack proofs verify against the target key (not the requester key) and result binding checks both DIDs", async () => {
-    const transport = makeLinkTransport();
+  test("phased OpenKey lifecycle for v2: discover signs with requesterSigningKey (pre-load and post-load), fetch and ack sign with target signingKey", async () => {
+    const linkTransport = makeLinkTransport();
     const created = await createApprovalRequest({
-      request: v1Request,
-      issuerKey: targetSigner,
+      request: v2Request,
       requesterKey: requesterSigner,
       apiOrigin: API_ORIGIN,
       openkeyOrigin: OPENKEY_ORIGIN,
       now: NOW,
-      fetch: transport.fetch,
-    });
-    const resolved = await resolveApprovalRequest(created.link, {
-      trustedOrigins: [OPENKEY_ORIGIN],
-      apiOrigin: API_ORIGIN,
-      now: NOW,
-      fetch: transport.fetch,
+      fetch: linkTransport.fetch,
     });
 
     const resultRef = "synthetic-result-reference-v2-1234";
     const resultExpiresAt = new Date(NOW + 600_000).toISOString();
-    const ackId = "ack-v2-target-proof-01";
-    const verifiedUnderTarget: string[] = [];
-    const verifiedUnderRequester: boolean[] = [];
+    const ackId = "ack-v2-phased-proof-01";
+    const openkey = makePhasedOpenKey({
+      link: created.link,
+      linkTransport,
+      requestId: created.id,
+      resultRef,
+      resultExpiresAt,
+      loadAfterPreLoadPolls: 1,
+    });
 
-    const verifyProofUnder = (proof: string, jwk: { kty: "OKP"; crv: "Ed25519"; x: string }, action: string, url: string, ref: string, ack: string) => {
-      const [h, p, s] = proof.split(".");
-      const parsedHeader = JSON.parse(Buffer.from(h!, "base64url").toString("utf8")) as Record<string, unknown>;
-      const claims = JSON.parse(Buffer.from(p!, "base64url").toString("utf8")) as Record<string, unknown>;
-      const jkt = createHash("sha256").update(JSON.stringify({ crv: "Ed25519", kty: "OKP", x: jwk.x })).digest("base64url");
-      const credHash = createHash("sha256")
-        .update(JSON.stringify([action, created.id, created.bodyCid, ref, ack]))
-        .digest("base64url");
-      return (
-        verify(null, Buffer.from(`${h}.${p}`), createPublicKey({ key: jwk, format: "jwk" }), Buffer.from(s!, "base64url")) &&
-        parsedHeader.kid === jkt &&
-        claims.htu === url &&
-        claims.cred_hash === credHash
-      );
-    };
-
-    const openkeyFetch = Object.assign(
-      async (input: RequestInfo | URL, init?: RequestInit) => {
-        const url = String(input);
-        const headers = init?.headers as Record<string, string>;
-        const proof = headers["OpenKey-Session-Proof"]!;
-        const action = url.endsWith("/result") ? "discover" : url.endsWith("/fetch") ? "fetch" : "ack";
-        const ref = action === "discover" ? "" : resultRef;
-        const ack = action === "ack" ? ackId : "";
-        if (verifyProofUnder(proof, resolved.request.targetPublicJwk, action, url, ref, ack)) {
-          verifiedUnderTarget.push(action);
-        }
-        verifiedUnderRequester.push(verifyProofUnder(proof, requesterPublicJwk, action, url, ref, ack));
-        if (action === "discover") return Response.json({ resultRef, expiresAt: resultExpiresAt });
-        if (action === "fetch") return Response.json({ requestId: created.id, bodyCid: created.bodyCid, resultRef, expiresAt: resultExpiresAt, relay: { version: 1 } });
-        return Response.json({ ackId, status: "acknowledged" });
-      },
-      { preconnect: () => {} },
-    ) as typeof globalThis.fetch;
-
-    // Requester state signs discover/fetch/ack with the TARGET key while record.header is signed by requester.
-    const state = {
+    const state: ApprovalRequesterState = {
       requestId: created.id,
       bodyCid: created.bodyCid,
       record: created.record,
       apiOrigin: OPENKEY_API_ORIGIN,
       signingKey: targetPrivateJwk,
+      requesterSigningKey: requesterPrivateJwk,
     };
 
-    expect(approvalSessionProof(state, "discover").split(".")).toHaveLength(3);
-    const discovered = await discoverApprovalResult(state, { fetch: openkeyFetch });
-    expect(discovered).toEqual({ status: "ready", resultRef, expiresAt: resultExpiresAt });
-    await fetchApprovalResult(state, { resultRef, expiresAt: resultExpiresAt }, { fetch: openkeyFetch });
-    expect(await ackApprovalResult(state, resultRef, ackId, { fetch: openkeyFetch })).toBe("acknowledged");
+    // Direct proof check: discover verifies under requester (not target); fetch/ack verify under target (not requester).
+    const discoverUrl = `${OPENKEY_API_ORIGIN}/api/approval-requests/${created.id}/result`;
+    const fetchUrl = `${OPENKEY_API_ORIGIN}/api/approval-results/${resultRef}/fetch`;
+    const ackUrl = `${OPENKEY_API_ORIGIN}/api/approval-results/${resultRef}/ack`;
+    const discoverProof = approvalSessionProof(state, "discover");
+    const fetchProof = approvalSessionProof(state, "fetch", resultRef);
+    const ackProof = approvalSessionProof(state, "ack", resultRef, ackId);
+    expect(verifySessionProof(discoverProof, requesterPublicJwk, { action: "discover", requestId: created.id, bodyCid: created.bodyCid, resultRef: "", ackId: "", url: discoverUrl })).toBe(true);
+    expect(verifySessionProof(discoverProof, targetPublicJwk, { action: "discover", requestId: created.id, bodyCid: created.bodyCid, resultRef: "", ackId: "", url: discoverUrl })).toBe(false);
+    expect(verifySessionProof(fetchProof, targetPublicJwk, { action: "fetch", requestId: created.id, bodyCid: created.bodyCid, resultRef, ackId: "", url: fetchUrl })).toBe(true);
+    expect(verifySessionProof(fetchProof, requesterPublicJwk, { action: "fetch", requestId: created.id, bodyCid: created.bodyCid, resultRef, ackId: "", url: fetchUrl })).toBe(false);
+    expect(verifySessionProof(ackProof, targetPublicJwk, { action: "ack", requestId: created.id, bodyCid: created.bodyCid, resultRef, ackId, url: ackUrl })).toBe(true);
+    expect(verifySessionProof(ackProof, requesterPublicJwk, { action: "ack", requestId: created.id, bodyCid: created.bodyCid, resultRef, ackId, url: ackUrl })).toBe(false);
 
-    expect(verifiedUnderTarget).toEqual(["discover", "fetch", "ack"]);
-    expect(verifiedUnderRequester).toEqual([false, false, false]);
+    // Full phased collection: pre-load discover (202) -> /load + approve -> post-load discover (200) -> fetch (200) -> ack (200).
+    const collected = await collectApprovalResult(state, { fetch: openkey.fetch, sleep: async () => {} });
+    expect(collected).toEqual({
+      status: "result",
+      resultRef,
+      expiresAt: resultExpiresAt,
+      relay: { version: 1, marker: "encrypted" },
+    });
+    expect(await ackApprovalResult(state, resultRef, ackId, { fetch: openkey.fetch })).toBe("acknowledged");
+    expect(openkey.phases).toEqual([
+      { phase: "discover-preload", verifiedBy: "header-issuer", status: 202 },
+      { phase: "discover-postload", verifiedBy: "header-issuer", status: 200 },
+      { phase: "fetch", verifiedBy: "target", status: 200 },
+      { phase: "ack", verifiedBy: "target", status: 200 },
+    ]);
 
     // Result binding binds requesterDid to requester and targetDid to target separately.
     const delegationExpiresAt = new Date(NOW + 3_600_000).toISOString();
@@ -353,7 +494,7 @@ describe("approval request v2 with distinct stable requester key", () => {
       delegationExpiresAt,
       delegation: { marker: "ok" },
     };
-    const bindingRequest = { issuer: resolved.request.issuer, targetDid: resolved.request.targetDid };
+    const bindingRequest = { issuer: created.request.issuer, targetDid: created.request.targetDid };
     expect(
       checkApprovalResultBinding(goodResult, { requestId: created.id, bodyCid: created.bodyCid, request: bindingRequest, now: NOW }),
     ).toEqual({ ownerDid: goodResult.ownerDid, delegationExpiresAt, delegation: { marker: "ok" } });
@@ -365,9 +506,60 @@ describe("approval request v2 with distinct stable requester key", () => {
       checkApprovalResultBinding({ ...goodResult, targetDid: requesterSigner.did }, { requestId: created.id, bodyCid: created.bodyCid, request: bindingRequest, now: NOW }),
     ).toThrow(/targetDid/);
   });
+
+  test("approval client enforces requesterSigningKey contract: required for v2, refused for v1, refused on mismatch without sending HTTP", async () => {
+    const v2Transport = makeLinkTransport();
+    const createdV2 = await createApprovalRequest({
+      request: v2Request,
+      requesterKey: requesterSigner,
+      apiOrigin: API_ORIGIN,
+      openkeyOrigin: OPENKEY_ORIGIN,
+      now: NOW,
+      fetch: v2Transport.fetch,
+    });
+    const v1Transport = makeLinkTransport();
+    const createdV1 = await createApprovalRequest({
+      request: v1Request,
+      issuerKey: targetSigner,
+      apiOrigin: API_ORIGIN,
+      openkeyOrigin: OPENKEY_ORIGIN,
+      now: NOW,
+      fetch: v1Transport.fetch,
+    });
+
+    let calls = 0;
+    const countingFetch = Object.assign(
+      async () => { calls += 1; return new Response(null, { status: 500 }); },
+      { preconnect: () => {} },
+    ) as typeof globalThis.fetch;
+
+    const found = { resultRef: "synthetic-result-reference-v2-1234", expiresAt: new Date(NOW + 600_000).toISOString() };
+
+    // v2 without requesterSigningKey is refused on discover, fetch, ack, and collect.
+    const v2MissingKey: ApprovalRequesterState = {
+      requestId: createdV2.id, bodyCid: createdV2.bodyCid, record: createdV2.record, apiOrigin: OPENKEY_API_ORIGIN, signingKey: targetPrivateJwk,
+    };
+    expect((await clientRefusalOf(() => discoverApprovalResult(v2MissingKey, { fetch: countingFetch }))).code).toBe("request_binding");
+    expect((await clientRefusalOf(() => fetchApprovalResult(v2MissingKey, found, { fetch: countingFetch }))).code).toBe("request_binding");
+    expect((await clientRefusalOf(() => ackApprovalResult(v2MissingKey, found.resultRef, "ack-1", { fetch: countingFetch }))).code).toBe("request_binding");
+    expect((await clientRefusalOf(() => collectApprovalResult(v2MissingKey, { fetch: countingFetch, sleep: async () => {} }))).code).toBe("request_binding");
+
+    // v2 with wrong requesterSigningKey (target key or third key) is refused.
+    expect((await clientRefusalOf(() => discoverApprovalResult({ ...v2MissingKey, requesterSigningKey: targetPrivateJwk }, { fetch: countingFetch }))).code).toBe("request_binding");
+    expect((await clientRefusalOf(() => discoverApprovalResult({ ...v2MissingKey, requesterSigningKey: thirdPrivateJwk }, { fetch: countingFetch }))).code).toBe("request_binding");
+
+    // v1 with requesterSigningKey (same key or different key) is refused.
+    const v1Base: ApprovalRequesterState = {
+      requestId: createdV1.id, bodyCid: createdV1.bodyCid, record: createdV1.record, apiOrigin: OPENKEY_API_ORIGIN, signingKey: targetPrivateJwk,
+    };
+    expect((await clientRefusalOf(() => discoverApprovalResult({ ...v1Base, requesterSigningKey: targetPrivateJwk }, { fetch: countingFetch }))).code).toBe("request_binding");
+    expect((await clientRefusalOf(() => discoverApprovalResult({ ...v1Base, requesterSigningKey: requesterPrivateJwk }, { fetch: countingFetch }))).code).toBe("request_binding");
+
+    expect(calls).toBe(0);
+  });
 });
 
-describe("refusals: binding mismatches, unknown versions, and malformed requester DIDs", () => {
+describe("refusals: binding mismatches, unknown versions, malformed requester DIDs, and createApprovalRequest guards", () => {
   test("refuses v2 when header issuer is the target key or a third key", async () => {
     expect(refusalOf(() => parseApprovalRequest(v2Request, { issuer: targetSigner.did })).code).toBe("issuer_binding_mismatch");
     expect(refusalOf(() => parseApprovalRequest(v2Request, { issuer: thirdSigner.did })).code).toBe("issuer_binding_mismatch");
@@ -407,7 +599,7 @@ describe("refusals: binding mismatches, unknown versions, and malformed requeste
     }
   });
 
-  test("refuses v2 when requester === targetDid (same-key requests must use v1)", async () => {
+  test("refuses v2 when requester === targetDid (same-key requests must use v1, no fallback)", async () => {
     const sameKeyV2 = {
       ...v2Request,
       issuer: targetSigner.did,
@@ -421,8 +613,7 @@ describe("refusals: binding mismatches, unknown versions, and malformed requeste
     const transport = makeLinkTransport();
     const err = await asyncRefusalOf(() =>
       createApprovalRequest({
-        request: v1Request,
-        issuerKey: targetSigner,
+        request: sameKeyV2,
         requesterKey: targetSigner,
         apiOrigin: API_ORIGIN,
         openkeyOrigin: OPENKEY_ORIGIN,
@@ -446,20 +637,25 @@ describe("refusals: binding mismatches, unknown versions, and malformed requeste
     ).toBe("body_validation_failed");
   });
 
-  test("refuses unknown request versions and v2 without requester", () => {
-    for (const version of [0, 3, -1, 1.5, "1", "2", null, undefined]) {
+  test("refuses unknown or inherited request versions and v2 without requester", () => {
+    for (const version of [0, 3, -1, 1.5, "1", "2", null, undefined, true, [2], {}]) {
       expect(refusalOf(() => parseApprovalRequest({ ...v1Request, requestVersion: version })).code).toBe("body_validation_failed");
       expect(refusalOf(() => parseApprovalRequest({ ...v2Request, requestVersion: version })).code).toBe("body_validation_failed");
     }
+    const { requestVersion: _ver, ...v2NoVersion } = v2Request;
+    const inheritedVersion = Object.assign(Object.create({ requestVersion: 2 }), v2NoVersion);
+    expect(refusalOf(() => parseApprovalRequest(inheritedVersion, { issuer: requesterSigner.did })).code).toBe("body_validation_failed");
+
     const { requester: _omitted, ...v2WithoutRequester } = v2Request;
     expect(refusalOf(() => parseApprovalRequest(v2WithoutRequester, { issuer: requesterSigner.did })).code).toBe("body_validation_failed");
     expect(refusalOf(() => parseApprovalRequest({ ...v2Request, extra: true }, { issuer: requesterSigner.did })).code).toBe("body_validation_failed");
   });
 
   test("refuses malformed requester DIDs (only canonical prime-order Ed25519 did:key is accepted)", () => {
-    // Non-Ed25519 multicodec prefixes: P-256 (0x80 0x24) and X25519 (0xec 0x01).
+    // Non-Ed25519 multicodec prefixes: P-256 (0x80 0x24), X25519 (0xec 0x01), secp256k1.
     const p256Did = `did:key:${base58btc.encode(Uint8Array.of(0x80, 0x24, ...new Uint8Array(33).fill(2)))}`;
     const x25519Did = `did:key:${base58btc.encode(Uint8Array.of(0xec, 0x01, ...new Uint8Array(32).fill(3)))}`;
+    const secp256k1Did = "did:key:zQ3shokFTS3brHcDQrn82RUDfCZESWL1ZdCEJwekUDPQiYBme";
     // Wrong key length (31 bytes and 33 bytes under Ed25519 multicodec 0xed 0x01).
     const shortEd25519Did = `did:key:${base58btc.encode(Uint8Array.of(0xed, 0x01, ...new Uint8Array(31).fill(4)))}`;
     const longEd25519Did = `did:key:${base58btc.encode(Uint8Array.of(0xed, 0x01, ...new Uint8Array(33).fill(4)))}`;
@@ -476,10 +672,12 @@ describe("refusals: binding mismatches, unknown versions, and malformed requeste
       "did:web:example.com",
       "service:openkey",
       "did:key:z0invalidbase58",
+      `${requesterSigner.did}#${requesterSigner.did.slice(8)}`,
       ` ${requesterSigner.did}`,
       `${requesterSigner.did} `,
       p256Did,
       x25519Did,
+      secp256k1Did,
       shortEd25519Did,
       longEd25519Did,
       weakDid,
@@ -494,13 +692,42 @@ describe("refusals: binding mismatches, unknown versions, and malformed requeste
     }
   });
 
-  test("createApprovalRequest refuses mismatched signers before sending any HTTP request", async () => {
+  test("createApprovalRequest refuses v1 bodies with requesterKey and refuses mismatched signers before sending HTTP", async () => {
     const transport = makeLinkTransport();
-    // Third-party issuerKey alongside requesterKey.
+
+    // v1 body with requesterKey must be refused (no silent rewrite to v2).
     expect(
       (await asyncRefusalOf(() =>
         createApprovalRequest({
           request: v1Request,
+          issuerKey: targetSigner,
+          requesterKey: requesterSigner,
+          apiOrigin: API_ORIGIN,
+          openkeyOrigin: OPENKEY_ORIGIN,
+          now: NOW,
+          fetch: transport.fetch,
+        }),
+      )).code,
+    ).toBe("body_validation_failed");
+
+    expect(
+      (await asyncRefusalOf(() =>
+        createApprovalRequest({
+          request: v1Request,
+          requesterKey: requesterSigner,
+          apiOrigin: API_ORIGIN,
+          openkeyOrigin: OPENKEY_ORIGIN,
+          now: NOW,
+          fetch: transport.fetch,
+        }),
+      )).code,
+    ).toBe("body_validation_failed");
+
+    // Third-party issuerKey alongside requesterKey on a v2 request.
+    expect(
+      (await asyncRefusalOf(() =>
+        createApprovalRequest({
+          request: v2Request,
           issuerKey: thirdSigner,
           requesterKey: requesterSigner,
           apiOrigin: API_ORIGIN,
@@ -539,40 +766,12 @@ describe("refusals: binding mismatches, unknown versions, and malformed requeste
       )).code,
     ).toBe("issuer_binding_mismatch");
 
-    // v1 request carrying a spurious requester field with requesterKey.
-    expect(
-      (await asyncRefusalOf(() =>
-        createApprovalRequest({
-          request: { ...v1Request, requester: thirdSigner.did } as OpenKeyApprovalRequestV1,
-          requesterKey: requesterSigner,
-          apiOrigin: API_ORIGIN,
-          openkeyOrigin: OPENKEY_ORIGIN,
-          now: NOW,
-          fetch: transport.fetch,
-        }),
-      )).code,
-    ).toBe("body_validation_failed");
-
-    // v1 request naming a third-party issuer with requesterKey.
-    expect(
-      (await asyncRefusalOf(() =>
-        createApprovalRequest({
-          request: { ...v1Request, issuer: thirdSigner.did },
-          requesterKey: requesterSigner,
-          apiOrigin: API_ORIGIN,
-          openkeyOrigin: OPENKEY_ORIGIN,
-          now: NOW,
-          fetch: transport.fetch,
-        }),
-      )).code,
-    ).toBe("issuer_binding_mismatch");
-
     expect(transport.getPosts()).toBe(0);
   });
 });
 
 describe("approval request v1 remains unchanged", () => {
-  test("without requesterKey, createApprovalRequest emits v1 byte-for-byte with no requester field", async () => {
+  test("without requesterKey, createApprovalRequest emits v1 byte-for-byte and completes the full phased OpenKey lifecycle with one key", async () => {
     const transport = makeLinkTransport();
     const created = await createApprovalRequest({
       request: v1Request,
@@ -583,6 +782,7 @@ describe("approval request v1 remains unchanged", () => {
       fetch: transport.fetch,
     });
     expect(created.record.header.issuer).toBe(targetSigner.did);
+    expect(created.request).toEqual(v1Request);
 
     const parsedLink = parseLink(created.link, { trustedOrigins: [OPENKEY_ORIGIN] });
     expect(parsedLink.form).toBe("short");
@@ -599,6 +799,34 @@ describe("approval request v1 remains unchanged", () => {
     expect(isApprovalRequestV2(resolved.request)).toBe(false);
     expect(approvalRequestRequester(resolved.request)).toBe(targetSigner.did);
     expect(resolved.request).toEqual(v1Request);
+
+    // v1 works through the phased OpenKey mock with only signingKey (no requesterSigningKey).
+    const resultRef = "synthetic-result-reference-v1-1234";
+    const resultExpiresAt = new Date(NOW + 600_000).toISOString();
+    const openkey = makePhasedOpenKey({
+      link: created.link,
+      linkTransport: transport,
+      requestId: created.id,
+      resultRef,
+      resultExpiresAt,
+      loadAfterPreLoadPolls: 1,
+    });
+    const state: ApprovalRequesterState = {
+      requestId: created.id,
+      bodyCid: created.bodyCid,
+      record: created.record,
+      apiOrigin: OPENKEY_API_ORIGIN,
+      signingKey: targetPrivateJwk,
+    };
+    const collected = await collectApprovalResult(state, { fetch: openkey.fetch, sleep: async () => {} });
+    expect(collected.status).toBe("result");
+    expect(await ackApprovalResult(state, resultRef, "ack-v1-01", { fetch: openkey.fetch })).toBe("acknowledged");
+    expect(openkey.phases).toEqual([
+      { phase: "discover-preload", verifiedBy: "header-issuer", status: 202 },
+      { phase: "discover-postload", verifiedBy: "target", status: 200 },
+      { phase: "fetch", verifiedBy: "target", status: 200 },
+      { phase: "ack", verifiedBy: "target", status: 200 },
+    ]);
   });
 
   test("v1 does not relax issuer === targetDid and rejects a requester field", () => {

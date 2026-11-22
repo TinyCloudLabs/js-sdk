@@ -81,6 +81,7 @@ export type OpenKeyApprovalRequest = ApprovalRequestCommon & {
   requestVersion: 1 | 2;
   requester?: string;
 };
+/** @deprecated includes version-2 requests; use OpenKeyApprovalRequest, and check requestVersion before assuming issuer === targetDid */
 export type OpenKeyApprovalRequestV1 = OpenKeyApprovalRequest;
 export type ShareInvitationApprovalContext = z.infer<typeof invitationContext>;
 
@@ -112,7 +113,8 @@ export function buildShareInvitationApprovalSpec(input: {
  * - Both versions enforce `did:key(targetPublicJwk) === targetDid`.
  */
 export function parseApprovalRequest(value: unknown, options: { readonly issuer?: string } = {}): OpenKeyApprovalRequest {
-  const version = typeof value === "object" && value !== null && !Array.isArray(value)
+  const version = typeof value === "object" && value !== null && !Array.isArray(value) &&
+    Object.prototype.hasOwnProperty.call(value, "requestVersion")
     ? (value as Record<string, unknown>).requestVersion
     : undefined;
   const parsed = version === 1

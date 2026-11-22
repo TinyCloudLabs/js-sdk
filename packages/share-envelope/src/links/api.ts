@@ -232,12 +232,14 @@ export type CreateApprovalRequestInput = LinkTransportOptions & {
 );
 
 /** Store one immutable request. The Worker sees only its signed header and sealed bytes. */
-export async function createApprovalRequest(input: CreateApprovalRequestInput): Promise<CreatedLink & { readonly record: LinkRecord }> {
+export async function createApprovalRequest(input: CreateApprovalRequestInput): Promise<CreatedLink & { readonly record: LinkRecord; readonly request: OpenKeyApprovalRequest }> {
   const linkSigner = input.requesterKey ?? input.issuerKey;
   if (!linkSigner) throw new LinkError("invalid_argument", "a signer is required");
-  let candidate: unknown = input.request;
   if (input.requesterKey !== undefined) {
-    if (!isPlainObject(input.request)) throw new LinkError("body_validation_failed", "invalid approval request");
+    if (!isPlainObject(input.request) || input.request.requestVersion !== 2) {
+      throw new LinkError("body_validation_failed", "requesterKey requires an explicit requestVersion 2 approval request");
+    }
+    // When both signers are passed, reject an unrelated third-party issuerKey rather than silently ignoring it.
     if (
       input.issuerKey !== undefined &&
       input.issuerKey.did !== input.requesterKey.did &&
@@ -245,20 +247,8 @@ export async function createApprovalRequest(input: CreateApprovalRequestInput): 
     ) {
       throw new LinkError("issuer_binding_mismatch");
     }
-    if (input.request.requestVersion === 1) {
-      if ("requester" in input.request) throw new LinkError("body_validation_failed", "invalid approval request");
-      if (input.request.issuer !== input.request.targetDid && input.request.issuer !== input.requesterKey.did) {
-        throw new LinkError("issuer_binding_mismatch");
-      }
-      candidate = {
-        ...input.request,
-        issuer: input.requesterKey.did,
-        requestVersion: 2 as const,
-        requester: input.requesterKey.did,
-      };
-    }
   }
-  const request = parseApprovalRequest(candidate, { issuer: linkSigner.did });
+  const request = parseApprovalRequest(input.request, { issuer: linkSigner.did });
   const now = toEpochMs(input.now);
   const prepared = await prepareLinkRecord({
     type: "openkey-approval-request", issuerKey: linkSigner, apiOrigin: input.apiOrigin,
@@ -271,7 +261,7 @@ export async function createApprovalRequest(input: CreateApprovalRequestInput): 
   const created = createdSchema.safeParse(await readJson(response));
   if (!created.success || !LINK_ID_PATTERN.test(created.data.id) || created.data.expiresAt !== prepared.record.header.expiresAt) throw new LinkError("invalid_response");
   return {
-    id: created.data.id, expiresAt: prepared.record.header.expiresAt, bodyCid: prepared.bodyCid, record: prepared.record,
+    id: created.data.id, expiresAt: prepared.record.header.expiresAt, bodyCid: prepared.bodyCid, record: prepared.record, request,
     link: buildShortLink({ origin: input.openkeyOrigin, type: "openkey-approval-request", id: created.data.id, key: prepared.key, bodyCid: prepared.bodyCid }),
   };
 }
