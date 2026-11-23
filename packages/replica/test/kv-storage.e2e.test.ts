@@ -14,7 +14,7 @@
  */
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
-import { TinyCloudNode } from "@tinycloud/node-sdk";
+import { TinyCloudNode, ownerFullAccess } from "@tinycloud/node-sdk";
 import { spawn, type ChildProcess } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import { existsSync } from "node:fs";
@@ -755,7 +755,7 @@ describe.skipIf(!RUN || NODE_BIN === undefined)("kv-storage against a real node 
     child.stderr!.on("data", onData);
     child.once("exit", (code) => launched.reject(new Error(`node exited (${code}) before launching:\n${output.slice(-2000)}`)));
     await launched.promise;
-    nodeOwner = new TinyCloudNode({ privateKey: `0x${randomBytes(32).toString("hex")}`, host, tinycloudRegistryUrl: registry.url.origin, autoCreateSpace: true });
+    nodeOwner = new TinyCloudNode({ privateKey: `0x${randomBytes(32).toString("hex")}`, host, tinycloudRegistryUrl: registry.url.origin, autoCreateSpace: true, ...ownerFullAccess() });
     await nodeOwner.signIn();
     space = nodeOwner.session!.spaceId;
     const put = await nodeOwner.kv.put("notes/a", new TextEncoder().encode("from the node"));

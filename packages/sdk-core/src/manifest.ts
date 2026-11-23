@@ -126,7 +126,7 @@ export interface Manifest {
   icon?: string;
   /** App version string. Optional. */
   appVersion?: string;
-  /** Default expiry for permissions. ms-format ("30d", "2h", "1y"). Default "30d". */
+  /** Default expiry for permissions. ms-format ("7d", "2h", "1y"). Default "7d". */
   expiry?: string;
   /** Space name or full space URI. Optional, defaults to "applications". */
   space?: string;
@@ -187,7 +187,7 @@ export interface ResolvedDelegate {
   did: string;
   /** Informational display name. Optional. */
   name?: string;
-  /** Expiry in milliseconds (per-delegation > manifest default > 30 days). */
+  /** Expiry in milliseconds (per-delegation > manifest default > 7 days). */
   expiryMs: number;
   /** Fully resolved permissions. */
   permissions: ResourceCapability[];
@@ -256,20 +256,85 @@ export class ManifestValidationError extends Error {
   }
 }
 
+/**
+ * The token an app writes in `permissions[].path` of a manifest it publishes at
+ * `/.well-known/openkey-manifest.json` where the path carries the signed-in
+ * owner, for example `urn:tinycloud:encryption:{owner}:default`. The digest OpenKey
+ * checks covers the manifest with the token in place; the SDK replaces it with the
+ * owner's `did:pkh:eip155:<chain>:<EIP-55 address>` only when it composes the request.
+ */
+export const MANIFEST_OWNER_PLACEHOLDER = "{owner}";
+
+/** Where the token sits when it is in a place that is not a path (a string value or an object key), else undefined. */
+function ownerTokenPlace(value: unknown): string | undefined {
+  if (typeof value === "string") {
+    return value.includes(MANIFEST_OWNER_PLACEHOLDER) ? "a string value" : undefined;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const found = ownerTokenPlace(item);
+      if (found !== undefined) return found;
+    }
+    return undefined;
+  }
+  if (value !== null && typeof value === "object") {
+    for (const [key, item] of Object.entries(value)) {
+      if (key.includes(MANIFEST_OWNER_PLACEHOLDER)) return "an object key";
+      const found = ownerTokenPlace(item);
+      if (found !== undefined) return found;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * True when the manifest holds {@link MANIFEST_OWNER_PLACEHOLDER} anywhere: in a path, a
+ * value or an object key. {@link resolveManifestOwner} then decides whether the place is allowed.
+ */
+export function manifestUsesOwnerPlaceholder(manifest: Manifest): boolean {
+  return JSON.stringify(manifest).includes(MANIFEST_OWNER_PLACEHOLDER);
+}
+
+/**
+ * The manifest with {@link MANIFEST_OWNER_PLACEHOLDER} replaced by `ownerDid` in every
+ * `permissions[].path`. A manifest without the token comes back as the same object.
+ * The token anywhere else (another value, an object key, an additional delegate's
+ * permissions) throws: OpenKey refuses such a manifest too, so the sign-in fails here, early.
+ */
+export function resolveManifestOwner(manifest: Manifest, ownerDid: string): Manifest {
+  const { permissions, ...rest } = manifest;
+  const elsewhere = ownerTokenPlace(rest);
+  if (elsewhere !== undefined) {
+    throw new ManifestValidationError(`${MANIFEST_OWNER_PLACEHOLDER} is only allowed in permissions[].path, found in ${elsewhere}`);
+  }
+  if (permissions === undefined) return manifest;
+  for (const entry of permissions) {
+    const found = ownerTokenPlace({ ...entry, path: "" });
+    if (found !== undefined) {
+      throw new ManifestValidationError(`${MANIFEST_OWNER_PLACEHOLDER} is only allowed in permissions[].path, found in ${found}`);
+    }
+  }
+  if (!permissions.some((entry) => entry.path.includes(MANIFEST_OWNER_PLACEHOLDER))) return manifest;
+  return {
+    ...manifest,
+    permissions: permissions.map((entry) => ({ ...entry, path: entry.path.split(MANIFEST_OWNER_PLACEHOLDER).join(ownerDid) })),
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
 
 /**
  * Default expiry when neither the manifest, delegation, nor permission
- * specifies one. APP tier — see `expiry.ts`. Spec: 30 days.
+ * specifies one. APP tier — see `expiry.ts`. 7 days.
  *
  * Kept as an ms-format string because the manifest schema stores expiry
  * as a string and the parser is shared between this default and
  * caller-provided values; converting `EXPIRY.APP_MS` back to a string
- * here would duplicate that same `30d` literal in another form.
+ * here would duplicate that same `7d` literal in another form.
  */
-export const DEFAULT_EXPIRY = "30d";
+export const DEFAULT_EXPIRY = "7d";
 
 /**
  * Default `defaults` value when the manifest omits it. Spec: standard tier.

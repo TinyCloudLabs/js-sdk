@@ -2,10 +2,12 @@ import { z } from "zod";
 import type { PermissionEntry } from "@tinycloud/sdk-core";
 import type { SecretReadResult } from "@tinycloud/node-sdk";
 import { secretKeyPath } from "@tinycloud/sdk-services";
+import { formatKeyResource, parseEncryptionResource } from "@tinycloud/sdk-services/encryption/resource";
 
 import { evaluateOperationAuthority } from "../authority.js";
 import { CLI_NAME } from "../cli-name.js";
 import {
+  type CapabilityAlternative,
   type OperationContext,
   type CapabilityRequirement,
   type OperationDefinition,
@@ -80,6 +82,8 @@ export const secretsGetOperationDefinition: OperationDefinition<SecretsGetInput,
   exposure: SECRETS_GET_EXPOSURE,
   sensitivity: SECRETS_GET_SENSITIVITY,
   authority: planSecretGet,
+  authorityAlternatives: planSecretGetAuthorityAlternatives,
+  runtimeHints: planSecretGetRuntimeHints,
   execute: executeSecretGet,
 };
 
@@ -87,16 +91,36 @@ export const secretsGetOperationDefinitions: readonly [typeof secretsGetOperatio
   secretsGetOperationDefinition,
 ];
 
-async function planSecretGet(
+function resolveSecretPlanTargets(
   context: RuntimeOperationContext,
   input: SecretsGetInput,
-): Promise<readonly CapabilityRequirement[]> {
+): { readonly reference: SecretReference; readonly networkId: string } {
   const reference = resolveSecretReferenceForOperation(
     input,
     context.runtime.node,
     context.summary.space,
   );
-  const decrypt = planSecretDecrypt(context, input, reference);
+  let networkSpace = reference.space;
+  if (input.space === undefined) {
+    try {
+      networkSpace = operationSpaceResolver(
+        context.runtime.node,
+        context.summary.space,
+      )("secrets");
+    } catch {
+      // Definition-focused callers may omit authenticated identity metadata;
+      // the runtime path supplies the owner space before production planning.
+    }
+  }
+  const networkId = resolveEncryptionNetworkId(context.runtime.node, networkSpace);
+  return { reference, networkId };
+}
+
+async function planSecretGet(
+  context: RuntimeOperationContext,
+  input: SecretsGetInput,
+): Promise<readonly CapabilityRequirement[]> {
+  const { reference, networkId } = resolveSecretPlanTargets(context, input);
 
   return [
     {
@@ -105,23 +129,74 @@ async function planSecretGet(
       path: reference.permissionPath,
       actions: ["tinycloud.kv/get"],
     },
-    decryptRequirement(decrypt.path),
+    {
+      service: "tinycloud.encryption",
+      path: networkId,
+      actions: ["tinycloud.encryption/decrypt"],
+    },
   ];
+}
+
+function exactSecretKeyDecryptCapability(
+  reference: SecretReference,
+  networkId: string,
+): CapabilityRequirement | undefined {
+  try {
+    const keyPath = secretKeyPath(reference.name, reference.scope);
+    const parsed = parseEncryptionResource(networkId);
+    if (parsed.kind !== "network") return undefined;
+    return {
+      service: "tinycloud.encryption",
+      path: formatKeyResource(parsed.networkId, keyPath),
+      actions: ["tinycloud.encryption/decrypt"],
+    };
+  } catch {
+    // Names or scopes past the key-path limit, reserved names, or non-network ids have no named key.
+    return undefined;
+  }
+}
+
+async function planSecretGetAuthorityAlternatives(
+  context: RuntimeOperationContext,
+  input: SecretsGetInput,
+): Promise<readonly CapabilityAlternative[]> {
+  const { reference, networkId } = resolveSecretPlanTargets(context, input);
+  const exactKey = exactSecretKeyDecryptCapability(reference, networkId);
+  if (exactKey === undefined) return [];
+  return [
+    {
+      replaces: {
+        service: "tinycloud.encryption",
+        path: networkId,
+        actions: ["tinycloud.encryption/decrypt"],
+      },
+      satisfiedBy: exactKey,
+    },
+  ];
+}
+
+async function planSecretGetRuntimeHints(
+  context: RuntimeOperationContext,
+  input: SecretsGetInput,
+): Promise<readonly CapabilityRequirement[]> {
+  const { reference, networkId } = resolveSecretPlanTargets(context, input);
+  const exactKey = exactSecretKeyDecryptCapability(reference, networkId);
+  return exactKey === undefined ? [] : [exactKey];
 }
 
 interface SecretDecryptPlan {
   /** The owner's encryption network. */
   readonly network: string;
-  /** The secret's own key; absent for a name or scope over 64 bytes, or a non-default network. */
+  /** The secret's own key; absent for a name or scope with no key, or a non-default network. */
   readonly key?: string;
-  /** The one this read is planned on: `key`, or `network` for a secret without one or a network-only session. */
+  /** What this session reads with: `key`, or `network` for a secret without one or a session that holds only the network. */
   readonly path: string;
 }
 
 /**
- * The decrypt a secret read needs (TC-3284): the secret's own key, so an owner is asked only for that. A session that
- * already decrypts with the whole network but not this key (a grant from before per-secret keys) reads with the
- * network, so secrets still in the older format stay readable to it.
+ * Which decrypt this read runs on (TC-3284): the secret's own key, or, for a session that decrypts with the whole
+ * network but not this key (a grant from before per-secret keys), the network, so secrets still in the older format
+ * stay readable to it. Used to word the two per-secret-key outcomes.
  */
 function planSecretDecrypt(
   context: OperationContext,
@@ -139,23 +214,16 @@ function planSecretDecrypt(
     }
   }
   const network = resolveEncryptionNetworkId(node, networkSpace);
-  // `resolveSecretReference` refuses a name or scope over the cap, so every secret on the default network has a key.
-  const key = network.endsWith(":default")
-    ? `${network}/${secretKeyPath(reference.name, reference.scope)}`
-    : undefined;
+  const key = network.endsWith(":default") ? exactSecretKeyDecryptCapability(reference, network)?.path : undefined;
   const granted = (context.runtime?.granted ?? []) as unknown as PermissionEntry[];
   const holds = (path: string) =>
-    evaluateOperationAuthority(granted, [decryptRequirement(path) as unknown as PermissionEntry]).satisfied;
+    evaluateOperationAuthority(granted, [{
+      service: "tinycloud.encryption",
+      path,
+      actions: ["tinycloud.encryption/decrypt"],
+    }]).satisfied;
   const path = key === undefined || (!holds(key) && holds(network)) ? network : key;
   return { network, ...(key === undefined ? {} : { key }), path };
-}
-
-function decryptRequirement(path: string): CapabilityRequirement {
-  return {
-    service: "tinycloud.encryption",
-    path,
-    actions: ["tinycloud.encryption/decrypt"],
-  };
 }
 
 async function executeSecretGet(

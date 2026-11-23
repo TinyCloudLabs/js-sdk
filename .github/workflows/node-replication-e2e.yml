@@ -36,8 +36,8 @@ permissions:
   packages: read
 
 env:
-  # tinycloud-node v1.20.6 pinned by digest, with the TC-899 fix (see replica-e2e.yml).
-  TINYCLOUD_NODE_IMAGE: ghcr.io/tinycloudlabs/tinycloud-node:1.20.6@sha256:41667d3d133aaa12290a2f3a744afacd838988327552d159c60f04466e66f86f
+  # tinycloud-node 1.26.21, the first release with per-secret keys (encryption-named-keys-v1), pinned by digest (TC-3801).
+  TINYCLOUD_NODE_IMAGE: ghcr.io/tinycloudlabs/tinycloud-node:1.26.21@sha256:fc9fd4efa884be75d05fe61dd55ffa6559a48df824647ce8c10739c7553afc26
   # tinycloud-node v1.20.6, the last release without per-secret keys (encryption-named-keys-v1), pinned by digest.
   # Only the legacy-node-e2e job runs it: secrets against a node that cannot parent a grant on a secret's own key (TC-3801).
   TINYCLOUD_LEGACY_NODE_IMAGE: ghcr.io/tinycloudlabs/tinycloud-node:1.20.6@sha256:41667d3d133aaa12290a2f3a744afacd838988327552d159c60f04466e66f86f
@@ -125,7 +125,7 @@ jobs:
       - name: Run node-sdk replication e2e
         env:
           TC_REPLICATION_E2E_NODE_BIN: ${{ runner.temp }}/tinycloud
-        run: bash "$GITHUB_WORKSPACE/.github/scripts/run-private-tests.sh" bun test --max-concurrency=1 packages/node-sdk/src/replication/replication.e2e.test.ts packages/node-sdk/src/TinyCloudNode.revokeDelegation.e2e.test.ts packages/node-sdk/src/TinyCloudNode.encryptionNetwork.e2e.test.ts
+        run: bash "$GITHUB_WORKSPACE/.github/scripts/run-private-tests.sh" bun test --max-concurrency=1 packages/node-sdk/src/replication/replication.e2e.test.ts packages/node-sdk/src/TinyCloudNode.revokeDelegation.e2e.test.ts packages/node-sdk/src/TinyCloudNode.encryptionNetwork.e2e.test.ts packages/node-sdk/src/TinyCloudNode.manifestBoundsFirstSignIn.e2e.test.ts packages/node-sdk/src/TinyCloudNode.genericFolderPort.e2e.test.ts
 
       - name: Run node-sdk terminal delegation e2e
         env:
@@ -301,6 +301,8 @@ jobs:
 
       - name: tc secrets against the 1.20.6 node
         timeout-minutes: 10
+        env:
+          TC_SECRETS_NAMED_KEY_WRITES: "1"
         run: .github/scripts/run-cli-node-suite.sh "$RUNNER_TEMP/tinycloud-legacy" tests/cli/secrets/secrets-legacy-node.e2e.test.ts
 
       - name: Stop any tests/cli node still running

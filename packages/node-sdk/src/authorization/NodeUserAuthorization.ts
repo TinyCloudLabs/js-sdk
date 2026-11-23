@@ -27,6 +27,13 @@ import {
   DEFAULT_MANIFEST_SPACE,
   ENCRYPTION_PERMISSION_SERVICE,
   composeManifestRequest,
+  resolveManifestOwner,
+  manifestUsesOwnerPlaceholder,
+  MANIFEST_OWNER_PLACEHOLDER,
+  GENERIC_APP_ID_WITHOUT_HOST,
+  genericAppManifest,
+  genericAppManifestWarning,
+  warnOnceWithoutAppHost,
   principalDidEquals,
   resourceCapabilitiesToAbilitiesMap,
   resourceCapabilitiesToSpaceAbilitiesMap,
@@ -67,10 +74,6 @@ import {
   ACCOUNT_REGISTRY_SPACE,
   ACCOUNT_MANIFEST_PERMISSIONS,
   KV,
-  SQL,
-  DUCKDB,
-  CAPABILITIES,
-  HOOKS,
   ENCRYPTION,
   publicJwk,
   type CapabilityPresentationEnvelopeV1,
@@ -102,6 +105,7 @@ import {
 } from "./strategies";
 import { MemorySessionStorage } from "../storage/MemorySessionStorage";
 import { clearPersistedSessionIfOwn } from "../storage/clearPersistedSessionIfOwn";
+import { SessionHosts } from "../sessionRetire";
 import type { OpenKeyBridgeInput, NodeUserAuthorizationAuthorizeFn, OpenKeySignInIdentity } from "./openKeyBridge";
 
 export type OpenKeyAuthorizeInput = OpenKeyBridgeInput;
@@ -282,9 +286,14 @@ export interface NodeUserAuthorizationConfig {
   statement?: string;
   /** Space prefix for new sessions */
   spacePrefix?: string;
-  /** Default actions for sessions */
+  /**
+   * Plain-session actions on the primary space, for owner tools that need
+   * every action there: pass `ownerFullAccess(space).defaultActions`. There
+   * is no built-in table: when neither this, `manifest` nor
+   * `capabilityRequest` is set, sign-in uses {@link genericAppManifest}.
+   */
   defaultActions?: Record<string, Record<string, string[]>>;
-  /** Session expiration time in milliseconds (default: 30 days, `EXPIRY.SESSION_MS`) */
+  /** Session expiration time in milliseconds (default: 7 days, `EXPIRY.SESSION_MS`) */
   sessionExpirationMs?: number;
   /** Automatically create space if it doesn't exist (default: false) */
   autoCreateSpace?: boolean;
@@ -349,6 +358,11 @@ export interface NodeUserAuthorizationConfig {
   /** Optional SIWE configuration overrides (e.g., nonce for server-provided nonces) */
   siweConfig?: SiweConfig;
   /**
+   * Host that names the generic manifest's app folder when nothing is
+   * declared. Default: the SIWE domain. `null`: no web address (`node.app`).
+   */
+  genericAppHost?: string | null;
+  /**
    * App manifest used to drive the SIWE recap at sign-in.
    *
    * When set, `signIn` resolves the manifest (via
@@ -363,8 +377,9 @@ export interface NodeUserAuthorizationConfig {
    * sub-delegation via the session-key UCAN path without a wallet
    * prompt.
    *
-   * When omitted, `signIn` falls back to `defaultActions` for
-   * backwards compatibility.
+   * Without a manifest, `capabilityRequest` or `defaultActions`, sign-in
+   * asks only for the app's own folder ({@link genericAppManifest}) and
+   * logs {@link genericAppManifestWarning} once per sign-in.
    */
   manifest?: Manifest | Manifest[];
   /** Pre-composed manifest request. Takes precedence over `manifest`. */
@@ -390,6 +405,12 @@ export interface NodeUserAuthorizationConfig {
    * `undefined` when replication is off, so the persisted session carries no stamp.
    */
   establishReplicaStamp?: (session: TinyCloudSession) => Promise<PersistedSessionData["replicaStamp"]>;
+  /**
+   * Every host the current session's delegation is posted to, shared with
+   * TinyCloudNode, which empties it when the session ends. Persisted with the
+   * session so sign-out can retire the key on each host (TC-3443).
+   */
+  sessionHosts?: SessionHosts;
 }
 
 export interface CreateBootstrapSessionOptions {
@@ -438,7 +459,10 @@ export class NodeUserAuthorization implements IUserAuthorization {
   private readonly uri: string;
   private readonly statement?: string;
   private readonly spacePrefix: string;
-  private readonly defaultActions: Record<string, Record<string, string[]>>;
+  private readonly defaultActions?: Record<string, Record<string, string[]>>;
+  private readonly genericAppHost: string | null;
+  /** The generated request, while sign-in is using the generic manifest. */
+  private genericRequest?: { request: ComposedManifestRequest; manifest: Manifest };
   private readonly sessionExpirationMs: number;
   private readonly autoCreateSpace: boolean;
   private readonly spaceCreationHandler?: ISpaceCreationHandler;
@@ -474,6 +498,10 @@ export class NodeUserAuthorization implements IUserAuthorization {
    */
   private _manifest?: Manifest | Manifest[];
   private _capabilityRequest?: ComposedManifestRequest;
+  /** The owner `{owner}` in manifest paths resolves to: `did:pkh:eip155:<chain>:<EIP-55 address>`, bound once the signer's address and chain are known. */
+  private _manifestOwnerDid?: string;
+  /** The owner the cached request was composed for, when a manifest path holds `{owner}`. */
+  private _capabilityRequestOwner?: string;
   private readonly includeAccountRegistryPermissions: boolean;
   private readonly includeImplicitCapabilitiesRead: boolean;
   private readonly requireExistingAccount: boolean;
@@ -504,6 +532,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
    * admin invocations) reuse this instead of re-fetching `/info`.
    */
   private _nodeInfoIdentity?: { host: string; nodeId: string };
+  private readonly sessionHosts: SessionHosts;
   private _lastActivationSkippedSpaceIds: string[] = [];
   /**
    * Spaces the sign-in activation reported hosted. Only the first POST of a
@@ -523,37 +552,15 @@ export class NodeUserAuthorization implements IUserAuthorization {
     this.uri = config.uri ?? `https://${config.domain}`;
     this.statement = config.statement;
     this.spacePrefix = config.spacePrefix ?? "default";
-    this.defaultActions = config.defaultActions ?? {
-      kv: {
-        "": [KV.PUT, KV.GET, KV.DEL, KV.LIST, KV.METADATA],
-      },
-      sql: {
-        "": [SQL.READ, SQL.WRITE, SQL.SCHEMA, SQL.ADMIN, SQL.EXPORT],
-      },
-      duckdb: {
-        "": [
-          DUCKDB.READ,
-          DUCKDB.WRITE,
-          DUCKDB.ADMIN,
-          DUCKDB.DESCRIBE,
-          DUCKDB.EXPORT,
-          DUCKDB.IMPORT,
-          DUCKDB.EXECUTE,
-        ],
-      },
-      capabilities: {
-        "": [CAPABILITIES.READ],
-      },
-      hooks: {
-        "": [HOOKS.SUBSCRIBE, HOOKS.REGISTER, HOOKS.LIST, HOOKS.UNREGISTER],
-      },
-    };
+    this.defaultActions = config.defaultActions;
     this.sessionExpirationMs = config.sessionExpirationMs ?? EXPIRY.SESSION_MS;
     this.autoCreateSpace = config.autoCreateSpace ?? false;
     this.spaceCreationHandler = config.spaceCreationHandler;
     this.tinycloudHosts = config.tinycloudHosts;
     this.registryNoEntryHosts = config.registryNoEntryHosts ?? config.tinycloudHosts ?? [];
     this.tinycloudRegistryUrl = config.tinycloudRegistryUrl;
+    this.sessionHosts = config.sessionHosts ?? new SessionHosts();
+    this.sessionHosts.onAdd = () => this.saveSessionHosts();
     this.tinycloudFallbackHosts = config.tinycloudFallbackHosts;
     this.newUserHost = config.newUserHost;
     this.registryChainId = config.registryChainId;
@@ -571,6 +578,9 @@ export class NodeUserAuthorization implements IUserAuthorization {
     this.enablePublicSpace = config.enablePublicSpace ?? true;
     this.nonce = config.nonce;
     this.siweConfig = config.siweConfig;
+    this.genericAppHost = config.genericAppHost === undefined
+      ? config.siweConfig?.domain ?? config.domain ?? null
+      : config.genericAppHost;
     this.includeAccountRegistryPermissions =
       config.includeAccountRegistryPermissions ?? true;
     this.includeImplicitCapabilitiesRead = config.includeImplicitCapabilitiesRead !== false;
@@ -601,6 +611,19 @@ export class NodeUserAuthorization implements IUserAuthorization {
     return this.getCapabilityRequest();
   }
 
+  /**
+   * The manifests a sign-in checks for caveats before any signer call. A template whose owner
+   * is not bound yet is checked as published: resolving the token adds no caveats.
+   * @internal
+   */
+  get manifestsForCaveatRefusal(): readonly Manifest[] | undefined {
+    if (this._capabilityRequest === undefined && this._manifest !== undefined && this._manifestOwnerDid === undefined) {
+      const manifests = Array.isArray(this._manifest) ? this._manifest : [this._manifest];
+      if (manifests.some(manifestUsesOwnerPlaceholder)) return manifests;
+    }
+    return this.getCapabilityRequest()?.manifests;
+  }
+
   get hosts(): string[] {
     return this.tinycloudHosts ? [...this.tinycloudHosts] : [];
   }
@@ -612,6 +635,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
   setManifest(manifest: Manifest | Manifest[] | undefined): void {
     this._manifest = manifest;
     this._capabilityRequest = undefined;
+    this._capabilityRequestOwner = undefined;
   }
 
   setCapabilityRequest(request: ComposedManifestRequest | undefined): void {
@@ -656,6 +680,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
     this._tinyCloudSession = { ...session, address };
     this._address = address;
     this._chainId = session.chainId;
+    this.bindManifestOwner(address, session.chainId);
     // Don't overwrite an explicitly-configured host (e.g. local dev) with a
     // possibly-stale persisted value: only adopt persisted hosts when none
     // are already set.
@@ -711,6 +736,66 @@ export class NodeUserAuthorization implements IUserAuthorization {
     }).finally(() => { this.pendingPersistence.delete(data); });
   }
 
+  /**
+   * Add the current session's hosts to its saved session, if that is this
+   * session. Best effort: a failed save leaves the hosts in memory for this
+   * sign-out.
+   */
+  private saveSessionHosts(): void {
+    const address = this._address;
+    const signature = this._tinyCloudSession?.signature;
+    if (address === undefined || signature === undefined) return;
+    const generation = this.sessionGeneration;
+    void this.enqueuePersistence(async () => {
+      if (generation !== this.sessionGeneration) return;
+      const stored = await this.sessionStorage.load(address);
+      if (stored?.signature !== signature) return;
+      const activatedHosts = [...new Set([...stored.activatedHosts ?? [], ...this.sessionHosts.list()])];
+      if (activatedHosts.length === stored.activatedHosts?.length) return;
+      await this.sessionStorage.save(address, { ...stored, activatedHosts });
+      // A sign-out that started meanwhile already cleared the record; don't leave it restored.
+      if (generation !== this.sessionGeneration) await clearPersistedSessionIfOwn(this.sessionStorage, address, signature);
+    }).catch(() => undefined);
+  }
+
+  /**
+   * @internal The registry's current nodes for every space the session's
+   * ReCap names, and the encryption node when it names an encryption network,
+   * from the record this sign-in or restore resolved. Empty when the account
+   * is not registered or the record was not resolved.
+   */
+  registeredSessionHosts(): { url: string; nodeDid: string }[] {
+    return this._tinyCloudSession ? [...this.registeredSessionTargets(this._tinyCloudSession).values()] : [];
+  }
+
+  /** The registry nodes {@link ensureSpaceExists} activates `session` on beyond its primary space's hosts. */
+  private registeredSessionTargets(session: TinyCloudSession): Map<string, { url: string; nodeDid: string }> {
+    const targets = new Map<string, { url: string; nodeDid: string }>();
+    if (this.registryVerdict?.status !== "registered" || !this.registryVerdict.record) return targets;
+    const record = this.registryVerdict.record;
+    const resources = Object.keys(extractRecapAttenuations(session.siwe ?? ""));
+    for (const space of record.spaces) {
+      const registeredSpace = parseSpaceUri(space.space);
+      if (!resources.some((resource) => {
+        const fullSpace = resource.split("/")[0];
+        const requestedSpace = parseSpaceUri(fullSpace);
+        return fullSpace === space.space || (registeredSpace !== null && requestedSpace !== null &&
+          registeredSpace.owner === requestedSpace.owner && registeredSpace.name === requestedSpace.name);
+      })) continue;
+      for (const membership of space.nodes) {
+        const node = record.nodes.find((candidate) => candidate.did === membership.did)!;
+        targets.set(node.url, { url: node.url, nodeDid: node.did });
+      }
+    }
+    if (record.encryptionNode && resources.some((resource) => resource.startsWith("urn:tinycloud:encryption:"))) {
+      const node = record.nodes.find((candidate) => candidate.did === record.encryptionNode)!;
+      // Encryption traffic uses the node's TEE-terminated origin (TC-2923), like TinyCloudNode routing.
+      const url = endToEndNodeHost(node.url);
+      targets.set(url, { url, nodeDid: node.did });
+    }
+    return targets;
+  }
+
   /** @internal Atomically adopt the state staged by TinyCloudNode.restoreSession. */
   installRestoredSession(
     sessionManager: ISessionManager,
@@ -740,6 +825,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
     this._tinyCloudSession = { ...session };
     this._address = session.address;
     this._chainId = session.chainId;
+    this.bindManifestOwner(session.address, session.chainId);
     this._session = {
       address: session.address,
       walletAddress: session.address,
@@ -947,10 +1033,11 @@ export class NodeUserAuthorization implements IUserAuthorization {
    * delegations via the session key (no wallet prompt): the session's
    * own recap already covers every action those delegations need.
    *
-   * When no manifest is installed, we fall back to the
-   * {@link defaultActions} table so existing callers see no change.
+   * Without a manifest or `capabilityRequest`, this returns `undefined`
+   * when the caller set explicit {@link defaultActions}, and otherwise the
+   * generic own-folder request ({@link genericAppManifest}).
    *
-   * This is a pure function of `this._manifest` + `this.defaultActions`
+   * This is a pure function of `this._manifest`
    * — the manifest resolution performs no I/O and throws a
    * {@link ManifestValidationError} on structural problems (missing
    * id/name, unparseable expiry, etc), which will surface at sign-in
@@ -963,10 +1050,27 @@ export class NodeUserAuthorization implements IUserAuthorization {
       return this._capabilityRequest;
     }
     if (this._manifest === undefined) {
-      return undefined;
+      if (this.defaultActions !== undefined) return undefined;
+      const manifest = genericAppManifest(this.genericAppHost);
+      // The generic folder never carries account rows.
+      const request = composeManifestRequest([manifest], {
+        includeAccountRegistryPermissions: false,
+        includeImplicitCapabilitiesRead: this.includeImplicitCapabilitiesRead,
+      });
+      this.genericRequest = { request, manifest };
+      this._capabilityRequest = request;
+      return request;
     }
+    const manifests = Array.isArray(this._manifest) ? this._manifest : [this._manifest];
+    const usesOwner = manifests.some(manifestUsesOwnerPlaceholder);
+    if (usesOwner && this._manifestOwnerDid === undefined) {
+      throw new ManifestValidationError(
+        `a manifest path holds ${MANIFEST_OWNER_PLACEHOLDER} and the signer's address is not known yet; sign in before reading the requested permissions`,
+      );
+    }
+    const ownerDid = this._manifestOwnerDid;
     this._capabilityRequest = composeManifestRequest(
-      Array.isArray(this._manifest) ? this._manifest : [this._manifest],
+      ownerDid === undefined ? manifests : manifests.map((manifest) => resolveManifestOwner(manifest, ownerDid)),
       {
         includeAccountRegistryPermissions:
           this.includeAccountRegistryPermissions,
@@ -974,10 +1078,53 @@ export class NodeUserAuthorization implements IUserAuthorization {
       }
     );
     MANIFEST_COMPOSED.add(this._capabilityRequest);
+    this._capabilityRequestOwner = usesOwner ? ownerDid : undefined;
     return this._capabilityRequest;
   }
 
+  /**
+   * Binds `{owner}` in manifest paths to the signer. Does nothing for a manifest without the
+   * token, so apps that use none see no change. A request composed for another owner is dropped.
+   */
+  private bindManifestOwner(address: string, chainId: number): void {
+    if (this._manifest === undefined) return;
+    const manifests = Array.isArray(this._manifest) ? this._manifest : [this._manifest];
+    if (!manifests.some(manifestUsesOwnerPlaceholder)) return;
+    const ownerDid = pkhDid(address, chainId);
+    this._manifestOwnerDid = ownerDid;
+    if (this._capabilityRequestOwner !== undefined && this._capabilityRequestOwner !== ownerDid) {
+      this._capabilityRequest = undefined;
+      this._capabilityRequestOwner = undefined;
+    }
+  }
+
+  /** {@link bindManifestOwner} for a sign-in that has not read the signer yet (only reads it when a manifest uses the token). */
+  private async bindManifestOwnerFromSigner(identity?: { readonly address: string; readonly chainId: number }): Promise<void> {
+    if (this._manifest === undefined) return;
+    const manifests = Array.isArray(this._manifest) ? this._manifest : [this._manifest];
+    if (!manifests.some(manifestUsesOwnerPlaceholder)) return;
+    this.bindManifestOwner(
+      canonicalizeAddress(identity?.address ?? await this.signer.getAddress()),
+      identity?.chainId ?? await this.signer.getChainId(),
+    );
+  }
+
+  /**
+   * One console line per sign-in that falls back to the generic manifest, and
+   * once per process when that folder is the shared one for apps without a domain.
+   */
+  private warnIfGenericManifest(): void {
+    const request = this.getCapabilityRequest();
+    if (request !== undefined && request === this.genericRequest?.request) {
+      console.warn(genericAppManifestWarning(this.genericRequest.manifest));
+      if (this.genericRequest.manifest.app_id === GENERIC_APP_ID_WITHOUT_HOST) {
+        warnOnceWithoutAppHost(GENERIC_APP_ID_WITHOUT_HOST);
+      }
+    }
+  }
+
   private async refreshNamedKeyFeatureForSignIn(address: string, chainId: number): Promise<void> {
+    this.bindManifestOwner(address, chainId);
     this._signInNodeInfoHost = undefined;
     const request = this.getCapabilityRequest();
     const siweDomain = this.siweConfig?.domain ?? this.domain;
@@ -1026,18 +1173,19 @@ export class NodeUserAuthorization implements IUserAuthorization {
   }
 
   /**
-   * The plain-session primary abilities: `defaultActions` (the shared table)
-   * unless the primary space IS the account space, where account-registry
-   * permissions merge into a private clone so the shared table is never
-   * mutated. Shared between `resolveSignInCapabilities` and
-   * `signInPermissionInputs` so sign-in and `replicationSignInEntries`
-   * can't disagree (§4.6).
+   * The plain-session primary abilities: the caller's `defaultActions`
+   * (empty on a restore without them) unless the primary space IS the
+   * account space, where account-registry permissions merge into a private
+   * clone so the caller's table is never mutated. Shared between
+   * `resolveSignInCapabilities` and `signInPermissionInputs` so sign-in and
+   * `replicationSignInEntries` can't disagree (§4.6).
    */
   private primaryActionsForSignIn(): AbilitiesMap {
+    const defaultActions = this.defaultActions ?? {};
     const primaryActions =
       this.includeAccountRegistryPermissions && this.spacePrefix === ACCOUNT_REGISTRY_SPACE
-        ? cloneAbilitiesMap(this.defaultActions)
-        : this.defaultActions;
+        ? cloneAbilitiesMap(defaultActions)
+        : defaultActions;
     if (this.includeAccountRegistryPermissions && this.spacePrefix === ACCOUNT_REGISTRY_SPACE) {
       const accountAbilities = resourceCapabilitiesToAbilitiesMap(
         ACCOUNT_MANIFEST_PERMISSIONS,
@@ -1089,6 +1237,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
     address: string,
     chainId: number,
   ): { entries: PermissionEntry[]; primarySpaceId: string } {
+    this.bindManifestOwner(address, chainId);
     const request = this.getCapabilityRequest();
     if (request === undefined) {
       const primarySpaceId = makePkhSpaceId(address, chainId, this.spacePrefix);
@@ -1216,6 +1365,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
     spaceAbilities?: Record<string, AbilitiesMap>;
     rawAbilities?: Record<string, string[]>;
   } {
+    this.bindManifestOwner(address, chainId);
     const request = this.getCapabilityRequest();
     if (request === undefined) {
       const defaultNetworkId = this.defaultEncryptionNetworkId(address, chainId);
@@ -1240,7 +1390,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
       // Replication augmentation (TC-858 §4.1): one {get, sync} entry per
       // configured prefix the plain request already covers with an
       // unrestricted get. Merged into a copy — `primaryActions` may be the
-      // shared `defaultActions` table.
+      // caller's `defaultActions` table.
       const mergedPrimary = this.mergeReplicationEntries(
         spaceAbilities,
         primarySpaceId,
@@ -1484,6 +1634,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
         try {
           await verifyResourceDestination(destination, globalThis.fetch.bind(globalThis));
           checkCurrent();
+          this.sessionHosts.add(destination.url);
           const result = await activateSessionWithHost(destination.url, this._tinyCloudSession.delegationHeader, signal);
           checkCurrent();
           results.push(result.skipped?.includes(spaceId) ? { ...result, success: false, status: 403, error: "The session does not activate the requested space" } : result);
@@ -1606,29 +1757,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
     const primary = await this.resolveResourceDestinations(primarySpaceId, "read");
     this.tinycloudHosts = primary.map(({ url }) => url);
     const targets = new Map(primary.map((destination) => [destination.url, destination]));
-    if (this.registryVerdict?.status === "registered" && this.registryVerdict.record) {
-      const record = this.registryVerdict.record;
-      const resources = Object.keys(extractRecapAttenuations(this._tinyCloudSession.siwe ?? ""));
-      for (const space of record.spaces) {
-        const registeredSpace = parseSpaceUri(space.space);
-        if (!resources.some((resource) => {
-          const fullSpace = resource.split("/")[0];
-          const requestedSpace = parseSpaceUri(fullSpace);
-          return fullSpace === space.space || (registeredSpace !== null && requestedSpace !== null &&
-            registeredSpace.owner === requestedSpace.owner && registeredSpace.name === requestedSpace.name);
-        })) continue;
-        for (const membership of space.nodes) {
-          const node = record.nodes.find((candidate) => candidate.did === membership.did)!;
-          targets.set(node.url, { url: node.url, nodeDid: node.did });
-        }
-      }
-      if (record.encryptionNode && resources.some((resource) => resource.startsWith("urn:tinycloud:encryption:"))) {
-        const node = record.nodes.find((candidate) => candidate.did === record.encryptionNode)!;
-        // Encryption traffic uses the node's TEE-terminated origin (TC-2923), like TinyCloudNode routing.
-        const url = endToEndNodeHost(node.url);
-        targets.set(url, { url, nodeDid: node.did });
-      }
-    }
+    for (const [url, destination] of this.registeredSessionTargets(this._tinyCloudSession)) targets.set(url, destination);
     let result: SpaceHostResult | undefined;
     // A session that names vault data activates only on end-to-end origins.
     const endToEnd = await sessionTouchesVault(this._tinyCloudSession);
@@ -1641,6 +1770,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
       await verifyResourceDestination(destination, globalThis.fetch.bind(globalThis));
       let activated: SpaceHostResult;
       try {
+        this.sessionHosts.add(destination.url);
         activated = await activateSessionWithHost(destination.url, this._tinyCloudSession.delegationHeader);
       } catch (error) {
         throw new NodeNotRespondingError([destination.url], error);
@@ -1705,10 +1835,11 @@ export class NodeUserAuthorization implements IUserAuthorization {
       onHosted: () => {
         this._spaceHosting = "hosted";
       },
-      activate: async (context) => activateSessionWithHost(
-        await sessionTouchesVault(session) ? endToEndNodeHost(context.host) : context.host,
-        session.delegationHeader,
-      ),
+      activate: async (context) => {
+        const host = await sessionTouchesVault(session) ? endToEndNodeHost(context.host) : context.host;
+        this.sessionHosts.add(host);
+        return activateSessionWithHost(host, session.delegationHeader);
+      },
       signal,
     });
   }
@@ -1875,6 +2006,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
       createdAt,
       version: "1.0",
       tinycloudHosts: this.tinycloudHosts,
+      ...(this.sessionHosts.list().length > 0 ? { activatedHosts: this.sessionHosts.list() } : {}),
       ...(this._spaceHosting !== "unknown" ? { spaceHosting: this._spaceHosting } : {}),
       ...(replicaStamp ? { replicaStamp } : {}),
     };
@@ -1892,6 +2024,8 @@ export class NodeUserAuthorization implements IUserAuthorization {
    * @param options - Optional per-call SIWE overrides for this sign-in only
    */
   async signIn(options?: SignInOptions): Promise<ClientSession> {
+    await this.bindManifestOwnerFromSigner();
+    this.warnIfGenericManifest();
     refuseCaveated(this.getCapabilityRequest()?.manifests);
     const generation = this.sessionGeneration;
     // Get signer address and chain ID
@@ -1929,7 +2063,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
     // When a manifest is installed, `resolveSignInAbilities()` returns
     // the union of app permissions + every manifest-declared
     // delegation's permissions in the shape `prepareSession` accepts.
-    // Otherwise it returns `defaultActions` unchanged (legacy path).
+    // Otherwise it returns the caller's explicit `defaultActions`.
     const prepared = this.prepareSessionWithResources({
       abilities: capabilityPlan.abilities,
       ...(capabilityPlan.spaceAbilities !== undefined
@@ -2107,6 +2241,8 @@ export class NodeUserAuthorization implements IUserAuthorization {
     address: string;
     chainId: number;
   }> {
+    await this.bindManifestOwnerFromSigner(identity);
+    this.warnIfGenericManifest();
     refuseCaveated(this.getCapabilityRequest()?.manifests);
     const address = canonicalizeAddress(identity?.address ?? await this.signer.getAddress());
     const chainId = identity?.chainId ?? await this.signer.getChainId();
@@ -2135,7 +2271,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
     // When a manifest is installed, `resolveSignInAbilities()` returns
     // the union of app permissions + every manifest-declared
     // delegation's permissions in the shape `prepareSession` accepts.
-    // Otherwise it returns `defaultActions` unchanged (legacy path).
+    // Otherwise it returns the caller's explicit `defaultActions`.
     const prepared = this.prepareSessionWithResources({
       abilities: capabilityPlan.abilities,
       ...(capabilityPlan.spaceAbilities !== undefined
@@ -2210,6 +2346,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
     // For now, we'll get it from the signer since it should match
     const address = canonicalizeAddress(identity?.address ?? await this.signer.getAddress());
     const chainId = identity?.chainId ?? await this.signer.getChainId();
+    this.bindManifestOwner(address, chainId);
     this.assertSignInCurrent(generation);
 
     await this.resolveTinyCloudHostsForSignIn(address, chainId);
@@ -2365,6 +2502,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
   ): Promise<PreparedOpenKeyAuthorization> {
     const generation = this.sessionGeneration;
     identity = identity ? Object.freeze({ ...identity, address: canonicalizeAddress(identity.address) }) : undefined;
+    await this.bindManifestOwnerFromSigner(identity);
     refuseCaveated(this.getCapabilityRequest()?.manifests);
     assertMaxExpiresAt(options?.maxExpiresAt);
     // A per-call host override is the host this session will actually use,
@@ -2562,6 +2700,8 @@ export class NodeUserAuthorization implements IUserAuthorization {
       reason: reason && reason.length > 0 ? reason : undefined,
       manifestId,
       manifestDigest,
+      // A hint only: OpenKey resolves `{owner}` with the owner it derives itself and treats a different value as unsigned.
+      owner: primary && manifestUsesOwnerPlaceholder(primary) ? this._manifestOwnerDid : undefined,
       manifests: envelopeManifests.length > 0 ? envelopeManifests : undefined,
     };
   }

@@ -227,7 +227,8 @@ describe("bootstrapStatus.warnings — recovered ambiguous batch write (TC-373 /
       spaces: [],
     };
 
-    const warnings = await (node as any).runAccountBootstrap([seedSpacesStep]);
+    const scope = { grants: [], account: () => node.account };
+    const warnings = await (node as any).runAccountBootstrap([seedSpacesStep], undefined, scope);
 
     expect(warnings).toEqual([
       {

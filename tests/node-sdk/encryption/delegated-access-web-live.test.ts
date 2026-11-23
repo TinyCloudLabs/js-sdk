@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { randomBytes } from "node:crypto";
-import { TinyCloudNode, serializeDelegation } from "@tinycloud/node-sdk";
+import { TinyCloudNode, ownerFullAccess, serializeDelegation } from "@tinycloud/node-sdk";
 import { REGISTRY_NOT_FOUND_BODY } from "@tinycloud/sdk-core";
 import { TinyCloudWeb, deserializeDelegation } from "@tinycloud/web-sdk";
 import { checkServerHealth, SERVER_URL } from "../setup";
@@ -34,6 +34,7 @@ describe("web DelegatedAccess reads a secret under the delegation (live)", () =>
       autoDiscoverLocalNode: false,
       privateKey: randomBytes(32).toString("hex"),
       autoCreateSpace: true,
+      ...ownerFullAccess(),
     });
     await owner.signIn();
     secretsSpace = await owner.ensureOwnedSpaceHosted("secrets");

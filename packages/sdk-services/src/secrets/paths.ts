@@ -9,6 +9,8 @@ export const SECRET_NAME_RE = /^[A-Z][A-Z0-9_]{0,63}$/;
 
 const SECRET_PREFIX = "secrets/";
 const SCOPED_SECRET_PREFIX = "secrets/scoped/";
+/** The one unscoped name whose key (`secrets/scoped`) is the parent of the scoped keys. */
+const RESERVED_SECRET_NAME = "SCOPED";
 const RESERVED_SECRET_SCOPES = new Set(["default", "global"]);
 
 export interface SecretScopeOptions {
@@ -32,6 +34,8 @@ export const TC832_RESERVED_SCOPES: readonly string[] = Object.freeze([
 ]);
 
 export interface SecretPutOptions extends SecretScopeOptions {
+  /** Seal to this secret's own key. The default seals to the network key. */
+  namedKey?: boolean;
   /** Write only when no secret exists under this name; never overwrite. */
   ifAbsent?: boolean;
   /**
@@ -105,12 +109,16 @@ export interface ResolvedSecretPath {
  * The named key a secret is sealed to (TC-3284): `secrets/<lower(NAME)>`, or
  * `secrets/scoped/<scope>/<lower(NAME)>`. Lowercasing a `SECRET_NAME_RE` name
  * is injective. The scope must already be canonical (`SECRET_SCOPE_RE`); it is
- * never normalised. Throws for a name or scope over 64 bytes.
+ * never normalised. Throws for a name or scope over 64 bytes, and for the
+ * unscoped name `SCOPED`: its key `secrets/scoped` is the parent of every scoped key.
  */
 export function secretKeyPath(name: string, scope?: string): string {
   if (!SECRET_NAME_RE.test(name) ||
       (scope !== undefined && (!SECRET_SCOPE_RE.test(scope) || scope.length > MAX_SECRET_SCOPE_LENGTH))) {
     throw new Error("A secret's key needs a name and scope of at most 64 bytes, scope in canonical form");
+  }
+  if (scope === undefined && name === RESERVED_SECRET_NAME) {
+    throw new Error(`Secret name ${JSON.stringify(name)} is reserved.`);
   }
   return `${scope === undefined ? SECRET_PREFIX : `${SCOPED_SECRET_PREFIX}${scope}/`}${name.toLowerCase()}`;
 }

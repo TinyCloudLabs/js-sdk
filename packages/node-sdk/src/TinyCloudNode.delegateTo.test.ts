@@ -1018,11 +1018,11 @@ describe("TinyCloudNode.delegateTo terminal grants and recipient kind", () => {
       expect(ms + before).toBeLessThanOrEqual(Date.now() + 7 * DAY);
     });
 
-    test("leaves kv and network-root grants on the 30 d default", async () => {
+    test("leaves kv and network-root grants on the 7 d default, and an asked-for 30 d on 30 d", async () => {
       const kv: PermissionEntry = { service: "tinycloud.kv", space: "default", path: "items/", actions: ["get"] };
       const root: PermissionEntry = { service: "tinycloud.encryption", path: network, actions: ["decrypt"] };
       for (const entry of [kv, root]) {
-        near((await lifetimeMs(entry)).ms, 30 * DAY);
+        near((await lifetimeMs(entry)).ms, 7 * DAY);
         near((await lifetimeMs(entry, "30d")).ms, 30 * DAY);
       }
     });

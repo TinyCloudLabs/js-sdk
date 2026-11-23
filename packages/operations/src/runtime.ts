@@ -20,6 +20,7 @@ import { activationRoutingOperationError, operationError, type OperationError } 
 import { isLocalOwnerProfile, ownerSessionLacksProof, resolveInvocationProfile, resolvePosture, restoreStoredSession, type InvocationProfileResolution } from "./profile.js";
 import { migrationRecovery, signInRecovery } from "./recovery.js";
 import { operationSpaceResolver } from "./secrets.js";
+import { OWNER_SESSION_EXPIRY_MS } from "./session-lifetime.js";
 import {
   createProfileRegistryCacheStore,
   createProfileRegistrySequenceStore,
@@ -171,7 +172,8 @@ export async function createInvocationRuntime(
       registrySequenceStore: createProfileRegistrySequenceStore(profileName),
       onRegistryFallback: (_message, reason) => collectRegistryFallbackWarning(warnings, reason),
       ...(tinycloudRegistryUrl === undefined ? {} : { tinycloudRegistryUrl }),
-      ...(privateKey === undefined ? {} : { privateKey }),
+      ...(privateKey === undefined ? {} : { privateKey, ...nodeSdk.ownerFullAccess() }),
+      sessionExpirationMs: OWNER_SESSION_EXPIRY_MS,
     });
 
     const activeSession = session === null ? undefined : normalizeSession(session, key);
@@ -359,6 +361,7 @@ async function createRestoredRuntime(
       onRegistryFallback: (_message, reason) => collectRegistryFallbackWarning(warnings, reason),
       ...(tinycloudRegistryUrl === undefined ? {} : { tinycloudRegistryUrl }),
       ...(typeof profile.privateKey === "string" ? { privateKey: profile.privateKey } : {}),
+      sessionExpirationMs: OWNER_SESSION_EXPIRY_MS,
     });
     try {
       await restoreStoredSession(node, activeSession, session ?? {});

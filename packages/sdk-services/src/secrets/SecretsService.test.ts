@@ -125,7 +125,7 @@ describe("SecretsService", () => {
     const vault = new MockVault();
     const secrets = new SecretsService(vault);
 
-    const putResult = await secrets.put("ANTHROPIC_API_KEY", "secret");
+    const putResult = await secrets.put("ANTHROPIC_API_KEY", "secret", { namedKey: true });
     expect(putResult.ok).toBe(true);
     expect(vault.put).toHaveBeenCalledWith(
       "secrets/ANTHROPIC_API_KEY",
@@ -154,7 +154,7 @@ describe("SecretsService", () => {
     const secrets = new SecretsService(vault);
 
     const options = { scope: "Food Tracker" };
-    const putResult = await secrets.put("ANTHROPIC_API_KEY", "secret", options);
+    const putResult = await secrets.put("ANTHROPIC_API_KEY", "secret", { ...options, namedKey: true });
     expect(putResult.ok).toBe(true);
     expect(vault.put).toHaveBeenCalledWith(
       "secrets/scoped/food-tracker/ANTHROPIC_API_KEY",
@@ -175,21 +175,21 @@ describe("SecretsService", () => {
     );
   });
 
-  it("forwards ifAbsent as ifNoneMatch, and every put names the secret's own key", async () => {
+  it("forwards ifAbsent and seals opted-in writes to the secret's key", async () => {
     const vault = new MockVault();
     const secrets = new SecretsService(vault);
 
-    expect((await secrets.put("API_KEY", "secret", { scope: "app", ifAbsent: true })).ok).toBe(true);
+    expect((await secrets.put("API_KEY", "secret", { scope: "app", ifAbsent: true, namedKey: true })).ok).toBe(true);
     expect(vault.put).toHaveBeenLastCalledWith(
       "secrets/scoped/app/API_KEY",
       expect.objectContaining({ value: "secret" }),
       { ifNoneMatch: "*", keyPath: "secrets/scoped/app/api_key" },
     );
 
-    expect((await secrets.put("API_KEY", "secret", { scope: "app" })).ok).toBe(true);
+    expect((await secrets.put("API_KEY", "secret", { scope: "app", namedKey: true })).ok).toBe(true);
     expect(vault.put.mock.calls.at(-1)?.[2]).toEqual({ keyPath: "secrets/scoped/app/api_key" });
 
-    expect((await secrets.put("API_KEY", "secret", { ifAbsent: false })).ok).toBe(true);
+    expect((await secrets.put("API_KEY", "secret", { ifAbsent: false, namedKey: true })).ok).toBe(true);
     expect(vault.put.mock.calls.at(-1)?.[2]).toEqual({ keyPath: "secrets/api_key" });
   });
 

@@ -284,6 +284,11 @@ const lazyLoaderExternals = (type, ext) => ({ context, request }, callback) => {
     callback(null, `${type} ./secret-read.${ext}`);
     return;
   }
+  // Sign-out's node calls (TC-3443): their own file, loaded when a session starts.
+  if (request === "./session-retire.js" && context === path.resolve(__dirname, "../node-sdk/dist")) {
+    callback(null, `${type} ./session-retire.${ext}`);
+    return;
+  }
   if (isIssuedDelegationsRequest({ context, request })) {
     callback(null, `${type} ./delegations-issued.${ext}`);
     return;
@@ -334,6 +339,7 @@ const lazyEntries = {
   "space-hosting": "./src/space-hosting-entry.ts",
   "runtime-grants": "./src/runtime-grants-entry.ts",
   "secret-read": "./src/secret-read-entry.ts",
+  "session-retire": "./src/session-retire-entry.ts",
   "registry-verdict-cache": "./src/registry-verdict-cache-entry.ts",
   "delegations-issued": "./src/delegations-issued-entry.ts",
   "delegations-renewal": "./src/delegations-renewal-entry.ts",

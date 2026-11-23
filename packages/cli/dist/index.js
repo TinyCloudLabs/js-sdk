@@ -145,7 +145,7 @@ import {
   tinycloudConfigPath,
   tinycloudHomePath
 } from "@tinycloud/operations/state";
-var CONFIG_DIR, PROFILES_DIR, CONFIG_FILE, DEFAULT_HOST, DEFAULT_OPENKEY_HOST, DEFAULT_OPENKEY_DEVICE_API_HOST, DEFAULT_PROFILE, PROFILE_COMMIT_LOCK_TIMEOUT_MS, ExitCode, OPENKEY_SPACE_SETUP_RETRY_HINT;
+var CONFIG_DIR, PROFILES_DIR, CONFIG_FILE, DEFAULT_HOST, DEFAULT_OPENKEY_HOST, DEFAULT_OPENKEY_DEVICE_API_HOST, DEFAULT_PROFILE, CLI_DEFAULT_SESSION_EXPIRY_DAYS, CLI_DEFAULT_SESSION_EXPIRY_MS, PROFILE_COMMIT_LOCK_TIMEOUT_MS, ExitCode, OPENKEY_SPACE_SETUP_RETRY_HINT;
 var init_constants = __esm({
   "src/config/constants.ts"() {
     "use strict";
@@ -156,6 +156,8 @@ var init_constants = __esm({
     DEFAULT_OPENKEY_HOST = "https://openkey.so";
     DEFAULT_OPENKEY_DEVICE_API_HOST = "https://api.openkey.so";
     DEFAULT_PROFILE = "default";
+    CLI_DEFAULT_SESSION_EXPIRY_DAYS = 30;
+    CLI_DEFAULT_SESSION_EXPIRY_MS = CLI_DEFAULT_SESSION_EXPIRY_DAYS * 24 * 60 * 60 * 1e3;
     PROFILE_COMMIT_LOCK_TIMEOUT_MS = 45e3;
     ExitCode = {
       SUCCESS: 0,
@@ -7693,6 +7695,7 @@ __export(sdk_exports, {
 });
 import { createProfileRegistryCacheStore, createProfileRegistrySequenceStore, profilePath as profilePath5 } from "@tinycloud/operations/state";
 import { TinyCloudNode, signedCompactUcanExpiry } from "@tinycloud/node-sdk";
+import { ownerFullAccess } from "@tinycloud/sdk-core";
 import { CLI_NAME as CLI_NAME9 } from "@tinycloud/operations/cli-name";
 import { liveStoredLease, ownerSessionLacksProof, restoreStoredSession } from "@tinycloud/operations/profile";
 function configuredRegistryUrl(contextUrl, profile) {
@@ -7780,7 +7783,8 @@ async function restoreProfileSessionNode(ctx) {
       onRegistryFallback: recordRegistryFallbackWarning,
       ...tinycloudRegistryUrl === void 0 ? {} : { tinycloudRegistryUrl },
       host: ctx.host,
-      ...profile.authMethod === "local" && profile.privateKey ? { privateKey: profile.privateKey } : {}
+      ...profile.authMethod === "local" && profile.privateKey ? { privateKey: profile.privateKey, ...ownerFullAccess() } : {},
+      sessionExpirationMs: CLI_DEFAULT_SESSION_EXPIRY_MS
     });
     await restoreProfileSession(node, ctx.profile, profile, persistedSessionData(ctx.profile, profile, session, key), session);
     return { node };
@@ -7808,7 +7812,8 @@ async function storedSessionVerifiesLocally(profileName) {
       ...cliRetryPolicy(),
       ...tinycloudRegistryUrl === void 0 ? {} : { tinycloudRegistryUrl },
       host: profile.host ?? DEFAULT_HOST,
-      ...local ? { privateKey: profile.privateKey } : {}
+      ...local ? { privateKey: profile.privateKey, ...ownerFullAccess() } : {},
+      sessionExpirationMs: CLI_DEFAULT_SESSION_EXPIRY_MS
     });
     await restoreProfileSession(node, profileName, profile, persistedSessionData(profileName, profile, session, key), session);
     return true;
@@ -7860,6 +7865,9 @@ async function createSDKInstance(ctx, options) {
       ...tinycloudRegistryUrl === void 0 ? {} : { tinycloudRegistryUrl },
       host: ctx.host,
       privateKey: effectivePrivateKey,
+      // The local owner key signs for every action on its own default space.
+      ...ownerFullAccess(),
+      sessionExpirationMs: CLI_DEFAULT_SESSION_EXPIRY_MS,
       ...replication2 ? { replication: replication2 } : {}
     });
     if (node2.replication) registerReplication(ctx.profile, node2.replication);
@@ -7905,6 +7913,8 @@ async function createSDKInstance(ctx, options) {
     ...tinycloudRegistryUrl === void 0 ? {} : { tinycloudRegistryUrl },
     host: ctx.host,
     privateKey: options?.privateKey,
+    ...options?.privateKey ? ownerFullAccess() : {},
+    sessionExpirationMs: CLI_DEFAULT_SESSION_EXPIRY_MS,
     ...replication ? { replication } : {}
   });
   if (node.replication) registerReplication(ctx.profile, node.replication);
@@ -16207,7 +16217,7 @@ var init_browser = __esm({
 });
 
 // src/lib/apps-agent-preset.ts
-import { DEFAULT_EXPIRY, parseExpiry, SERVICE_LONG_TO_SHORT as SERVICE_LONG_TO_SHORT3, VAULT_PERMISSION_SERVICE } from "@tinycloud/sdk-core";
+import { parseExpiry, SERVICE_LONG_TO_SHORT as SERVICE_LONG_TO_SHORT3, VAULT_PERMISSION_SERVICE } from "@tinycloud/sdk-core";
 import { CLI_NAME as CLI_NAME13 } from "@tinycloud/operations/cli-name";
 var APPS_AGENT_EXPIRY_DAYS, APPS_AGENT_EXPIRY;
 var init_apps_agent_preset = __esm({
@@ -16311,7 +16321,7 @@ var init_named_keys = __esm({
 });
 
 // src/auth/scoped-login.ts
-import { EXPIRY, technicalExpiryRefusal } from "@tinycloud/sdk-core";
+import { technicalExpiryRefusal } from "@tinycloud/sdk-core";
 import { NodeWasmBindings, signedCompactUcanExpiry as signedCompactUcanExpiry2 } from "@tinycloud/node-sdk";
 import { isLocalOwnerProfile as isLocalOwnerProfile2, liveStoredLease as liveStoredLease2, ownerSessionLacksProof as ownerSessionLacksProof2 } from "@tinycloud/operations/profile";
 import { CLI_NAME as CLI_NAME14 } from "@tinycloud/operations/cli-name";
@@ -16602,12 +16612,14 @@ var init_pending_code = __esm({
 import { createProfileRegistryCacheStore as createProfileRegistryCacheStore3, createProfileRegistrySequenceStore as createProfileRegistrySequenceStore3 } from "@tinycloud/operations/state";
 import { TCWSessionManager, importKey, initPanicHook } from "@tinycloud/node-sdk-wasm";
 import { PrivateKeySigner } from "@tinycloud/node-sdk";
+import { ownerFullAccess as ownerFullAccess2 } from "@tinycloud/sdk-core";
 import { randomBytes as randomBytes4 } from "crypto";
 var init_local_key = __esm({
   "src/auth/local-key.ts"() {
     "use strict";
     init_replication_config();
     init_warnings();
+    init_constants();
   }
 });
 
@@ -16977,7 +16989,7 @@ import { setTimeout as wait } from "timers/promises";
 import { additionalDelegationsPath, profilePath as profilePath10 } from "@tinycloud/operations/state";
 import { principalDidEquals } from "@tinycloud/node-sdk";
 import { canonicalizeRecapCaveats, parseSignedCompactUcanAttenuation as parseSignedCompactUcanAttenuation2 } from "@tinycloud/sdk-core";
-import { admitOwnerRenewalLease, RENEWAL_LEASE_ORIGINAL_EXPIRED } from "@tinycloud/sdk-core/delegations/renewal";
+import { admitOwnerRenewalLease, RENEWAL_LEASE_ORIGINAL_EXPIRED, RENEWAL_RENEWER_CHANGED } from "@tinycloud/sdk-core/delegations/renewal";
 import { RENEWAL_ADMISSION_LEAD_MS, verifyOwnerRenewalLease } from "@tinycloud/sdk-core/delegations/renewal-receipt";
 function invalid(message) {
   return new CLIError("APPROVAL_RESULT_INVALID", message, ExitCode.PERMISSION_DENIED);
@@ -17180,7 +17192,7 @@ async function admitApprovedRenewal(host, entry, verified) {
     if (error instanceof Error && "code" in error && error.code === RENEWAL_LEASE_ORIGINAL_EXPIRED) {
       throw new CLIError("AUTH_EXPIRED", "The approved session has expired. No session was saved.", ExitCode.AUTH_REQUIRED);
     }
-    if (error instanceof Error && error.message === "Renewal node identity changed") {
+    if (error instanceof Error && "code" in error && error.code === RENEWAL_RENEWER_CHANGED) {
       throw refused("This renewal names a different TinyCloud node than the one you signed in to, so it wasn't turned on. Sign in again for a new approval.");
     }
     throw Object.assign(new CLIError(

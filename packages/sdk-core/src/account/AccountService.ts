@@ -145,6 +145,13 @@ export interface AccountServiceConfig {
   getDelegationManager?: () => Pick<DelegationManager, "query" | "revoke">;
   getAccountDb?: () => IDatabaseHandle | undefined;
   ensureAccountSpaceHosted?: () => Promise<void>;
+  /**
+   * Whether the session can write the account index (`tinycloud.sql` write and
+   * schema on `account/account`). Returning `false` makes every best-effort
+   * index write a no-op instead of a request the node refuses; canonical KV
+   * reads and writes are unaffected. Omitted means "attempt the write".
+   */
+  canWriteAccountIndex?: () => boolean;
 }
 
 export class AccountService {
@@ -599,6 +606,8 @@ export class AccountService {
     ensure: async (): Promise<Result<AccountIndexEnsureResult>> => {
       const dbResult = this.accountDb();
       if (!dbResult.ok) return dbResult;
+      // A session that cannot write the index leaves it as it is; reads tolerate its absence.
+      if (this.config.canWriteAccountIndex?.() === false) return ok({ database: ACCOUNT_INDEX_DB });
 
       const schema = await this.ensureAccountIndex(dbResult.data);
       if (!schema.ok) return schema;
@@ -843,8 +852,14 @@ export class AccountService {
     return queried.ok && queried.data.rows.length > 0;
   }
 
+  /** Runs a best-effort index write, or skips it when the session cannot write the index. */
+  private async quietIndexWrite(task: () => Promise<unknown>): Promise<void> {
+    if (this.config.canWriteAccountIndex?.() === false) return;
+    await ignoreIndexFailure(task);
+  }
+
   private async upsertApplicationIndexQuietly(app: AccountApplication): Promise<void> {
-    await ignoreIndexFailure(() => this.upsertApplicationIndex(app));
+    await this.quietIndexWrite(() => this.upsertApplicationIndex(app));
   }
 
   private async upsertApplicationIndex(app: AccountApplication): Promise<Result<void>> {
@@ -879,7 +894,7 @@ export class AccountService {
   }
 
   private async deleteApplicationIndexQuietly(appId: string): Promise<void> {
-    await ignoreIndexFailure(() => this.deleteApplicationIndex(appId));
+    await this.quietIndexWrite(() => this.deleteApplicationIndex(appId));
   }
 
   private async deleteApplicationIndex(appId: string): Promise<Result<void>> {
@@ -897,7 +912,7 @@ export class AccountService {
   }
 
   private async upsertSpaceIndexQuietly(space: AccountSpace): Promise<void> {
-    await ignoreIndexFailure(() => this.upsertSpaceIndex(space));
+    await this.quietIndexWrite(() => this.upsertSpaceIndex(space));
   }
 
   private async upsertSpaceIndex(space: AccountSpace): Promise<Result<void>> {
@@ -929,7 +944,7 @@ export class AccountService {
   }
 
   private async upsertSpacesIndexQuietly(spaces: AccountSpace[]): Promise<void> {
-    await ignoreIndexFailure(() => this.upsertSpacesIndex(spaces));
+    await this.quietIndexWrite(() => this.upsertSpacesIndex(spaces));
   }
 
   /**
@@ -976,7 +991,7 @@ export class AccountService {
   }
 
   private async deleteSpaceIndexQuietly(spaceId: string): Promise<void> {
-    await ignoreIndexFailure(() => this.deleteSpaceIndex(spaceId));
+    await this.quietIndexWrite(() => this.deleteSpaceIndex(spaceId));
   }
 
   private async deleteSpaceIndex(spaceId: string): Promise<Result<void>> {
@@ -1038,7 +1053,7 @@ export class AccountService {
   }
 
   private async replaceApplicationsIndexQuietly(applications: AccountApplication[]): Promise<void> {
-    await ignoreIndexFailure(async () => {
+    await this.quietIndexWrite(async () => {
       const dbResult = this.accountDb();
       if (!dbResult.ok) return;
       const syncedAt = new Date().toISOString();
@@ -1073,7 +1088,7 @@ export class AccountService {
   }
 
   private async replaceSpacesIndexQuietly(spaces: AccountSpace[]): Promise<void> {
-    await ignoreIndexFailure(async () => {
+    await this.quietIndexWrite(async () => {
       const dbResult = this.accountDb();
       if (!dbResult.ok) return;
       const syncedAt = new Date().toISOString();
@@ -1106,7 +1121,7 @@ export class AccountService {
   }
 
   private async replaceDelegationsIndexQuietly(delegations: AccountDelegation[]): Promise<void> {
-    await ignoreIndexFailure(async () => {
+    await this.quietIndexWrite(async () => {
       const dbResult = this.accountDb();
       if (!dbResult.ok) return;
       const syncedAt = new Date().toISOString();

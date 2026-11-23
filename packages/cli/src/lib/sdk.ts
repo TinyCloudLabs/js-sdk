@@ -1,12 +1,13 @@
 import { createProfileRegistryCacheStore, createProfileRegistrySequenceStore, profilePath } from "@tinycloud/operations/state";
 import { TinyCloudNode, signedCompactUcanExpiry, type PortableDelegation } from "@tinycloud/node-sdk";
+import { ownerFullAccess } from "@tinycloud/sdk-core";
 import type { ProfileReplicaLogoutPending } from "@tinycloud/sdk-services/kv/replication";
 import { CLI_NAME } from "@tinycloud/operations/cli-name";
 import { ProfileManager } from "../config/profiles.js";
 import { syncAuthCredentialFiles } from "../config/storage.js";
 import { resolveProfilePosture, type CLIContext, type ProfileConfig } from "../config/types.js";
 import { CLIError, wrapError } from "../output/errors.js";
-import { DEFAULT_HOST, ExitCode, PROFILE_COMMIT_LOCK_TIMEOUT_MS } from "../config/constants.js";
+import { CLI_DEFAULT_SESSION_EXPIRY_MS, DEFAULT_HOST, ExitCode, PROFILE_COMMIT_LOCK_TIMEOUT_MS } from "../config/constants.js";
 import { replayAdditionalDelegations } from "./permissions.js";
 import { sessionExpiredError } from "../auth/session-expired.js";
 import { liveStoredLease, ownerSessionLacksProof, restoreStoredSession } from "@tinycloud/operations/profile";
@@ -173,7 +174,8 @@ export async function restoreProfileSessionNode(
       onRegistryFallback: recordRegistryFallbackWarning,
       ...(tinycloudRegistryUrl === undefined ? {} : { tinycloudRegistryUrl }),
       host: ctx.host,
-      ...(profile.authMethod === "local" && profile.privateKey ? { privateKey: profile.privateKey } : {}),
+      ...(profile.authMethod === "local" && profile.privateKey ? { privateKey: profile.privateKey, ...ownerFullAccess() } : {}),
+      sessionExpirationMs: CLI_DEFAULT_SESSION_EXPIRY_MS,
     });
     await restoreProfileSession(node, ctx.profile, profile, persistedSessionData(ctx.profile, profile, session, key), session);
     return { node };
@@ -212,7 +214,8 @@ export async function storedSessionVerifiesLocally(profileName: string): Promise
       ...cliRetryPolicy(),
       ...(tinycloudRegistryUrl === undefined ? {} : { tinycloudRegistryUrl }),
       host: profile.host ?? DEFAULT_HOST,
-      ...(local ? { privateKey: profile.privateKey } : {}),
+      ...(local ? { privateKey: profile.privateKey, ...ownerFullAccess() } : {}),
+      sessionExpirationMs: CLI_DEFAULT_SESSION_EXPIRY_MS,
     });
     await restoreProfileSession(node, profileName, profile, persistedSessionData(profileName, profile, session, key), session);
     return true;
@@ -288,6 +291,9 @@ export async function createSDKInstance(
       ...(tinycloudRegistryUrl === undefined ? {} : { tinycloudRegistryUrl }),
       host: ctx.host,
       privateKey: effectivePrivateKey,
+      // The local owner key signs for every action on its own default space.
+      ...ownerFullAccess(),
+      sessionExpirationMs: CLI_DEFAULT_SESSION_EXPIRY_MS,
       ...(replication ? { replication } : {}),
     });
     if (node.replication) registerReplication(ctx.profile, node.replication);
@@ -336,6 +342,8 @@ export async function createSDKInstance(
     ...(tinycloudRegistryUrl === undefined ? {} : { tinycloudRegistryUrl }),
     host: ctx.host,
     privateKey: options?.privateKey,
+    ...(options?.privateKey ? ownerFullAccess() : {}),
+    sessionExpirationMs: CLI_DEFAULT_SESSION_EXPIRY_MS,
     ...(replication ? { replication } : {}),
   });
   if (node.replication) registerReplication(ctx.profile, node.replication);

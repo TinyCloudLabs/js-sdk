@@ -191,11 +191,13 @@ export function verifyRenewalHistory(input: VerifyRenewalHistoryInput): Verified
       "type", "newEnd", "nodeDid", "version", "leaseCid", "originalCid",
       "renewerEpoch", "leaseGeneration", "previousStampCid",
     ]);
+    if (unsigned.nodeDid !== nodeIdentity.nodeDid || unsigned.renewerEpoch !== nodeIdentity.renewerEpoch) {
+      throw new RenewalRenewerChangedError();
+    }
     if (
       unsigned.type !== "TinyCloudRenewalStamp" || unsigned.version !== 1
       || unsigned.originalCid !== originalCid || unsigned.leaseCid !== leaseCid
       || unsigned.leaseGeneration !== entry.generation || unsigned.previousStampCid !== previousStampCid
-      || unsigned.nodeDid !== nodeIdentity.nodeDid || unsigned.renewerEpoch !== nodeIdentity.renewerEpoch
       || parseCanonicalExpiry(unsigned.newEnd) !== entry.new_end
     ) {
       throw new Error("Renewal stamp binding is invalid");
@@ -313,7 +315,7 @@ export async function admitOwnerRenewalLease(input: AdmitOwnerRenewalLeaseInput)
   const current = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)) as Partial<RenewalNodeIdentity>;
   if (!current || Object.keys(input.nodeIdentity).some((key) =>
     current[key as keyof RenewalNodeIdentity] !== input.nodeIdentity[key as keyof RenewalNodeIdentity])) {
-    throw new Error("Renewal node identity changed");
+    throw new RenewalRenewerChangedError();
   }
   // The producer has already admitted the original. Only replay the saved lease.
   const result = await activateSessionWithHost(host, { Authorization: leaseAuthorization }, input.signal);
@@ -338,4 +340,13 @@ export class RenewalLeaseExpiredError extends Error {
 export class RenewalAuthorityInactiveError extends Error {
   readonly code = RENEWAL_AUTHORITY_INACTIVE;
   constructor() { super("Node reports no active renewal authority"); this.name = "RenewalAuthorityInactiveError"; }
+}
+/**
+ * The node no longer advertises the renewer identity or epoch the lease was issued to, so it never renews
+ * that lease again. Only a new owner approval, issued to the current renewer, can renew.
+ */
+export const RENEWAL_RENEWER_CHANGED = "RENEWAL_RENEWER_CHANGED";
+export class RenewalRenewerChangedError extends Error {
+  readonly code = RENEWAL_RENEWER_CHANGED;
+  constructor() { super("Renewal node identity changed"); this.name = "RenewalRenewerChangedError"; }
 }

@@ -1,7 +1,7 @@
 import { createPrivateKey, sign as signEd25519 } from "node:crypto";
 import { ucanCid } from "@tinycloud/replica";
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { REGISTRY_NOT_FOUND_BODY, ServiceContext, pkhDid } from "@tinycloud/sdk-core";
+import { REGISTRY_NOT_FOUND_BODY, ServiceContext, ownerFullAccess, pkhDid } from "@tinycloud/sdk-core";
 import {
   type KVReadThrough,
   type KVReplicaHandle,
@@ -732,6 +732,7 @@ describe.skipIf(!REAL_NODE_BIN)("node-sdk replication against a real node", () =
       autoCreateSpace: true,
       autoBootstrapAccount: false,
       enablePublicSpace: false,
+      ...ownerFullAccess(),
       replication: {
         enabled: true,
         prefixes: ["notes/"],
@@ -803,6 +804,7 @@ describe.skipIf(!REAL_NODE_BIN)("node-sdk replication against a real node", () =
       autoCreateSpace: true,
       autoBootstrapAccount: false,
       enablePublicSpace: false,
+      ...ownerFullAccess(),
       replication: {
         enabled: true,
         prefixes: ["notes/"],
@@ -856,6 +858,7 @@ describe.skipIf(!REAL_NODE_BIN)("node-sdk replication against a real node", () =
       autoCreateSpace: true,
       autoBootstrapAccount: false,
       enablePublicSpace: false,
+      ...ownerFullAccess(),
       replication: {
         enabled: true, prefixes, storage: profile.storage, profileDir: profile.profileDir,
         profileGuard: profile.guard, mode: "foreground",
@@ -991,6 +994,7 @@ describe.skipIf(!REAL_NODE_BIN)("node-sdk replication against a real node", () =
       autoCreateSpace: true,
       autoBootstrapAccount: false,
       enablePublicSpace: false,
+      ...ownerFullAccess(),
       replication: {
         enabled: true, prefixes: ["notes/"], storage: profile.storage,
         profileDir: profile.profileDir, profileGuard: profile.guard, mode: "foreground",
@@ -1144,6 +1148,7 @@ describe.skipIf(!REAL_NODE_BIN)("node-sdk replication against a real node", () =
       autoCreateSpace: true,
       autoBootstrapAccount: false,
       enablePublicSpace: false,
+      ...ownerFullAccess(),
       requestLog: true,
       replication: {
         enabled: true,
@@ -1189,6 +1194,7 @@ describe.skipIf(!REAL_NODE_BIN)("node-sdk replication against a real node", () =
       autoCreateSpace: true,
       autoBootstrapAccount: false,
       enablePublicSpace: false,
+      ...ownerFullAccess(),
       replication: {
         enabled: true,
         prefixes: ["notes/"],

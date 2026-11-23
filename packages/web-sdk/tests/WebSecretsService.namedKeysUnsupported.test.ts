@@ -3,7 +3,7 @@ import type { ISecretsService } from "@tinycloud/sdk-core";
 
 import { WebSecretsService } from "../src/modules/WebSecretsService";
 
-// TC-3801: a secret is sealed to its own key, so a node without encryption-named-keys-v1 cannot take a put.
+// TC-3801: a put that opts in to per-secret keys requires encryption-named-keys-v1.
 // The page's prompt never opens for it, nothing is written, and reads, lists and deletes still work.
 
 const MONICA_TEXT =
@@ -35,7 +35,7 @@ function harness(namedKeysSupported: boolean | undefined) {
 describe("WebSecretsService.put on a node without per-secret keys", () => {
   it("is refused with NAMED_KEYS_UNSUPPORTED and Monica's words, with no prompt and no write", async () => {
     const h = harness(false);
-    const result = await h.secrets.put("API_KEY", "v");
+    const result = await h.secrets.put("API_KEY", "v", { namedKey: true });
     expect(result.ok ? undefined : result.error).toMatchObject({
       code: "NAMED_KEYS_UNSUPPORTED", service: "secrets", message: MONICA_TEXT,
     });
@@ -53,14 +53,14 @@ describe("WebSecretsService.put on a node without per-secret keys", () => {
 
   it("a node that lists named keys still asks and then writes", async () => {
     const h = harness(true);
-    expect((await h.secrets.put("API_KEY", "v")).ok).toBe(true);
+    expect((await h.secrets.put("API_KEY", "v", { namedKey: true })).ok).toBe(true);
     expect(h.requestPermissions).toHaveBeenCalledTimes(1);
     expect(h.base.put).toHaveBeenCalledTimes(1);
   });
 
   it("a node that cannot be asked fails closed: NAMED_KEYS_CHECK_FAILED, retryable, no prompt, no write", async () => {
     const h = harness(undefined);
-    const result = await h.secrets.put("API_KEY", "v");
+    const result = await h.secrets.put("API_KEY", "v", { namedKey: true });
     expect(result.ok ? undefined : result.error).toMatchObject({
       code: "NAMED_KEYS_CHECK_FAILED",
       service: "secrets",

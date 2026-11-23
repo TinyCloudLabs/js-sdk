@@ -43,7 +43,7 @@ const SECRETS: Array<[string, string?]> = [
   ["API_KEY"],
   ["A"],
   ["SECRETS"],
-  ["SCOPED"],
+  ["SCOPED", "food"],
   ["API_KEY", "food"],
   ["X_1", "a-b"],
 ];

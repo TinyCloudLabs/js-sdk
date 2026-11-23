@@ -235,7 +235,7 @@ function makeFakeNode(overrides: {
   deleteResult?: SecretResult<undefined> | SecretResult<undefined>[];
   networkShowResult?: NetworkDescriptorLike | null;
   networkInitResult?: NetworkDescriptorLike;
-  delegateResult?: { delegation: { cid: string; path: string; actions: string[] }; prompted: boolean };
+  delegateResult?: { delegation: { cid: string; path: string; actions: string[]; expiry?: Date }; prompted: boolean };
   delegatedKvResult?: { ok: true; data: { data: string } } | { ok: false; error: { code: string; message: string } };
   decryptResult?: SecretResult<Uint8Array>;
 } = {}): FakeNode {
@@ -1407,9 +1407,68 @@ describe("CLI secrets commands", () => {
         prompted: false,
         path: descriptor.networkId,
         actions: ["decrypt"],
+        scope: "whole-network",
         expiresAt: "2099-01-01T00:00:00.000Z",
       },
     ]);
+  });
+
+  describe("secrets network grant says what it grants", () => {
+    async function grantStreams(overrides: Parameters<typeof makeFakeNode>[0]): Promise<string> {
+      currentNode = makeFakeNode(overrides);
+      let streams = "";
+      const stderrSpy = spyOn(process.stderr, "write").mockImplementation((chunk: unknown) => {
+        streams += String(chunk);
+        return true;
+      });
+      try {
+        await runSecretsCommand(["secrets", "network", "grant", "did:key:z6MkRecipient", "shared"]);
+      } finally {
+        stderrSpy.mockRestore();
+      }
+      return streams;
+    }
+
+    test("names the recipient, the whole network and the signed end of the grant", async () => {
+      const expiry = new Date("2026-12-21T14:30:00.000Z");
+      const descriptor = makeDescriptor("urn:tinycloud:encryption:did:key:z6MkPrincipal:shared");
+      const streams = await grantStreams({
+        networkInitResult: descriptor,
+        delegateResult: { delegation: { cid: "bafy-delegation", path: descriptor.networkId, actions: ["decrypt"], expiry }, prompted: false },
+      });
+
+      expect(streams).toContain(
+        'did:key:z6MkRecipient can read every secret in the "shared" network, including secrets added later, until 2026-12-21 14:30 UTC.',
+      );
+      expect(recorded.outputs).toHaveLength(1);
+      expect(recorded.outputs[0]).toMatchObject({ scope: "whole-network", networkId: descriptor.networkId });
+    });
+
+    test("says the grant lasts as long as it lasts when no end is reported", async () => {
+      const streams = await grantStreams({ networkInitResult: makeDescriptor("urn:tinycloud:encryption:did:key:z6MkPrincipal:shared") });
+
+      expect(streams).toContain(
+        'did:key:z6MkRecipient can read every secret in the "shared" network, including secrets added later, for as long as this grant lasts.',
+      );
+    });
+
+    test("prints nothing about access when the grant fails", async () => {
+      const node = makeFakeNode({ networkInitResult: makeDescriptor("urn:tinycloud:encryption:did:key:z6MkPrincipal:shared") });
+      currentNode = { ...node, delegateTo: async () => { throw new Error("grant refused"); } };
+      let streams = "";
+      const stderrSpy = spyOn(process.stderr, "write").mockImplementation((chunk: unknown) => {
+        streams += String(chunk);
+        return true;
+      });
+      try {
+        await runSecretsCommand(["secrets", "network", "grant", "did:key:z6MkRecipient", "shared"]);
+      } finally {
+        stderrSpy.mockRestore();
+      }
+
+      expect(streams).not.toContain("can read every secret");
+      expect(recorded.outputs).toEqual([]);
+    });
   });
 
   test("requests list permission and retries when an owner session is expired", async () => {

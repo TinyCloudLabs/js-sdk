@@ -102,7 +102,8 @@ The new auth introduces a clear distinction between identity types:
 | `sessionDid` | Session key identity | Always (even before sign-in) |
 
 ```typescript
-const tcw = new TinyCloudWeb({ useNewAuth: true });
+const manifest = { app_id: 'com.example.notes', name: 'Notes' };
+const tcw = new TinyCloudWeb({ useNewAuth: true, manifest });
 
 // Before sign-in
 console.log(tcw.sessionDid); // did:key:z6Mk...#z6Mk...
@@ -121,7 +122,8 @@ Start without a wallet and receive delegations:
 
 ```typescript
 // Create in session-only mode (no wallet required)
-const tcw = new TinyCloudWeb({ useNewAuth: true });
+const manifest = { app_id: 'com.example.notes', name: 'Notes' };
+const tcw = new TinyCloudWeb({ useNewAuth: true, manifest });
 
 // Properties available immediately
 console.log(tcw.isSessionOnly);    // true

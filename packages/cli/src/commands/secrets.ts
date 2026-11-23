@@ -43,7 +43,7 @@ import {
 import { theme } from "../output/theme.js";
 import { handleError, CLIError, cliErrorFromService, wrapError } from "../output/errors.js";
 import { mergeWarnings } from "../output/warnings.js";
-import { ExitCode } from "../config/constants.js";
+import { CLI_DEFAULT_SESSION_EXPIRY_MS, ExitCode } from "../config/constants.js";
 import { validatePrivateOutput, writePrivateOutput } from "../lib/private-output.js";
 import { ensureAuthenticated } from "../lib/sdk.js";
 import { closeReplication } from "../lib/replication-registry.js";
@@ -409,6 +409,14 @@ function assertOwnerApprovalPossible(profileName: string, profile: ProfileConfig
 
 function scopedSecretLoginHint(profileName: string): string {
   return `Have the owner approve a scoped login whose manifest names the secret: ${CLI_NAME} --profile ${profileName} auth login --method openkey --paste --manifest <manifest.json>. Pass the owner's code on stdin, newline-terminated.`;
+}
+
+/** What a network grant lets the recipient do, printed once the grant is made; `expiry` is the signed end, when the node-sdk reports one. */
+function networkGrantNotice(recipientDid: string, networkName: string, expiry: Date | undefined): string {
+  const until = expiry instanceof Date && Number.isFinite(expiry.getTime())
+    ? `until ${expiry.toISOString().slice(0, 16).replace("T", " ")} UTC`
+    : "for as long as this grant lasts";
+  return `${safeInline(recipientDid)} can read every secret in the "${safeInline(networkName)}" network, including secrets added later, ${until}.`;
 }
 
 
@@ -1886,9 +1894,10 @@ export function registerSecretsCommand(
 
         const scopeOptions = resolveSecretScope(options);
         assertSecretValueMatchesType(secretType, secretValue);
-        const putOptions = secretType === undefined
+        const namedKey = process.env.TC_SECRETS_NAMED_KEY_WRITES === "1";
+        const putOptions = secretType === undefined && !namedKey
           ? scopeOptions
-          : { ...scopeOptions, type: secretType };
+          : { ...scopeOptions, ...(secretType === undefined ? {} : { type: secretType }), ...(namedKey ? { namedKey: true } : {}) };
         const result = await runSecretOperation({
           ctx,
           openKeyAcquisition,
@@ -1949,8 +1958,10 @@ export function registerSecretsCommand(
     });
 
   network
-    .command("grant <recipientDid> [name]")
-    .description("Grant decrypt permission for a secrets encryption network")
+    .command("grant")
+    .argument("<recipientDid>")
+    .argument("[name]", "network name (default: default)")
+    .description("Let someone read every secret in an encryption network")
     .option("--expiry <duration>", "How long the grant lasts, for example 30m, 1h or 2d. Default 1h, at most 7d; longer values are cut to 7d.")
     .option("--private-key <hex>", "Ethereum private key override (or set TC_PRIVATE_KEY)")
     .action(async (recipientDid: string, name: string | undefined, options, cmd) => {
@@ -1979,9 +1990,10 @@ export function registerSecretsCommand(
         // Wallet-signed, so its delegator is the owner and `account revoke` can end it: the node lets an owner revoke
         // an encryption-only delegation only when the owner signed it (TC-3284).
         const result = await withSpinner(
-          `Granting decrypt permission to ${recipientDid}...`,
+          `Granting ${safeInline(recipientDid)} access to read secrets...`,
           () => node.delegateTo(recipientDid, [permission], { expiry: expiryMs, forceWalletSign: true }),
         );
+        process.stderr.write(networkGrantNotice(recipientDid, networkName, result.delegation.expiry) + "\n");
 
         outputJson({
           networkId: descriptor.networkId,
@@ -1990,6 +2002,7 @@ export function registerSecretsCommand(
           prompted: result.prompted,
           path: result.delegation.path,
           actions: result.delegation.actions,
+          scope: "whole-network",
           expiresAt: result.delegation.expiry.toISOString(),
         });
       } catch (error) {

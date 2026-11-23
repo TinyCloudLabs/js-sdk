@@ -221,8 +221,10 @@ export class WebSecretsService implements ISecretsService {
   ): ReturnType<ISecretsService["put"]> {
     const tooLong = secretNameTooLongRefusal(name);
     if (tooLong) return tooLong;
-    const refusal = this.config.namedKeysSupported ? namedKeysPutRefusal(await this.config.namedKeysSupported()) : undefined;
-    if (refusal) return refusal;
+    if (options?.namedKey === true && this.config.namedKeysSupported) {
+      const refusal = namedKeysPutRefusal(await this.config.namedKeysSupported());
+      if (refusal) return refusal;
+    }
     const permission = await this.ensureMutationPermission(
       name,
       options,

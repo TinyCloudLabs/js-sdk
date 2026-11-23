@@ -87,7 +87,10 @@ describe.skipIf(!nodeBinary)(
       const ownerNetwork = `urn:tinycloud:encryption:did:pkh:eip155:1:${await new PrivateKeySigner(privateKey).getAddress()}:default`;
       const capabilityRequest = composeManifestRequest([{
         app_id: "delegated-encryption.test", name: "Delegated encryption e2e", prefix: "", space: "default", defaults: "all",
-        permissions: [{ service: "tinycloud.kv", space: "secrets", path: "vault/secrets/", actions: ["get", "put", "del", "list", "metadata"] }],
+        permissions: [
+          { service: "tinycloud.kv", space: "secrets", path: "vault/secrets/", actions: ["get", "put", "del", "list", "metadata"] },
+          { service: "tinycloud.kv", space: "applications", path: "vault/secrets/", actions: ["get", "put", "del", "list", "metadata"] },
+        ],
       }]);
       capabilityRequest.resources.push(
         { service: "tinycloud.encryption", space: "encryption", path: ownerNetwork, actions: ["tinycloud.encryption/decrypt"], skipPrefix: true },
@@ -113,7 +116,7 @@ describe.skipIf(!nodeBinary)(
         [secretsSpace, "OTHER_KEY", "other-value"],
         [primarySpace, "PRIMARY_KEY", "primary-space-value"],
       ] as const) {
-        const put = await owner.secretsForSpace(space).put(name, value);
+        const put = await owner.secretsForSpace(space).put(name, value, { namedKey: true });
         expect(put.ok, JSON.stringify(put.ok ? undefined : put.error)).toBe(true);
       }
       const encrypted = await owner.encryption.encryptToNetwork(networkId, plaintext);
@@ -248,14 +251,16 @@ describe.skipIf(!nodeBinary)(
     test("an owner without a secret's own key: reads ask for exactly that key, and only an opted-in get signs", async () => {
       const hint = { service: "tinycloud.encryption", path: `${networkId}/secrets/other_key`, actions: ["tinycloud.encryption/decrypt"] };
       const signer = (owner as unknown as { signer: NonNullable<ConstructorParameters<typeof TinyCloudNode>[0]["signer"]> }).signer;
-      // The same wallet with the plain sign-in: the network decrypt only, never a
+      // The same wallet signed in with the owner defaults: the network decrypt only, never a
       // secrets/ key (that comes only from an explicit capability request).
+      const { ownerFullAccess } = await import("@tinycloud/sdk-core");
       const plain = new TinyCloudNode({
         host,
         tinycloudRegistryUrl: registry.url.origin,
         signer,
         wasmBindings: new NodeWasmBindings(),
         domain: "delegated-encryption.test",
+        ...ownerFullAccess(),
       });
       await plain.signIn();
       expect(await plain.readSecret({ space: secretsSpace, name: "OTHER_KEY" })).toEqual({ status: "permission_required", hint });
@@ -278,7 +283,7 @@ describe.skipIf(!nodeBinary)(
         expect(restored.isSessionOnly).toBe(true);
         const denied = await restored.secretsForSpace(secretsSpace).get("OTHER_KEY", { requestPermission: true });
         expect(denied.ok ? undefined : denied.error).toMatchObject({ code: "DECRYPT_DENIED", key: "secrets/OTHER_KEY", permissionHint: hint });
-        const put = await restored.secretsForSpace(secretsSpace).put("OTHER_KEY", "overwritten");
+        const put = await restored.secretsForSpace(secretsSpace).put("OTHER_KEY", "overwritten", { namedKey: true });
         expect(put.ok ? undefined : put.error.code).toBe("PERMISSION_DENIED");
         expect(signatures).toBe(0);
 
@@ -361,7 +366,7 @@ describe.skipIf(!nodeBinary)(
       const scope = "s".repeat(64);
       const secrets = owner.secretsForSpace(secretsSpace);
 
-      const put = await secrets.put(name, "longest-value", { scope });
+      const put = await secrets.put(name, "longest-value", { scope, namedKey: true });
       expect(put.ok, JSON.stringify(put.ok ? undefined : put.error)).toBe(true);
       const record = await owner.kvForSpace(secretsSpace).get<unknown>(`vault/secrets/scoped/${scope}/${name}`);
       if (!record.ok) throw new Error(JSON.stringify(record.error));

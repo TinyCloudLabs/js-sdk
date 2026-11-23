@@ -14,6 +14,7 @@ import type {
   IWasmBindings,
   NodeNotFoundError,
   PermissionEntry,
+  PersistedSessionProof,
   ServiceSession,
   SpaceHostResult,
   TinyCloudSession,
@@ -67,6 +68,8 @@ export interface RuntimeGrantPorts<Operation> {
   ): Promise<SpaceHostResult>;
   spaceIdsEqual(a: string, b: string): boolean;
   operations(entries: PermissionEntry[], spaceId: string): Operation[];
+  /** Hears every root signed for the session key, before it is posted anywhere (TC-3443 sign-out retire). */
+  retainRoot(root: Omit<PersistedSessionProof, "jwk" | "spaces" | "verificationMethod">): void;
   install(grant: {
     session: ServiceSession;
     delegation: PortableDelegation;
@@ -198,6 +201,15 @@ export async function issueRuntimeGrants<Operation>(
   graph.assertActive();
   const delegatedSession = ports.wasm.completeSessionSetup({
     ...prepared,
+    signature,
+  });
+  ports.retainRoot({
+    delegationHeader: delegatedSession.delegationHeader,
+    delegationCid: delegatedSession.delegationCid,
+    spaceId: primarySpaceId,
+    address: session.address,
+    chainId: session.chainId,
+    siwe: prepared.siwe,
     signature,
   });
   // One portable delegation per space, all proven by the one signed session

@@ -1,5 +1,5 @@
 const TEE_NODE_ORIGIN = "https://tee.node.tinycloud.xyz";
-const PRODUCTION_NODE_ORIGINS = new Set([
+export const PRODUCTION_NODE_ORIGINS: ReadonlySet<string> = new Set([
   "https://node.tinycloud.xyz",
   TEE_NODE_ORIGIN,
 ]);

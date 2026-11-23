@@ -174,14 +174,12 @@ Secrets are stored as network-encrypted inline envelopes and read through
 `tinycloud.encryption/decrypt`. Secret names are env-style uppercase
 identifiers such as `FIREFLIES_API_KEY`. `tinycloud secrets network show` accepts
 either a short network name or a full
-`urn:tinycloud:encryption:<ownerDid>:<network>` identifier. `tinycloud secrets
-network grant` lets another key decrypt all your encrypted data that isn't on a
-key of its own, including every secret in the older format
-(`tinycloud.encryption/decrypt`). Your wallet signs the grant, so `tinycloud
-account delegations revoke <cid>` ends it. It lasts 1 hour unless you pass
-`--expiry`, and at most 7 days; a longer value is cut to 7 days. `expiresAt` in
-the JSON output shows when it ends. Share the decrypt grant separately from any
-KV or SQL reads the app also needs.
+`urn:tinycloud:encryption:<ownerDid>:<network>` identifier, and `tinycloud secrets
+network grant` takes the short network name, resolves the network, and issues
+`tinycloud.encryption/decrypt` on the whole network: every secret in it, including secrets added later. Your wallet
+signs the grant, so `tinycloud account delegations revoke <cid>` ends it. It lasts 1 hour unless you pass `--expiry`,
+and at most 7 days; a longer value is cut to 7 days. `expiresAt` in the JSON output shows when it ends. Share the decrypt grant
+separately from any KV or SQL reads the app also needs.
 
 ```bash
 tinycloud secrets network init
@@ -571,7 +569,7 @@ Use `--json` for machine-readable output; interactive commands can render human 
 
 General storage/auth exit codes: 0 success, 1 operation error (including `PROFILE_MIGRATION_REQUIRED` and `PROBE_FAILED`), 2 invalid input, 3 authentication required, 4 not found, 5 permission denied, 6 network error, 7 node error, 8 pending (`tinycloud secrets wait`; `onboard` and `auth grant` with `--timeout`, where it is an approval still pending or OpenKey not reachable), 10 storage full, 130 interrupted (`CANCELLED`). `tinycloud share` uses its own: 1 profile lock timeout, sender-history retry or unconfirmed revocation (`PROFILE_LOCK_TIMEOUT`, `SHARE_HISTORY_RETRY`, `SHARE_REVOKE_UNCONFIRMED`), 3 upload authority required, 4 unavailable, expired, revoked bearer link, upload failed or revocation refused (`SHARE_LINK_UNAVAILABLE`, `SHARE_REVOKED`, `SHARE_REVOKE_REJECTED`), 5 permission denied (`PERMISSION_DENIED`, `SHARE_ISSUER_KEY_UNAVAILABLE`) or verification failed, 6 recipient authorization required or network error, 7 byte limit, 8 (unused by share: output conflicts, unsafe filenames and unsafe folder paths are exit 2 `OUTPUT_EXISTS`, `UNSAFE_FILENAME`, `UNSAFE_PATH`), 9 partial success, 10 storage full.
 
-`tinycloud secrets put` against a node without per-secret keys (no `encryption-named-keys-v1`) exits 11 with `NAMED_KEYS_UNSUPPORTED`, before any wallet prompt, and nothing is saved. `tinycloud share` has no exit 11. `secrets get|list|delete` still work on secrets already stored there.
+`tinycloud secrets put` seals to the network key by default. Set `TC_SECRETS_NAMED_KEY_WRITES=1` to seal to the secret's own key. With opt-in, a node without `encryption-named-keys-v1` returns `NAMED_KEYS_UNSUPPORTED` (exit 11) before any secret permission request or write. A failed feature check returns `NAMED_KEYS_CHECK_FAILED` (exit 6). Adopt readers for both formats before enabling per-secret keys for writes.
 
 `tinycloud secrets run` exits with its command's status once the command has started. Before that it uses the codes above, plus 126 (the command cannot be executed or started) and 127 (the command does not exist).
 

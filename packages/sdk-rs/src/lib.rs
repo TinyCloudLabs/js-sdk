@@ -195,11 +195,22 @@ pub fn validateSessionGrant(proof: JsValue) -> Result<JsValue, JsValue> {
     validate_signed_session(proof, SignedSessionUse::Grant)
 }
 
+/// Verify a wallet-signed root of a session key (the session's own or a
+/// runtime grant's) with every check of [`validateSessionGrant`] except the
+/// time window and the non-empty ReCap: sign-out retires the key against its
+/// roots that are expired or not yet valid too (TC-3443).
+#[wasm_bindgen]
+#[allow(non_snake_case)]
+pub fn validateSessionRoot(proof: JsValue) -> Result<JsValue, JsValue> {
+    validate_signed_session(proof, SignedSessionUse::Root)
+}
+
 #[derive(Clone, Copy, PartialEq)]
 enum SignedSessionUse {
     Session,
     Grant,
     RenewalCandidate,
+    Root,
 }
 
 const RAW_ENCRYPTION: &str = "encryption";
@@ -270,6 +281,7 @@ fn validate_signed_session(proof: JsValue, usage: SignedSessionUse) -> Result<Js
             .map(|not_before| not_before < &now)
             .unwrap_or(true),
         SignedSessionUse::Session | SignedSessionUse::Grant => signed.session.siwe.valid_at(&now),
+        SignedSessionUse::Root => true,
     };
     if !time_valid {
         return Err(JsValue::from_str("persisted SIWE is expired or not yet valid"));
@@ -289,7 +301,7 @@ fn validate_signed_session(proof: JsValue, usage: SignedSessionUse) -> Result<Js
         return Err(JsValue::from_str("session grant carries no ReCap authority"));
     }
     // Raw encryption-network resources are the only authority without a space.
-    let raw_only_grant = usage == SignedSessionUse::Grant
+    let raw_only_grant = matches!(usage, SignedSessionUse::Grant | SignedSessionUse::Root)
         && recap
             .iter()
             .all(|entry| entry.space == RAW_ENCRYPTION && entry.service == RAW_ENCRYPTION);

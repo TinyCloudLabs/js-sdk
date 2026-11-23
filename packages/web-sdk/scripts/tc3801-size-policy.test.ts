@@ -11,21 +11,21 @@ import {
 test("TC-3801 records the exact canonical CI root bytes of #1131", () => {
   validateLedger(ledger);
   const row = ledger.tc3801NamedKeysRoot;
-  const predecessor = ledger.tc2490OneApprovalRoot;
+  const predecessor = ledger.tc3947ReplicaRevokeRoot;
   expect(row).toEqual(approvedTc3801NamedKeysRoot);
-  expect(row.base).toBe("cb3edeab4f66ae2fc7f84243c7b8fdc3a15fc812");
+  expect(row.base).toBe("979145a429cbc0fb1c107da4e211dbabeb9afb81");
   expect(row.canonicalCI).toEqual({
-    run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45036860065",
+    run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45128664935",
     jobs: [
-      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45036860065/job/137252523301",
-      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45036860065/job/137252523541",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45128664935/job/137538818194",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45128664935/job/137538818578",
     ],
   });
-  expect(row.sourceCommits).toEqual(["6d1bfa617057ea9ad1432b18a5ed91fe68162803"]);
-  expect(row.root.ceiling).toEqual({ "index.mjs": 1534477, "index.cjs": 1466213 });
-  expect(row.root.delta).toEqual({ "index.mjs": 4619, "index.cjs": 3364 });
+  expect(row.sourceCommits).toEqual(["f9fd4d997b3b3d42093650e10b3c175c238d486d"]);
+  expect(row.root.ceiling).toEqual({ "index.mjs": 1539368, "index.cjs": 1471344 });
+  expect(row.root.delta).toEqual({ "index.mjs": 3822, "index.cjs": 4391 });
 
-  // Naomi's ruling lifts the per-row byte cap for this row: the delta is exactly CI's.
+  // The ruling lifts the per-row byte cap for this row: the delta is exactly CI's.
   for (const format of ["index.mjs", "index.cjs"] as const) {
     expect(row.root.ceiling[format] - predecessor.root.ceiling[format]).toBe(row.root.delta[format]);
     expect(rootCeilingFor({ ...ledger, tc3802SecretKeyCapRoot: undefined }, format)).toEqual({ row: "tc3801NamedKeysRoot", ceiling: row.root.ceiling[format] });
@@ -40,7 +40,7 @@ test("TC-3801 records the exact canonical CI root bytes of #1131", () => {
   ]);
 });
 
-test("TC-3801 refuses mutation, removal, or a missing TC-2490 predecessor", () => {
+test("TC-3801 refuses mutation, removal, or a missing TC-3947 predecessor", () => {
   const row = ledger.tc3801NamedKeysRoot;
   validateTc3801NamedKeysRootTransition(undefined, row);
   validateTc3801NamedKeysRootTransition(row, structuredClone(row));
@@ -58,5 +58,5 @@ test("TC-3801 refuses mutation, removal, or a missing TC-2490 predecessor", () =
   }
 
   expect(() => validateTc3801NamedKeysRootTransition(row, undefined)).toThrow("TC-3801");
-  expect(() => validateLedger({ ...ledger, tc2490OneApprovalRoot: undefined })).toThrow("TC-3801");
+  expect(() => validateLedger({ ...ledger, tc3947ReplicaRevokeRoot: undefined })).toThrow("TC-3801");
 });
