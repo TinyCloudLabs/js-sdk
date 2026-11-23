@@ -1,5 +1,14 @@
 # @tinycloudlabs/node-demo
 
+## 0.0.53-beta.15
+
+### Patch Changes
+
+- Updated dependencies [52f7d4c]
+  - @tinycloud/sdk-core@3.14.0-beta.17
+  - @tinycloud/node-sdk@3.14.0-beta.17
+  - @tinycloud/vfs@0.2.22-beta.15
+
 ## 0.0.53-beta.14
 
 ### Patch Changes
