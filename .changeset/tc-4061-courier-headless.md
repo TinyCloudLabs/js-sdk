@@ -1,5 +1,5 @@
 ---
-"@tinycloud/courier": minor
+"@tinycloud/courier": patch
 ---
 
 Courier exports a headless API for services that host many owners' agents: `acceptPairing`, `finalizePairing`, `listInbound`, `acknowledgeInbound`, `sendMessage`, `unpair` and `peerReference`. It runs from an explicit owner, agent, Node origin, session and peer store, and never reads a Courier home.
