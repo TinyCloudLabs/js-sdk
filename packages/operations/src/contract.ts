@@ -140,6 +140,17 @@ export type AuthorityPlanningContext = RuntimeOperationContext;
  */
 export type CapabilityRequirement = Readonly<Record<string, unknown>>;
 
+/**
+ * An exact capability that may satisfy a specific planned requirement during
+ * preflight — for example, a secret's own exact named encryption key
+ * satisfying `tinycloud.secrets.get@1`'s bare-network decrypt requirement
+ * without accepting prefixes, wildcards, or other secrets.
+ */
+export interface CapabilityAlternative {
+  readonly replaces: CapabilityRequirement;
+  readonly satisfiedBy: CapabilityRequirement;
+}
+
 export interface PermissionRequestArtifact {
   readonly requestId: string;
   readonly [key: string]: unknown;
@@ -279,6 +290,15 @@ export interface OperationDefinition<I, O> {
     context: AuthorityPlanningContext,
     input: I,
   ) => Promise<readonly CapabilityRequirement[]>;
+  /**
+   * Optional exact capability alternatives that satisfy a planned requirement
+   * during preflight without requiring the broader requirement or accepting
+   * prefixes, wildcards, or unrelated resources.
+   */
+  readonly authorityAlternatives?: (
+    context: AuthorityPlanningContext,
+    input: I,
+  ) => Promise<readonly CapabilityAlternative[]>;
   /**
    * Additional exact capabilities a node may name in a runtime permission hint
    * alongside `authority(...)` — for example, a secret's own named encryption

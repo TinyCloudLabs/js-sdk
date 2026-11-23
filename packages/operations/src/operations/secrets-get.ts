@@ -5,6 +5,7 @@ import { formatKeyResource, parseEncryptionResource } from "@tinycloud/sdk-servi
 
 import { CLI_NAME } from "../cli-name.js";
 import {
+  type CapabilityAlternative,
   type OperationContext,
   type CapabilityRequirement,
   type OperationDefinition,
@@ -79,6 +80,7 @@ export const secretsGetOperationDefinition: OperationDefinition<SecretsGetInput,
   exposure: SECRETS_GET_EXPOSURE,
   sensitivity: SECRETS_GET_SENSITIVITY,
   authority: planSecretGet,
+  authorityAlternatives: planSecretGetAuthorityAlternatives,
   runtimeHints: planSecretGetRuntimeHints,
   execute: executeSecretGet,
 };
@@ -133,29 +135,51 @@ async function planSecretGet(
   ];
 }
 
+function exactSecretKeyDecryptCapability(
+  reference: SecretReference,
+  networkId: string,
+): CapabilityRequirement | undefined {
+  try {
+    const keyPath = secretKeyPath(reference.name, reference.scope);
+    const parsed = parseEncryptionResource(networkId);
+    if (parsed.kind !== "network") return undefined;
+    return {
+      service: "tinycloud.encryption",
+      path: formatKeyResource(parsed.networkId, keyPath),
+      actions: ["tinycloud.encryption/decrypt"],
+    };
+  } catch {
+    // Names or scopes past the key-path limit, reserved names, or non-network ids have no named key.
+    return undefined;
+  }
+}
+
+async function planSecretGetAuthorityAlternatives(
+  context: RuntimeOperationContext,
+  input: SecretsGetInput,
+): Promise<readonly CapabilityAlternative[]> {
+  const { reference, networkId } = resolveSecretPlanTargets(context, input);
+  const exactKey = exactSecretKeyDecryptCapability(reference, networkId);
+  if (exactKey === undefined) return [];
+  return [
+    {
+      replaces: {
+        service: "tinycloud.encryption",
+        path: networkId,
+        actions: ["tinycloud.encryption/decrypt"],
+      },
+      satisfiedBy: exactKey,
+    },
+  ];
+}
+
 async function planSecretGetRuntimeHints(
   context: RuntimeOperationContext,
   input: SecretsGetInput,
 ): Promise<readonly CapabilityRequirement[]> {
   const { reference, networkId } = resolveSecretPlanTargets(context, input);
-  let keyResource: string;
-  try {
-    const keyPath = secretKeyPath(reference.name, reference.scope);
-    const parsed = parseEncryptionResource(networkId);
-    if (parsed.kind !== "network") return [];
-    keyResource = formatKeyResource(parsed.networkId, keyPath);
-  } catch {
-    // Names or scopes past the key-path limit, reserved names, or non-network ids have no named key.
-    return [];
-  }
-
-  return [
-    {
-      service: "tinycloud.encryption",
-      path: keyResource,
-      actions: ["tinycloud.encryption/decrypt"],
-    },
-  ];
+  const exactKey = exactSecretKeyDecryptCapability(reference, networkId);
+  return exactKey === undefined ? [] : [exactKey];
 }
 
 async function executeSecretGet(
