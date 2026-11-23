@@ -55,6 +55,8 @@
     "tc-3731-manifest-owner-placeholder",
     "tc-3801-secret-named-keys",
     "tc-3947-replica-revoke-json",
+    "tc-3969-signed-secret-key-coverage",
+    "tc-3971-secrets-owner-template",
     "tinycloud-one-naming"
   ]
 }

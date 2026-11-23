@@ -1,5 +1,17 @@
 # @tinycloudlabs/node-sdk
 
+## 3.14.0-beta.16
+
+### Patch Changes
+
+- 9919d97: `hasPermissions` and `hasRuntimePermissions` recognize exact secret-key permissions signed in the session, even when the same session has a bare encryption-network grant. An exact key does not cover a different key, a broader prefix or an unsigned action.
+
+  Details: TC-3969
+
+- 9919d97: Secrets permission checks use the signed-in owner's resolved manifest when the app declares an encryption path with `{owner}`. The template remains unchanged for sign-in. Apps can read secrets sealed to the network key and write secrets without asking again for permissions already granted.
+
+  Details: TC-3971
+
 ## 3.14.0-beta.15
 
 ### Minor Changes
