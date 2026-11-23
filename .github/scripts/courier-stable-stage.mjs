@@ -17,6 +17,7 @@
 //                                     deterministically, after the caller has settled bun.lock; prints the sha
 //   release-sha                       print the plan's releaseSha (the workflow checks out exactly this)
 //   build-filters                     the turbo --filter arguments for the plan, one per line
+//   plan-flags                        GITHUB_OUTPUT lines for plan-dependent steps (node_release_check)
 //   verify-route                      dispatch on master at a master commit; the plan is sealed
 //   guard-route                       verify-route, and the release commit is the plan's (delta, manifests)
 //   pack <out-dir>                    npm pack the plan's packages, write manifest.json
@@ -50,6 +51,18 @@ const REQUIRED_FILES = {
   "@tinycloud/cli": ["bin/tinycloud", "dist/index.js"],
 };
 
+// What a package's tarball must ship: the table's files plus the plan's own list (a plan adds, never replaces). Only a
+// package with neither falls back to dist/index.js, so a build that has no dist/index.js (web-sdk) lists its own files.
+export const requiredFiles = (pkg) => {
+  const table = REQUIRED_FILES[pkg.name] ?? [];
+  const listed = pkg.requiredFiles ?? [];
+  const all = [...new Set([...table, ...listed])];
+  return all.length ? all : ["dist/index.js"];
+};
+
+// Which plan-dependent workflow steps apply. The node release pin check is the CLI's own.
+export const planFlags = (plan) => ({ nodeReleaseCheck: plan.byName.has("@tinycloud/cli") });
+
 const fail = (message) => {
   throw new Error(message);
 };
@@ -63,6 +76,10 @@ export function loadPlan(id, policy = JSON.parse(readFileSync(POLICY_FILE, "utf8
   if (plan.tag !== "staging") fail(`policy tag is "${plan.tag}", not staging`);
   for (const pkg of plan.packages) {
     if (!EXACT_STABLE.test(pkg.stable) || !pkg.from || !pkg.dir.startsWith("packages/")) fail(`plan ${id}: malformed package ${JSON.stringify(pkg)}`);
+    const files = pkg.requiredFiles;
+    if (files !== undefined && (!Array.isArray(files) || files.length === 0 || !files.every((file) => typeof file === "string" && /^(?!.*(^|\/)\.\.?(\/|$))[\w@.+-]+(\/[\w@.+-]+)*$/.test(file)))) {
+      fail(`plan ${id}: ${pkg.name} requiredFiles must be a non-empty list of safe relative paths`);
+    }
   }
   plan.byName = new Map(plan.packages.map((pkg) => [pkg.name, pkg]));
   plan.pinByName = new Map(plan.pins.map((pin) => [pin.name, pin]));
@@ -222,7 +239,7 @@ export function tarballProblems({ pkg, entries, manifest, plan }) {
   for (const key of Object.keys(manifest.publishConfig ?? {})) {
     if (!["access", "provenance"].includes(key)) problems.push(`${pkg.name}: publishConfig.${key} could redirect the publish`);
   }
-  for (const file of REQUIRED_FILES[pkg.name] ?? ["dist/index.js"]) {
+  for (const file of requiredFiles(pkg)) {
     if (!entries.some((entry) => entry.path === `package/${file}`)) problems.push(`${pkg.name}: tarball lacks ${file}`);
   }
   return problems;
@@ -484,6 +501,8 @@ async function main([command, ...args]) {
     console.log(plan.releaseSha);
   } else if (command === "build-filters") {
     console.log(buildFilters(plan).join("\n"));
+  } else if (command === "plan-flags") {
+    console.log(`node_release_check=${planFlags(plan).nodeReleaseCheck}`);
   } else if (command === "verify-route" || command === "guard-route") {
     const common = { env: process.env, repo: gitRepo(), masterTip: git(["rev-parse", "refs/remotes/origin/master"]).trim(), plan, git: gitOut };
     const problems = command === "verify-route" ? guardRouteHead(common) : guardRoute(common);
@@ -498,7 +517,7 @@ async function main([command, ...args]) {
   } else if (command === "publish") {
     await publish(plan, args[0], { manifestSha256: process.env.MANIFEST_SHA256 });
   } else {
-    fail("usage: courier-stable-stage.mjs prepare|release-sha|build-filters|verify-route|guard-route|pack|verify-tarballs|publish");
+    fail("usage: courier-stable-stage.mjs prepare|release-sha|build-filters|plan-flags|verify-route|guard-route|pack|verify-tarballs|publish");
   }
 }
 

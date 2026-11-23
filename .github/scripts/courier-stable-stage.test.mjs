@@ -8,6 +8,8 @@ import test from "node:test";
 
 import {
   buildFilters,
+  planFlags,
+  requiredFiles,
   guardRoute,
   guardRouteHead,
   ROOT_NPMRC,
@@ -528,4 +530,115 @@ test("a package-directory .npmrc is always refused, even the benign line", (t) =
     const { cwd, pkgDir } = npmrcCheckout(t, { committed: `${ROOT_NPMRC}\n`, packageNpmrc });
     assert.match(npmrcProblems(cwd, pkgDir).join(), /packages\/p\/\.npmrc would change npm's registry or auth/, JSON.stringify(packageNpmrc));
   }
+});
+
+// ---- non-Courier plans: per-package requiredFiles and plan-dependent steps ------------------------------------------
+
+const webSdkPlan = (requiredFiles) =>
+  loadPlan("web", {
+    ...policy,
+    plans: {
+      web: {
+        ...policy.plans["courier-0.8.1"],
+        packages: [{ name: "@tinycloud/web-sdk", dir: "packages/web-sdk", from: "3.14.0-beta.21", stable: "3.14.1", ...(requiredFiles ? { requiredFiles } : {}) }],
+        pins: [],
+      },
+    },
+  });
+const WEB_FILES = ["dist/index.mjs", "dist/index.cjs", "dist/index.d.ts"];
+
+test("a plan's requiredFiles are what a table-less package must ship: a web-sdk build is accepted, a missing file refused", () => {
+  const plan = webSdkPlan(WEB_FILES);
+  const pkg = plan.packages[0];
+  const manifest = { name: "@tinycloud/web-sdk", version: "3.14.1", dependencies: { zod: "^3.23.0" } };
+  const shipped = ["package/package.json", ...WEB_FILES.map((file) => `package/${file}`)].map((path) => entry(path));
+  assert.deepEqual(tarballProblems({ pkg, plan, entries: shipped, manifest }), []);
+  const missing = tarballProblems({ pkg, plan, entries: shipped.filter((e) => e.path !== "package/dist/index.cjs"), manifest });
+  assert.match(missing.join(), /@tinycloud\/web-sdk: tarball lacks dist\/index\.cjs/);
+  // Without the plan's list the default (dist/index.js) applies and this build would be refused.
+  const plain = webSdkPlan();
+  assert.match(tarballProblems({ pkg: plain.packages[0], plan: plain, entries: shipped, manifest }).join(), /lacks dist\/index\.js/);
+});
+
+test("a plan's requiredFiles add to the table and never replace it", () => {
+  // (a) a plan listing README.md for the CLI still requires the table's bin/tinycloud and dist/index.js.
+  const cli = { ...pkgOf("@tinycloud/cli"), requiredFiles: ["README.md"] };
+  assert.deepEqual([...requiredFiles(cli)].sort(), ["README.md", "bin/tinycloud", "dist/index.js"]);
+  const plan = real;
+  const manifest = stableManifest(pkgOf("@tinycloud/cli"));
+  const entries = (...paths) => paths.map((path) => entry(`package/${path}`));
+  assert.deepEqual(tarballProblems({ pkg: cli, plan, entries: entries("package.json", "bin/tinycloud", "dist/index.js", "README.md"), manifest }), []);
+  const noBin = tarballProblems({ pkg: cli, plan, entries: entries("package.json", "dist/index.js", "README.md"), manifest }).join();
+  assert.match(noBin, /lacks bin\/tinycloud/);
+  assert.match(tarballProblems({ pkg: cli, plan, entries: entries("package.json", "bin/tinycloud", "dist/index.js"), manifest }).join(), /lacks README\.md/);
+  // The plan listing a table file again does not duplicate it.
+  assert.deepEqual(requiredFiles({ ...pkgOf("@tinycloud/courier"), requiredFiles: ["dist/cli.js", "x/y.js"] }), ["dist/cli.js", "dist/index.js", "x/y.js"]);
+});
+
+test("a package with a plan list and no table entry does not need dist/index.js (web-sdk)", () => {
+  // (b)
+  const webSdk = loadPlan("tc-4082").byName.get("@tinycloud/web-sdk");
+  assert.equal(requiredFiles(webSdk).includes("dist/index.js"), false);
+  assert.deepEqual(requiredFiles(webSdk), webSdk.requiredFiles);
+});
+
+test("a package with neither a table entry nor a plan list still requires dist/index.js", () => {
+  // (c)
+  assert.deepEqual(requiredFiles(pkgOf("@tinycloud/bootstrap")), ["dist/index.js"]);
+  assert.deepEqual(requiredFiles(pkgOf("@tinycloud/courier")), ["dist/cli.js", "dist/index.js"]);
+  assert.deepEqual(requiredFiles(pkgOf("@tinycloud/cli")), ["bin/tinycloud", "dist/index.js"]);
+});
+
+test("requiredFiles must be a non-empty list of safe relative paths", () => {
+  for (const bad of [[], "dist/index.js", ["../evil"], ["/etc/passwd"], ["dist/../x"], ["dist//x"], ["./dist/x"], [""], [1], ["dist/a b"]]) {
+    assert.throws(() => webSdkPlan(bad), /requiredFiles must be a non-empty list of safe relative paths/, JSON.stringify(bad));
+  }
+  assert.doesNotThrow(() => webSdkPlan(["dist/index.mjs", "dist/wasm/index.cjs"]));
+});
+
+test("the node release pin check applies only to plans that stage the CLI", () => {
+  assert.deepEqual(planFlags(real), { nodeReleaseCheck: true });
+  assert.deepEqual(planFlags(loadPlan("courier-0.8.1")), { nodeReleaseCheck: false });
+  assert.deepEqual(planFlags(webSdkPlan(WEB_FILES)), { nodeReleaseCheck: false });
+});
+
+test("the tc-4082 plan is closed until sealed, and names the six packages with the files each must ship", () => {
+  const plan = loadPlan("tc-4082");
+  assert.match(sealProblems(plan).join("\n"), /releaseSha is null/);
+  assert.match(sealProblems(plan).join("\n"), /expectedDelta/);
+  assert.equal(plan.base, BASE);
+  assert.equal(plan.sourceSha, "30025b74fccebc13c18f0b34ec0f87174b0304f7");
+  assert.deepEqual(Object.fromEntries(plan.packages.map((pkg) => [pkg.name, pkg.stable])), {
+    "@tinycloud/bootstrap": "2.10.1",
+    "@tinycloud/sdk-services": "3.14.1",
+    "@tinycloud/sdk-core": "3.14.1",
+    "@tinycloud/node-sdk": "3.14.1",
+    "@tinycloud/web-sdk-wasm": "1.8.0",
+    "@tinycloud/web-sdk": "3.14.1",
+  });
+  assert.deepEqual(plan.pins.map((pin) => `${pin.name} ${pin.from}->${pin.to}`).sort(), ["@tinycloud/node-sdk-wasm 1.8.0-beta.0->1.8.0", "@tinycloud/replica 0.4.7-beta.6->0.4.7"]);
+  // web-sdk is built, not excluded.
+  assert.deepEqual(buildFilters(plan).filter((filter) => filter.startsWith("--filter=!")), []);
+  assert.ok(buildFilters(plan).includes("--filter=@tinycloud/web-sdk..."));
+  assert.ok(plan.packages.every((pkg) => requiredFiles(pkg).length >= 3), "every package states what it ships");
+  assert.deepEqual(planFlags(plan), { nodeReleaseCheck: false });
+});
+
+test("tc-4082's web-sdk must ship every file its exports and entry chunks point at", () => {
+  const webSdk = loadPlan("tc-4082").byName.get("@tinycloud/web-sdk");
+  const files = new Set(requiredFiles(webSdk));
+  // package.json main/module/types and the exports "." "./replica" "./replica-gated" "./credentials" targets.
+  for (const file of ["index.cjs", "index.mjs", "index.d.ts", "replica.cjs", "replica.mjs", "replica.d.ts", "replica-gated.cjs", "replica-gated.mjs", "replica-gated.d.ts", "credentials.cjs", "credentials.mjs", "credentials-subpath.d.ts"]) {
+    assert.ok(files.has(`dist/${file}`), file);
+  }
+  // Every entry chunk, in both module formats.
+  for (const name of ["delegations-issued", "delegations-renewal", "encryption-keys", "modals", "panel-data", "panel", "registry-verdict-cache", "runtime-grants", "secret-read", "session-retire", "share-placement", "space-hosting"]) {
+    for (const ext of ["cjs", "mjs"]) assert.ok(files.has(`dist/${name}.${ext}`), `${name}.${ext}`);
+  }
+  const staged = ["index.cjs", "index.mjs", "index.d.ts", ...[...files].map((f) => f.slice("dist/".length))].filter((f, i, all) => all.indexOf(f) === i);
+  const shipped = staged.map((file) => entry(`package/dist/${file}`));
+  const manifest = { name: "@tinycloud/web-sdk", version: "3.14.1", dependencies: { zod: "^3.23.0" } };
+  const plan = loadPlan("tc-4082");
+  assert.deepEqual(tarballProblems({ pkg: webSdk, plan, entries: [entry("package/package.json"), ...shipped], manifest }), []);
+  assert.match(tarballProblems({ pkg: webSdk, plan, entries: [entry("package/package.json"), ...shipped.filter((e) => e.path !== "package/dist/space-hosting.mjs")], manifest }).join(), /lacks dist\/space-hosting\.mjs/);
 });
