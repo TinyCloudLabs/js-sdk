@@ -247,21 +247,21 @@ export async function cmdWatch(args: ParsedArgs): Promise<void> {
   }
 
   const log = jsonLineLog();
-  const node = await createRuntimeNode();
+  let node = await createRuntimeNode();
   const watcher = new Watcher({
-    beforePoll: () => watchOwnerPreflight(node),
+    beforePoll: async () => { node = await watchOwnerPreflight(node); },
     // One peer, before acting for it: a strict verdict (inbound grant probed too; anything but positive throws, so the
     // action fails closed). Every peer: the 300 s housekeeping.
     checkAuthority: (handle) => handle === undefined ? maintainPeerSet(node) : maintainPeerSet(node, handle, true, true),
     onAuthorityRefusal: recordAuthorityRefusal,
     notificationHome: config.home,
     notifyOnly: config.adapter === 'none',
-    selfKv: node.kv,
+    get selfKv() { return node.kv; },
     // The DID the restored node session signs as: captured after the reload, so a key rotated meanwhile cannot split
     // this watcher from the identity its node acts as.
     agent: node.credentialHolderDid,
     spaceId: profile.spaceId!,
-    selfHooks: node.hooks,
+    get selfHooks() { return node.hooks; },
     peerHooks: (peer) => peerHooks(node, loadProfile(), peer),
     loadPeers: () => Object.values(loadProfile().peers).filter(peer => watchPeerEligible(peer)),
     peerHandles: () => Object.keys(loadProfile().peers),

@@ -8,10 +8,14 @@ import type { StoredPeer } from './profile.js';
 import { courierNode, peerKv } from './node.js';
 import { clearLocalCaches } from './thread.js';
 import { maintainOutbound } from './interim-renewal.js';
-import { markOwnerRefused, preflightOwner } from './interim-owner.js';
+import { markOwnerRefused, preflightOwner, type OwnerPreflight } from './interim-owner.js';
 
-export async function prepareOwnerAccess(request = false) {
-  const result = await preflightOwner({ request });
+function ownerAuthorityRefused(): CourierError {
+  return new CourierError('owner-authority-refused', `Courier's access was refused, so automatic renewal has stopped. Run \`${cmd('init --request')}\` to request new approval.`);
+}
+
+function requireOwnerAccess(result: OwnerPreflight) {
+  if (result.state === 'authority-inactive') throw ownerAuthorityRefused();
   if (result.state === 'revoked') throw new CourierError('owner-revoked', `Courier access was revoked. Run \`${cmd('init --request')}\` to request new approval.`);
   if (result.state === 'approval-required') {
     throw new CourierError('approval-required', result.approvalUrl
@@ -22,6 +26,10 @@ export async function prepareOwnerAccess(request = false) {
     ? `Courier needs your approval to keep renewing access. Approve the request in OpenKey, then run \`${cmd('init --wait')}\`.\n${result.approvalUrl}`
     : `Courier couldn't create an approval request. Run \`${cmd('init --request')}\` to try again.`);
   return result;
+}
+
+export async function prepareOwnerAccess(request = false) {
+  return requireOwnerAccess(await preflightOwner({ request }));
 }
 
 /**
@@ -76,7 +84,7 @@ export async function maintainPeerSet(node: TinyCloudNode, target?: string, coll
     } catch (error) {
       if (isAuthorizationRefusal(error) || (error instanceof CourierError && error.code === 'owner-authority-refused')) {
         await markOwnerRefused();
-        throw new CourierError('owner-authority-refused', `Courier's access was refused, so automatic renewal has stopped. Run \`${cmd('init --request')}\` to request new approval.`);
+        throw ownerAuthorityRefused();
       }
       if (!(error instanceof CourierError)) throw error;
       canRequestApproval = false;
@@ -97,7 +105,7 @@ export async function maintainPeerSet(node: TinyCloudNode, target?: string, coll
     } catch (error) {
       if (isAuthorizationRefusal(error)) {
         await markOwnerRefused();
-        throw new CourierError('owner-authority-refused', `Courier's access was refused, so automatic renewal has stopped. Run \`${cmd('init --request')}\` to request new approval.`);
+        throw ownerAuthorityRefused();
       }
       // Unknown and transient results cannot authorize an automatic request.
     }
@@ -139,15 +147,19 @@ export async function createRuntimeNode(): Promise<TinyCloudNode> {
   }
 }
 
-/** Local only: owner access state, and a changed owner grant restarts a service so every captured SDK service uses the verified new session. */
-export async function watchOwnerPreflight(node: TinyCloudNode): Promise<void> {
-  await prepareOwnerAccess();
-  if (loadGrant()?.delegationCid !== node.restorableSession?.delegationCid) {
+/** A changed CID still needs a restart; a verified extension of the same grant swaps in the new SDK node. */
+export async function watchOwnerPreflight(node: TinyCloudNode): Promise<TinyCloudNode> {
+  const { node: verified } = requireOwnerAccess(await preflightOwner({ watchSession: true }));
+  const cid = node.restorableSession?.delegationCid;
+  if (loadGrant()?.delegationCid !== cid || (verified && verified.restorableSession?.delegationCid !== cid)) {
     throw new CourierError('owner-grant-changed', `Your approval for Courier changed. Run your \`${cmd('watch')}\` command again to use it.`);
   }
+  const end = node.sessionEnd?.getTime() ?? 0;
+  if (verified && (verified.sessionEnd?.getTime() ?? 0) > end) return verified;
+  if (end <= Date.now()) requireOwnerAccess({ state: 'approval-required' });
+  return node;
 }
 
 export async function watchPreflight(node: TinyCloudNode): Promise<void> {
-  await watchOwnerPreflight(node);
-  await maintainPeerSet(node);
+  await maintainPeerSet(await watchOwnerPreflight(node));
 }

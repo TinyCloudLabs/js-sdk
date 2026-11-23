@@ -225,7 +225,7 @@ interface HooksLike {
 }
 
 export interface WatchDeps {
-  /** Local owner checks, before startup and every cycle; service mode retries a `profile-locked` timeout. */
+  /** Check owner access and refresh its SDK bindings before startup and each poll. */
   beforePoll?(): Promise<void>;
   /**
    * Renewal and authority checks against the node: one peer, or every peer when `handle` is omitted. Runs at startup,
@@ -241,7 +241,7 @@ export interface WatchDeps {
   agent?: string;
   /** Own space id, for the `me/approvals/` subscription. */
   spaceId: string;
-  /** The owner's own space. */
+  /** The owner's hook service. A replacement reopens the approvals subscription. */
   selfHooks: HooksLike;
   /** A peer's space, through the peer delegation (each peer streams independently: one refused scope must not stall the rest). */
   peerHooks(peer: StoredPeer): Promise<HooksLike>;
@@ -1776,7 +1776,7 @@ export class Watcher {
    */
   async run(external: AbortSignal, options: { once?: boolean } = {}): Promise<void> {
     if (options.once) return this.session(external, options);
-    const { log, selfKv } = this.deps;
+    const { log } = this.deps;
     let windowMs = CONFLICT_STANDBY_MS;
     for (;;) {
       const started = this.now();
@@ -1798,12 +1798,12 @@ export class Watcher {
         reason: 'state-conflict', retryInMs: windowMs,
         message: `Another \`watch\` is writing this Courier agent's watch.json. This watcher has stopped waking and checks again in ${Math.round(windowMs / 60_000)} min; stop one of the two.`,
       });
-      let seen = (await getJson(selfKv, this.keys.watch).catch(() => undefined))?.etag;
+      let seen = (await getJson(this.deps.selfKv, this.keys.watch).catch(() => undefined))?.etag;
       for (;;) {
         await sleep(windowMs, external);
         if (external.aborted) return;
         windowMs = Math.min(windowMs * 2, CONFLICT_STANDBY_MAX_MS);
-        const etag = (await getJson(selfKv, this.keys.watch).catch(() => undefined))?.etag;
+        const etag = (await getJson(this.deps.selfKv, this.keys.watch).catch(() => undefined))?.etag;
         if (etag === seen) break;
         seen = etag;
       }
@@ -1831,6 +1831,7 @@ export class Watcher {
       await this.loadState(await this.migrateLegacyState());
       log('start', { debounceMs: this.opts.debounceMs, pollMs: this.opts.pollMs, ticketSeconds: this.opts.ticketSeconds, once: Boolean(options.once) });
       await this.pruneClaimsIfDue();
+      let approvalsHooks: HooksLike | undefined;
       const reconcile = () => {
         const desired = new Map<string, { sub: HookSubscription; hooks: () => Promise<HooksLike>; onEvent: (event?: HookEventLike) => void }>();
         for (const peer of this.deps.loadPeers()) {
@@ -1850,13 +1851,17 @@ export class Watcher {
             },
           });
         }
+        const hooks = this.deps.selfHooks;
+        const approvalsChanged = approvalsHooks !== hooks;
+        if (approvalsHooks && approvalsChanged) this.approvalsDirty = true;
+        approvalsHooks = hooks;
         desired.set('approvals', {
           sub: { space: this.deps.spaceId, service: 'kv', pathPrefix: k.approvalsPrefix },
-          hooks: async () => this.deps.selfHooks,
+          hooks: async () => hooks,
           onEvent: () => void this.syncApprovals('hook'),
         });
         for (const [id, controller] of supervisors) {
-          if (!desired.has(id)) {
+          if (!desired.has(id) || (id === 'approvals' && approvalsChanged)) {
             controller.abort();
             supervisors.delete(id);
             this.hookStreams.delete(id);
@@ -1908,6 +1913,7 @@ export class Watcher {
     } finally {
       clearInterval(ticker);
       for (const controller of supervisors.values()) controller.abort();
+      this.hookStreams.clear();
       external.removeEventListener('abort', onExternalAbort);
       this.onFatal = undefined;
       this.saveLocal();
@@ -1938,25 +1944,28 @@ export class Watcher {
         if (opened) void sleep(RECONNECT_CATCH_UP_MS, signal).then(() => { if (!signal.aborted) onEvent(); });
         opened = true;
         const service = await hooks();
+        if (signal.aborted) return;
         const stream = { openedAt: this.now(), proven: false };
         this.hookStreams.set(id, stream);
         for await (const event of service.subscribe([sub], { ttlSeconds: this.opts.ticketSeconds, signal })) {
+          if (signal.aborted) return;
           failures = 0;
           stream.proven = true;
           this.deps.log('hook-event', { source: id.split(':').slice(0, 2).join(':'), path: event.path ?? null });
           onEvent(event);
         }
+        if (signal.aborted) return;
         this.hookStreams.delete(id);
-        if (!signal.aborted) {
-          onEvent();
-          await sleep(5_000, signal);
-        }
+        onEvent();
+        await sleep(5_000, signal);
       } catch (error) {
+        // A superseded stream must not clear the replacement or latch a late refusal.
+        if (signal.aborted) return;
         this.hookStreams.delete(id);
         if (isAuthorizationRefusal(error)) { await this.deps.onAuthorityRefusal?.(id); return; }
         failures++;
         this.deps.log('hook-error', { source: id.split(':').slice(0, 2).join(':'), ...errInfo(error) });
-        if (!signal.aborted) onEvent();
+        onEvent();
         await sleep(Math.min(300_000, 15_000 * 2 ** Math.min(failures - 1, 5)), signal);
       }
     }
