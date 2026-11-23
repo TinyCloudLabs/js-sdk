@@ -3752,5 +3752,23 @@
       "ceiling": { "index.mjs": 1539522, "index.cjs": 1471461 }
     },
     "reason": "The Web SDK bundles the shared first-party allowlist, which recognizes the exact Explorer origin even when the owner has no location record. OpenKey handles account bootstrap. Details: TC-3862"
+  },
+  "tc3522InvocationRefusalRoot": {
+    "label": "retain signed proof attribution for invocation refusals (TC-3522)",
+    "ruling": "Naomi 2026-11-23 15:39:44Z: set the absolute index.mjs ceiling to 1539880 (1539830 measured in both canonical jobs plus 50 bytes); carry the TC-3862 index.cjs ceiling and leave every optional and worker ceiling unchanged.",
+    "base": "089087a0797e2f77661f98a9a7bfb5bd8b145f8c",
+    "sourceCommits": ["45cbb18e7b9c762063a4c23aac199e458df95a1d"],
+    "canonicalCI": {
+      "run": "45204181222",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45204181222/job/137795503048",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45204181222/job/137795503716"
+      ]
+    },
+    "root": {
+      "delta": { "index.mjs": 358, "index.cjs": 0 },
+      "ceiling": { "index.mjs": 1539880, "index.cjs": 1471461 }
+    },
+    "reason": "Both backends measured 1539830/1470750 gzip bytes at the pinned source before the TC-3862 merge-forward. The ceiling delta is relative to the TC-3862 row, not to that run's base. The Web root bundles SDK Services' invocation-time versus proof-refusal classification. Details: TC-3522"
   }
 }
