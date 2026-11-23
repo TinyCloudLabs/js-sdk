@@ -302,7 +302,6 @@ test("a saved request is taken only by a sign-in with the same lease ask, both w
 
 const execFileAsync = promisify(execFile);
 test.each([
-  ["--device", ["--device", "--renew", "30d"]],
   ["--paste", ["--paste", "--renew", "30d"]],
   ["--method local", ["--method", "local", "--renew", "30d"]],
   ["a lease over the maximum", ["--renew", `${MAX_APPROVAL_LEASE_SECONDS / DAY + 1}d`]],

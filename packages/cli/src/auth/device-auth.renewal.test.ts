@@ -80,6 +80,7 @@ type Fixture = {
   node?: "refuse-original" | "wrong-original-cid" | "refuse-lease" | "wrong-identity";
   loseCommit?: boolean;
   cliFlags?: string[];
+  omitManifest?: boolean;
 };
 
 async function run(fixture: Fixture = {}) {
@@ -148,7 +149,7 @@ async function run(fixture: Fixture = {}) {
       await ProfileManager.setKey(profileName, key);
       const previous = fixture.loseCommit ? { ...grant, jwk: key, renewal: await signedRenewal(grant.delegationCid, 7 * 86_400) } : undefined;
       if (previous) await ProfileManager.setSession(profileName, previous);
-      const cli = fixture.cliFlags === undefined ? undefined : await runCli(home, origin, fixture.cliFlags);
+      const cli = fixture.cliFlags === undefined ? undefined : await runCli(home, origin, fixture.cliFlags, fixture.omitManifest);
       const input = { profileName, permissions, nodeOrigin: origin, shareOrigin: origin, openkeyHost: origin,
         ...(fixture.ask === false ? {} : { renewalLeaseSeconds: leaseSeconds }), replaceSession: fixture.loseCommit,
         wait: async () => {}, emitInstructions: () => {} };
@@ -161,15 +162,17 @@ async function run(fixture: Fixture = {}) {
   }
 }
 
-async function runCli(home: string, origin: string, flags: string[]) {
+async function runCli(home: string, origin: string, flags: string[], omitManifest = false) {
   const manifest = `base64:${Buffer.from(JSON.stringify({ app_id: "test.device-renewal", name: "Device renewal test", space: "default",
     permissions: permissions.map(({ service, path, actions }) => ({ service, path, actions, skipPrefix: true })) })).toString("base64")}`;
+  const args = ["--profile", profileName, "--host", origin, "auth", "login", "--device",
+    ...(omitManifest ? [] : ["--manifest", manifest]), ...flags];
   const script = `
     import { Command } from "commander";
     import { registerAuthCommand } from ${JSON.stringify(new URL("../commands/auth.ts", import.meta.url).pathname)};
     const program = new Command().option("--profile <name>").option("--host <url>");
     registerAuthCommand(program);
-    await program.parseAsync(${JSON.stringify(["--profile", profileName, "--host", origin, "auth", "login", "--device", "--manifest", manifest, ...flags])}, { from: "user" });
+    await program.parseAsync(${JSON.stringify(args)}, { from: "user" });
   `;
   const child = Bun.spawn([process.execPath, "-e", script], {
     cwd: import.meta.dir,
@@ -276,5 +279,12 @@ test("an explicit lease that cannot extend the grant is rejected before OpenKey 
   const result = await run({ cliFlags: ["--expiry", "7d", "--renew", "7d"] });
   expect(result.cli?.code).toBe(2);
   expect(result.cli?.stderr).toContain("INVALID_RENEW");
+  expect(result.events).toEqual([]);
+});
+
+test("device login with --renew still requires an explicit manifest before contacting OpenKey", async () => {
+  const result = await run({ cliFlags: ["--renew", "30d"], omitManifest: true });
+  expect(result.cli?.code).toBe(2);
+  expect(JSON.parse(result.cli!.stderr)).toMatchObject({ error: { code: "MANIFEST_REQUIRED" } });
   expect(result.events).toEqual([]);
 });
