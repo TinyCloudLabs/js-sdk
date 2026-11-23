@@ -117,6 +117,28 @@ describe("a wallet that cancels the first sign-in", () => {
   });
 });
 
+describe("a sign-out while a newer sign-in is waiting on the wallet", () => {
+  test("still retires the active, proven session at the node: once", async () => {
+    const { node, count } = harness();
+    await node.signIn();
+    const wallet = node as unknown as { signer: { signMessage: (message: string) => Promise<string> } };
+    const sign = wallet.signer.signMessage;
+    let reach!: () => void;
+    let release!: () => void;
+    const reached = new Promise<void>((resolve) => { reach = resolve; });
+    const released = new Promise<void>((resolve) => { release = resolve; });
+    wallet.signer.signMessage = async (message: string) => { reach(); await released; return sign(message); };
+    const second = node.signIn().catch((error) => error);
+    await reached;
+    await node.signOut();
+    release();
+    await second;
+    await node.nodeSignOutStatus();
+    expect(count(`POST ${DEFAULT_NODE}/session/retire`)).toBe(1);
+    expect(node.session).toBeUndefined();
+  });
+});
+
 describe("a sign-out in the middle of a proof", () => {
   async function signOutWhile(path: "/delegate") {
     let reach!: () => void;

@@ -27,9 +27,10 @@ async function run(options: { actions?: string[]; invoke?: () => Response; deleg
     requests.push({ url: `${url.origin}${url.pathname}`, method: init?.method ?? "GET" });
     if (url.origin === REGISTRY) return new Response(REGISTRY_NOT_FOUND_BODY, { status: 404 });
     if (url.origin === DEFAULT_NODE) {
-      if (url.pathname === "/info") return Response.json({ protocol: 1, version: "1.26.22", features: [] });
+      if (url.pathname === "/info") return Response.json({ nodeId: "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK", protocol: 1, version: "1.26.22", features: [] });
       if (url.pathname === "/delegate") return options.delegate?.() ?? Response.json({ activated: [applications], skipped: [] });
       if (url.pathname === "/invoke") return options.invoke?.() ?? Response.json([]);
+      if (url.pathname === "/session/retire") return Response.json({ retired: true });
     }
     throw new Error(`Unexpected request ${url.origin}${url.pathname}`);
   }) as typeof fetch;
@@ -77,5 +78,17 @@ describe("an OpenKey sign-in for a hosted owner with no registry record", () => 
     expect(node.session).toBeUndefined();
     expect(requests.filter((request) => request.url === `${DEFAULT_NODE}/delegate`)).toHaveLength(1);
     expect(requests.map((request) => request.url)).not.toContain(`${DEFAULT_NODE}/session/retire`);
+  });
+});
+
+describe("an OpenKey request that is prepared and never completed", () => {
+  test("leaves the active session to be retired by the next sign-out", async () => {
+    const { node, requests } = await run();
+    expect(node.session?.spaceId).toBe(applications);
+    await node.prepareOpenKeySignIn();
+    await node.signOut();
+    await node.nodeSignOutStatus();
+    expect(requests.filter((request) => request.url === `${DEFAULT_NODE}/session/retire` && request.method === "POST")).toHaveLength(1);
+    expect(node.session).toBeUndefined();
   });
 });

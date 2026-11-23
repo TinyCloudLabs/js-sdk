@@ -3311,9 +3311,8 @@ export class TinyCloudNode {
     try {
       // A refused hosted-owner proof is discarded locally: the retire request carries session roots, so it would write.
       if (options?.retireAtNodes === false) throw new Error("The session was refused before it was proven, so no node is asked to retire it.");
-      // A sign-out before the proof's `/delegate` was sent: nothing was issued at any node, so there is nothing to retire.
-      const proof = this.auth?.hostedOwnerProof;
-      if (proof?.status === "pending" && proof.delegateSent !== true) throw new Error("The session was signed out before the hosted-space check sent anything, so no node is asked to retire it.");
+      // Otherwise the current session is retired wherever it is held, even while a newer sign-in or proof is pending:
+      // a sign-out before the first session exists has no key to retire, and one after the proof's /delegate is cleaned up.
       retire = this.leavingSessionRetire();
     } catch (error) {
       let hosts: string[] = [];
