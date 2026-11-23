@@ -507,6 +507,7 @@ export type Ledger = {
   tc3802SecretKeyCapRoot?: LogoutRatchet;
   tc3862ExplorerOriginRoot?: LogoutRatchet;
   tc3522InvocationRefusalRoot?: LogoutRatchet;
+  tc3810ReaderRoot?: LogoutRatchet;
   tc3522InvocationRefusalKvWorker?: WorkerRatchet;
   tc3522InvocationRefusalReplicaWorker?: Omit<WorkerRatchet, "worker"> & { replicaWorker: { delta: number; ceiling: number } };
   tc2773LazyRestoreReplicaWorker?: Omit<WorkerRatchet, "worker"> & { replicaWorker: { delta: number; ceiling: number } };
@@ -1170,6 +1171,7 @@ export function ancestryPins(root: Ledger, hasGatedOnly: boolean): Array<{ row: 
   if (root.tc3802SecretKeyCapRoot !== undefined) pins.push({ row: "tc3802SecretKeyCapRoot", pin: root.tc3802SecretKeyCapRoot.sourceCommits.at(-1)! });
   if (root.tc3862ExplorerOriginRoot !== undefined) pins.push({ row: "tc3862ExplorerOriginRoot", pin: root.tc3862ExplorerOriginRoot.sourceCommits.at(-1)! });
   if (root.tc3522InvocationRefusalRoot !== undefined) pins.push({ row: "tc3522InvocationRefusalRoot", pin: root.tc3522InvocationRefusalRoot.sourceCommits.at(-1)! });
+  if (root.tc3810ReaderRoot !== undefined) pins.push({ row: "tc3810ReaderRoot", pin: root.tc3810ReaderRoot.sourceCommits.at(-1)! });
   if (root.tc3522InvocationRefusalKvWorker !== undefined) pins.push({ row: "tc3522InvocationRefusalKvWorker", pin: root.tc3522InvocationRefusalKvWorker.sourceCommits.at(-1)! });
   if (root.tc3522InvocationRefusalReplicaWorker !== undefined) pins.push({ row: "tc3522InvocationRefusalReplicaWorker", pin: root.tc3522InvocationRefusalReplicaWorker.sourceCommits.at(-1)! });
   if (hasGatedOnly) pins.push({ row: "gatedOnlyRatchet", pin: approvedGatedOnlyRatchet.sourceCommit });
@@ -1303,6 +1305,7 @@ export function rootCeilings(root: Ledger): Array<{ row: string; ceiling: GzipSi
     ["tc3802SecretKeyCapRoot", root.tc3802SecretKeyCapRoot?.root.ceiling],
     ["tc3862ExplorerOriginRoot", root.tc3862ExplorerOriginRoot?.root.ceiling],
     ["tc3522InvocationRefusalRoot", root.tc3522InvocationRefusalRoot?.root.ceiling],
+    ["tc3810ReaderRoot", root.tc3810ReaderRoot?.root.ceiling],
   ];
   return rows.flatMap(([row, ceiling]) => ceiling === undefined ? [] : [{ row, ceiling }]);
 }
@@ -4164,6 +4167,33 @@ export const approvedTc3522InvocationRefusalReplicaWorker: NonNullable<Ledger["t
   "reason": "The SDK Services KV refusal path ships in replica.worker.js. Both canonical jobs measured 775076 gzip -9 bytes, 156 above the TC-3947 ceiling of 774920."
 };
 
+export const approvedTc3810ReaderRoot: LogoutRatchet = {
+  "label": "read wallet-signed ReCap delegation modes (TC-3810 A1)",
+  "ruling": "Naomi 15:40:24Z approved the exact combined canonical CI measurement up to +181 B ESM and +107 B CJS over #1148's measured bytes. Naomi 17:23Z: ceilings set to the canonical measurement from Replica run 45220085215 (+179/+110 over #1148); the CJS +3 B over the earlier allowance is accepted as minifier variance of the ruled reader change.",
+  "base": "eb4a66fd4525575618679e3204e8082a90c640ce",
+  "sourceCommits": [
+    "fde4cc70a2dc0e2c64cd9638f2f01dc1e696e117"
+  ],
+  "canonicalCI": {
+    "run": "45220085215",
+    "jobs": [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45220085215/job/137851673053",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45220085215/job/137851672657"
+    ]
+  },
+  "root": {
+    "delta": {
+      "index.mjs": 179,
+      "index.cjs": 110
+    },
+    "ceiling": {
+      "index.mjs": 1540015,
+      "index.cjs": 1470863
+    }
+  },
+  "reason": "Both canonical jobs (SQLite and Postgres, run 45220085215, provisional head 3b44e890) measured 1540015/1470863 gzip bytes, 179/110 over #1148's measured 1539836/1470753. The Web SDK root reads signed attenuable and terminal ReCap delegation modes. Details: TC-3810"
+};
+
 export const approvedLedgerRows: Record<string, unknown> = {
   phase2Ratchet: approvedPhase2,
   fixRequiredRatchet: approvedFixRequiredRatchet,
@@ -4292,6 +4322,7 @@ export const approvedLedgerRows: Record<string, unknown> = {
   tc3802SecretKeyCapRoot: approvedTc3802SecretKeyCapRoot,
   tc3862ExplorerOriginRoot: approvedTc3862ExplorerOriginRoot,
   tc3522InvocationRefusalRoot: approvedTc3522InvocationRefusalRoot,
+  tc3810ReaderRoot: approvedTc3810ReaderRoot,
   tc3522InvocationRefusalKvWorker: approvedTc3522InvocationRefusalKvWorker,
   tc3522InvocationRefusalReplicaWorker: approvedTc3522InvocationRefusalReplicaWorker,
 };
@@ -4892,6 +4923,11 @@ export function validateLedger(value: Ledger, historicalBase = false): void {
       (!value.tc3862ExplorerOriginRoot ||
         JSON.stringify(value.tc3522InvocationRefusalRoot) !== JSON.stringify(approvedTc3522InvocationRefusalRoot))) {
     throw new Error("Only the exact TC-3522 invocation-refusal root admission is approved.");
+  }
+  if (value.tc3810ReaderRoot !== undefined &&
+      (!value.tc3522InvocationRefusalRoot ||
+        JSON.stringify(value.tc3810ReaderRoot) !== JSON.stringify(approvedTc3810ReaderRoot))) {
+    throw new Error("Only the exact TC-3810 reader root admission is approved.");
   }
   if (value.tc3522InvocationRefusalKvWorker !== undefined || value.tc3522InvocationRefusalReplicaWorker !== undefined) {
     if (!value.tc3947ReplicaRevokeRoot ||
