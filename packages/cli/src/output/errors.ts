@@ -15,7 +15,14 @@ import {
 } from "@tinycloud/operations/secret-request";
 import { operationWarnings, outputError, outputJson, type ErrorOutputDetails } from "./formatter.js";
 import { safeBlock } from "./safe-text.js";
-import { authorizationVerdictOf, parseCapabilityResource, SERVICE_LONG_TO_SHORT, validatedCapabilityOf } from "@tinycloud/sdk-core";
+import {
+  TERMINAL_REDELEGATION_REFUSED_MESSAGE,
+  authorizationVerdictOf,
+  isTerminalParentRefusal,
+  parseCapabilityResource,
+  SERVICE_LONG_TO_SHORT,
+  validatedCapabilityOf,
+} from "@tinycloud/sdk-core";
 import { describeStorageRejection, storageRejection } from "./storage.js";
 import { drainWarnings, mergeWarnings } from "./warnings.js";
 import { routingFailure } from "@tinycloud/sdk-services";
@@ -115,6 +122,9 @@ export function cliErrorFromService(
   if (unauthenticated && isRevokedGrantRefusal({ ...error, meta, message })) {
     return new CLIError("GRANT_REVOKED", REVOKED_GRANT_MESSAGE, GRANT_REVOKED_EXIT_CODE, { status: 401 });
   }
+  if (isTerminalParentRefusal({ ...error, meta, message })) {
+    return new CLIError("TERMINAL_DELEGATION_REFUSED", TERMINAL_REDELEGATION_REFUSED_MESSAGE, ExitCode.PERMISSION_DENIED, { status: 401 });
+  }
   return new CLIError(
     denied ? "PERMISSION_DENIED" : unauthenticated ? "AUTH_REQUIRED" : error.code,
     message,
@@ -165,6 +175,9 @@ export function wrapError(error: unknown): CLIError {
   const storageFull = storageFullError(error);
   if (storageFull) return storageFull;
   if (error instanceof CLIError) return error;
+  if (isTerminalParentRefusal(error)) {
+    return new CLIError("TERMINAL_DELEGATION_REFUSED", TERMINAL_REDELEGATION_REFUSED_MESSAGE, ExitCode.PERMISSION_DENIED, { status: 401 });
+  }
   const message = error instanceof Error ? error.message : String(error);
 
   // A typed HTTP refusal wins over misleading response text, including text

@@ -22,6 +22,7 @@ import type {
   canonicalizeAddress,
   parseSpaceUri,
   verifyEip191MessageSignature,
+  withSiweDelegationMode,
 } from "@tinycloud/sdk-core";
 import type { PartialNodeWriteError, ResourceNotRoutedError } from "@tinycloud/sdk-services";
 import type { SiweMessage } from "siwe";
@@ -43,6 +44,7 @@ export interface RuntimeGrantPorts<Operation> {
     canonicalizeAddress: typeof canonicalizeAddress;
     parseSpaceUri: typeof parseSpaceUri;
     verifySignature: typeof verifyEip191MessageSignature;
+    withSiweDelegationMode: typeof withSiweDelegationMode;
     expiryMs: typeof resolveExpiryMs;
     wholeSecond: typeof wholeSecondExpiry;
     assertExpiry: typeof assertExpiryWithinTechnicalLimit;
@@ -153,7 +155,7 @@ export async function issueRuntimeGrants<Operation>(
   );
   const prepared = (() => {
     try {
-      return ports.wasm.prepareSession({
+      const raw = ports.wasm.prepareSession({
         abilities: spaceAbilities[primarySpaceId]!,
         ...(spaces.length > 1 ? { spaceAbilities } : {}),
         ...(rawEntries.length > 0
@@ -167,6 +169,9 @@ export async function issueRuntimeGrants<Operation>(
         spaceId: primarySpaceId,
         jwk: session.jwk,
       });
+      return /(?:^|\r?\n)- urn:recap:/i.test(raw.siwe)
+        ? { ...raw, siwe: lib.withSiweDelegationMode(raw.siwe, "attenuable") }
+        : raw;
     } catch (error) {
       if (
         rawEntries.some((entry) => ports.isRawRevocation(entry)) &&

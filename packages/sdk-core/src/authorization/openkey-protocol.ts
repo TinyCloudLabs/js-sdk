@@ -19,6 +19,13 @@
 //     lives for the SIGNED expiry; see `checkChangedExpiration`.
 
 import { MAX_SIWE_EXPIRY_MS, technicalExpiryRefusal } from "../expiry";
+import {
+  assertNoDuplicateJsonKeys,
+  extractSiweDelegationMode,
+  isCompatibleSignedDelegationMode,
+  parseDelegationModeField,
+  type DelegationMode,
+} from "../delegations/terminal";
 
 export interface TinyCloudAuthorizationRequestV1 {
   protocolVersion: 1;
@@ -36,6 +43,8 @@ export interface TinyCloudAuthorizationRequestV1 {
    * the approval keeps the app's expiry.
    */
   expiryChangeable?: boolean;
+  /** Declared ReCap delegation mode (`"terminal"` | `"attenuable"`). */
+  delegationMode?: DelegationMode;
 }
 
 export interface TinyCloudAuthorizationResultV1 {
@@ -541,6 +550,17 @@ export function checkChangedExpiration(input: CheckChangedExpirationInput): stri
   const signed = extractImmutableSiweFields(input.signedSiwe);
   const drift = diffImmutableSiweFields(prepared, signed, { originalHasRecap, allowExpirationChange: true });
   if (drift.length > 0) return `altered immutable SIWE fields: ${drift.join(", ")}`;
+  if (originalHasRecap) {
+    try {
+      const originalMode = extractSiweDelegationMode(input.preparedSiwe);
+      const signedMode = extractSiweDelegationMode(input.signedSiwe);
+      if (!isCompatibleSignedDelegationMode(originalMode, signedMode)) {
+        return "altered the ReCap delegation mode";
+      }
+    } catch (error) {
+      return `has an invalid ReCap delegation mode: ${error instanceof Error ? error.message : String(error)}`;
+    }
+  }
   if (signed.expirationTime === prepared.expirationTime) return null;
 
   const expiresAt = parseInstantMs(signed.expirationTime);
@@ -615,9 +635,11 @@ export function extractRecapAttenuations(siwe: string): RecapAttenuation {
         `urn:recap: payload is not valid JSON: ${(err as Error).message}`,
       );
     }
-    if (!parsed || typeof parsed !== "object") {
+    assertNoDuplicateJsonKeys(decodedJson);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
       throw new Error("urn:recap: payload must be an object");
     }
+    parseDelegationModeField(parsed as Record<string, unknown>);
     const att = (parsed as Record<string, unknown>).att;
     if (att === undefined) {
       continue; // ReCap without an `att` block grants nothing.

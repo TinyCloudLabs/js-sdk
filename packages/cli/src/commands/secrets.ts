@@ -8,7 +8,12 @@ import {
   type PortableDelegation,
   type TinyCloudNode,
 } from "@tinycloud/node-sdk";
-import { appSecretScope, SECRET_TYPES } from "@tinycloud/sdk-core";
+import {
+  appSecretScope,
+  isTerminalParentRefusal,
+  SECRET_TYPES,
+  TERMINAL_REDELEGATION_REFUSED_MESSAGE,
+} from "@tinycloud/sdk-core";
 import { invokeOperation } from "@tinycloud/operations";
 import { isLocalOwnerProfile, liveStoredLease, ownerSessionLacksProof } from "@tinycloud/operations/profile";
 import {
@@ -1870,6 +1875,16 @@ export function registerSecretsCommand(
           scope: "whole-network",
         });
       } catch (error) {
+        if (isTerminalParentRefusal(error)) {
+          return handleError(
+            new CLIError(
+              "TERMINAL_DELEGATION_REFUSED",
+              `${TERMINAL_REDELEGATION_REFUSED_MESSAGE}\nThe owner can run \`tc secrets network grant\`.`,
+              ExitCode.PERMISSION_DENIED,
+              { status: 401 },
+            ),
+          );
+        }
         return handleError(error);
       }
     });

@@ -9,7 +9,7 @@ import { createInterface } from "node:readline";
 import type { IncomingMessage } from "node:http";
 import { TinyCloudNode, grantAuthRequest, principalDidEquals, REPLICA_LOGOUT_PENDING_FILE, signedCompactUcanExpiry, type AuthDelegationArtifact, type PermissionEntry, type PortableDelegation, type RuntimeDelegationActivator, type TinyCloudSession } from "@tinycloud/node-sdk";
 import type { ProfileReplicaApprovalEntry, ProfileReplicaDeferredToken, ProfileReplicaLogoutPending, ProfileReplicaPreflight, ProfileReplicaPurge } from "@tinycloud/sdk-services/kv/replication";
-import { composeManifestRequest, ownerFullAccess } from "@tinycloud/sdk-core";
+import { composeManifestRequest, ownerFullAccess, type DelegationMode } from "@tinycloud/sdk-core";
 import { invokeOperation } from "@tinycloud/operations";
 import { createProfileRegistryCacheStore, createProfileRegistrySequenceStore, namedProfilePath, profilePath } from "@tinycloud/operations/state";
 import { principalHashOf, readGateSnapshot, REPLICA_DENY_FLOOR_FILE } from "@tinycloud/replica/profile-gate";
@@ -1090,6 +1090,8 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
             // Only a plain paste link for a custom grant opts in; the device and approval-request paths, and the agent
             // preset, keep the --expiry ceiling.
             ...(grantLinkOptsIn ? { expiryChangeable: true } : {}),
+            // Only device and plain paste links transmit delegationMode; `/a/` omits it until step 4.
+            ...(options.device === true || options.paste === true ? { delegationMode: "terminal" as const } : {}),
           };
           const declined: PermissionEntry[] = [];
           const groups = groupPermissionsBySpace(requested);
@@ -1110,6 +1112,7 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
                   shareOrigin: DEFAULT_SHARE_ORIGIN,
                   permissions: request,
                   expiry: parseRequestedExpiry(expiryOption ?? "7d"),
+                  delegationMode: "terminal",
                   expectedOwner: pinnedOwner(profile),
                   openkeyHost: resolveDeviceApiHost(profile),
                 });
@@ -1124,6 +1127,7 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
                   permissions: request,
                   openkeyHost,
                   expiry: expiryCap === undefined ? undefined : openKeyExpiryParam(expiryCap),
+                  delegationMode: "terminal",
                   noPopup: options.popup === false,
                   paste: options.paste,
                   ...(deadlineMs === undefined ? {} : { approvalWait: { deadlineMs, step: index + 1, of: groups.length } }),
@@ -2082,6 +2086,7 @@ export async function acquireOpenKeyApproval(params: {
       ...(params.reason === undefined ? {} : { reason: params.reason }),
       openkeyHost: resolveOpenKeyHost(params.profile),
       expiry: expiryCap === undefined ? undefined : openKeyExpiryParam(expiryCap),
+      delegationMode: "attenuable",
       noPopup: params.noPopup,
       commandIntent: params.commandIntent,
       ...(params.approvalWait === undefined ? {} : { approvalWait: params.approvalWait }),
@@ -2378,6 +2383,8 @@ export interface PortableGrantProof {
   expiryChangeable?: boolean;
   /** Agent request: the approval must cover every requested action, or no grant is stored. */
   exactApproval?: boolean;
+  /** Declared mode transmitted on `/delegate` or device-auth; absent stays accepted for pre-#735 OpenKey, flipped is refused. */
+  delegationMode?: DelegationMode;
 }
 
 /** A verified OpenKey approval: the portable grant, and the signed session it was verified from. */
@@ -2407,6 +2414,7 @@ export function verifyOpenKeyApproval(
     expectedOwner: proof.expectedOwner,
     expiry: proof.expiry,
     ...(proof.expiryChangeable === true ? { expiryChangeable: true } : {}),
+    ...(proof.delegationMode === undefined ? {} : { delegationMode: proof.delegationMode }),
     purpose: "grant",
     exactApproval: proof.exactApproval,
   });
@@ -3195,6 +3203,7 @@ export async function refreshOpenKeySession(
     // owner is verified below.
     permissions: permissions ?? ownerLoginPermissions(expectedOwner),
     expiry: openKeyExpiry,
+    delegationMode: "attenuable",
     // The plain paste link lets the user pick the lifetime; the signed result has no `--expiry` ceiling.
     ...(plainPasteLink ? { expiryChangeable: true } : {}),
     ...(permissions && options.reason ? { reason: options.reason } : {}),
@@ -3210,15 +3219,16 @@ export async function refreshOpenKeySession(
   let verifiedOwner: string | undefined;
   let declined: PermissionEntry[] = [];
   let legacyNested: PermissionEntry[] = [];
+  const pasteDeclaredMode = options.paste === true ? { delegationMode: "attenuable" as const } : {};
   if (permissions) {
-    const verified = verifyScopedLogin(delegationData, key, sessionDid, permissions, { expectedOwner, expiry, ...(plainPasteLink ? { expiryChangeable: true } : {}) });
+    const verified = verifyScopedLogin(delegationData, key, sessionDid, permissions, { expectedOwner, expiry, ...(plainPasteLink ? { expiryChangeable: true } : {}), ...pasteDeclaredMode });
     sanitizedSession = verified.session;
     legacyNested = verified.legacyNested;
     verifiedOwner = sanitizedSession.ownerDid as string;
     declined = declinedPermissions(permissions, sanitizedSession.permissions as PermissionEntry[], verifiedOwner);
   } else {
     // A delegation without a verifiable proof for this key is refused, never saved (TC-1053).
-    const signed = verifySignedSession(delegationData, key, sessionDid, { expectedOwner, expiry, ...(plainPasteLink ? { expiryChangeable: true } : {}) });
+    const signed = verifySignedSession(delegationData, key, sessionDid, { expectedOwner, expiry, ...(plainPasteLink ? { expiryChangeable: true } : {}), ...pasteDeclaredMode });
     // The session's space must belong to the signing owner, as on the scoped path.
     const spaceId = String(delegationData.spaceId);
     if (normalizePkhIdentifier(ownerSpaceId(spaceId.split(":").at(-1) ?? "", signed.ownerDid)) !== normalizePkhIdentifier(spaceId)) {

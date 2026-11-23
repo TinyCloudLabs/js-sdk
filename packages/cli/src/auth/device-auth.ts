@@ -7,7 +7,7 @@ import {
   type ECDH,
 } from "node:crypto";
 import type { PermissionEntry } from "@tinycloud/node-sdk";
-import { publicJwk } from "@tinycloud/sdk-core";
+import { publicJwk, type DelegationMode } from "@tinycloud/sdk-core";
 import { DEFAULT_CHAIN_ID, DEFAULT_OPENKEY_DEVICE_API_HOST, ExitCode } from "../config/constants.js";
 import type { ProfileConfig } from "../config/types.js";
 import { CLIError } from "../output/errors.js";
@@ -96,6 +96,8 @@ export interface DeviceAuthorizationInput {
   permissions: PermissionEntry[];
   /** Requested lifetime or absolute deadline; defaults to the 30-day maximum. */
   expiry?: RequestedExpiry;
+  /** Declared delegation mode for OpenKey device authorization (`"terminal"` | `"attenuable"`). */
+  delegationMode?: DelegationMode;
   reason?: string;
   /** Primary DID the approving identity must match, when known. */
   expectedOwner?: string;
@@ -361,6 +363,7 @@ async function verifyApproval(input: {
   requested: PermissionEntry[];
   expiry: RequestedExpiry;
   expectedOwner?: string;
+  delegationMode?: DelegationMode;
 }): Promise<DeviceAuthorizationResult> {
   const { binding, delegation } = input;
   if (
@@ -390,6 +393,7 @@ async function verifyApproval(input: {
   const { session } = verifyScopedLogin(delegation, input.key, input.sessionDid, input.requested, {
     expectedOwner: input.expectedOwner,
     expiry: input.expiry,
+    ...(input.delegationMode === undefined ? {} : { delegationMode: input.delegationMode }),
   });
   const { ownerDid } = session;
   if (Math.abs(Date.parse(session.expiresAt) - expiresAt) > 1000) {
@@ -486,6 +490,7 @@ export async function acquireDeviceDelegation(input: DeviceAuthorizationInput): 
         nodeOrigin,
         shareOrigin,
         delegationTtlSeconds: ttlSeconds,
+        ...(input.delegationMode !== undefined ? { delegationMode: input.delegationMode } : {}),
         ...(reason ? { reason } : {}),
       }),
     });
@@ -577,6 +582,7 @@ export async function acquireDeviceDelegation(input: DeviceAuthorizationInput): 
         requested: input.permissions,
         expiry,
         expectedOwner: input.expectedOwner,
+        ...(input.delegationMode === undefined ? {} : { delegationMode: input.delegationMode }),
       });
     } catch (error) {
       // The owner approved: the refused result is named in the notice the caller prints.
@@ -617,6 +623,7 @@ export async function loginWithDeviceAuthorization(input: Omit<DeviceAuthorizati
   // when this login made it, i.e. it was held in memory; a stored key is kept).
   const result = await refusing({ profileName: input.profileName, key, storedKey: snapshot.key }, () => acquireDeviceDelegation({
     ...input,
+    delegationMode: input.delegationMode ?? "terminal",
     permissions,
     sessionDid,
     jwk: key,
