@@ -88,10 +88,25 @@ test("the 0.8.1 plan is sealed to the reviewed backport source, its version comm
   assert.equal(plan.base, BASE);
   assert.equal(plan.sourceSha, "fe46e1d6766f6e8bd3f68bbc78c9731358327b17");
   assert.equal(plan.releaseSha, "ff6ad2212bea19b255e10fbc8e8bff7b7929b4cb");
-  assert.equal(plan.expectedDelta.length, 17);
-  // The backport's feature paths plus exactly the version commit's two files.
-  assert.deepEqual(plan.expectedDelta.filter((path) => !path.startsWith("packages/courier/src/") && !path.startsWith("packages/courier/test/")), [".changeset/tc-4061-courier-headless.md", "bun.lock", "packages/courier/README.md", "packages/courier/package.json"]);
-  assert.ok(plan.expectedDelta.every((path) => path === "bun.lock" || path.startsWith(".changeset/") || path.startsWith("packages/courier/")), "nothing outside courier, its changeset and bun.lock");
+  assert.deepEqual(plan.expectedDelta, [
+    ".changeset/tc-4061-courier-headless.md",
+    "bun.lock",
+    "packages/courier/README.md",
+    "packages/courier/package.json",
+    "packages/courier/src/a2a.ts",
+    "packages/courier/src/commands.ts",
+    "packages/courier/src/headless.ts",
+    "packages/courier/src/inbox.ts",
+    "packages/courier/src/index.ts",
+    "packages/courier/src/outbox.ts",
+    "packages/courier/src/pairing-flow.ts",
+    "packages/courier/src/pairing.ts",
+    "packages/courier/src/revoke.ts",
+    "packages/courier/src/send.ts",
+    "packages/courier/src/store.ts",
+    "packages/courier/test/delete-all.test.mjs",
+    "packages/courier/test/headless-local.test.mjs",
+  ]);
   assert.deepEqual(plan.packages.map((pkg) => `${pkg.name}@${pkg.stable}`), ["@tinycloud/courier@0.8.1"]);
   assert.equal(plan.allowedRuntime.get("@tinycloud/sdk-core"), "3.14.0");
   assert.equal(plan.allowedRuntime.has("@tinycloud/cli"), false);
