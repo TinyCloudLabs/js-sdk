@@ -423,6 +423,18 @@ jobs:
             exit 1
           fi
 
+      - name: Run the scoped-login put e2e (a create-only scoped OpenKey session saves a secret on its own key, plain and scoped, create then overwrite)
+        timeout-minutes: 10
+        env:
+          TC_NAMED_KEYS_E2E_NODE_BIN: ${{ runner.temp }}/tinycloud-named-keys
+        run: |
+          set -o pipefail
+          bash "$GITHUB_WORKSPACE/.github/scripts/run-private-tests.sh" bun test --max-concurrency=1 packages/cli/src/commands/secrets-scoped-put.e2e.test.ts 2>&1 | tee "$RUNNER_TEMP/named-keys-scoped-put.log"
+          if grep -Eq '^ *[1-9][0-9]* skip' "$RUNNER_TEMP/named-keys-scoped-put.log" || ! grep -Eq '^ *1 pass' "$RUNNER_TEMP/named-keys-scoped-put.log" || grep -Eq '^ *[1-9][0-9]* fail' "$RUNNER_TEMP/named-keys-scoped-put.log"; then
+            echo "::error title=scoped-login put e2e::the test was skipped, failed, or did not pass"
+            exit 1
+          fi
+
       - name: Run the MCP per-secret keys e2e (the agent's tinycloud_secrets_get on its own key)
         timeout-minutes: 10
         env:
