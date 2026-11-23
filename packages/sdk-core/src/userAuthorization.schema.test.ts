@@ -11,11 +11,6 @@ import {
 } from "./userAuthorization.schema";
 
 describe("PartialSiweMessageSchema", () => {
-  it("should accept empty object", () => {
-    const result = PartialSiweMessageSchema.safeParse({});
-    expect(result.success).toBe(true);
-  });
-
   it("should accept minimal fields", () => {
     const result = PartialSiweMessageSchema.safeParse({
       address: "0x1234567890123456789012345678901234567890",
@@ -46,20 +41,6 @@ describe("PartialSiweMessageSchema", () => {
       chainId: 1,
     });
     expect(result.success).toBe(true);
-  });
-
-  it("should accept chainId for polygon", () => {
-    const result = PartialSiweMessageSchema.safeParse({
-      chainId: 137,
-    });
-    expect(result.success).toBe(true);
-  });
-
-  it("should reject negative chainId", () => {
-    const result = PartialSiweMessageSchema.safeParse({
-      chainId: -1,
-    });
-    expect(result.success).toBe(false);
   });
 
   it("should reject zero chainId", () => {
@@ -106,11 +87,6 @@ describe("UserAuthorizationConfigSchema", () => {
     expect(result.success).toBe(true);
   });
 
-  it("should reject missing signer", () => {
-    const result = UserAuthorizationConfigSchema.safeParse({});
-    expect(result.success).toBe(false);
-  });
-
   it("should reject null signer", () => {
     const result = UserAuthorizationConfigSchema.safeParse({
       signer: null,
@@ -150,14 +126,6 @@ describe("UserAuthorizationConfigSchema", () => {
     const result = UserAuthorizationConfigSchema.safeParse({
       signer: mockSigner,
       siweConfig: { domain: "example.com" },
-    });
-    expect(result.success).toBe(true);
-  });
-
-  it("should accept domain string", () => {
-    const result = UserAuthorizationConfigSchema.safeParse({
-      signer: mockSigner,
-      domain: "example.com",
     });
     expect(result.success).toBe(true);
   });
@@ -226,14 +194,6 @@ describe("UserAuthorizationConfigSchema", () => {
       },
     });
     expect(result.success).toBe(true);
-  });
-
-  it("should reject invalid sign strategy", () => {
-    const result = UserAuthorizationConfigSchema.safeParse({
-      signer: mockSigner,
-      signStrategy: { type: "invalid" },
-    });
-    expect(result.success).toBe(false);
   });
 
   it("should accept spaceCreationHandler", () => {

@@ -127,38 +127,35 @@ function shareLink(service: SharingService, overrides: Partial<EncodedShareData[
 
 describe("SharingService authority space comparison", () => {
   test("matches owner addresses without relaxing chain or namespace identity", () => {
-    const { service } = makeService();
-    const matching = {
-      spaceId: SPACE.replace(OWNER, OWNER.toLowerCase()),
-      path: "shared",
-      actions: ["tinycloud.kv/get"],
-      expiry: PARENT_EXPIRY,
-      allowSubDelegation: true,
-      caveats: [],
+    const preflightWithAuthorityIn = (spaceId: string) => {
+      const registry = new CapabilityKeyRegistry();
+      registry.registerKey({ id: "session-key", did: "did:key:z6MkParent", type: "session", priority: 0 }, [{
+        cid: "bafy-parent",
+        delegateDID: "did:key:z6MkParent",
+        spaceId,
+        path: "shared",
+        actions: ["tinycloud.kv/get"],
+        expiry: PARENT_EXPIRY,
+        isRevoked: false,
+        allowSubDelegation: true,
+      }]);
+      const service = new SharingService({
+        hosts: [HOST],
+        session: { spaceId: SPACE } as ServiceSession,
+        invoke: mock(async () => ({ ok: true, data: undefined })) as never,
+        fetch: mock(async () => new Response(null, { status: 200 })) as unknown as typeof globalThis.fetch,
+        keyProvider: {} as KeyProvider,
+        registry,
+        createKVService: mock(() => ({})) as never,
+        createDelegationWasm: mock(() => { throw new Error("preflight must not sign"); }) as never,
+      });
+      return service.preflightGenerate({ path: "shared", actions: ["tinycloud.kv/get"], expiry: PARENT_EXPIRY });
     };
-    const internal = service as unknown as {
-      session: { readonly spaceId: string };
-      registry: {
-        getAllKeys: () => { readonly id: string }[];
-        getDelegationsForKey: () => typeof matching[];
-        isDelegationValid: () => boolean;
-      };
-      classifyDelegationAuthority: (path: string, actions: string[], expiry: Date) => string;
-    };
-    internal.session = { spaceId: SPACE };
-    internal.registry = {
-      getAllKeys: () => [{ id: "session-key" }],
-      getDelegationsForKey: () => [matching],
-      isDelegationValid: () => true,
-    };
+    const matching = SPACE.replace(OWNER, OWNER.toLowerCase());
 
-    expect(internal.classifyDelegationAuthority("shared", ["tinycloud.kv/get"], PARENT_EXPIRY)).toBe("ok");
-    for (const spaceId of [
-      `${matching.spaceId}:other`,
-      matching.spaceId.replace("eip155:1:", "eip155:2:"),
-    ]) {
-      internal.registry.getDelegationsForKey = () => [{ ...matching, spaceId }];
-      expect(internal.classifyDelegationAuthority("shared", ["tinycloud.kv/get"], PARENT_EXPIRY)).toBe("not-covered");
+    expect(preflightWithAuthorityIn(matching)).toBe("ok");
+    for (const spaceId of [`${matching}:other`, matching.replace("eip155:1:", "eip155:2:")]) {
+      expect(preflightWithAuthorityIn(spaceId)).toBe("not-covered");
     }
   });
 });
@@ -1145,20 +1142,6 @@ describe("SharingService non-transferable shares", () => {
 
     expect(terminal.delegation.allowSubDelegation).toBe(false);
     expect(transferable.delegation.allowSubDelegation).toBe(true);
-  });
-
-  test("viewer refuses to onward-delegate a link issued as non-transferable", async () => {
-    const { service } = makeService();
-
-    const result = await service.delegateReceivedShare(
-      shareLink(service, { allowSubDelegation: false }),
-      { delegateDID: "did:key:z6MkFeedHost", actions: ["tinycloud.kv/get"] },
-    );
-
-    expect(result).toMatchObject({
-      ok: false,
-      error: { code: "PERMISSION_DENIED", message: "Sharing link does not allow delegation" },
-    });
   });
 
   test("keeps allowSubDelegation:false through encodeLink/decodeLink and refuses the re-encoded link", async () => {

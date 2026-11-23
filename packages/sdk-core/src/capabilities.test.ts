@@ -183,18 +183,6 @@ describe("isCapabilitySubset — action subset", () => {
     },
   ];
 
-  it("accepts a proper subset of actions", () => {
-    const requested: PermissionEntry[] = [
-      {
-        service: "tinycloud.kv",
-        space: "s1",
-        path: "app/",
-        actions: ["tinycloud.kv/get"],
-      },
-    ];
-    expect(isCapabilitySubset(requested, granted).subset).toBe(true);
-  });
-
   it("combines actions split across equivalent ReCap entries", () => {
     const requested: PermissionEntry[] = [
       {

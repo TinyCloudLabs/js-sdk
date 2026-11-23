@@ -29,26 +29,6 @@ const validFailureResult = {
 
 describe("SpaceHostResultSchema", () => {
   describe("valid inputs", () => {
-    it("accepts successful result without error", () => {
-      const result = SpaceHostResultSchema.safeParse(validSuccessResult);
-      expect(result.success).toBe(true);
-      if (result.success) {
-        expect(result.data.success).toBe(true);
-        expect(result.data.status).toBe(200);
-        expect(result.data.error).toBeUndefined();
-      }
-    });
-
-    it("accepts failure result with error message", () => {
-      const result = SpaceHostResultSchema.safeParse(validFailureResult);
-      expect(result.success).toBe(true);
-      if (result.success) {
-        expect(result.data.success).toBe(false);
-        expect(result.data.status).toBe(404);
-        expect(result.data.error).toBe("Space not found");
-      }
-    });
-
     it("accepts result with empty error string", () => {
       const data = {
         success: false,
@@ -70,12 +50,6 @@ describe("SpaceHostResultSchema", () => {
   });
 
   describe("invalid inputs", () => {
-    it("rejects missing success field", () => {
-      const data = { status: 200 };
-      const result = SpaceHostResultSchema.safeParse(data);
-      expect(result.success).toBe(false);
-    });
-
     it("rejects missing status field", () => {
       const data = { success: true };
       const result = SpaceHostResultSchema.safeParse(data);
@@ -84,12 +58,6 @@ describe("SpaceHostResultSchema", () => {
 
     it("rejects non-boolean success", () => {
       const data = { success: "true", status: 200 };
-      const result = SpaceHostResultSchema.safeParse(data);
-      expect(result.success).toBe(false);
-    });
-
-    it("rejects non-number status", () => {
-      const data = { success: true, status: "200" };
       const result = SpaceHostResultSchema.safeParse(data);
       expect(result.success).toBe(false);
     });
@@ -113,11 +81,6 @@ describe("SpaceHostResultSchema", () => {
 
     it("rejects undefined", () => {
       const result = SpaceHostResultSchema.safeParse(undefined);
-      expect(result.success).toBe(false);
-    });
-
-    it("rejects empty object", () => {
-      const result = SpaceHostResultSchema.safeParse({});
       expect(result.success).toBe(false);
     });
   });

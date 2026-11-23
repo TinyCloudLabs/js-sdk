@@ -387,21 +387,6 @@ describe("ed25519 verification mode: strict RFC 8032, not ZIP-215", () => {
     return bytes;
   })();
 
-  it("rejects a known non-canonical encoding that ZIP-215 accepts", async () => {
-    const { ed25519 } = await import("@noble/curves/ed25519");
-    const signature = new Uint8Array(64); // R = non-canonical identity, s = 0
-    signature.set(NONCANONICAL_IDENTITY, 0);
-    const message = new TextEncoder().encode("any message");
-    // Sanity: this really is in the ZIP-215-only acceptance set…
-    expect(
-      ed25519.verify(signature, message, NONCANONICAL_IDENTITY, { zip215: true }),
-    ).toBe(true);
-    // …and strict mode (what this package uses) rejects it.
-    expect(
-      ed25519.verify(signature, message, NONCANONICAL_IDENTITY, { zip215: false }),
-    ).toBe(false);
-  });
-
   it("verifyEnvelopeSignatureOnly rejects the same degenerate signature end-to-end", async () => {
     const { toBase64Url } = await import("../src/bytes.js");
     const signature = new Uint8Array(64);

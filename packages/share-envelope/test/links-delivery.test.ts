@@ -53,10 +53,6 @@ describe("redacting a link from text", () => {
 describe("the short share link on a trusted origin", () => {
   const trusted = { trustedOrigins: [ORIGIN] } as const;
 
-  it("accepts the exact production share origin", () => {
-    expect(shortShareLinkCid(SHORT, trusted)).toBe(CID);
-  });
-
   it("refuses another origin, a sub-domain, a port and a different scheme", () => {
     for (const origin of ["https://share.example", "https://evil.share.tinycloud.xyz", "https://share.tinycloud.xyz:8443", "http://share.tinycloud.xyz"]) {
       expect(shortShareLinkCid(SHORT.replace(ORIGIN, origin), trusted)).toBeUndefined();

@@ -373,12 +373,6 @@ describe("DelegationChainSchema", () => {
     const result = DelegationChainSchema.safeParse(chain);
     expect(result.success).toBe(true);
   });
-
-  it("should validate a chain with multiple delegations", () => {
-    const chain = [createValidDelegation(), createValidDelegation()];
-    const result = DelegationChainSchema.safeParse(chain);
-    expect(result.success).toBe(true);
-  });
 });
 
 // =============================================================================

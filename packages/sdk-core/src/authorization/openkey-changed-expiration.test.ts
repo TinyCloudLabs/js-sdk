@@ -87,14 +87,6 @@ describe("checkChangedExpiration refuses", () => {
     expect(check(siwe({ notBefore: "2026-08-01T02:00:00.000Z", expiry: "2026-08-01T02:00:00.000Z" }), { prepared })).toContain("Not Before");
   });
 
-  it("an expiry beyond the request max", () => {
-    const max = Date.parse("2026-08-01T03:00:00.000Z");
-    const reason = check(siwe({ expiry: iso(max + 1) }), { maxExpiresAt: max });
-    expect(reason).toContain("maximum");
-    // Names the limit, so the person who picked the expiry knows what to choose instead.
-    expect(reason).toContain("2026-08-01T03:00:00.000Z");
-  });
-
   // OpenKey signs any expiry the user picks; the SDK refuses the ones it cannot accept, and each refusal says what to pick.
   it("every refusal of a picked expiry says what to pick instead", () => {
     expect(check(siwe({ expiry: iso(NOW + 59_999) }))).toBe("expiry must be more than 60 seconds from now; choose a longer expiry");

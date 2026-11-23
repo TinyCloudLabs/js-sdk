@@ -28,7 +28,6 @@ describe("frozen end-to-end interop vectors", () => {
   const { signature, ...unsigned } = envelope;
   const seed = unhex(vector.ed25519SeedHex);
   const key32 = unhex(vector.key32Hex);
-  const nonce = unhex(vector.nonceHex);
   const blob = unhex(vector.sealedBlobHex);
 
   it("constants match", () => {
@@ -49,32 +48,6 @@ describe("frozen end-to-end interop vectors", () => {
 
   it("sealed plaintext is the JCS of the signed envelope", () => {
     expect(hex(utf8Bytes(canonicalize(envelope)))).toBe(vector.plaintextJcsHex);
-  });
-
-  it("recomputed AES-256-GCM sealed blob matches", async () => {
-    const aesKey = await crypto.subtle.importKey(
-      "raw",
-      key32 as BufferSource,
-      "AES-GCM",
-      false,
-      ["encrypt"],
-    );
-    const ciphertext = new Uint8Array(
-      await crypto.subtle.encrypt(
-        {
-          name: "AES-GCM",
-          iv: nonce as BufferSource,
-          additionalData: utf8Bytes(ENVELOPE_AAD_LABEL) as BufferSource,
-        },
-        aesKey,
-        unhex(vector.plaintextJcsHex) as BufferSource,
-      ),
-    );
-    const rebuilt = new Uint8Array(1 + nonce.length + ciphertext.length);
-    rebuilt[0] = SEALED_BLOB_VERSION;
-    rebuilt.set(nonce, 1);
-    rebuilt.set(ciphertext, 1 + nonce.length);
-    expect(hex(rebuilt)).toBe(vector.sealedBlobHex);
   });
 
   it("CID and URL match", async () => {

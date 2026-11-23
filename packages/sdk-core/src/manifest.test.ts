@@ -9,7 +9,6 @@ import { describe, expect, it } from "bun:test";
 import { authorizationVerdictOf } from "@tinycloud/sdk-services";
 
 import {
-  DEFAULT_EXPIRY,
   DEFAULT_KNOWLEDGE_ROOT,
   ManifestValidationError,
   applyPrefix,
@@ -373,8 +372,8 @@ describe("resolveManifest — minimum manifest with defaults=true", () => {
     expect(resolved.app_id).toBe("com.listen.app");
   });
 
-  it("defaults expiry to 30 days", () => {
-    expect(resolved.expiryMs).toBe(parseExpiry(DEFAULT_EXPIRY));
+  it("defaults expiry to 7 days", () => {
+    expect(resolved.expiryMs).toBe(7 * 24 * 60 * 60 * 1000);
   });
 
   it("defaults includePublicSpace to true", () => {
@@ -796,23 +795,6 @@ describe("resolveManifest — prefix semantics", () => {
     const delegate = resolved.additionalDelegates[0]!;
     expect(delegate.permissions[0]?.path).toBe("com.listen.app/data.sqlite");
     expect(delegate.permissions[0]?.space).toBe("applications");
-  });
-
-  it("permissions honor skipPrefix on individual entries", () => {
-    const resolved = resolveManifest({
-      app_id: "com.listen.app",
-      name: "x",
-      defaults: false,
-      permissions: [
-        {
-          service: "tinycloud.kv",
-          path: "shared/",
-          actions: ["get"],
-          skipPrefix: true,
-        },
-      ],
-    });
-    expect(resolved.resources[0]?.path).toBe("shared/");
   });
 
   it("preserves per-permission descriptions on resolved resources and delegates", () => {

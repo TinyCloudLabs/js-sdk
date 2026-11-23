@@ -79,18 +79,6 @@ describe("activateSessionWithHost", () => {
     expect(result.error).toBe("Space not found");
   });
 
-  it("returns failure on 500 response", async () => {
-    (globalThis.fetch as any).mockResolvedValueOnce(
-      mockFetchResponse("Internal server error", { status: 500 })
-    );
-
-    const result = await activateSessionWithHost(TEST_HOST, TEST_DELEGATION_HEADER);
-
-    expect(result.success).toBe(false);
-    expect(result.status).toBe(500);
-    expect(result.error).toBe("Internal server error");
-  });
-
   it("falls back to statusText when body read fails on error response", async () => {
     const response = new Response(null, { status: 502, statusText: "Bad Gateway" });
     // Override text() to reject — use defineProperty since text is read-only

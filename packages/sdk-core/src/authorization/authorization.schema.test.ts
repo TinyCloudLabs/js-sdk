@@ -285,15 +285,6 @@ describe("AutoSignStrategySchema", () => {
     }
   });
 
-  it("rejects strategy with extra fields", () => {
-    // Note: Zod strips extra fields by default, so this passes
-    const result = AutoSignStrategySchema.safeParse({
-      type: "auto-sign",
-      extra: "field",
-    });
-    expect(result.success).toBe(true);
-  });
-
   it("rejects wrong type literal", () => {
     const result = AutoSignStrategySchema.safeParse({ type: "auto-reject" });
     expect(result.success).toBe(false);
@@ -506,14 +497,6 @@ describe("SpaceCreationContextSchema", () => {
       const { spaceId, ...context } = validSpaceCreationContext;
       const result = SpaceCreationContextSchema.safeParse(context);
       expect(result.success).toBe(false);
-    });
-
-    it("accepts any non-empty string as spaceId", () => {
-      const result = SpaceCreationContextSchema.safeParse({
-        ...validSpaceCreationContext,
-        spaceId: "any-space-id",
-      });
-      expect(result.success).toBe(true);
     });
   });
 

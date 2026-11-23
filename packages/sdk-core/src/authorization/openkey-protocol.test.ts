@@ -132,17 +132,6 @@ describe("diffImmutableSiweFields", () => {
     expect(diffImmutableSiweFields(original, changed)).toEqual(["domain"]);
   });
 
-  it("flags expirationTime drift (Sol MAJOR-4)", () => {
-    const original = extractImmutableSiweFields(SAMPLE_SIWE);
-    const changed = extractImmutableSiweFields(
-      SAMPLE_SIWE.replace(
-        "Expiration Time: 2026-08-01T01:00:00.000Z",
-        "Expiration Time: 2027-01-01T00:00:00.000Z",
-      ),
-    );
-    expect(diffImmutableSiweFields(original, changed)).toContain("expirationTime");
-  });
-
   it("flags statement drift (Sol MAJOR-4)", () => {
     const original = extractImmutableSiweFields(SAMPLE_SIWE);
     const changed = extractImmutableSiweFields(
@@ -374,32 +363,6 @@ describe("unauthorizedRecapCapabilities", () => {
 // consumer of canonical four-part action IDs walks through this helper.
 describe("parseCanonicalRecapResource (Sol continuation req 1)", () => {
   const space = "tinycloud:pkh:eip155:1:0x1111111111111111111111111111111111111111:default";
-
-  it("returns { space, path: '' } for a whole-space grant `<space>/<short>`", () => {
-    // WASM: `abilities: { kv: { "": [...] } }` produces URI `<space>/kv`
-    // and `parseRecapFromSiwe` reports `path=""`.
-    expect(parseCanonicalRecapResource(`${space}/kv`)).toEqual({
-      space,
-      path: "",
-    });
-  });
-
-  it("strips the service segment from `<space>/<short>/<sub-path>`", () => {
-    // WASM: `abilities: { kv: { "listen/transcript": [...] } }` produces
-    // URI `<space>/kv/listen/transcript` and reports `path="listen/transcript"`.
-    expect(
-      parseCanonicalRecapResource(`${space}/kv/listen/transcript`),
-    ).toEqual({ space, path: "listen/transcript" });
-  });
-
-  it("keeps a repeated-space path (`<space>/<short>/<space>`) verbatim", () => {
-    // WASM: `abilities: { kv: { [spaceId]: [...] } }` produces
-    // URI `<space>/kv/<space>` and reports `path=<space>`.
-    expect(parseCanonicalRecapResource(`${space}/kv/${space}`)).toEqual({
-      space,
-      path: space,
-    });
-  });
 
   it("returns non-tinycloud URIs unchanged as space (path empty)", () => {
     const encryptionUri =

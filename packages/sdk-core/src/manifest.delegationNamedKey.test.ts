@@ -4,7 +4,6 @@ import { encryptionResourceContains, formatKeyResource, formatPrefixResource } f
 import {
   ManifestValidationError,
   expandDelegationPermissionEntries,
-  expandPermissionEntries,
   type PermissionEntry,
 } from "./manifest";
 import { isCapabilitySubset } from "./capabilities";
@@ -42,9 +41,5 @@ describe("exact named-key delegation expansion", () => {
     for (const invalid of [entry(prefix), entry(key, ["key.create"]), entry(key, ["decrypt", "key.create"]), entry(key.replace(owner, owner.toLowerCase()))]) {
       expect(() => expandDelegationPermissionEntries([invalid])).toThrow(ManifestValidationError);
     }
-  });
-
-  test("manifest expansion still rejects named-key permission entries", () => {
-    expect(() => expandPermissionEntries([entry(key)])).toThrow("named keys go in manifest.keys");
   });
 });

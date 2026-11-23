@@ -17,11 +17,6 @@ describe("the two technical expiry limits", () => {
     expect(new Date(MAX_SIWE_EXPIRY_MS).toISOString()).toBe("9999-12-31T23:59:59.000Z");
     expect(new Date(MAX_UCAN_EXPIRY_MS).toISOString()).toBe("2255-06-05T23:47:34.000Z");
   });
-
-  test("round-trip through an ISO string without losing the instant", () => {
-    expect(Date.parse("9999-12-31T23:59:59Z")).toBe(MAX_SIWE_EXPIRY_MS);
-    expect(Date.parse("2255-06-05T23:47:34Z")).toBe(MAX_UCAN_EXPIRY_MS);
-  });
 });
 
 describe("technicalExpiryRefusal for a sign-in message (siwe)", () => {

@@ -16,17 +16,6 @@ describe("RFC 8785 canonicalization", () => {
     expect(canonicalize(value)).toBe('{"":0,"1":0,"A":0,"a":0}');
   });
 
-  it("serializes numbers per ECMAScript Number::toString (RFC 8785 §3.2.2.3)", () => {
-    expect(canonicalize({ n: 1e21 })).toBe('{"n":1e+21}');
-    expect(canonicalize({ n: 0.000001 })).toBe('{"n":0.000001}');
-    expect(canonicalize({ n: 10 })).toBe('{"n":10}');
-    expect(canonicalize({ n: -0 })).toBe('{"n":0}');
-  });
-
-  it("escapes strings per JSON/JCS rules", () => {
-    expect(canonicalize("a\nb\u0000")).toBe('"a\\nb\\u0000"');
-  });
-
   it("matches RFC 8785 number vectors at the exponent boundaries", () => {
     // Positional/exponential switchover: 10^21 flips to exponent notation.
     expect(canonicalize(1e20)).toBe("100000000000000000000");

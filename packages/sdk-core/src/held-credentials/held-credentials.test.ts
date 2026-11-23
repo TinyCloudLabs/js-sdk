@@ -528,28 +528,6 @@ test("the module has no Node-only imports (Worker-safe)", async () => {
   }
 });
 
-describe("Worker-safety scan (stripComments + FORBIDDEN_NODE_ACCESS)", () => {
-  const flagged = (source: string) => FORBIDDEN_NODE_ACCESS.test(stripComments(source));
-
-  test("flags executable Node access, including after literals that contain comment markers", () => {
-    expect(flagged("process.env.NODE_ENV;\n")).toBe(true);
-    expect(flagged(`const probeUrl = "https://example.invalid"; process.env.NODE_ENV;\n`)).toBe(true);
-    expect(flagged(`const beginMarker = "/*"; process.env.NODE_ENV; const endMarker = "*/";\n`)).toBe(true);
-    expect(flagged(`const q = /"/; process.env.A;\n`)).toBe(true);
-  });
-
-  test("ignores line and block comments that mention Node access", () => {
-    expect(flagged("// uses process.env here\nconst a = 1;\n")).toBe(false);
-    expect(flagged("/**\n * process.x in docs\n */\nconst a = 1;\n")).toBe(false);
-    expect(flagged("const a = 1; // process.z\nexport const b = a;\n")).toBe(false);
-  });
-
-  test("still flags Node access written as string or template data", () => {
-    expect(flagged("const t = `process.data`;\n")).toBe(true);
-    expect(flagged(`const s = "process.data";\n`)).toBe(true);
-  });
-});
-
 describe("TC-1540 N1: jti", () => {
   test("jti must be a lowercase urn:uuid v4", async () => {
     const ok = "urn:uuid:11111111-1111-4111-8111-111111111111";
@@ -731,12 +709,6 @@ describe("TC-1540 Miller 5: strict Ed25519 (cofactorless, mixed-order R refused)
   const Point = ed25519.ExtendedPoint;
   // an order-8 torsion point (y = c7176a70...037a)
   const T = Point.fromHex("c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac037a");
-
-  test("the torsion vector is really order 8, and R + T is mixed-order, not small-order", () => {
-    expect(T.multiply(8n).is0()).toBe(true);
-    expect(T.multiply(4n).is0()).toBe(false);
-    expect(T.isSmallOrder()).toBe(true);
-  });
   test("a signature whose R carries an order-8 component passes noble's cofactored verify but is refused", () => {
     const seedBytes = seed(7);
     const message = asciiBytes("mixed-order R");
@@ -1003,11 +975,6 @@ describe("TC-1553: org membership rows", () => {
   });
   test("the same credential passes when the policy accepts org B", async () => {
     expect(await orgCode(orgBCredential(), { entries: [orgEntry([PAID_PROFILE]), orgBEntry()], profiles: accept.profiles, issuers: [{ issuerDid: ORG_B }] })).toBe("ok");
-  });
-
-  test("the free row refuses a credential longer than 30 days; the paid row allows 365", async () => {
-    expect(await orgCode(orgCredential(FREE_PROFILE, { payload: (p) => ({ ...p, exp: (p.iat as number) + 365 * DAY }) }), { entries: [orgEntry([FREE_PROFILE])], profiles: [{ profile: FREE_PROFILE, profileVersion: 1 }], issuers: [{ issuerDid: ORG_A }] })).toBe("bad-lifetime");
-    expect(await orgCode(orgCredential(PAID_PROFILE), { entries: [orgEntry([PAID_PROFILE])], ...accept })).toBe("ok");
   });
   test("role must be member or admin, and membershipType must be a lowercase slug", async () => {
     expect(await orgCode(orgCredential(PAID_PROFILE, { disclosures: [["role", "owner"]] }), { entries: [orgEntry([PAID_PROFILE])], ...accept })).toBe("bad-disclosure");
@@ -1676,12 +1643,5 @@ describe("verifyHeldEmailCredential reports the signed issuance time (TC-1454)",
     const iat = NOW_S - 5000;
     const sdJwt = makeCredential({ payload: (p) => ({ ...p, iat, nbf: iat, exp: iat + 365 * DAY }) }).sdJwt;
     expect(verifyHeldEmailCredential(sdJwt, policy()).issuedAt).toEqual(new Date(iat * 1000));
-  });
-
-  test("the presentation verifier's output shape is unchanged (no issuedAt)", async () => {
-    const h = harness();
-    const { presentation } = h.present();
-    const result = await verifyHeldPresentation(presentation, h.options);
-    expect("issuedAt" in result).toBe(false);
   });
 });

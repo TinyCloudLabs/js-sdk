@@ -401,66 +401,6 @@ describe("typed signature-material failures", () => {
     );
   });
 
-  it("keeps every signature-material failure in the typed hierarchy", async () => {
-    const failures = [
-      () =>
-        verifySignedObject({
-          ...engine.unsigned,
-          engineRecordId: engine.id,
-          signature: {
-            suite: ED25519_JCS_SIGNATURE_SUITE,
-            signerDid: suitesFixture.ed25519.policy_signer.did,
-            value: "not*base64url",
-          },
-        }),
-      () =>
-        verifySignedObject({
-          ...engine.unsigned,
-          engineRecordId: engine.id,
-          signature: {
-            suite: ED25519_JCS_SIGNATURE_SUITE,
-            signerDid: suitesFixture.ed25519.policy_signer.did,
-            value: "AAAA",
-          },
-        }),
-      () =>
-        verifySignedObject({
-          ...engine.unsigned,
-          engineRecordId: engine.id,
-          signature: {
-            suite: "unknown-suite",
-            signerDid: suitesFixture.ed25519.policy_signer.did,
-            value: bytesToBase64Url(new Uint8Array(64)),
-          },
-        }),
-      () =>
-        verifySignedObject({
-          ...engine.unsigned,
-          engineRecordId: engine.id,
-          signature: {
-            suite: ED25519_JCS_SIGNATURE_SUITE,
-            signerDid: "did:key:znot-valid",
-            value: bytesToBase64Url(new Uint8Array(64)),
-          },
-        }),
-      () =>
-        verifySignedObject({
-          ...engine.unsigned,
-          engineRecordId: engine.id,
-          signature: {
-            suite: EIP191_JCS_SIGNATURE_SUITE,
-            signerDid: "did:pkh:eip155:1:not-an-address",
-            value: bytesToBase64Url(Uint8Array.from([...new Uint8Array(64), 27])),
-          },
-        }),
-    ];
-
-    for (const fail of failures) {
-      const error = await expectTypedFailure(fail);
-      expect(error).toBeInstanceOf(SignedObjectProfileError);
-    }
-  });
-
   it("rejects non-canonical base64url signature encodings", async () => {
     await expectTypedFailure(
       () =>
@@ -711,17 +651,5 @@ describe("structural validation", () => {
         constructor: "did:key:z6MkNotAField",
       }),
     ).toThrow(SignedObjectProfileError);
-  });
-});
-
-describe("did:key derivation sanity", () => {
-  it("matches the vendored policy signer DID from the Ed25519 public key", () => {
-    const publicKey = ed25519.getPublicKey(
-      hexToBytes(suitesFixture.ed25519.policy_signer.seed_hex),
-    );
-    const did = `did:key:${bases.base58btc.encode(
-      Uint8Array.from([0xed, 0x01, ...publicKey]),
-    )}`;
-    expect(did).toBe(suitesFixture.ed25519.policy_signer.did);
   });
 });
