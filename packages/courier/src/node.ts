@@ -155,7 +155,7 @@ function peerReader(node: TinyCloudNode, peer: StoredPeer): TinyCloudNode {
 }
 
 /** `renew: false` skips reading the peer's renewal marker; the watcher reads it on its renewal schedule instead. */
-export async function peerKv(node: TinyCloudNode, profile: Profile, peer: StoredPeer, options: { renew?: boolean } = {}) {
+export async function peerKv(node: TinyCloudNode, profile: Profile, peer: StoredPeer, options: { renew?: boolean; onRenewed?: (peer: StoredPeer) => void } = {}) {
   const original = renewalBinding(profile, peer);
   const current = await currentInbound(node, profile, peer);
   const kv = peerReader(node, peer).kvForSpace(peer.spaceId);
@@ -195,6 +195,7 @@ export async function peerKv(node: TinyCloudNode, profile: Profile, peer: Stored
     if (profile.peers[peer.handle]) profile.peers[peer.handle].inbound = inbound;
   });
   readersOf(node).set(peer.handle, { cid: renewed.cid, reader, activated: renewed });
+  options.onRenewed?.(peer);
   return reader.kvForSpace(peer.spaceId);
 }
 
@@ -223,8 +224,8 @@ let wasm: NodeWasmBindings | undefined;
  * did:pkh), and a hook ticket minted from the node's own session is refused for a peer's space (401), so the
  * stream runs on a `DelegatedAccess` whose session is the peer delegation, signed by the courier key (spec §8).
  */
-export async function peerHooks(node: TinyCloudNode, profile: Profile, peer: StoredPeer): Promise<IHooksService> {
-  await peerKv(node, profile, peer); // validates the delegation against the pairing record
+export async function peerHooks(node: TinyCloudNode, profile: Profile, peer: StoredPeer, onRenewed?: (peer: StoredPeer) => void): Promise<IHooksService> {
+  await peerKv(node, profile, peer, onRenewed ? { onRenewed } : undefined); // validates the delegation against the pairing record
   const delegation = deserializeDelegation(peer.inbound!.delegation);
   const key = loadKey();
   wasm ??= new NodeWasmBindings();

@@ -161,6 +161,7 @@ export function verifyRenewalHistory(input: VerifyRenewalHistoryInput): Verified
   if (stampsByPrevious.size === 0) throw new Error("Renewal history is missing or too large");
 
   let previousStampCid = leaseCid;
+  // A lease can issue multiple stamps per generation. The signed predecessor and expiry order them.
   let previousGeneration = 0;
   let previousEnd: number | undefined;
   let latest: RenewalStampHistoryEntry | undefined;
@@ -169,7 +170,8 @@ export function verifyRenewalHistory(input: VerifyRenewalHistoryInput): Verified
     if (!entry) throw new Error("Renewal history chain is invalid");
     stampsByPrevious.delete(previousStampCid);
     if (
-      !entry.cid || !Number.isSafeInteger(entry.generation) || entry.generation <= previousGeneration
+      !entry.cid || !Number.isSafeInteger(entry.generation)
+      || entry.generation < 1 || entry.generation < previousGeneration
       || !isSafeUnixSeconds(entry.new_end)
       || (previousEnd !== undefined && entry.new_end <= previousEnd)
       || entry.new_end > leaseExpiresAt

@@ -475,10 +475,12 @@ function saveProfileUnlocked(profile: Profile, beforeSave?: (disk: Profile | und
   remember(profile);
 }
 
+export type ProfileSave = (beforeSave?: (disk: Profile | undefined) => void) => void;
+
 /** Read under a short lock; network work runs unlocked, and each save re-reads and merges under the lock. */
-export async function withProfileTransaction<T>(fn: (profile: Profile, save: () => void) => Promise<T>): Promise<T> {
+export async function withProfileTransaction<T>(fn: (profile: Profile, save: ProfileSave) => Promise<T>): Promise<T> {
   const profile = withProfileLock(() => loadProfile());
-  return fn(profile, () => saveProfile(profile));
+  return fn(profile, beforeSave => saveProfile(profile, beforeSave));
 }
 
 /** The shape `loadKey` accepts: version 1, a JWK and a `did:key:` identifier. */

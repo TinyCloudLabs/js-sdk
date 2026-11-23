@@ -2,8 +2,8 @@
 export class CourierError extends Error {
   readonly code: string;
 
-  constructor(code: string, message: string) {
-    super(message);
+  constructor(code: string, message: string, options?: ErrorOptions) {
+    super(message, options);
     this.name = 'CourierError';
     this.code = code;
   }
@@ -84,13 +84,32 @@ export function isTransientError(error: unknown): boolean {
   return TRANSIENT_CODES.some((c) => c === code || c === causeCode);
 }
 
+/** Local metadata on a 401/403 from a routed KV request or hook ticket mint. */
+export function isInvocationTimeRefusal(error: unknown): boolean {
+  return fieldOf(fieldOf(error instanceof CourierError ? error.cause : error, 'meta'), 'invocationTimeRefused') === true;
+}
+
+/** A timestamp denial precedes execution, so one re-sign is safe even for a conditional put. */
+export async function retryInvocationTime<T>(invoke: () => Promise<T>): Promise<T> {
+  try { return await invoke(); }
+  catch (error) {
+    if (!isInvocationTimeRefusal(error)) throw error;
+    return invoke();
+  }
+}
+
+export function refusedInvocationCid(error: unknown): string | undefined {
+  const cid = fieldOf(fieldOf(error instanceof CourierError ? error.cause : error, 'meta'), 'invocationProofCid');
+  return typeof cid === 'string' && cid.length > 0 ? cid : undefined;
+}
+
 /** Unwrap an SDK Result, throwing a CourierError on failure. */
 export function unwrap<T>(r: ResultLike<T> | T, what: string): T {
   if (r && typeof r === 'object' && 'ok' in (r as ResultLike<T>)) {
     const res = r as ResultLike<T>;
     if (!res.ok) {
       const code = String(res.error?.code ?? res.error?.status ?? res.error?.meta?.status ?? 'sdk-error');
-      throw new CourierError(code, `${what}: ${res.error?.message ?? 'failed'}`);
+      throw new CourierError(code, `${what}: ${res.error?.message ?? 'failed'}`, { cause: res.error });
     }
     return res.data as T;
   }

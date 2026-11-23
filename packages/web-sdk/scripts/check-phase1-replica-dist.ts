@@ -3,6 +3,7 @@ import { validateTc2931BootstrapScopeTransition } from "./replica-size-policy";
 import { validateTc2923EncryptionTeeOriginRootTransition } from "./replica-size-policy";
 import { validateTc2934RequestedAccountRootTransition } from "./replica-size-policy";
 import { validateTc2936RestoreCommitRootTransition } from "./replica-size-policy";
+import { validateTc3522InvocationRefusalRootTransition, validateTc3522InvocationRefusalWorkerTransition, validateTc3862ExplorerOriginRootTransition } from "./replica-size-policy";
 import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { cp, mkdtemp, open, readFile, rm } from "node:fs/promises";
@@ -223,6 +224,27 @@ if (prBaseSha) {
     throw new Error(`Unable to read base ${baseLedgerPath}: ${baseLedgerResult.stderr.trim()}`);
   }
   validateLedger(baseLedger, true);
+  const invocationRefusalRoot = ledger.tc3522InvocationRefusalRoot;
+  validateTc3522InvocationRefusalRootTransition(baseLedger.tc3522InvocationRefusalRoot, invocationRefusalRoot);
+  if (invocationRefusalRoot !== undefined && baseLedger.tc3522InvocationRefusalRoot === undefined &&
+      (baseLedger.tc3862ExplorerOriginRoot === undefined || !hasAncestor(repoRoot, invocationRefusalRoot.sourceCommits.at(-1)!))) {
+    console.error("The TC-3522 invocation-refusal admission requires the merged TC-3862 row and its measured source ancestor.");
+    failed = true;
+  }
+  validateTc3522InvocationRefusalWorkerTransition(baseLedger, ledger);
+  const invocationRefusalWorker = ledger.tc3522InvocationRefusalKvWorker;
+  if (invocationRefusalWorker !== undefined && baseLedger.tc3522InvocationRefusalKvWorker === undefined &&
+      (baseLedger.tc3947ReplicaRevokeRoot === undefined || !hasAncestor(repoRoot, invocationRefusalWorker.sourceCommits.at(-1)!))) {
+    console.error("The TC-3522 worker admissions require the merged TC-3947 worker ceilings and their measured source ancestor.");
+    failed = true;
+  }
+  const explorerOriginRoot = ledger.tc3862ExplorerOriginRoot;
+  validateTc3862ExplorerOriginRootTransition(baseLedger.tc3862ExplorerOriginRoot, explorerOriginRoot);
+  if (explorerOriginRoot !== undefined && baseLedger.tc3862ExplorerOriginRoot === undefined &&
+      (baseLedger.tc3802SecretKeyCapRoot === undefined || !hasAncestor(repoRoot, explorerOriginRoot.sourceCommits.at(-1)!))) {
+    console.error("The TC-3862 admission requires the merged TC-3802 row and its measured source ancestor.");
+    failed = true;
+  }
   validateTc2934RequestedAccountRootTransition(baseLedger.tc2934RequestedAccountRoot, ledger.tc2934RequestedAccountRoot);
   validateTc2936RestoreCommitRootTransition(baseLedger.tc2936RestoreCommitRoot, ledger.tc2936RestoreCommitRoot);
   validateTc2931BootstrapScopeTransition(baseLedger.tc2931BootstrapScope, ledger.tc2931BootstrapScope);

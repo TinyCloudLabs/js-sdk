@@ -1,4 +1,6 @@
 import { courierNode } from './node.js';
+import type { TinyCloudNode } from '@tinycloud/node-sdk';
+import { RenewalAuthorityInactiveError, RenewalLeaseExpiredError } from '@tinycloud/sdk-core/delegations/renewal';
 import fs from 'node:fs';
 import path from 'node:path';
 import { loadGrant, loadKey, loadProfile, profileDir, saveProfile, withProfileLock, writeSecure } from './profile.js';
@@ -24,7 +26,13 @@ export interface OwnerEpisode {
   requestHash: string | null;
   phase: 'creating' | 'requested' | 'unavailable' | 'complete' | 'refused';
 }
-export type OwnerPreflight = { state: 'live' | 'approval-required' | 'approval-unavailable' | 'revoked'; approvalUrl?: string; notify?: boolean; requestDue?: boolean };
+export type OwnerPreflight = {
+  state: 'live' | 'approval-required' | 'approval-unavailable' | 'revoked' | 'authority-inactive';
+  approvalUrl?: string;
+  notify?: boolean;
+  requestDue?: boolean;
+  node?: TinyCloudNode;
+};
 const episodeFile = () => path.join(profileDir(), 'renewal-owner.json');
 
 /** Read our own owner-only episode without following a link or accepting permissive modes. */
@@ -58,7 +66,7 @@ function pendingForEpisode(episode: OwnerEpisode, profile: Profile, renew: strin
 }
 
 /** No node, KV, approval discovery, or grant activation is involved in terminal startup states. */
-export async function preflightOwner(options: { request?: boolean } = {}): Promise<OwnerPreflight> {
+export async function preflightOwner(options: { request?: boolean; watchSession?: boolean } = {}): Promise<OwnerPreflight> {
   const local = withProfileLock<OwnerPreflight | { renewalProfile: Profile } | { requestProfile: Profile; key: AgentKey; episode: OwnerEpisode; renew: string | undefined }>(() => {
     const profile = loadProfile();
     const grant = loadGrant();
@@ -114,8 +122,16 @@ export async function preflightOwner(options: { request?: boolean } = {}): Promi
     return { requestProfile: profile, key, episode, renew };
   });
   if ('renewalProfile' in local) {
-    try { await courierNode(local.renewalProfile); return { state: 'live' }; }
-    catch { return { state: 'approval-unavailable' }; }
+    try {
+      const node = await courierNode(local.renewalProfile);
+      return options.watchSession ? { state: 'live', node } : { state: 'live' };
+    } catch (error) {
+      if (options.watchSession) {
+        if (error instanceof RenewalAuthorityInactiveError) return { state: 'authority-inactive' };
+        if (error instanceof RenewalLeaseExpiredError) return { state: 'approval-required' };
+      }
+      return { state: 'approval-unavailable' };
+    }
   }
   if (!('requestProfile' in local)) return local;
   const { requestProfile: profile, key, episode, renew } = local;

@@ -1,8 +1,8 @@
-import { isAuthorizationRefusal } from './errors.js';
+import { isAuthorizationRefusal, isInvocationTimeRefusal } from './errors.js';
 import { defer } from './defer.js';
 import { decodeTime, ulid } from 'ulid';
 import type { HookSubscription } from '@tinycloud/node-sdk';
-import { errInfo, CourierError } from './errors.js';
+import { errInfo, CourierError, refusedInvocationCid } from './errors.js';
 import { k, PREFIX, stateKeys, type StateKeys } from './keys.js';
 import type { StoredPeer } from './profile.js';
 import { isRecord, messageView, oneLine, taskView } from './a2a.js';
@@ -225,14 +225,14 @@ interface HooksLike {
 }
 
 export interface WatchDeps {
-  /** Local owner checks, before startup and every cycle; service mode retries a `profile-locked` timeout. */
+  /** Check owner access and refresh its SDK bindings before startup and each poll. */
   beforePoll?(): Promise<void>;
   /**
    * Renewal and authority checks against the node: one peer, or every peer when `handle` is omitted. Runs at startup,
    * every cycle, and before anything is imported from a peer whose last check is older than `pollMs`.
    */
   checkAuthority?(handle?: string): Promise<void>;
-  onAuthorityRefusal?(source: string): Promise<void>;
+  onAuthorityRefusal?(source: string, inboundCid?: string): Promise<void>;
   selfKv: KV;
   /**
    * This side's Courier agent DID. Its watch state, pause markers and wake claims live under its own keys
@@ -241,7 +241,7 @@ export interface WatchDeps {
   agent?: string;
   /** Own space id, for the `me/approvals/` subscription. */
   spaceId: string;
-  /** The owner's own space. */
+  /** The owner's hook service. A replacement reopens the approvals subscription. */
   selfHooks: HooksLike;
   /** A peer's space, through the peer delegation (each peer streams independently: one refused scope must not stall the rest). */
   peerHooks(peer: StoredPeer): Promise<HooksLike>;
@@ -358,7 +358,7 @@ export class Watcher {
   private readonly factIdentity: Map<string, PeerIdentity>;
   /** The local cache changed since it was last saved. */
   private localDirty = false;
-  private readonly syncing = new Map<string, { again: boolean; via: Via; listPaused: boolean }>();
+  private readonly syncing = new Map<string, { again: boolean; via: Via; listPaused: boolean; successor?: StoredPeer }>();
   /** Peers whose last sync did not finish: a cycle between full catch-ups lists only these again. */
   private readonly dirtyPeers = new Set<string>();
   private approvalsDirty = false;
@@ -368,6 +368,7 @@ export class Watcher {
   private readonly authorityDue = new Set<string>();
   /** Open hook streams by subscription id; absent while one is failed, ended or not yet opened. */
   private readonly hookStreams = new Map<string, { openedAt: number; proven: boolean }>();
+  private reconcileHooks?: () => void;
   /** Message keys each peer's receipts already list; receipts only grow, so a listing within this set has nothing new. */
   private readonly receipted: Map<string, Set<string>>;
   private stateQueue: Promise<unknown> = Promise.resolve();
@@ -665,6 +666,20 @@ export class Watcher {
 
   // ---------- catch-up and delivery ----------
 
+  /** The validated successor is on disk and its reader is ready. Rebind and check it now. */
+  inboundRenewed(peer: StoredPeer): void {
+    if (this.stopping) return;
+    this.reconcileHooks?.();
+    this.authorityDue.add(peer.handle);
+    const running = this.syncing.get(peer.handle);
+    if (running) {
+      running.successor = peer;
+      running.again = true;
+    } else {
+      void this.sync(peer, 'hook');
+    }
+  }
+
   /**
    * Serialises syncs per peer; a request that arrives mid-sync reruns once after it. `pausedListed`: the caller has
    * just listed the pause markers for this cycle, so the sync shares that listing instead of making its own.
@@ -676,10 +691,15 @@ export class Watcher {
       running.listPaused ||= !pausedListed;
       return;
     }
-    const entry = { again: false, via, listPaused: !pausedListed };
+    const entry: { again: boolean; via: Via; listPaused: boolean; successor?: StoredPeer } = { again: false, via, listPaused: !pausedListed };
     this.syncing.set(peer.handle, entry);
+    let retriedRefusal = false;
     try {
       do {
+        if (entry.successor) {
+          peer = entry.successor;
+          entry.successor = undefined;
+        }
         entry.again = false;
         const listPaused = entry.listPaused;
         entry.listPaused = false;
@@ -687,15 +707,31 @@ export class Watcher {
         this.dirtyPeers.delete(peer.handle);
         try {
           await this.syncPeer(peer, entry.via, listPaused, renew);
+          if (retriedRefusal) await this.recheckUnavailable(peer.handle);
         } catch (error) {
+          if (entry.successor) continue; // An in-flight read against the old binding cannot affect the new one.
           if (!isAuthorizationRefusal(error)) {
             this.dirtyPeers.add(peer.handle);
             this.deps.log('sync-error', { peer: peer.handle, ...errInfo(error) });
             continue;
           }
+          const refused = refusedInvocationCid(error);
+          const latest = this.deps.loadPeers().find(candidate => candidate.handle === peer.handle);
+          if (!latest?.inbound) return;
+          if (refused !== latest.inbound.cid) {
+            if (!retriedRefusal) {
+              retriedRefusal = true;
+              if (latest.inbound.cid !== peer.inbound?.cid) this.inboundRenewed(latest);
+              else entry.again = true; // No proof verdict (e.g. expired signature): sign again.
+              continue;
+            }
+            this.dirtyPeers.add(peer.handle);
+            this.deps.log('sync-error', { peer: peer.handle, ...errInfo(error) });
+            return;
+          }
           let renewed: StoredPeer | undefined;
           try {
-            renewed = await this.afterRefusal(peer, renew);
+            if (!retriedRefusal) renewed = await this.afterRefusal(peer, renew);
           } catch (failure) {
             // Neither renewed nor refused for certain: retried by the next cycle, nothing recorded.
             this.dirtyPeers.add(peer.handle);
@@ -703,9 +739,18 @@ export class Watcher {
             continue;
           }
           if (!renewed) {
-            await this.deps.onAuthorityRefusal?.(`peer:${peer.handle}`);
+            if (this.syncing.get(peer.handle)?.successor) continue;
+            await this.deps.onAuthorityRefusal?.(`peer:${peer.handle}`, refused);
+            const installed = this.deps.loadPeers().find(candidate => candidate.handle === peer.handle);
+            if (installed?.inbound && installed.inbound.cid !== refused && !retriedRefusal) {
+              retriedRefusal = true;
+              this.inboundRenewed(installed);
+              continue;
+            }
+            if (installed) this.dirtyPeers.add(peer.handle);
             return;
           }
+          retriedRefusal = true;
           peer = renewed;
           entry.again = true;
         }
@@ -721,6 +766,11 @@ export class Watcher {
    */
   private async afterRefusal(peer: StoredPeer, markerRead: boolean): Promise<StoredPeer | undefined> {
     const refused = peer.inbound?.cid;
+    const latest = this.deps.loadPeers().find(candidate => candidate.handle === peer.handle);
+    if (latest?.inbound && latest.inbound.cid !== refused) {
+      this.authorityDue.add(peer.handle);
+      return latest;
+    }
     try {
       if (!markerRead) {
         await this.deps.kvFor(peer, true);
@@ -733,6 +783,14 @@ export class Watcher {
     }
     const current = this.deps.loadPeers().find(candidate => candidate.handle === peer.handle);
     return current?.inbound && current.inbound.cid !== refused ? current : undefined;
+  }
+
+  private async recheckUnavailable(handle?: string): Promise<void> {
+    for (const peer of this.deps.loadPeers()) {
+      if (peer.interim?.unavailableAt && (handle === undefined || handle === peer.handle)) {
+        await this.deps.checkAuthority?.(peer.handle);
+      }
+    }
   }
 
   /**
@@ -794,6 +852,12 @@ export class Watcher {
     const { selfKv, log } = this.deps;
     const mailbox = peer.theirHandleForMe;
     const peerKv = await this.deps.kvFor(peer, renew);
+    const readerCid = peer.inbound.cid;
+    const readerCurrent = () => {
+      const successor = this.syncing.get(peer.handle)?.successor;
+      return !successor || successor.inbound?.cid === readerCid;
+    };
+    if (!readerCurrent()) return;
     if (renew) {
       this.renewalDue.delete(peer.handle);
       this.markerReadAt.set(peer.handle, this.now());
@@ -804,13 +868,14 @@ export class Watcher {
       // The marker changed: check now, even with nothing to import; the verdict also serves this sync's imports.
       try { allowed = Promise.resolve(await this.authorized(peer)); } catch (error) { this.authorityDue.add(peer.handle); throw error; }
     }
-    const authorized = () => allowed ??= this.authorized(peer);
-    // Pause markers are read with every listing (a cycle lists them once for all its peers just before), so a
+    if (!readerCurrent()) return;
+    const authorized = async () => readerCurrent() && await (allowed ??= this.authorized(peer)) && readerCurrent();
     // `courier resume` or `courier pause` takes effect on the very next message instead of at the next poll (a
     // message delivered while the watcher still thought the thread was paused would never wake anyone).
     const prefix = peer.sessionId ? `${k.threadRoot(mailbox, peer.sessionId)}/` : `${PREFIX}/to/${mailbox}/threads/`;
     const [keys] = await Promise.all([listAll(peerKv, prefix), listPaused ? this.syncPaused() : undefined]);
     // Receipts are read only when the listing holds a message they were not already known to cover.
+    if (!readerCurrent()) return;
     const seen = this.receipted.get(peer.handle) ?? new Set<string>();
     const unseen = selectUndelivered(keys, { v: 1, threads: {} }).filter(item => !seen.has(`${item.threadId}/${item.messageId}`));
     let receipts: Receipts = { v: 1, threads: {} };
@@ -835,6 +900,7 @@ export class Watcher {
     try {
       outcomes = await readJsonMany<unknown>(peerKv, selectedItems.map(item => item.key));
     } catch (error) {
+      if (isAuthorizationRefusal(error)) throw error;
       this.dirtyPeers.add(peer.handle);
       log('sync-error', { peer: peer.handle, messages: selectedItems.length, ...errInfo(error) });
       outcomes = new Map();
@@ -858,6 +924,7 @@ export class Watcher {
         const view = messageView(value);
         delivered.push({ threadId: selected.threadId, messageId: selected.messageId, intent: view.intent, notice: view.notice });
       } catch (error) {
+        if (isAuthorizationRefusal(error)) throw error;
         // Not delivered, so no receipt: this message is retried on the next sync; the others go ahead.
         this.dirtyPeers.add(peer.handle);
         log('sync-error', { peer: peer.handle, messageId: selected.messageId, ...errInfo(error) });
@@ -1532,10 +1599,18 @@ export class Watcher {
    * This agent's pause markers are the truth. A marker that disappeared means the human resumed: the budget starts
    * over and what arrived meanwhile wakes the agent once. Serialised, so overlapping calls never apply a stale listing.
    */
-  syncPaused(): Promise<void> {
-    return this.exclusive(async () => {
+  async syncPaused(): Promise<void> {
+    let recoveredTimeRefusal = false;
+    await this.exclusive(async () => {
       try {
-        const keys = await listAll(this.deps.selfKv, this.keys.pausedPrefix);
+        const list = () => listAll(this.deps.selfKv, this.keys.pausedPrefix);
+        let keys: string[];
+        try { keys = await list(); }
+        catch (error) {
+          if (!isInvocationTimeRefusal(error)) throw error;
+          keys = await list();
+          recoveredTimeRefusal = true;
+        }
         const listed = new Set<string>();
         for (const key of keys) {
           const match = /\/paused\/([^/]+)\/([^/]+)\.json$/.exec(key);
@@ -1575,6 +1650,10 @@ export class Watcher {
         this.deps.log('sync-error', { source: 'paused', ...errInfo(error) });
       }
     });
+    if (recoveredTimeRefusal) {
+      try { await this.recheckUnavailable(); }
+      catch (error) { this.deps.log('sync-error', { source: 'paused', ...errInfo(error) }); }
+    }
   }
 
   /** State that only matters for a day or an hour is dropped, so it cannot grow without bound. */
@@ -1776,7 +1855,7 @@ export class Watcher {
    */
   async run(external: AbortSignal, options: { once?: boolean } = {}): Promise<void> {
     if (options.once) return this.session(external, options);
-    const { log, selfKv } = this.deps;
+    const { log } = this.deps;
     let windowMs = CONFLICT_STANDBY_MS;
     for (;;) {
       const started = this.now();
@@ -1798,12 +1877,12 @@ export class Watcher {
         reason: 'state-conflict', retryInMs: windowMs,
         message: `Another \`watch\` is writing this Courier agent's watch.json. This watcher has stopped waking and checks again in ${Math.round(windowMs / 60_000)} min; stop one of the two.`,
       });
-      let seen = (await getJson(selfKv, this.keys.watch).catch(() => undefined))?.etag;
+      let seen = (await getJson(this.deps.selfKv, this.keys.watch).catch(() => undefined))?.etag;
       for (;;) {
         await sleep(windowMs, external);
         if (external.aborted) return;
         windowMs = Math.min(windowMs * 2, CONFLICT_STANDBY_MAX_MS);
-        const etag = (await getJson(selfKv, this.keys.watch).catch(() => undefined))?.etag;
+        const etag = (await getJson(this.deps.selfKv, this.keys.watch).catch(() => undefined))?.etag;
         if (etag === seen) break;
         seen = etag;
       }
@@ -1831,14 +1910,21 @@ export class Watcher {
       await this.loadState(await this.migrateLegacyState());
       log('start', { debounceMs: this.opts.debounceMs, pollMs: this.opts.pollMs, ticketSeconds: this.opts.ticketSeconds, once: Boolean(options.once) });
       await this.pruneClaimsIfDue();
+      let approvalsHooks: HooksLike | undefined;
       const reconcile = () => {
-        const desired = new Map<string, { sub: HookSubscription; hooks: () => Promise<HooksLike>; onEvent: (event?: HookEventLike) => void }>();
+        const desired = new Map<string, { sub: HookSubscription; hooks: () => Promise<HooksLike>; onEvent: (event?: HookEventLike) => void; onRefused?: () => void }>();
         for (const peer of this.deps.loadPeers()) {
           if (peer.status !== 'paired' || !peer.inbound || !peer.theirHandleForMe) continue;
           // The id carries the delegation CID: a renewed delegation restarts the subscription.
-          desired.set(`peer:${peer.handle}:${peer.inbound.cid}`, {
+          const cid = peer.inbound.cid;
+          desired.set(`peer:${peer.handle}:${cid}`, {
             sub: { space: peer.spaceId, service: 'kv', pathPrefix: peer.sessionId ? k.threadRoot(peer.theirHandleForMe, peer.sessionId) : `${PREFIX}/to/${peer.theirHandleForMe}` },
             hooks: () => this.deps.peerHooks(peer),
+            onRefused: () => {
+              const current = this.deps.loadPeers().find(candidate => candidate.handle === peer.handle);
+              if (current?.inbound && current.inbound.cid !== cid) this.inboundRenewed(current);
+              else reconcile();
+            },
             onEvent: (event) => {
               // A peer renewing or replacing its delegation to us writes this marker (a path-less event may be it):
               // read the marker and check the peer's authority now, not at the next scheduled check.
@@ -1850,13 +1936,17 @@ export class Watcher {
             },
           });
         }
+        const hooks = this.deps.selfHooks;
+        const approvalsChanged = approvalsHooks !== hooks;
+        if (approvalsHooks && approvalsChanged) this.approvalsDirty = true;
+        approvalsHooks = hooks;
         desired.set('approvals', {
           sub: { space: this.deps.spaceId, service: 'kv', pathPrefix: k.approvalsPrefix },
-          hooks: async () => this.deps.selfHooks,
+          hooks: async () => hooks,
           onEvent: () => void this.syncApprovals('hook'),
         });
         for (const [id, controller] of supervisors) {
-          if (!desired.has(id)) {
+          if (!desired.has(id) || (id === 'approvals' && approvalsChanged)) {
             controller.abort();
             supervisors.delete(id);
             this.hookStreams.delete(id);
@@ -1866,13 +1956,14 @@ export class Watcher {
           if (supervisors.has(id)) continue;
           const controller = new AbortController();
           supervisors.set(id, controller);
-          void this.supervise(id, source.sub, source.hooks, source.onEvent, controller.signal);
+          void this.supervise(id, source.sub, source.hooks, source.onEvent, controller.signal, source.onRefused);
         }
       };
       if (options.once) {
         await this.pollOnce('startup', false);
         await this.tick(true);
       } else {
+        this.reconcileHooks = reconcile;
         // Open the subscriptions first, then catch up: a write between the two is seen by one or the other.
         reconcile();
         await sleep(RECONNECT_CATCH_UP_MS, signal);
@@ -1903,11 +1994,13 @@ export class Watcher {
         }
       }
     } catch (error) {
-      if (isAuthorizationRefusal(error)) await this.deps.onAuthorityRefusal?.('self');
+      if (isAuthorizationRefusal(error) && !isInvocationTimeRefusal(error)) await this.deps.onAuthorityRefusal?.('self');
       throw error;
     } finally {
+      this.reconcileHooks = undefined;
       clearInterval(ticker);
       for (const controller of supervisors.values()) controller.abort();
+      this.hookStreams.clear();
       external.removeEventListener('abort', onExternalAbort);
       this.onFatal = undefined;
       this.saveLocal();
@@ -1926,9 +2019,11 @@ export class Watcher {
     hooks: () => Promise<HooksLike>,
     onEvent: (event?: HookEventLike) => void,
     signal: AbortSignal,
+    onRefused?: () => void,
   ): Promise<void> {
     let failures = 0;
     let opened = false;
+    let retriedRefusal = false;
     while (!signal.aborted) {
       try {
         this.deps.log('hook-subscribe', { source: id.split(':').slice(0, 2).join(':'), ttlSeconds: this.opts.ticketSeconds });
@@ -1938,25 +2033,40 @@ export class Watcher {
         if (opened) void sleep(RECONNECT_CATCH_UP_MS, signal).then(() => { if (!signal.aborted) onEvent(); });
         opened = true;
         const service = await hooks();
+        if (signal.aborted) return;
         const stream = { openedAt: this.now(), proven: false };
         this.hookStreams.set(id, stream);
         for await (const event of service.subscribe([sub], { ttlSeconds: this.opts.ticketSeconds, signal })) {
+          if (signal.aborted) return;
           failures = 0;
           stream.proven = true;
+          retriedRefusal = false;
           this.deps.log('hook-event', { source: id.split(':').slice(0, 2).join(':'), path: event.path ?? null });
           onEvent(event);
         }
+        if (signal.aborted) return;
         this.hookStreams.delete(id);
-        if (!signal.aborted) {
+        onEvent();
+        await sleep(5_000, signal);
+      } catch (error) {
+        // A superseded stream must not clear the replacement or latch a late refusal.
+        if (signal.aborted) return;
+        this.hookStreams.delete(id);
+        if (isAuthorizationRefusal(error)) {
+          const refused = refusedInvocationCid(error);
+          if (!isInvocationTimeRefusal(error) && (!onRefused || refused !== undefined)) {
+            await this.deps.onAuthorityRefusal?.(id, refused);
+            if (!signal.aborted) onRefused?.();
+            if (!onRefused || signal.aborted) return;
+          }
+          if (!retriedRefusal) { retriedRefusal = true; continue; }
           onEvent();
           await sleep(5_000, signal);
+          continue;
         }
-      } catch (error) {
-        this.hookStreams.delete(id);
-        if (isAuthorizationRefusal(error)) { await this.deps.onAuthorityRefusal?.(id); return; }
         failures++;
         this.deps.log('hook-error', { source: id.split(':').slice(0, 2).join(':'), ...errInfo(error) });
-        if (!signal.aborted) onEvent();
+        onEvent();
         await sleep(Math.min(300_000, 15_000 * 2 ** Math.min(failures - 1, 5)), signal);
       }
     }

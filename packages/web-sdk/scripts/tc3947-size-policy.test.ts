@@ -29,7 +29,7 @@ test("TC-3947 records the exact canonical CI root bytes of #1138", () => {
   // The delta is exactly CI's measured change over the predecessor.
   for (const format of ["index.mjs", "index.cjs"] as const) {
     expect(row.root.ceiling[format] - predecessor.root.ceiling[format]).toBe(row.root.delta[format]);
-    expect(rootCeilingFor({ ...ledger, tc3801NamedKeysRoot: undefined, tc3969SecretKeyCoverageRoot: undefined, tc3823BotHistoryKeyRoot: undefined, tc3802SecretKeyCapRoot: undefined, tc3810ReaderRoot: undefined }, format)).toEqual({ row: "tc3947ReplicaRevokeRoot", ceiling: row.root.ceiling[format] });
+    expect(rootCeilingFor({ ...ledger, tc3801NamedKeysRoot: undefined, tc3969SecretKeyCoverageRoot: undefined, tc3823BotHistoryKeyRoot: undefined, tc3802SecretKeyCapRoot: undefined, tc3862ExplorerOriginRoot: undefined, tc3522InvocationRefusalRoot: undefined, tc3810ReaderRoot: undefined }, format)).toEqual({ row: "tc3947ReplicaRevokeRoot", ceiling: row.root.ceiling[format] });
   }
 
   expect(ancestryPins(ledger, false)).toContainEqual({
@@ -40,8 +40,8 @@ test("TC-3947 records the exact canonical CI root bytes of #1138", () => {
   expect(row.replicaWorker.ceiling - ledger.tc3443SessionRetireRoot.replicaWorker.ceiling).toBe(row.replicaWorker.delta);
   expect(row.worker).toEqual({ delta: 234, ceiling: 781191 });
   expect(row.replicaWorker).toEqual({ delta: 238, ceiling: 774920 });
-  expect(MAX_WORKER_GZIP_BYTES).toBe(row.worker.ceiling);
-  expect(MAX_REPLICA_WORKER_GZIP_BYTES).toBe(row.replicaWorker.ceiling);
+  expect(MAX_WORKER_GZIP_BYTES).toBe(ledger.tc3522InvocationRefusalKvWorker.worker.ceiling);
+  expect(MAX_REPLICA_WORKER_GZIP_BYTES).toBe(ledger.tc3522InvocationRefusalReplicaWorker.replicaWorker.ceiling);
   expect(Object.keys(row).sort()).toEqual([
     "base", "canonicalCI", "label", "reason", "replicaWorker", "root", "ruling", "sourceCommits", "worker",
   ]);
