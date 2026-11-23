@@ -279,6 +279,15 @@ export interface OperationDefinition<I, O> {
     context: AuthorityPlanningContext,
     input: I,
   ) => Promise<readonly CapabilityRequirement[]>;
+  /**
+   * Additional exact capabilities a node may name in a runtime permission hint
+   * alongside `authority(...)` — for example, a secret's own named encryption
+   * key when opening a v2 envelope. Never widens preflight or allows wildcards.
+   */
+  readonly runtimeHints?: (
+    context: AuthorityPlanningContext,
+    input: I,
+  ) => Promise<readonly CapabilityRequirement[]>;
   readonly execute: (
     context: OperationContext,
     input: I,

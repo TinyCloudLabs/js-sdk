@@ -161,8 +161,11 @@ function canonicalizeOperationResource(permission: PermissionEntry): PermissionE
   // service marker, not an owned data-space; an explicit full space stays bound.
   const rawMarker = permission.space === "encryption"
     && permission.path.startsWith("urn:tinycloud:encryption:");
+  // Bare network URNs normalize PKH address casing; named-key and prefix URNs
+  // (`<networkId>/<path>`) require canonical EIP-55 owners (parseEncryptionResource)
+  // and must not be lowercased here.
   const match = permission.path.match(
-    /^(urn:tinycloud:encryption:did:pkh:eip155:\d+:)(0x[0-9a-fA-F]{40})(:.*)$/,
+    /^(urn:tinycloud:encryption:did:pkh:eip155:\d+:)(0x[0-9a-fA-F]{40})(:[^/]+)$/,
   );
   if (!match && !rawMarker) return permission;
   const canonical = {

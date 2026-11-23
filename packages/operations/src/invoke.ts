@@ -277,11 +277,18 @@ async function retryWithLocalAuthority(
       operationContext.runtime.node,
       operationContext.summary.space,
     );
+    const allowedHints = await resolveAllowedRuntimeHints(
+      prepared.definition,
+      operationContext,
+      prepared.parsedInput.data,
+      planned!,
+    );
     const refreshedGranted = refreshLiveRuntimeAuthority(
       operationContext.runtime.node,
       first.missing as unknown as PermissionEntry[],
       planned as unknown as PermissionEntry[],
       resolveSpace,
+      allowedHints as unknown as PermissionEntry[],
     );
     if (refreshedGranted === undefined) {
       return localAuthorityFailure(prepared);
@@ -606,11 +613,17 @@ async function executePreparedInvocation(
       }
       case "authority_required": {
         const hinted = exactCapabilities(outcome.missing);
+        const allowedHints = await resolveAllowedRuntimeHints(
+          definition,
+          (runtimeContext ?? runtimeResolution.context) as RuntimeOperationContext,
+          parsedInput.data,
+          required,
+        );
         if (
           hinted === undefined ||
           !isExactCapabilityMemberSubset(
             hinted as unknown as PermissionEntry[],
-            required as unknown as PermissionEntry[],
+            allowedHints as unknown as PermissionEntry[],
             resolveSpace,
           )
         ) {
@@ -1021,11 +1034,23 @@ function isExactLocalSecretsGetPlan(
   return "valid";
 }
 
+async function resolveAllowedRuntimeHints(
+  definition: OperationDefinition<any, any>,
+  context: RuntimeOperationContext,
+  input: unknown,
+  required: readonly CapabilityRequirement[],
+): Promise<readonly CapabilityRequirement[]> {
+  if (definition.runtimeHints === undefined) return required;
+  const extra = exactCapabilities(await definition.runtimeHints(context, input));
+  return extra === undefined ? required : [...required, ...extra];
+}
+
 function refreshLiveRuntimeAuthority(
   node: unknown,
   requested: readonly PermissionEntry[],
   planned: readonly PermissionEntry[],
   resolveSpace: (space: string) => string,
+  allowed: readonly PermissionEntry[] = planned,
 ): readonly CapabilityRequirement[] | undefined {
   const candidate = node as {
     hasRuntimePermissions?: (permissions: PermissionEntry[]) => unknown;
@@ -1043,7 +1068,7 @@ function refreshLiveRuntimeAuthority(
   const exactActivated = validateExactCapabilities(activated);
   if (exactActivated === undefined) return undefined;
   const selectedActivated = exactActivated.filter((permission) =>
-    isExactCapabilityMemberSubset([permission], planned, resolveSpace),
+    isExactCapabilityMemberSubset([permission], allowed, resolveSpace),
   );
   if (!isExactCapabilityMemberSubset(requested, selectedActivated, resolveSpace)) return undefined;
   const combined = canonicalizeOperationCapabilities(
