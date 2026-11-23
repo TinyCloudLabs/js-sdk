@@ -847,7 +847,7 @@ test("at most 64 links are polled in the background; the next call collects the 
   expect(await openkey.delivery(id, () => store.validateTenant(last.subject, [requester]))).toEqual({ status: "stored" });
 }, 60_000);
 
-test("one tenant's links hold at most four background polls, so other tenants' links are still polled", async () => {
+test("one tenant's links hold at most four background polls, so other tenants' links are polled", async () => {
   const store = await testStore();
   const requester = await ownerDid(REQUESTER_KEY);
   const greedy = "openkey-user-greedy";
