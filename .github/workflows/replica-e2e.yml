@@ -230,7 +230,13 @@ jobs:
         run: |
           docker run -d --name replica-e2e-pg -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=replica_e2e -p 127.0.0.1:5432:5432 postgres:16
           for attempt in $(seq 1 30); do
-            docker exec replica-e2e-pg pg_isready -U postgres -d replica_e2e && exit 0
+            if docker exec replica-e2e-pg pg_isready -U postgres -d replica_e2e; then
+              # One database per suite: a node of a newer release decrypts the rows it finds at start, so a suite
+              # with its own host key must not open another suite's database (TC-3947).
+              docker exec replica-e2e-pg createdb -U postgres replica_e2e_cli
+              docker exec replica-e2e-pg createdb -U postgres replica_e2e_flag
+              exit 0
+            fi
             sleep 2
           done
           docker logs replica-e2e-pg
@@ -265,14 +271,14 @@ jobs:
         env:
           TC_REPLICA_E2E_NODE_BIN: ${{ runner.temp }}/tinycloud
           TC_REPLICATION_E2E_NODE_BIN: ${{ runner.temp }}/tinycloud
-          TC_REPLICA_E2E_DATABASE_URL: ${{ matrix.database == 'postgres' && 'postgres://postgres:postgres@127.0.0.1:5432/replica_e2e' || '' }}
+          TC_REPLICA_E2E_DATABASE_URL: ${{ matrix.database == 'postgres' && 'postgres://postgres:postgres@127.0.0.1:5432/replica_e2e_cli' || '' }}
         run: bash "$GITHUB_WORKSPACE/.github/scripts/run-private-tests.sh" bun test packages/cli/test/replica.e2e.test.ts --reporter=junit --reporter-outfile="$RUNNER_TEMP/replica-junit/cli-replica-e2e.xml"
       - name: CLI replication flag against the node
         if: ${{ !cancelled() && steps.relevance.outputs.relevant == 'true' }}
         env:
           TC_REPLICA_E2E_NODE_BIN: ${{ runner.temp }}/tinycloud
           TC_REPLICATION_E2E_NODE_BIN: ${{ runner.temp }}/tinycloud
-          TC_REPLICA_E2E_DATABASE_URL: ${{ matrix.database == 'postgres' && 'postgres://postgres:postgres@127.0.0.1:5432/replica_e2e' || '' }}
+          TC_REPLICA_E2E_DATABASE_URL: ${{ matrix.database == 'postgres' && 'postgres://postgres:postgres@127.0.0.1:5432/replica_e2e_flag' || '' }}
         run: bash "$GITHUB_WORKSPACE/.github/scripts/run-private-tests.sh" bun test packages/cli/test/replication-flag.e2e.test.ts --reporter=junit --reporter-outfile="$RUNNER_TEMP/replica-junit/cli-flag.xml"
       - name: Enforce real-node JUnit counts and zero skips
         if: ${{ always() && steps.relevance.outputs.relevant == 'true' }}
