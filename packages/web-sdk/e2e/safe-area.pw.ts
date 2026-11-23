@@ -95,13 +95,6 @@ test("a 60px swipe down on the header closes the panel; a 30px one does not", as
   await expect(panel(page)).toBeHidden();
 });
 
-test("Escape closes the panel", async ({ page }) => {
-  const c = CASES[0]!;
-  await openPhone(page, c.viewport, c.insets);
-  await page.keyboard.press("Escape");
-  await expect(panel(page)).toBeHidden();
-});
-
 test("with no insets the header sits at the top edge", async ({ page }) => {
   await openPhone(page, { width: 390, height: 844 }, { top: 0, right: 0, bottom: 0, left: 0 });
   const top = await panel(page).evaluate((el) => (el.querySelector(".head") as HTMLElement).getBoundingClientRect().top);

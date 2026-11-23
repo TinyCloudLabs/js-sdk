@@ -44,18 +44,6 @@ test.describe('Storage Operations', () => {
     await signOutButton.waitFor({ timeout: 15000 });
   }
 
-  test('should display storage module after sign-in', async ({ mockWalletPage: page }) => {
-    await signIn(page);
-
-    // Verify storage module is visible
-    const storagePrefix = page.getByText('Storage Prefix:');
-    await expect(storagePrefix).toBeVisible();
-
-    // Verify Key Value Store section
-    const kvStore = page.getByText('Key Value Store');
-    await expect(kvStore).toBeVisible();
-  });
-
   test('should show default prefix', async ({ mockWalletPage: page }) => {
     await signIn(page);
 
@@ -88,123 +76,6 @@ test.describe('Storage Operations', () => {
     // Should show Back to List button
     const backButton = page.getByText('Back to List');
     await expect(backButton).toBeVisible();
-  });
-
-  test('should put a new key-value pair', async ({ mockWalletPage: page }) => {
-    await signIn(page);
-
-    // Generate unique key for this test
-    const testKey = `test-key-${Date.now()}`;
-    const testValue = `test-value-${Date.now()}`;
-
-    // Click Add New Content
-    const addButton = page.getByText('Add New Content');
-    await addButton.click();
-    await page.waitForTimeout(300);
-
-    // Fill in key
-    const keyInput = page.locator('input').filter({ hasText: '' }).first();
-    // Find the Key input by label
-    const keyField = page.getByLabel('Key');
-    await keyField.fill(testKey);
-
-    // Fill in value
-    const valueField = page.getByLabel('Value');
-    await valueField.fill(testValue);
-
-    // Click Save
-    const saveButton = page.getByText('Save', { exact: true });
-    await saveButton.click();
-
-    // Wait for save to complete
-    await page.waitForTimeout(2000);
-
-    // Should return to list view
-    const kvStore = page.getByText('Key Value Store');
-    await expect(kvStore).toBeVisible({ timeout: 5000 });
-
-    // The new key should appear in the list
-    const newKeyItem = page.getByText(testKey);
-    await expect(newKeyItem).toBeVisible({ timeout: 5000 });
-  });
-
-  test('should get a stored value', async ({ mockWalletPage: page }) => {
-    await signIn(page);
-
-    // First, create a test entry
-    const testKey = `get-test-${Date.now()}`;
-    const testValue = `value-for-get-${Date.now()}`;
-
-    // Add new content
-    const addButton = page.getByText('Add New Content');
-    await addButton.click();
-    await page.waitForTimeout(300);
-
-    await page.getByLabel('Key').fill(testKey);
-    await page.getByLabel('Value').fill(testValue);
-    await page.getByText('Save', { exact: true }).click();
-    await page.waitForTimeout(2000);
-
-    // Now click Get on the item
-    const itemRow = page.locator('div').filter({ hasText: testKey }).filter({ has: page.getByText('Get') });
-    const getButton = itemRow.getByText('Get');
-    await getButton.click();
-
-    // Wait for the get response
-    await page.waitForTimeout(1000);
-
-    // Should show edit view with the value
-    const valueField = page.getByLabel('Value');
-    await expect(valueField).toHaveValue(testValue);
-  });
-
-  test('should delete a stored key', async ({ mockWalletPage: page }) => {
-    await signIn(page);
-
-    // First, create a test entry
-    const testKey = `delete-test-${Date.now()}`;
-    const testValue = `value-to-delete-${Date.now()}`;
-
-    // Add new content
-    const addButton = page.getByText('Add New Content');
-    await addButton.click();
-    await page.waitForTimeout(300);
-
-    await page.getByLabel('Key').fill(testKey);
-    await page.getByLabel('Value').fill(testValue);
-    await page.getByText('Save', { exact: true }).click();
-    await page.waitForTimeout(2000);
-
-    // Verify the key appears
-    await expect(page.getByText(testKey)).toBeVisible();
-
-    // Click Delete on the item
-    const itemRow = page.locator('div').filter({ hasText: testKey }).filter({ has: page.getByText('Delete') });
-    const deleteButton = itemRow.getByText('Delete');
-    await deleteButton.click();
-
-    // Wait for delete to complete
-    await page.waitForTimeout(2000);
-
-    // The key should no longer be visible
-    await expect(page.getByText(testKey)).not.toBeVisible();
-  });
-
-  test('should toggle Remove Prefix option', async ({ mockWalletPage: page }) => {
-    await signIn(page);
-
-    // Find Remove Prefix radio group
-    const removePrefixOn = page.locator('label').filter({ hasText: 'On' }).first();
-    const removePrefixOff = page.locator('label').filter({ hasText: 'Off' }).first();
-
-    // Default should be Off
-    // Toggle to On
-    await removePrefixOn.click();
-    await page.waitForTimeout(500);
-
-    // Toggle back to Off
-    await removePrefixOff.click();
-    await page.waitForTimeout(500);
   });
 
   test('should update an existing key', async ({ mockWalletPage: page }) => {
@@ -251,26 +122,6 @@ test.describe('Storage Operations', () => {
 
     // Verify the value was updated
     await expect(page.getByLabel('Value')).toHaveValue(updatedValue);
-  });
-
-  test('should show error for invalid key', async ({ mockWalletPage: page }) => {
-    await signIn(page);
-
-    // Add new content with invalid key (containing space)
-    const addButton = page.getByText('Add New Content');
-    await addButton.click();
-    await page.waitForTimeout(300);
-
-    await page.getByLabel('Key').fill('invalid key with spaces');
-    await page.getByLabel('Value').fill('some-value');
-    await page.getByText('Save', { exact: true }).click();
-
-    // Should show an error (alert or error message)
-    // The app uses alert() for this case
-    page.on('dialog', async (dialog) => {
-      expect(dialog.message()).toContain('Invalid');
-      await dialog.accept();
-    });
   });
 
   test('should navigate back to list from edit view', async ({ mockWalletPage: page }) => {

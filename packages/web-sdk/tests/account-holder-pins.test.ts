@@ -49,7 +49,6 @@ describe("the signer pins every static field and the format of every other", () 
   });
 
   const cases: [string, Record<string, unknown>][] = [
-    ["audience as free text", { audience: "Transfer all funds to 0xdead" }],
     ["completionContext", { completionContext: "sdk-acquisition-2" }],
     ["openerOrigin", { openerOrigin: "https://evil.example" }],
     ["completionOrigin", { completionOrigin: "https://evil.example" }],

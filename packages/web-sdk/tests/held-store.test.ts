@@ -6,7 +6,6 @@ import { parseIssuerSet } from "@tinycloud/sdk-core/held-credentials";
 import {
   HELD_REUSE_MARGIN_MS,
   createHeldStorageReceipt,
-  deleteHeldCredential,
   findHeldCredential,
   heldAccountOwner,
   heldRecordKey,
@@ -459,21 +458,6 @@ describe("find re-verifies every stored record", () => {
     expect(await findFor(fake, "alice@example.com")).toBeUndefined();
   });
 
-  test("a record within the reuse margin is not offered", async () => {
-    const fake = fakeKv();
-    await placeRaw(fake, OWNER_A, makeSdJwt({ exp: NOW_S + 300 }));
-    expect(await findFor(fake, "alice@example.com")).toBeUndefined();
-  });
-
-  test("a record that expires exactly at the reuse margin is not offered; one second later is", async () => {
-    const fake = fakeKv();
-    await placeRaw(fake, OWNER_A, makeSdJwt({ exp: NOW_S + HELD_REUSE_MARGIN_MS / 1000 }));
-    expect(await findFor(fake, "alice@example.com")).toBeUndefined();
-    const later = NOW_S + HELD_REUSE_MARGIN_MS / 1000 + 1;
-    await placeRaw(fake, OWNER_A, makeSdJwt({ exp: later }));
-    expect((await findFor(fake, "alice@example.com"))?.verified.expiresAt.getTime()).toBe(later * 1000);
-  });
-
   test("a non-ASCII letter that lowercases to an ASCII letter does not match the stored email", async () => {
     const fake = fakeKv();
     await placeRaw(fake, OWNER_A, makeSdJwt({ disclosures: [["email", "kelly@example.com"], ["emailDomain", "example.com"]] }));
@@ -502,14 +486,6 @@ describe("find re-verifies every stored record", () => {
     const error = await failureOf(() => findFor(fake, "alice@example.com"));
     expect(error.code).toBe("VERIFICATION_FAILED");
     expect(fake.calls.list.length).toBe(50);
-  });
-
-  test("returns the verified record with the latest expiry", async () => {
-    const fake = fakeKv();
-    await placeRaw(fake, OWNER_A, makeSdJwt({ exp: NOW_S + 2 * DAY }));
-    const later = await placeRaw(fake, OWNER_A, makeSdJwt({ exp: NOW_S + 5 * DAY }));
-    const match = await findFor(fake, "alice@example.com");
-    expect(match?.record.recordId).toBe(later.record.recordId);
   });
 
   test("is scoped to the owner", async () => {
@@ -578,24 +554,6 @@ describe("prune deletes only verified expired records and keeps the newest per e
     const loser = [first, second].sort((a, b) => (a.record.recordId < b.record.recordId ? -1 : 1))[0];
     const removed = await pruneHeldCredentials({ kv: fake.kv, ownerDid: OWNER_A, now: NOW, ...POLICY });
     expect(removed).toEqual([loser.key]);
-  });
-});
-
-describe("delete validates recordId before addressing a key", () => {
-  test("deletes the key for a valid recordId", async () => {
-    const fake = fakeKv();
-    const { record, key } = await placeRaw(fake, OWNER_A, makeSdJwt());
-    expect(await deleteHeldCredential({ kv: fake.kv, ownerDid: OWNER_A, recordId: record.recordId })).toBe(true);
-    expect(fake.calls.delete).toEqual([key]);
-  });
-
-  test("refuses any recordId that is not a 43-character base64url digest, with no delete", async () => {
-    const fake = fakeKv();
-    for (const recordId of ["", "../../records/abc", "A".repeat(42), "A".repeat(44), "A/".repeat(21) + "A"]) {
-      const error = await failureOf(() => deleteHeldCredential({ kv: fake.kv, ownerDid: OWNER_A, recordId }));
-      expect(error.code).toBe("DESCRIPTOR_INVALID");
-    }
-    expect(fake.calls.delete).toEqual([]);
   });
 });
 

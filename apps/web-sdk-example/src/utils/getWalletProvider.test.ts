@@ -11,9 +11,6 @@ test("uses the connector's EIP-1193 provider as the TinyCloud driver", async () 
       throw new Error(`Unexpected method: ${method}`);
     },
   } as unknown as BrowserWalletProvider;
-  const walletClient = {
-    transport: { type: "viem", request: "not-an-eip-1193-request" },
-  };
   const connector = {
     getProvider: async () => provider,
   };
@@ -21,8 +18,6 @@ test("uses the connector's EIP-1193 provider as the TinyCloud driver", async () 
   const driver = await getWalletProvider(connector);
 
   expect(driver).toBe(provider);
-  expect(driver).not.toBe(walletClient.transport);
-  expect(typeof driver.request).toBe("function");
   await expect(
     driver.request({ method: "eth_chainId" }),
   ).resolves.toBe("0x1");

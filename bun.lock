@@ -85,7 +85,6 @@
       },
       "devDependencies": {
         "@babel/plugin-proposal-private-property-in-object": "^7.21.11",
-        "@playwright/test": "^1.40.0",
         "@radix-ui/react-slot": "^1.1.2",
         "@tailwindcss/postcss": "^4.1.11",
         "autoprefixer": "^10.4.21",

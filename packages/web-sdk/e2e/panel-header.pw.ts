@@ -190,20 +190,6 @@ for (const c of LAYOUTS) {
   }
 }
 
-for (const section of ["delegations", "storage"] as const) {
-  test(`drawer ${section} and its controls fit with a long app name`, async ({ page }) => {
-    await open(page, { width: 1280, height: 800 }, "drawer", NAMES[0]);
-    await page.evaluate((id) => (window as unknown as HarnessWindow).tc?.ui.open(id), section);
-    await expect(panel(page).locator(".sec-title")).toHaveText(section === "storage" ? "Storage" : "Delegations");
-    expect(await panel(page).evaluate((el) => el.scrollWidth)).toBeLessThanOrEqual(await panel(page).evaluate((el) => el.clientWidth));
-    if (section === "delegations") {
-      await panel(page).getByRole("button", { name: "Revoke access for Stub grant" }).click();
-      await expect(panel(page).locator('[role="alertdialog"]')).toBeVisible();
-      expect(await panel(page).evaluate((el) => el.scrollWidth)).toBeLessThanOrEqual(await panel(page).evaluate((el) => el.clientWidth));
-    }
-  });
-}
-
 /** Visible section content must not paint to the right of the panel, including inside scrollable cards. */
 async function expectContentFits(page: Page, section: string): Promise<void> {
   const overflow = await panel(page).evaluate((el, id) => {

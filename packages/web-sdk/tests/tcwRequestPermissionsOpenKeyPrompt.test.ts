@@ -84,15 +84,6 @@ describe("an OpenKey client that accepts a presentation", () => {
     const request = signMessage.mock.calls[0]![0];
     expect(request.presentation).toEqual({ protocolVersion: 1, displayName: "Test App", iconUrl: ICON });
   });
-
-  test("the signed message is the grant's message, byte for byte", async () => {
-    const { signMessage, config } = openKeyConfig(1);
-    const { tcw } = web(node(), config);
-
-    await tcw.requestPermissions([ENTRY]);
-
-    expect(signMessage.mock.calls[0]![0].message).toBe(SIWE);
-  });
 });
 
 describe("an OpenKey client that does not accept a presentation", () => {

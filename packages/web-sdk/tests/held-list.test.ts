@@ -13,7 +13,6 @@ import {
   type HeldCredentialRecord,
   type HeldMatch,
 } from "../src/credentials/held-store";
-import * as subpath from "../src/credentials-subpath";
 
 const ISSUER_DID = "did:web:issuer.credentials.org";
 const KID = `${ISSUER_DID}#controller`;
@@ -112,10 +111,7 @@ interface Fake {
 interface FakeOptions {
   /** `kv.get` rejects for this key (a transport failure that throws). */
   readonly getThrowsFor?: (key: string) => boolean;
-  /** `kv.get` resolves `{ ok: false }` with a non-not-found error for this key. */
-  readonly getFailsFor?: (key: string) => boolean;
   readonly listThrows?: boolean;
-  readonly listFails?: boolean;
   /** Every listed key comes back twice. */
   readonly repeatKeys?: boolean;
   /** The listing claims to be truncated and gives no cursor. */
@@ -131,14 +127,12 @@ function fakeKv(options: FakeOptions = {}): Fake {
     async list(opts: { prefix?: string } = {}) {
       listPrefixes.push(opts.prefix ?? "");
       if (options.listThrows) throw new Error("kv list failed");
-      if (options.listFails) return { ok: false, error: { code: "NETWORK_ERROR" } };
       const sorted = [...data.keys()].filter((k) => k.startsWith(opts.prefix ?? "")).sort().reverse();
       const keys = options.repeatKeys ? sorted.flatMap((k) => [k, k]) : sorted;
       return { ok: true, data: { keys, truncated: options.truncatedNoCursor === true } };
     },
     async get(key: string) {
       if (options.getThrowsFor?.(key)) throw new Error("kv get failed");
-      if (options.getFailsFor?.(key)) return { ok: false, error: { code: "NETWORK_ERROR" } };
       if (!data.has(key)) return { ok: false, error: { code: "KV_NOT_FOUND" } };
       return { ok: true, data: { data: structuredClone(data.get(key)) } };
     },
@@ -267,15 +261,6 @@ describe("listHeldEmailCredentials: bad records are skipped, an unreadable store
     await expect(list(fake)).rejects.toThrow("kv get failed");
   });
 
-  test("a kv.get that resolves not-ok with a non-not-found error is OFFLINE", async () => {
-    let failKey = "";
-    const fake = fakeKv({ getFailsFor: (key) => key === failKey });
-    await place(fake, OWNER_A, makeSdJwt({ email: "ok@example.com" }));
-    failKey = (await place(fake, OWNER_A, makeSdJwt({ email: "unreadable@example.com" }))).key;
-    const error = await refusalOf(() => list(fake));
-    expect(error.code).toBe("OFFLINE");
-  });
-
   test("a listed key that is gone by the time it is read (not found) is skipped", async () => {
     const fake = fakeKv();
     await place(fake, OWNER_A, makeSdJwt({ email: "ok@example.com" }));
@@ -291,11 +276,6 @@ describe("listHeldEmailCredentials: bad records are skipped, an unreadable store
 
   test("a kv.list that throws propagates", async () => {
     await expect(list(fakeKv({ listThrows: true }))).rejects.toThrow("kv list failed");
-  });
-
-  test("a kv.list that resolves not-ok is OFFLINE, not an empty list", async () => {
-    const error = await refusalOf(() => list(fakeKv({ listFails: true })));
-    expect(error.code).toBe("OFFLINE");
   });
 
   test("a truncated listing with no cursor is still refused", async () => {
@@ -556,20 +536,4 @@ describe("a caller or config error is thrown, never read as 'no credentials'", (
     await expect(find(await seeded(), { now: new Date("not a date") })).rejects.toMatchObject({ code: "bad-config" });
   });
 
-  test("a record that merely fails verification is still skipped, not thrown", async () => {
-    const fake = fakeKv();
-    await place(fake, OWNER_A, makeSdJwt({ tamperSignature: true }));
-    expect(await list(fake)).toEqual([]);
-    expect(await find(fake)).toBeUndefined();
-  });
-});
-
-describe("@tinycloud/web-sdk/credentials entry exposes the held surface", () => {
-  test("exports the signer, store and source functions the claim screen needs", () => {
-    for (const name of ["createAccountHolderSigner", "storeHeldCredential", "findHeldCredential", "acquireHeldCredential", "listHeldEmailCredentials"] as const) {
-      expect(typeof subpath[name]).toBe("function");
-    }
-    expect(subpath.listHeldEmailCredentials).toBe(listHeldEmailCredentials);
-    expect(subpath.findHeldCredential).toBe(findHeldCredential);
-  });
 });

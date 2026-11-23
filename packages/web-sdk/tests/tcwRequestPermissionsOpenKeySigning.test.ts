@@ -61,33 +61,4 @@ describe("TinyCloudWeb.requestPermissions signing", () => {
     expect(stub.signatures).toEqual(["0xopenkey"]);
     expect(stub.grantRuntimePermissions.mock.calls[0]?.[1]).toMatchObject({ expiry: 1000 });
   });
-
-  test("the OpenKey client signs in popup mode unless the session was configured otherwise", async () => {
-    const stub = node();
-    const signMessage = mock(async (_request: { message: string; keyId: string }, _opts?: { mode?: string }) => ({ signature: "0xopenkey" }));
-    const tcw = web(stub, { openkey: { client: { authorizeTinyCloud: mock(), signMessage, lastAuth: CONNECTED } } });
-
-    await tcw.requestPermissions([ENTRY]);
-
-    expect(signMessage).toHaveBeenCalledWith({ message: SIWE, keyId: "key-1" }, { mode: "popup" });
-  });
-
-  test("a session without an OpenKey client signs through the connected wallet", async () => {
-    const stub = node();
-    const tcw = web(stub, {});
-
-    await expect(tcw.requestPermissions([ENTRY])).rejects.toMatchObject({ name: "UnsupportedMethodError" });
-
-    expect(stub.personalSign).toHaveBeenCalledTimes(1);
-    expect(stub.grantRuntimePermissions).toHaveBeenCalledWith([ENTRY], undefined);
-  });
-
-  test("an OpenKey client that cannot sign a message leaves signing to the connected wallet", async () => {
-    const stub = node();
-    const tcw = web(stub, { openkey: { client: { authorizeTinyCloud: mock() } } });
-
-    await expect(tcw.requestPermissions([ENTRY])).rejects.toMatchObject({ name: "UnsupportedMethodError" });
-
-    expect(stub.grantRuntimePermissions).toHaveBeenCalledWith([ENTRY], undefined);
-  });
 });

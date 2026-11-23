@@ -377,8 +377,10 @@ describe("a missing or ambiguous key is a typed OpenKeySigningKeyError and never
     const fake = fakeClient({ lastAuth: null, connect: "absent" });
     const tcw = restored(stub, { openkey: { client: fake.client } });
 
-    await expect(tcw.requestPermissions([ENTRY])).rejects.toMatchObject({ name: SIGNING_KEY_ERROR, code: "OPENKEY_KEY_MISSING" });
+    const error = await tcw.requestPermissions([ENTRY]).then(() => undefined, (e: unknown) => e as Error & { code?: string });
 
+    expect(error).toBeInstanceOf(Error);
+    expect(error).toMatchObject({ name: SIGNING_KEY_ERROR, code: "OPENKEY_KEY_MISSING", message: "OpenKey has no connected key" });
     expect(fake.signMessage).not.toHaveBeenCalled();
     expect(stub.signatures).toEqual([]);
   });
@@ -457,19 +459,6 @@ describe("a missing or ambiguous key is a typed OpenKeySigningKeyError and never
     await expect(tcw.requestPermissions([ENTRY])).rejects.toThrow();
 
     expect(stub.granted).toEqual([]);
-  });
-
-  test("the error is an Error with the documented name, code and message", async () => {
-    const stub = stubNode();
-    const fake = fakeClient({ lastAuth: null, connect: "absent" });
-    const tcw = restored(stub, { openkey: { client: fake.client } });
-
-    const error = await tcw.requestPermissions([ENTRY]).then(() => undefined, (e: unknown) => e as Error & { code?: string });
-
-    expect(error).toBeInstanceOf(Error);
-    expect(error!.name).toBe(SIGNING_KEY_ERROR);
-    expect(error!.code).toBe("OPENKEY_KEY_MISSING");
-    expect(error!.message).toBe("OpenKey has no connected key");
   });
 });
 

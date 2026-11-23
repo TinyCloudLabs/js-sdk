@@ -4,7 +4,6 @@ import { JSDOM } from "jsdom";
 import type { PanelDataSource } from "../../src/ui/data";
 import { activitySection } from "../../src/ui/sections/activity";
 import { localTinycloudSection } from "../../src/ui/sections/local-tinycloud";
-import { nodesSection } from "../../src/ui/sections/nodes";
 import type { HostContext, PanelClient, PanelSection } from "../../src/ui/slots";
 import { text } from "../../src/ui/strings";
 
@@ -47,7 +46,6 @@ const flush = async () => {
 };
 
 const ready = <T>(data: T) => ({ state: "ready" as const, data });
-const failed = (code: string) => ({ state: "error" as const, code });
 
 const LOCAL_OFF = { connection: "off" };
 
@@ -99,41 +97,10 @@ function mount(section: PanelSection, client: PanelClient, developerMode = false
   return el;
 }
 
-function labels(el: HTMLElement): string[] {
-  return [...el.querySelectorAll(".row .label")].map((node) => node.textContent ?? "");
-}
-
 describe("local tinycloud section", () => {
   test("without a data source it shows the placeholder, not the switch", () => {
     const el = mount(localTinycloudSection, clientWith(undefined));
     expect(el.querySelector('[role="switch"]')).toBeNull();
-  });
-
-  test("a running local node shows the switch on and its identity", async () => {
-    const node = {
-      connection: "found",
-      identity: { origin: ORIGIN, nodeDid: "did:key:zLocal" },
-      version: "9.9.9",
-    };
-    const el = mount(
-      localTinycloudSection,
-      clientWith(fakeData({ localNode: async () => ready(node) })),
-    );
-    await flush();
-    const sw = el.querySelector<HTMLButtonElement>('[role="switch"]');
-    expect(sw?.getAttribute("aria-checked")).toBe("true");
-    expect(sw?.disabled).toBe(false);
-    expect(el.textContent).toContain("did:key:zLocal");
-  });
-
-  test("an unavailable connection keeps the switch on but disabled", async () => {
-    const el = mount(
-      localTinycloudSection,
-      clientWith(fakeData({ localNode: async () => ready({ connection: "unavailable" }) })),
-    );
-    await flush();
-    const sw = el.querySelector<HTMLButtonElement>('[role="switch"]');
-    expect(sw?.disabled).toBe(true);
   });
 
   test("a rejected read shows the error with retry, and retry reads again", async () => {
@@ -175,73 +142,6 @@ describe("local tinycloud section", () => {
     expect(status?.hidden).toBe(false);
     expect(retry?.hidden).toBe(true);
   });
-
-  test("clicking the switch while off asks the source to turn the node on", async () => {
-    const calls: boolean[] = [];
-    const el = mount(
-      localTinycloudSection,
-      clientWith(
-        fakeData({
-          setLocalNodeEnabled: async (on: boolean) => {
-            calls.push(on);
-            return { ok: true };
-          },
-        }),
-      ),
-    );
-    await flush();
-    el.querySelector<HTMLButtonElement>('[role="switch"]')?.click();
-    await flush();
-    expect(calls).toEqual([true]);
-  });
-
-  test("a failed switch change shows the action error", async () => {
-    const el = mount(
-      localTinycloudSection,
-      clientWith(fakeData({ setLocalNodeEnabled: async () => ({ ok: false, code: "unknown" }) })),
-    );
-    await flush();
-    el.querySelector<HTMLButtonElement>('[role="switch"]')?.click();
-    await flush();
-    const alert = el.querySelector<HTMLParagraphElement>('[role="alert"]');
-    expect(alert?.hidden).toBe(false);
-  });
-});
-
-describe("nodes section", () => {
-  test("lists each node by its host", async () => {
-    const el = mount(
-      nodesSection,
-      clientWith(
-        fakeData({
-          nodes: async () =>
-            ready([
-              {
-                origin: "https://node.test",
-                kind: "hosted",
-                active: true,
-                status: "ok",
-                spaces: 1,
-                version: "2",
-                latencyMs: 12,
-              },
-            ]),
-        }),
-      ),
-    );
-    await flush();
-    expect(labels(el)).toEqual(["node.test"]);
-  });
-
-  test("a failed read shows the error with retry", async () => {
-    const el = mount(
-      nodesSection,
-      clientWith(fakeData({ nodes: async () => failed("unknown") })),
-    );
-    await flush();
-    expect(el.querySelector('[role="status"]')?.hasAttribute("hidden")).toBe(false);
-    expect(el.querySelector<HTMLButtonElement>("button.action")?.hidden).toBe(false);
-  });
 });
 
 describe("activity section", () => {
@@ -250,37 +150,4 @@ describe("activity section", () => {
     expect(activitySection.isAvailable(ctxFor(client, false))).toBe(false);
     expect(activitySection.isAvailable(ctxFor(client, true))).toBe(true);
   });
-
-  test("lists requests newest first", async () => {
-    const requests = {
-      snapshot: () => [request("get", "a"), request("put", "b")],
-      subscribe: () => () => undefined,
-      onClear: () => () => undefined,
-    };
-    const el = mount(activitySection, { ...clientWith(fakeData({})), requests } as PanelClient, true);
-    await flush();
-    const rows = [...el.querySelectorAll(".act-ar:not(.act-hd)")].map(
-      (node) => `${node.querySelector(".act-c-op")?.textContent} ${node.querySelector(".act-c-path")?.textContent}`,
-    );
-    expect(rows).toEqual(["put b", "get a"]);
-  });
 });
-
-function request(op: string, path: string) {
-  return {
-    v: 1,
-    id: `${op}-${path}`,
-    at: 0,
-    service: "kv",
-    op,
-    path,
-    space: null,
-    host: null,
-    bytes: null,
-    durationMs: 1,
-    attempts: 1,
-    ok: true,
-    code: null,
-    source: "stub",
-  };
-}

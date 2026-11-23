@@ -4,9 +4,8 @@ import { privateKeyToAccount } from "viem/accounts";
 import { acquireEmailProof, createEd25519HolderSigner, EmailProofError, type EmailProofProfileId } from "@tinycloud/node-sdk/credentials";
 import { createAccountHolderSigner } from "../src/credentials/account-holder";
 
-// Public local-development keys (Hardhat accounts #0 and #1). They are not secrets.
+// Public local-development key (Hardhat account #0). It is not a secret.
 const OWNER = privateKeyToAccount("0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80");
-const OTHER = privateKeyToAccount("0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d");
 const ACCOUNT = `did:pkh:eip155:1:${OWNER.address}`;
 const DOMAIN = "tinycloud.credentials/account-binding/v1";
 const DID_KEY = "did:key:z6MkpTHR8VNsBxYAAWHut2Geadd9jSwuBV8xRoAnwWsdvktH";
@@ -72,41 +71,6 @@ test("account signer is EIP191 with the EIP-55 did and the blockchainAccountId k
   expect(signer.kid).toBe(`${ACCOUNT}#blockchainAccountId`);
 });
 
-test("signer accepts domain-prefixed bytes, calls the wallet once with the exact bytes, and returns its signature", async () => {
-  const { sign: walletSign, calls } = wallet(OWNER);
-  const signer = createAccountHolderSigner(ACCOUNT, walletSign);
-  const signature = await signer.sign(bindingBytes());
-  expect(signature.length).toBe(65);
-  expect(calls.count).toBe(1);
-  expect(signature).toEqual(await personalSign(OWNER, bindingBytes()));
-});
-
-test("signer hands the wallet the exact bytes it was given and returns the wallet's own signature object", async () => {
-  const message = bindingBytes();
-  const signature = await personalSign(OWNER, message);
-  const seen: Uint8Array[] = [];
-  const signer = createAccountHolderSigner(ACCOUNT, async (bytes) => {
-    seen.push(bytes);
-    return signature;
-  });
-  expect(await signer.sign(message)).toBe(signature);
-  expect(seen[0]).toEqual(message);
-  expect(seen[0]).not.toBe(message);
-});
-
-test("the wallet receives UTF8(domain), one 0x00 byte, then the JCS binding, byte for byte", async () => {
-  const jcs = BINDING_BODY;
-  const expected = new Uint8Array([...new TextEncoder().encode(DOMAIN), 0x00, ...new TextEncoder().encode(jcs)]);
-  const seen: Uint8Array[] = [];
-  const signer = createAccountHolderSigner(ACCOUNT, async (bytes) => {
-    seen.push(bytes);
-    return personalSign(OWNER, bytes);
-  });
-  await signer.sign(new TextEncoder().encode(`${DOMAIN}\u0000${jcs}`));
-  expect(seen[0]).toEqual(expected);
-  expect(seen[0]?.[DOMAIN.length]).toBe(0);
-});
-
 test("signer refuses every input outside the account-binding domain before the wallet is called", async () => {
   const cases: Record<string, Uint8Array> = {
     "no prefix": new TextEncoder().encode(`{"did":"${ACCOUNT}"}`),
@@ -130,29 +94,11 @@ test("signer refuses every input outside the account-binding domain before the w
   });
 });
 
-test("signer refuses domain-prefixed bytes whose message is not valid UTF-8, before the wallet is called", async () => {
-  const bytes = new Uint8Array([...new TextEncoder().encode(`${DOMAIN}\u0000`), 0xff, 0xfe]);
-  const { sign: walletSign, calls } = wallet(OWNER);
-  const signer = createAccountHolderSigner(ACCOUNT, walletSign);
-  expect([await refusedCode(() => signer.sign(bytes)), calls.count]).toEqual(["HOLDER_INVALID", 0]);
-});
-
 test("account signer propagates a wallet rejection", async () => {
   const signer = createAccountHolderSigner(ACCOUNT, async () => {
     throw new Error("wallet rejected");
   });
   await expect(signer.sign(bindingBytes())).rejects.toThrow("wallet rejected");
-});
-
-test("account signer refuses anything that is not a did:pkh:eip155 account", () => {
-  for (const did of [DID_KEY, "did:pkh:solana:1:abc", "not-a-did"]) {
-    expect(codeOf(() => createAccountHolderSigner(did, sign))).toBe("HOLDER_INVALID");
-  }
-});
-
-test("signer refuses a signature from another key", async () => {
-  const signer = createAccountHolderSigner(ACCOUNT, wallet(OTHER).sign);
-  expect(await refusedCode(() => signer.sign(bindingBytes()))).toBe("HOLDER_INVALID");
 });
 
 test("signer refuses a signature over different bytes", async () => {

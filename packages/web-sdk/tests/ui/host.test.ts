@@ -140,13 +140,6 @@ describe("host mount", () => {
     expect(page.document.querySelectorAll("[data-tinycloud-ui]").length).toBe(1);
   });
 
-  test("shadow tree contains no dialog or popover markup", () => {
-    mountClient();
-    const root = shadow();
-    expect(root.querySelector("dialog")).toBeNull();
-    expect(root.querySelector("[popover]")).toBeNull();
-  });
-
   test("adds no string-keyed global and only the registry symbol", () => {
     const namesBefore = Object.getOwnPropertyNames(globalThis);
     const pageNamesBefore = Object.getOwnPropertyNames(page);

@@ -591,8 +591,16 @@ test("a later-page row whose answer was lost says to reload, and Reload list rea
 
 test("reduced motion removes the row at once", async ({ page }) => {
   await open(page, { reducedMotion: true, seed: { rows: mockupRows() } });
+  // Record whether any row ever enters the animated leaving state; checking only after removal cannot tell.
+  await body(page).evaluate((el) => {
+    const w = window as unknown as { __leaving?: boolean };
+    w.__leaving = false;
+    new MutationObserver(() => {
+      if (el.querySelector(".dl-leaving")) w.__leaving = true;
+    }).observe(el, { subtree: true, attributes: true, attributeFilter: ["class"] });
+  });
   const box = await openConfirm(page, "Exo");
   await box.getByRole("button", { name: "Revoke access" }).click();
   await expect(card(page, "Exo")).toHaveCount(0);
-  expect(await body(page).locator(".dl-leaving").count()).toBe(0);
+  expect(await page.evaluate(() => (window as unknown as { __leaving?: boolean }).__leaving)).toBe(false);
 });

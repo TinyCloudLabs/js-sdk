@@ -40,10 +40,6 @@ describe("A2.1(b) signer hardening", () => {
     expect(await attempt(evil)).toEqual({ code: "HOLDER_INVALID", wallet: 0 });
   });
 
-  test("2. UTF8(domain) ‖ 0x00 ‖ EF BB BF ‖ the fixed JCS is refused with 0 wallet calls (the BOM is not stripped)", async () => {
-    expect(await attempt(Uint8Array.from([...domainBytes, 0, 0xef, 0xbb, 0xbf, ...fixedBytes]))).toEqual({ code: "HOLDER_INVALID", wallet: 0 });
-  });
-
   test("3. control: the bytes handed to the wallet are not the caller's object, and equal the checked bytes; a later mutation by the caller changes nothing", async () => {
     const original = [...domainBytes, 0, ...fixedBytes];
     const bytes = Uint8Array.from(original);

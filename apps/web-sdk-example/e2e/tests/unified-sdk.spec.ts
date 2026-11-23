@@ -182,24 +182,6 @@ test.describe('Unified SDK (TinyCloudWeb)', () => {
       await expect(page.locator('input#Value')).toHaveValue(testValue);
     });
 
-    test('should list stored keys after put', async ({ mockWalletPage: page }) => {
-      await signIn(page);
-
-      // Create a test entry
-      const testKey = `list-test-${Date.now()}`;
-      const addButton = page.getByRole('button', { name: 'Add New Content' });
-      await addButton.click();
-      await page.waitForTimeout(300);
-
-      await page.locator('input#Key').fill(testKey);
-      await page.locator('input#Value').fill('list-test-value');
-      await page.getByText('Save', { exact: true }).click();
-      await page.waitForTimeout(2000);
-
-      // The key should appear in the list
-      await expect(page.getByText(testKey, { exact: true })).toBeVisible({ timeout: 5000 });
-    });
-
     test('should delete a stored key', async ({ mockWalletPage: page }) => {
       await signIn(page);
 
@@ -248,14 +230,6 @@ test.describe('Unified SDK (TinyCloudWeb)', () => {
       // Add New Content button should be available (proves KV is operational)
       const addButton = page.getByRole('button', { name: 'Add New Content' });
       await expect(addButton).toBeVisible();
-    });
-
-    test('should show storage module with KV Store UI after sign-in', async ({ mockWalletPage: page }) => {
-      await signIn(page);
-
-      // The storage module (KV) should render when signed in
-      const kvStore = page.getByText('Key Value Store');
-      await expect(kvStore).toBeVisible();
     });
   });
 

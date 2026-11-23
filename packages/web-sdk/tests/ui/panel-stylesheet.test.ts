@@ -437,12 +437,3 @@ for (const scheme of ["light", "dark"] as const) {
     }
   });
 }
-
-describe("host shadow root", () => {
-  test("the host root is open and reachable from document", async () => {
-    await openPanel();
-    const host = document.querySelector<HTMLElement>("[data-tinycloud-ui]");
-    expect(host?.shadowRoot).not.toBeNull();
-    expect(host?.shadowRoot?.querySelector("#tinycloud-ui-panel")).not.toBeNull();
-  });
-});

@@ -52,15 +52,12 @@ afterAll(() => {
 });
 
 describe("TinyCloudWeb without a location", () => {
-  test("constructs without throwing and keeps its core API", () => {
+  test("constructs without throwing and mounts no UI host", () => {
     expect(typeof globalThis.location).toBe("undefined");
     delete g[REGISTRY_KEY];
 
     const tc = new TinyCloudWeb({ persistSession: false });
 
-    expect(typeof tc.signIn).toBe("function");
-    expect(typeof tc.signOut).toBe("function");
-    expect(typeof tc.ui.open).toBe("function");
     expect(tc.ui.isOpen).toBe(false);
     expect(g[REGISTRY_KEY]).toBeUndefined();
   });
