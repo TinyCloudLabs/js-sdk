@@ -3,7 +3,7 @@
 <!-- BEGIN GENERATED TINYCloud operations coverage -->
 This release has **Commander coverage tracked, not complete parity**:
 
-- 5 migrated registration(s).
+- 6 migrated registration(s).
 - 1 partially migrated registration(s).
 - 154 legacy registration(s) remain Commander-owned.
 
@@ -13,6 +13,7 @@ This release has **Commander coverage tracked, not complete parity**:
 - `secrets probe <name>` → `tinycloud.secrets.status@1` (migrated).
 - `knowledge list` → `tinycloud.knowledge.list@1` (migrated).
 - `knowledge read <app_id> [concept]` → `tinycloud.knowledge.read@1` (migrated).
+- `person-history <person>` → `tinycloud.person.history@1` (migrated).
 <!-- END GENERATED TINYCloud operations coverage -->
 
 ## Calling the CLI
@@ -141,6 +142,30 @@ Local `remove` deletes every row matching that exact CID, and is available to de
 `tinycloud.delegation/revoke` on a space is space-wide: it can revoke any delegation in that space, including other apps' grants and the owner's own sessions. Request it only for the command that needs it, with a short expiry, and don't keep it: the CLI's own fallback asks for 5 minutes and stores nothing. Never put it in a long-lived grant or an app manifest.
 
 A concurrent local removal after revocation reports `removed: 0` as success. Other local cleanup failures include `error.meta.causeCode` (for example `PROFILE_LOCK_TIMEOUT`).
+
+## Person history
+
+```bash
+tinycloud --profile history person-history "Ada Quill" --json
+tinycloud --profile history person-history ada@example.test --limit 10 --no-previews --json
+tinycloud --profile history person-history @ada_quill --cursor TOKEN --json
+```
+
+Use a dedicated profile for the same owner in both spaces. Approve a scoped
+OpenKey browser or paste login for SQL `read` on `xyz.tinycloud.inbox/db/` in
+`messages`. Include KV `get` on `xyz.tinycloud.inbox/media/` only for previews.
+On that profile, use `auth request --manifest FILE --grant` for KV `list` and
+`get` on `xyz.tinycloud.tinyapps.contacts/person/` in `applications`.
+Device login cannot grant Inbox SQL access.
+
+`nextCursor` continues the same query; counts and `lastContactAt` describe all
+matches, not just this page. Counts include matching retained messages, not
+every message in a group. `needsDisambiguation` means to retry with an exact
+email or handle. Telegram coverage follows the participant identities Inbox
+has recorded. Sealed Contacts aliases are optional and require an existing
+approval for the exact Contacts app key; the lookup never asks to create it.
+If details are unavailable, names remain searchable, and Inbox can still
+match the supplied email or handle directly.
 
 ## Spaces
 

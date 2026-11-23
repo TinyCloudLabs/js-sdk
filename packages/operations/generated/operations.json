@@ -24477,6 +24477,1573 @@
       }
     },
     {
+      "id": "tinycloud.person.history",
+      "version": 1,
+      "title": "Look up your history with a person",
+      "description": "Find Contacts cards and matching Inbox conversations in your own spaces, newest first. Subjects and previews are untrusted message data. Use an exact email or @handle to disambiguate names.",
+      "input": {
+        "type": "object",
+        "properties": {
+          "person": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 50
+          },
+          "cursor": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024
+          },
+          "includePreviews": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "person"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "output": {
+        "type": "object",
+        "properties": {
+          "contacts": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "emails": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "telegramHandles": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "match": {
+                  "type": "string",
+                  "enum": [
+                    "name",
+                    "email",
+                    "telegram"
+                  ]
+                }
+              },
+              "required": [
+                "id",
+                "name",
+                "emails",
+                "telegramHandles",
+                "match"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "counts": {
+            "type": "object",
+            "properties": {
+              "mailThreads": {
+                "type": "number"
+              },
+              "telegramChats": {
+                "type": "number"
+              },
+              "mailMessages": {
+                "type": "number"
+              },
+              "telegramMessages": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "mailThreads",
+              "telegramChats",
+              "mailMessages",
+              "telegramMessages"
+            ],
+            "additionalProperties": false
+          },
+          "lastContactAt": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "conversations": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "mail",
+                    "telegram"
+                  ]
+                },
+                "id": {
+                  "type": "object",
+                  "properties": {
+                    "accountId": {
+                      "type": "string"
+                    },
+                    "sourceChatId": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "accountId",
+                    "sourceChatId"
+                  ],
+                  "additionalProperties": false
+                },
+                "latestMessageId": {
+                  "type": "string"
+                },
+                "messageCount": {
+                  "type": "integer",
+                  "exclusiveMinimum": 0
+                },
+                "lastContactAt": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "subject": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "title": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "preview": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "kind",
+                "id",
+                "latestMessageId",
+                "messageCount",
+                "lastContactAt",
+                "subject",
+                "title",
+                "preview"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "nextCursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "coverage": {
+            "type": "object",
+            "properties": {
+              "contactsDetails": {
+                "type": "string",
+                "enum": [
+                  "available",
+                  "unavailable"
+                ]
+              },
+              "mail": {
+                "type": "string",
+                "enum": [
+                  "complete",
+                  "ambiguous"
+                ]
+              },
+              "telegram": {
+                "type": "string",
+                "enum": [
+                  "partial",
+                  "not-connected"
+                ]
+              }
+            },
+            "required": [
+              "contactsDetails",
+              "mail",
+              "telegram"
+            ],
+            "additionalProperties": false
+          },
+          "needsDisambiguation": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "contacts",
+          "counts",
+          "lastContactAt",
+          "conversations",
+          "nextCursor",
+          "coverage",
+          "needsDisambiguation"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "result": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "object",
+        "anyOf": [
+          {
+            "type": "object",
+            "properties": {
+              "status": {
+                "const": "ok"
+              },
+              "operation": {
+                "type": "object",
+                "properties": {
+                  "operationId": {
+                    "type": "string",
+                    "const": "tinycloud.person.history"
+                  },
+                  "operationVersion": {
+                    "type": "integer",
+                    "const": 1
+                  }
+                },
+                "required": [
+                  "operationId",
+                  "operationVersion"
+                ],
+                "additionalProperties": false
+              },
+              "context": {
+                "type": "object",
+                "properties": {
+                  "profile": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "host": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "posture": {
+                    "type": "string",
+                    "enum": [
+                      "owner-openkey",
+                      "delegate-session",
+                      "local-owner-key",
+                      "unauthenticated"
+                    ]
+                  },
+                  "operatorType": {
+                    "type": "string",
+                    "enum": [
+                      "human",
+                      "agent"
+                    ]
+                  },
+                  "principalDid": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "sessionDid": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "ownerDid": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "space": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "required": [
+                  "profile",
+                  "host",
+                  "posture"
+                ],
+                "additionalProperties": false
+              },
+              "warnings": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "const": "STORED_GRANT_SKIPPED"
+                        },
+                        "reason": {
+                          "type": "string",
+                          "enum": [
+                            "malformed",
+                            "unbound",
+                            "outside_request",
+                            "host_mismatch",
+                            "expired",
+                            "cid_mismatch",
+                            "authority_invalid",
+                            "proof_missing",
+                            "proof_invalid",
+                            "owner_mismatch",
+                            "audience_mismatch",
+                            "resources_mismatch",
+                            "unsupported",
+                            "activation_rejected",
+                            "activation_unavailable",
+                            "activation_unauthenticated",
+                            "invalid"
+                          ]
+                        },
+                        "grantCid": {
+                          "type": "string",
+                          "pattern": "^bafkr4i[a-z2-7]{52}$"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "reason"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "const": "REGISTRY_UNAVAILABLE"
+                        },
+                        "reason": {
+                          "type": "string",
+                          "enum": [
+                            "using_default_node",
+                            "using_cached_settings"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "reason"
+                      ],
+                      "additionalProperties": false
+                    }
+                  ]
+                }
+              },
+              "output": {
+                "$ref": "#/$defs/output"
+              }
+            },
+            "required": [
+              "status",
+              "operation",
+              "context",
+              "output"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "status": {
+                "const": "authority_required"
+              },
+              "operation": {
+                "type": "object",
+                "properties": {
+                  "operationId": {
+                    "type": "string",
+                    "const": "tinycloud.person.history"
+                  },
+                  "operationVersion": {
+                    "type": "integer",
+                    "const": 1
+                  }
+                },
+                "required": [
+                  "operationId",
+                  "operationVersion"
+                ],
+                "additionalProperties": false
+              },
+              "context": {
+                "type": "object",
+                "properties": {
+                  "profile": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "host": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "posture": {
+                    "type": "string",
+                    "enum": [
+                      "owner-openkey",
+                      "delegate-session",
+                      "local-owner-key",
+                      "unauthenticated"
+                    ]
+                  },
+                  "operatorType": {
+                    "type": "string",
+                    "enum": [
+                      "human",
+                      "agent"
+                    ]
+                  },
+                  "principalDid": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "sessionDid": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "ownerDid": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "space": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "required": [
+                  "profile",
+                  "host",
+                  "posture"
+                ],
+                "additionalProperties": false
+              },
+              "warnings": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "const": "STORED_GRANT_SKIPPED"
+                        },
+                        "reason": {
+                          "type": "string",
+                          "enum": [
+                            "malformed",
+                            "unbound",
+                            "outside_request",
+                            "host_mismatch",
+                            "expired",
+                            "cid_mismatch",
+                            "authority_invalid",
+                            "proof_missing",
+                            "proof_invalid",
+                            "owner_mismatch",
+                            "audience_mismatch",
+                            "resources_mismatch",
+                            "unsupported",
+                            "activation_rejected",
+                            "activation_unavailable",
+                            "activation_unauthenticated",
+                            "invalid"
+                          ]
+                        },
+                        "grantCid": {
+                          "type": "string",
+                          "pattern": "^bafkr4i[a-z2-7]{52}$"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "reason"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "const": "REGISTRY_UNAVAILABLE"
+                        },
+                        "reason": {
+                          "type": "string",
+                          "enum": [
+                            "using_default_node",
+                            "using_cached_settings"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "reason"
+                      ],
+                      "additionalProperties": false
+                    }
+                  ]
+                }
+              },
+              "missing": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "$ref": "#/$defs/permissionEntry"
+                }
+              },
+              "request": {
+                "$ref": "#/$defs/permissionRequest"
+              },
+              "approval": {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "const": "openkey"
+                  },
+                  "requestId": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "url": {
+                    "type": "string",
+                    "format": "uri"
+                  },
+                  "fallback": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "required": [
+                  "kind",
+                  "requestId",
+                  "fallback"
+                ],
+                "additionalProperties": false
+              },
+              "retry": {
+                "type": "object",
+                "properties": {
+                  "operationId": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "operationVersion": {
+                    "type": "integer",
+                    "const": 1
+                  },
+                  "inputDigest": {
+                    "type": "string",
+                    "pattern": "^[a-f0-9]{64}$"
+                  },
+                  "safeInput": {
+                    "type": "object",
+                    "additionalProperties": true
+                  },
+                  "requiresCallerInput": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "operationId",
+                  "operationVersion",
+                  "inputDigest",
+                  "requiresCallerInput"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "status",
+              "operation",
+              "context",
+              "missing",
+              "request",
+              "approval",
+              "retry"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "status": {
+                "const": "setup_required"
+              },
+              "operation": {
+                "type": "object",
+                "properties": {
+                  "operationId": {
+                    "type": "string",
+                    "const": "tinycloud.person.history"
+                  },
+                  "operationVersion": {
+                    "type": "integer",
+                    "const": 1
+                  }
+                },
+                "required": [
+                  "operationId",
+                  "operationVersion"
+                ],
+                "additionalProperties": false
+              },
+              "context": {
+                "type": "object",
+                "properties": {
+                  "profile": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "host": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "posture": {
+                    "type": "string",
+                    "enum": [
+                      "owner-openkey",
+                      "delegate-session",
+                      "local-owner-key",
+                      "unauthenticated"
+                    ]
+                  },
+                  "operatorType": {
+                    "type": "string",
+                    "enum": [
+                      "human",
+                      "agent"
+                    ]
+                  },
+                  "principalDid": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "sessionDid": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "ownerDid": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "space": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "required": [
+                  "profile",
+                  "host",
+                  "posture"
+                ],
+                "additionalProperties": false
+              },
+              "warnings": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "const": "STORED_GRANT_SKIPPED"
+                        },
+                        "reason": {
+                          "type": "string",
+                          "enum": [
+                            "malformed",
+                            "unbound",
+                            "outside_request",
+                            "host_mismatch",
+                            "expired",
+                            "cid_mismatch",
+                            "authority_invalid",
+                            "proof_missing",
+                            "proof_invalid",
+                            "owner_mismatch",
+                            "audience_mismatch",
+                            "resources_mismatch",
+                            "unsupported",
+                            "activation_rejected",
+                            "activation_unavailable",
+                            "activation_unauthenticated",
+                            "invalid"
+                          ]
+                        },
+                        "grantCid": {
+                          "type": "string",
+                          "pattern": "^bafkr4i[a-z2-7]{52}$"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "reason"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "const": "REGISTRY_UNAVAILABLE"
+                        },
+                        "reason": {
+                          "type": "string",
+                          "enum": [
+                            "using_default_node",
+                            "using_cached_settings"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "reason"
+                      ],
+                      "additionalProperties": false
+                    }
+                  ]
+                }
+              },
+              "setup": {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "const": "secret_manager"
+                  },
+                  "action": {
+                    "const": "add_secret"
+                  },
+                  "url": {
+                    "type": "string",
+                    "format": "uri"
+                  },
+                  "names": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 10,
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  },
+                  "scope": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "owner": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "secret": {
+                    "type": "object",
+                    "properties": {
+                      "name": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "scope": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "space": {
+                        "type": "string",
+                        "minLength": 1
+                      }
+                    },
+                    "required": [
+                      "name",
+                      "space"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "message": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "required": [
+                  "kind",
+                  "action",
+                  "url",
+                  "names",
+                  "owner",
+                  "secret",
+                  "message"
+                ],
+                "additionalProperties": false
+              },
+              "retry": {
+                "type": "object",
+                "properties": {
+                  "operationId": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "operationVersion": {
+                    "type": "integer",
+                    "const": 1
+                  },
+                  "inputDigest": {
+                    "type": "string",
+                    "pattern": "^[a-f0-9]{64}$"
+                  },
+                  "safeInput": {
+                    "type": "object",
+                    "additionalProperties": true
+                  },
+                  "requiresCallerInput": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "operationId",
+                  "operationVersion",
+                  "inputDigest",
+                  "requiresCallerInput"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "status",
+              "operation",
+              "context",
+              "setup",
+              "retry"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "status": {
+                "const": "error"
+              },
+              "operation": {
+                "type": "object",
+                "properties": {
+                  "operationId": {
+                    "type": "string",
+                    "const": "tinycloud.person.history"
+                  },
+                  "operationVersion": {
+                    "type": "integer",
+                    "const": 1
+                  }
+                },
+                "required": [
+                  "operationId",
+                  "operationVersion"
+                ],
+                "additionalProperties": false
+              },
+              "context": {
+                "type": "object",
+                "properties": {
+                  "profile": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "host": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "posture": {
+                    "type": "string",
+                    "enum": [
+                      "owner-openkey",
+                      "delegate-session",
+                      "local-owner-key",
+                      "unauthenticated"
+                    ]
+                  },
+                  "operatorType": {
+                    "type": "string",
+                    "enum": [
+                      "human",
+                      "agent"
+                    ]
+                  },
+                  "principalDid": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "sessionDid": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "ownerDid": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "space": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "required": [
+                  "profile",
+                  "host",
+                  "posture"
+                ],
+                "additionalProperties": false
+              },
+              "warnings": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "const": "STORED_GRANT_SKIPPED"
+                        },
+                        "reason": {
+                          "type": "string",
+                          "enum": [
+                            "malformed",
+                            "unbound",
+                            "outside_request",
+                            "host_mismatch",
+                            "expired",
+                            "cid_mismatch",
+                            "authority_invalid",
+                            "proof_missing",
+                            "proof_invalid",
+                            "owner_mismatch",
+                            "audience_mismatch",
+                            "resources_mismatch",
+                            "unsupported",
+                            "activation_rejected",
+                            "activation_unavailable",
+                            "activation_unauthenticated",
+                            "invalid"
+                          ]
+                        },
+                        "grantCid": {
+                          "type": "string",
+                          "pattern": "^bafkr4i[a-z2-7]{52}$"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "reason"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "const": "REGISTRY_UNAVAILABLE"
+                        },
+                        "reason": {
+                          "type": "string",
+                          "enum": [
+                            "using_default_node",
+                            "using_cached_settings"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "reason"
+                      ],
+                      "additionalProperties": false
+                    }
+                  ]
+                }
+              },
+              "error": {
+                "type": "object",
+                "properties": {
+                  "code": {
+                    "type": "string",
+                    "enum": [
+                      "INPUT_INVALID",
+                      "OPERATION_NOT_FOUND",
+                      "OPERATION_VERSION_UNSUPPORTED",
+                      "PROFILE_NOT_FOUND",
+                      "PROFILE_POSTURE_NOT_ALLOWED",
+                      "PROFILE_OWNER_OPT_IN_REQUIRED",
+                      "PROFILE_MIGRATION_REQUIRED",
+                      "AUTH_REQUIRED",
+                      "PERMISSION_DENIED",
+                      "SESSION_NOT_FOUND",
+                      "PERMISSION_HINT_INVALID",
+                      "DELEGATION_ARTIFACT_INVALID",
+                      "DELEGATION_EXPIRED",
+                      "DELEGATION_AUDIENCE_MISMATCH",
+                      "DELEGATION_HOST_MISMATCH",
+                      "DELEGATION_REJECTED",
+                      "ENCRYPTION_NETWORK_UNRESOLVED",
+                      "NODE_UNREACHABLE",
+                      "NODE_NOT_RESPONDING",
+                      "DECRYPTION_DEPENDENCY_UNAVAILABLE",
+                      "NODE_IDENTITY_MISMATCH",
+                      "PARTIAL_NODE_WRITE",
+                      "RESOURCE_NOT_ROUTED",
+                      "REGISTRY_UNAVAILABLE",
+                      "NODE_NOT_FOUND",
+                      "NODE_REGISTRY_ENTRY_EXISTS",
+                      "NODE_ERROR",
+                      "STORAGE_QUOTA_EXCEEDED",
+                      "KV_NOT_FOUND",
+                      "KV_PRECONDITION_FAILED",
+                      "KV_CONFLICT",
+                      "KV_RESPONSE_TOO_LARGE",
+                      "SQL_QUERY_INVALID",
+                      "SQL_EXECUTION_FAILED",
+                      "SQL_RESULT_LIMIT_EXCEEDED",
+                      "SQL_VALUE_UNSAFE",
+                      "READ_SOURCE_CHANGED",
+                      "READ_CONTEXT_MISMATCH",
+                      "SECRET_READ_FAILED",
+                      "SECRET_DECRYPT_FAILED",
+                      "SECRET_LEGACY_ENVELOPE",
+                      "OUTPUT_INVALID",
+                      "INTERNAL_ERROR"
+                    ]
+                  },
+                  "message": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "retryable": {
+                    "type": "boolean"
+                  },
+                  "details": {
+                    "type": "object",
+                    "additionalProperties": true
+                  }
+                },
+                "required": [
+                  "code",
+                  "message",
+                  "retryable"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "status",
+              "operation",
+              "context",
+              "error"
+            ],
+            "additionalProperties": false
+          }
+        ],
+        "$defs": {
+          "permissionEntry": {
+            "type": "object",
+            "properties": {
+              "service": {
+                "type": "string",
+                "minLength": 1
+              },
+              "space": {
+                "type": "string",
+                "minLength": 1
+              },
+              "path": {
+                "type": "string"
+              },
+              "actions": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "minItems": 1
+              },
+              "caveats": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": {}
+                }
+              },
+              "skipPrefix": {
+                "type": "boolean"
+              },
+              "expiry": {
+                "type": "string",
+                "minLength": 1
+              },
+              "description": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "service",
+              "path",
+              "actions"
+            ],
+            "additionalProperties": false,
+            "$schema": "http://json-schema.org/draft-07/schema#"
+          },
+          "permissionRequest": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "const": "tinycloud.auth.request"
+              },
+              "version": {
+                "type": "number",
+                "const": 1
+              },
+              "requestId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "createdAt": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "profile": {
+                "type": "string",
+                "minLength": 1
+              },
+              "posture": {
+                "type": "string",
+                "enum": [
+                  "owner-openkey",
+                  "delegate-session",
+                  "local-owner-key",
+                  "unauthenticated"
+                ]
+              },
+              "operatorType": {
+                "type": "string",
+                "enum": [
+                  "human",
+                  "agent"
+                ]
+              },
+              "host": {
+                "type": "string",
+                "minLength": 1
+              },
+              "sessionDid": {
+                "type": "string",
+                "minLength": 1
+              },
+              "ownerDid": {
+                "type": "string",
+                "minLength": 1
+              },
+              "spaceId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "requestedExpiry": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  {
+                    "type": "number"
+                  }
+                ]
+              },
+              "requested": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "service": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "space": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "path": {
+                      "type": "string"
+                    },
+                    "actions": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "minItems": 1
+                    },
+                    "caveats": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "additionalProperties": {}
+                      }
+                    },
+                    "skipPrefix": {
+                      "type": "boolean"
+                    },
+                    "expiry": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "description": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "service",
+                    "path",
+                    "actions"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "command": {
+                "type": "object",
+                "properties": {
+                  "argv": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    },
+                    "minItems": 1
+                  },
+                  "cwd": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "required": [
+                  "argv",
+                  "cwd"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "kind",
+              "version",
+              "requestId",
+              "createdAt",
+              "profile",
+              "posture",
+              "operatorType",
+              "host",
+              "sessionDid",
+              "requested"
+            ],
+            "additionalProperties": false,
+            "$schema": "http://json-schema.org/draft-07/schema#"
+          },
+          "output": {
+            "type": "object",
+            "properties": {
+              "contacts": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "emails": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "telegramHandles": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "match": {
+                      "type": "string",
+                      "enum": [
+                        "name",
+                        "email",
+                        "telegram"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "name",
+                    "emails",
+                    "telegramHandles",
+                    "match"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "counts": {
+                "type": "object",
+                "properties": {
+                  "mailThreads": {
+                    "type": "number"
+                  },
+                  "telegramChats": {
+                    "type": "number"
+                  },
+                  "mailMessages": {
+                    "type": "number"
+                  },
+                  "telegramMessages": {
+                    "type": "number"
+                  }
+                },
+                "required": [
+                  "mailThreads",
+                  "telegramChats",
+                  "mailMessages",
+                  "telegramMessages"
+                ],
+                "additionalProperties": false
+              },
+              "lastContactAt": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "conversations": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "enum": [
+                        "mail",
+                        "telegram"
+                      ]
+                    },
+                    "id": {
+                      "type": "object",
+                      "properties": {
+                        "accountId": {
+                          "type": "string"
+                        },
+                        "sourceChatId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "accountId",
+                        "sourceChatId"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "latestMessageId": {
+                      "type": "string"
+                    },
+                    "messageCount": {
+                      "type": "integer",
+                      "exclusiveMinimum": 0
+                    },
+                    "lastContactAt": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "subject": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "title": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "preview": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "id",
+                    "latestMessageId",
+                    "messageCount",
+                    "lastContactAt",
+                    "subject",
+                    "title",
+                    "preview"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "nextCursor": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "coverage": {
+                "type": "object",
+                "properties": {
+                  "contactsDetails": {
+                    "type": "string",
+                    "enum": [
+                      "available",
+                      "unavailable"
+                    ]
+                  },
+                  "mail": {
+                    "type": "string",
+                    "enum": [
+                      "complete",
+                      "ambiguous"
+                    ]
+                  },
+                  "telegram": {
+                    "type": "string",
+                    "enum": [
+                      "partial",
+                      "not-connected"
+                    ]
+                  }
+                },
+                "required": [
+                  "contactsDetails",
+                  "mail",
+                  "telegram"
+                ],
+                "additionalProperties": false
+              },
+              "needsDisambiguation": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "contacts",
+              "counts",
+              "lastContactAt",
+              "conversations",
+              "nextCursor",
+              "coverage",
+              "needsDisambiguation"
+            ],
+            "additionalProperties": false,
+            "$schema": "http://json-schema.org/draft-07/schema#"
+          }
+        }
+      },
+      "postures": [
+        "owner-openkey",
+        "delegate-session"
+      ],
+      "effects": [
+        "read"
+      ],
+      "sensitivity": {
+        "input": true,
+        "output": true
+      },
+      "exposure": {
+        "cli": {
+          "status": "required"
+        },
+        "mcp": {
+          "status": "required"
+        },
+        "skill": {
+          "status": "required"
+        },
+        "docs": {
+          "status": "required"
+        }
+      },
+      "stableErrors": [
+        "INPUT_INVALID",
+        "OPERATION_NOT_FOUND",
+        "OPERATION_VERSION_UNSUPPORTED",
+        "PROFILE_NOT_FOUND",
+        "PROFILE_POSTURE_NOT_ALLOWED",
+        "PROFILE_OWNER_OPT_IN_REQUIRED",
+        "PROFILE_MIGRATION_REQUIRED",
+        "AUTH_REQUIRED",
+        "PERMISSION_DENIED",
+        "SESSION_NOT_FOUND",
+        "PERMISSION_HINT_INVALID",
+        "DELEGATION_ARTIFACT_INVALID",
+        "DELEGATION_EXPIRED",
+        "DELEGATION_AUDIENCE_MISMATCH",
+        "DELEGATION_HOST_MISMATCH",
+        "DELEGATION_REJECTED",
+        "ENCRYPTION_NETWORK_UNRESOLVED",
+        "NODE_UNREACHABLE",
+        "NODE_NOT_RESPONDING",
+        "DECRYPTION_DEPENDENCY_UNAVAILABLE",
+        "NODE_IDENTITY_MISMATCH",
+        "PARTIAL_NODE_WRITE",
+        "RESOURCE_NOT_ROUTED",
+        "REGISTRY_UNAVAILABLE",
+        "NODE_NOT_FOUND",
+        "NODE_REGISTRY_ENTRY_EXISTS",
+        "NODE_ERROR",
+        "STORAGE_QUOTA_EXCEEDED",
+        "KV_NOT_FOUND",
+        "KV_PRECONDITION_FAILED",
+        "KV_CONFLICT",
+        "KV_RESPONSE_TOO_LARGE",
+        "SQL_QUERY_INVALID",
+        "SQL_EXECUTION_FAILED",
+        "SQL_RESULT_LIMIT_EXCEEDED",
+        "SQL_VALUE_UNSAFE",
+        "READ_SOURCE_CHANGED",
+        "READ_CONTEXT_MISMATCH",
+        "SECRET_READ_FAILED",
+        "SECRET_DECRYPT_FAILED",
+        "SECRET_LEGACY_ENVELOPE",
+        "OUTPUT_INVALID",
+        "INTERNAL_ERROR"
+      ],
+      "authority": {
+        "dynamic": true
+      }
+    },
+    {
       "id": "tinycloud.read",
       "version": 1,
       "title": "Read complete TinyCloud resource bytes in bounded pages",

@@ -200,6 +200,12 @@
       "operationVersion": 1
     },
     {
+      "command": "person-history <person>",
+      "status": "migrated",
+      "operationId": "tinycloud.person.history",
+      "operationVersion": 1
+    },
+    {
       "command": "apps",
       "status": "excluded",
       "reason": "Command group; its subcommands are local installer compositions."

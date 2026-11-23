@@ -95,6 +95,7 @@ process.stdout.write(JSON.stringify(tools));
     tinycloud_kv_delete: "tinycloud.kv.delete",
     tinycloud_knowledge_list: "tinycloud.knowledge.list",
     tinycloud_knowledge_read: "tinycloud.knowledge.read",
+    tinycloud_person_history: "tinycloud.person.history",
     tinycloud_sql_schema_inspect: "tinycloud.sql.schema.inspect",
     tinycloud_sql_query: "tinycloud.sql.query",
     tinycloud_sql_execute: "tinycloud.sql.execute",

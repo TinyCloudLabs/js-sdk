@@ -328,6 +328,22 @@
       "sensitiveOutput": false
     },
     {
+      "name": "tinycloud_person_history",
+      "surfaces": [
+        "local"
+      ],
+      "operationId": "tinycloud.person.history",
+      "operationVersion": 1,
+      "effects": [
+        "read"
+      ],
+      "postures": [
+        "owner-openkey",
+        "delegate-session"
+      ],
+      "sensitiveOutput": true
+    },
+    {
       "name": "tinycloud_read",
       "surfaces": [
         "local",

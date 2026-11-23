@@ -52,7 +52,7 @@ test("official v2 client enforces operation schemas and owner opt-in over stdio"
     await client.connect(transport);
     const listed = await client.listTools();
     // Tuple order: name, readOnlyHint, destructiveHint, idempotentHint, openWorldHint.
-    // Local/stdio has 21 tools; the 24-tool hosted surface also exposes personal apps.
+    // Person history is local-only.
     expect(listed.tools.map(({ name, annotations }) => [
       name, annotations?.readOnlyHint, annotations?.destructiveHint,
       annotations?.idempotentHint, annotations?.openWorldHint,
@@ -74,6 +74,7 @@ test("official v2 client enforces operation schemas and owner opt-in over stdio"
       ["tinycloud_kv_delete", false, true, true, true],
       ["tinycloud_knowledge_list", true, false, true, true],
       ["tinycloud_knowledge_read", true, false, true, true],
+      ["tinycloud_person_history", true, false, true, true],
       ["tinycloud_sql_schema_inspect", true, false, true, true],
       ["tinycloud_sql_query", true, false, true, true],
       ["tinycloud_sql_execute", false, true, false, true],
@@ -104,6 +105,7 @@ test("official v2 client enforces operation schemas and owner opt-in over stdio"
       ["tinycloud_kv_delete", { space: "applications", key: "agents/example" }, { status: "error", operation: { operationId: "tinycloud.kv.delete", operationVersion: 1 }, error: { code: "PROFILE_OWNER_OPT_IN_REQUIRED" } }],
       ["tinycloud_knowledge_list", {}, { status: "error", operation: { operationId: "tinycloud.knowledge.list", operationVersion: 1 }, error: { code: "PROFILE_OWNER_OPT_IN_REQUIRED" } }],
       ["tinycloud_knowledge_read", { app_id: "xyz.example.app" }, { status: "error", operation: { operationId: "tinycloud.knowledge.read", operationVersion: 1 }, error: { code: "PROFILE_OWNER_OPT_IN_REQUIRED" } }],
+      ["tinycloud_person_history", { person: "Synthetic Person" }, { status: "error", error: { code: "PROFILE_OWNER_OPT_IN_REQUIRED" } }],
       ["tinycloud_sql_schema_inspect", { space: "applications", database: "notes" }, { status: "error", operation: { operationId: "tinycloud.sql.schema.inspect", operationVersion: 1 }, error: { code: "PROFILE_OWNER_OPT_IN_REQUIRED" } }],
       ["tinycloud_sql_query", { space: "applications", database: "notes", sql: "SELECT 1" }, { status: "error", operation: { operationId: "tinycloud.sql.query", operationVersion: 1 }, error: { code: "PROFILE_OWNER_OPT_IN_REQUIRED" } }],
       ["tinycloud_sql_execute", { space: "applications", database: "notes", sql: "DELETE FROM notes WHERE id = ?", params: [1], acknowledgeDatabaseWideAuthority: true }, { status: "error", operation: { operationId: "tinycloud.sql.execute", operationVersion: 1 }, error: { code: "PROFILE_OWNER_OPT_IN_REQUIRED" } }],
