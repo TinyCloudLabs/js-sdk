@@ -49,6 +49,48 @@
         { "name": "@tinycloud/node-sdk", "from": "3.14.0-beta.20", "to": "3.14.0" },
         { "name": "@tinycloud/sdk-core", "from": "3.14.0-beta.20", "to": "3.14.0" }
       ]
+    },
+    "tc-4082": {
+      "base": "a0b24da8f04d674e651558d6f11376ce1ddb4def",
+      "releaseSha": null,
+      "sourceSha": "30025b74fccebc13c18f0b34ec0f87174b0304f7",
+      "expectedDelta": null,
+      "buildExclude": [],
+      "packages": [
+        { "name": "@tinycloud/bootstrap", "dir": "packages/bootstrap", "from": "2.10.0-beta.1", "stable": "2.10.1", "requiredFiles": ["dist/index.js", "dist/index.cjs", "dist/index.d.ts"] },
+        { "name": "@tinycloud/sdk-services", "dir": "packages/sdk-services", "from": "3.14.0-beta.20", "stable": "3.14.1", "requiredFiles": ["dist/index.js", "dist/index.cjs", "dist/index.d.ts"] },
+        { "name": "@tinycloud/sdk-core", "dir": "packages/sdk-core", "from": "3.14.0-beta.20", "stable": "3.14.1", "requiredFiles": ["dist/index.js", "dist/index.cjs", "dist/index.d.ts"] },
+        { "name": "@tinycloud/node-sdk", "dir": "packages/node-sdk", "from": "3.14.0-beta.20", "stable": "3.14.1", "requiredFiles": ["dist/index.js", "dist/index.cjs", "dist/index.d.ts"] },
+        { "name": "@tinycloud/web-sdk-wasm", "dir": "packages/sdk-rs/packages/web", "from": "1.8.0-beta.0", "stable": "1.8.0", "requiredFiles": ["dist/index.js", "dist/index.d.ts", "dist/tinycloud_web_sdk_rs.d.ts"] },
+        {
+          "name": "@tinycloud/web-sdk",
+          "dir": "packages/web-sdk",
+          "from": "3.14.0-beta.20",
+          "stable": "3.14.1",
+          "requiredFiles": [
+            "dist/index.cjs", "dist/index.mjs", "dist/index.d.ts",
+            "dist/credentials.cjs", "dist/credentials.mjs", "dist/credentials-subpath.d.ts",
+            "dist/delegations-issued.cjs", "dist/delegations-issued.mjs",
+            "dist/delegations-renewal.cjs", "dist/delegations-renewal.mjs",
+            "dist/encryption-keys.cjs", "dist/encryption-keys.mjs",
+            "dist/modals.cjs", "dist/modals.mjs",
+            "dist/panel-data.cjs", "dist/panel-data.mjs",
+            "dist/panel.cjs", "dist/panel.mjs",
+            "dist/registry-verdict-cache.cjs", "dist/registry-verdict-cache.mjs",
+            "dist/replica-gated.cjs", "dist/replica-gated.mjs", "dist/replica-gated.d.ts",
+            "dist/replica.cjs", "dist/replica.mjs", "dist/replica.d.ts",
+            "dist/runtime-grants.cjs", "dist/runtime-grants.mjs",
+            "dist/secret-read.cjs", "dist/secret-read.mjs",
+            "dist/session-retire.cjs", "dist/session-retire.mjs",
+            "dist/share-placement.cjs", "dist/share-placement.mjs",
+            "dist/space-hosting.cjs", "dist/space-hosting.mjs"
+          ]
+        }
+      ],
+      "pins": [
+        { "name": "@tinycloud/node-sdk-wasm", "from": "1.8.0-beta.0", "to": "1.8.0" },
+        { "name": "@tinycloud/replica", "from": "0.4.7-beta.6", "to": "0.4.7" }
+      ]
     }
   }
 }

@@ -578,3 +578,44 @@ test("the node release pin check applies only to plans that stage the CLI", () =
   assert.deepEqual(planFlags(loadPlan("courier-0.8.1")), { nodeReleaseCheck: false });
   assert.deepEqual(planFlags(webSdkPlan(WEB_FILES)), { nodeReleaseCheck: false });
 });
+
+test("the tc-4082 plan is closed until sealed, and names the six packages with the files each must ship", () => {
+  const plan = loadPlan("tc-4082");
+  assert.match(sealProblems(plan).join("\n"), /releaseSha is null/);
+  assert.match(sealProblems(plan).join("\n"), /expectedDelta/);
+  assert.equal(plan.base, BASE);
+  assert.equal(plan.sourceSha, "30025b74fccebc13c18f0b34ec0f87174b0304f7");
+  assert.deepEqual(Object.fromEntries(plan.packages.map((pkg) => [pkg.name, pkg.stable])), {
+    "@tinycloud/bootstrap": "2.10.1",
+    "@tinycloud/sdk-services": "3.14.1",
+    "@tinycloud/sdk-core": "3.14.1",
+    "@tinycloud/node-sdk": "3.14.1",
+    "@tinycloud/web-sdk-wasm": "1.8.0",
+    "@tinycloud/web-sdk": "3.14.1",
+  });
+  assert.deepEqual(plan.pins.map((pin) => `${pin.name} ${pin.from}->${pin.to}`).sort(), ["@tinycloud/node-sdk-wasm 1.8.0-beta.0->1.8.0", "@tinycloud/replica 0.4.7-beta.6->0.4.7"]);
+  // web-sdk is built, not excluded.
+  assert.deepEqual(buildFilters(plan).filter((filter) => filter.startsWith("--filter=!")), []);
+  assert.ok(buildFilters(plan).includes("--filter=@tinycloud/web-sdk..."));
+  assert.ok(plan.packages.every((pkg) => requiredFiles(pkg).length >= 3), "every package states what it ships");
+  assert.deepEqual(planFlags(plan), { nodeReleaseCheck: false });
+});
+
+test("tc-4082's web-sdk must ship every file its exports and entry chunks point at", () => {
+  const webSdk = loadPlan("tc-4082").byName.get("@tinycloud/web-sdk");
+  const files = new Set(requiredFiles(webSdk));
+  // package.json main/module/types and the exports "." "./replica" "./replica-gated" "./credentials" targets.
+  for (const file of ["index.cjs", "index.mjs", "index.d.ts", "replica.cjs", "replica.mjs", "replica.d.ts", "replica-gated.cjs", "replica-gated.mjs", "replica-gated.d.ts", "credentials.cjs", "credentials.mjs", "credentials-subpath.d.ts"]) {
+    assert.ok(files.has(`dist/${file}`), file);
+  }
+  // Every entry chunk, in both module formats.
+  for (const name of ["delegations-issued", "delegations-renewal", "encryption-keys", "modals", "panel-data", "panel", "registry-verdict-cache", "runtime-grants", "secret-read", "session-retire", "share-placement", "space-hosting"]) {
+    for (const ext of ["cjs", "mjs"]) assert.ok(files.has(`dist/${name}.${ext}`), `${name}.${ext}`);
+  }
+  const staged = ["index.cjs", "index.mjs", "index.d.ts", ...[...files].map((f) => f.slice("dist/".length))].filter((f, i, all) => all.indexOf(f) === i);
+  const shipped = staged.map((file) => entry(`package/dist/${file}`));
+  const manifest = { name: "@tinycloud/web-sdk", version: "3.14.1", dependencies: { zod: "^3.23.0" } };
+  const plan = loadPlan("tc-4082");
+  assert.deepEqual(tarballProblems({ pkg: webSdk, plan, entries: [entry("package/package.json"), ...shipped], manifest }), []);
+  assert.match(tarballProblems({ pkg: webSdk, plan, entries: [entry("package/package.json"), ...shipped.filter((e) => e.path !== "package/dist/space-hosting.mjs")], manifest }).join(), /lacks dist\/space-hosting\.mjs/);
+});
