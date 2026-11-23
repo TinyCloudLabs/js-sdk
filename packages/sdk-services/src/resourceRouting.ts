@@ -1,4 +1,5 @@
 import type { FetchFunction, FetchResponse, ServiceHeaders, ServiceSession } from "./types";
+import { classifyInvocationRefusal, refusedInvocations } from "./invocationRefusal";
 
 export type ResourceAccess = "read" | "write" | "host" | "encryption";
 export interface ResourceDestination { readonly url: string; readonly nodeDid?: string }
@@ -348,7 +349,10 @@ export function createResourceRoutingFetch(fetchFn: FetchFunction, routing: Reso
       const timeout = AbortSignal.timeout(5_000);
       const signal = init?.signal ? AbortSignal.any([init.signal, timeout]) : timeout;
       try {
-        return await fetchFn(`${target.url}${parsed.pathname}${parsed.search}`, { ...init, headers, signal, redirect: "error" });
+        const response = await fetchFn(`${target.url}${parsed.pathname}${parsed.search}`, { ...init, headers, signal, redirect: "error" });
+        const refusal = classifyInvocationRefusal(response.status, signed);
+        if (refusal !== undefined) refusedInvocations.set(response, refusal);
+        return response;
       } catch (error) {
         if (init?.signal?.aborted) throw error;
         if (routingFailure(error)) throw error;

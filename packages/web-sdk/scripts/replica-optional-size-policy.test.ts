@@ -515,6 +515,8 @@ describe("TC-2481 Web routing exact optional admission", () => {
   const root = JSON.parse(readFileSync(resolve(import.meta.dir, "replica-size-ledger.json"), "utf8")) as Ledger;
     delete root.tc2931BootstrapScope;
     delete root.tc3947ReplicaRevokeRoot;
+    delete root.tc3522InvocationRefusalKvWorker;
+    delete root.tc3522InvocationRefusalReplicaWorker;
     delete root.tc2923EncryptionTeeOriginRoot;
     delete root.tc2949PanelChunkRecoveryRoot;
     delete root.tc2970RegistryVerdictCacheRoot;
@@ -545,6 +547,7 @@ describe("TC-2481 Web routing exact optional admission", () => {
     delete root.tc3969SecretKeyCoverageRoot;
     delete root.tc3823BotHistoryKeyRoot;
     delete root.tc3802SecretKeyCapRoot;
+    delete root.tc3810ReaderRoot;
     delete root.tc3947ReplicaRevokeRoot;
     delete root.tc3030FirstPartyOriginsRoot;
     delete root.tc2937SharePlacementRoot;
@@ -719,6 +722,8 @@ describe("TC-2481 final3e0 optional accounting admission", () => {
     const root = JSON.parse(readFileSync(resolve(import.meta.dir, "replica-size-ledger.json"), "utf8")) as Ledger;
     delete root.tc2931BootstrapScope;
     delete root.tc3947ReplicaRevokeRoot;
+    delete root.tc3522InvocationRefusalKvWorker;
+    delete root.tc3522InvocationRefusalReplicaWorker;
     delete root.tc2923EncryptionTeeOriginRoot;
     delete root.tc2949PanelChunkRecoveryRoot;
     delete root.tc2970RegistryVerdictCacheRoot;
@@ -749,6 +754,9 @@ describe("TC-2481 final3e0 optional accounting admission", () => {
     delete root.tc3969SecretKeyCoverageRoot;
     delete root.tc3823BotHistoryKeyRoot;
     delete root.tc3802SecretKeyCapRoot;
+    delete root.tc3862ExplorerOriginRoot;
+    delete root.tc3522InvocationRefusalRoot;
+    delete root.tc3810ReaderRoot;
     delete root.tc3947ReplicaRevokeRoot;
     delete root.tc3030FirstPartyOriginsRoot;
     delete root.tc2937SharePlacementRoot;

@@ -1,5 +1,39 @@
 # @tinycloudlabs/web-sdk
 
+## 3.14.0-beta.21
+
+### Patch Changes
+
+- Updated dependencies [03d49fe]
+  - @tinycloud/sdk-core@3.14.0-beta.21
+  - @tinycloud/share-sdk@1.7.0-beta.0
+  - @tinycloud/node-sdk@3.14.0-beta.21
+
+## 3.14.0-beta.20
+
+### Patch Changes
+
+- f2ce056: Apps can request additional permissions after restoring a session with a verified renewal. The new permissions end by the time the restored session expires.
+
+  Details: TC-4028
+
+- Updated dependencies [f2ce056]
+- Updated dependencies [f2ce056]
+  - @tinycloud/sdk-core@3.14.0-beta.20
+  - @tinycloud/node-sdk@3.14.0-beta.20
+  - @tinycloud/replica@0.4.7-beta.6
+
+## 3.14.0-beta.19
+
+### Patch Changes
+
+- 71da2dd: Users can sign in to TinyCloud Explorer at `https://explorer.tinycloud.xyz` even if the owner has no location registry record. OpenKey handles account setup. Other origins do not gain this access.
+
+  Details: TC-3862
+  - @tinycloud/sdk-core@3.14.0-beta.19
+  - @tinycloud/node-sdk@3.14.0-beta.19
+  - @tinycloud/replica@0.4.7-beta.5
+
 ## 3.14.0-beta.18
 
 ### Patch Changes

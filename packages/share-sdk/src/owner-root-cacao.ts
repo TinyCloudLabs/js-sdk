@@ -22,11 +22,14 @@ export interface DecodedOwnerRootCacao {
   readonly attenuation: Readonly<Record<string, Readonly<Record<string, readonly unknown[]>>>>;
   /** The ReCap `prf` list (parent capabilities); a root has none. */
   readonly reCapProofs: readonly unknown[];
+  /** Signed top-level `xyz.tinycloud.policy/delegationMode`, when present. Absence is legacy attenuable. */
+  readonly delegationMode?: "terminal" | "attenuable";
 }
 
 const MAX_CACAO_BYTES = 64 * 1024;
 const MAX_CBOR_DEPTH = 64;
 const RECAP_PREFIX = "urn:recap:";
+const DELEGATION_MODE_KEY = "xyz.tinycloud.policy/delegationMode";
 type CborMap = Record<string, unknown>;
 
 /**
@@ -100,11 +103,55 @@ function text(value: unknown, label: string): string {
   return value;
 }
 
-function reCap(resource: string): { attenuation: DecodedOwnerRootCacao["attenuation"]; proofs: readonly unknown[] } {
+/**
+ * Reject duplicate JSON object member names (including `\uXXXX` escaped-name
+ * equivalents) before trusting `JSON.parse`'s last-key-wins output.
+ *
+ * Duplicated from `packages/sdk-core/src/delegations/recap-mode.ts`
+ * (`assertNoDuplicateJsonKeys`) because `@tinycloud/share-sdk` does not depend
+ * on `@tinycloud/sdk-core`. Keep both copies in sync; parity is enforced by
+ * `packages/sdk-core/src/delegations/recap-mode.test.ts`.
+ */
+function assertNoDuplicateJsonKeys(json: string): void {
+  const objects: Array<Set<string> | null> = [];
+  const tokens = /"(?:[^"\\]|\\.)*"|[{}\[\]:,]|[^\s{}\[\]:,]+/g;
+  const parts = [...json.matchAll(tokens)].map((match) => match[0]!);
+  for (let i = 0; i < parts.length; i++) {
+    const token = parts[i]!;
+    if (token === "{") objects.push(new Set());
+    else if (token === "[") objects.push(null);
+    else if (token === "}" || token === "]") objects.pop();
+    else if (token.startsWith('"') && parts[i + 1] === ":") {
+      const keys = objects.at(-1);
+      const key = JSON.parse(token) as string;
+      if (keys?.has(key)) throw new Error("ReCap duplicate member is ambiguous");
+      keys?.add(key);
+    }
+  }
+}
+
+function reCap(resource: string): {
+  attenuation: DecodedOwnerRootCacao["attenuation"];
+  proofs: readonly unknown[];
+  delegationMode?: "terminal" | "attenuable";
+} {
   const isObject = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
-  const parsed: unknown = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(fromBase64Url(resource.slice(RECAP_PREFIX.length))));
+  const json = new TextDecoder("utf-8", { fatal: true }).decode(fromBase64Url(resource.slice(RECAP_PREFIX.length)));
+  // JSON.parse silently keeps the last duplicate member (including \uXXXX escaped-name equivalents).
+  assertNoDuplicateJsonKeys(json);
+  const parsed: unknown = JSON.parse(json);
   if (!isObject(parsed) || !isObject(parsed.att)) throw new Error("ReCap attenuation must be an object");
-  for (const key of Object.keys(parsed)) if (key !== "att" && key !== "prf") throw new Error("ReCap has an unknown field");
+  for (const key of Object.keys(parsed)) {
+    if (key !== "att" && key !== "prf" && key !== DELEGATION_MODE_KEY) throw new Error("ReCap has an unknown field");
+  }
+  let delegationMode: "terminal" | "attenuable" | undefined;
+  if (Object.prototype.hasOwnProperty.call(parsed, DELEGATION_MODE_KEY)) {
+    const mode = parsed[DELEGATION_MODE_KEY];
+    if (mode !== "terminal" && mode !== "attenuable") {
+      throw new Error(`ReCap ${DELEGATION_MODE_KEY} must be "terminal" or "attenuable"`);
+    }
+    delegationMode = mode;
+  }
   const proofs = parsed.prf ?? [];
   if (!Array.isArray(proofs)) throw new Error("ReCap prf must be an array");
   const attenuation: Record<string, Record<string, readonly unknown[]>> = Object.create(null);
@@ -117,7 +164,11 @@ function reCap(resource: string): { attenuation: DecodedOwnerRootCacao["attenuat
     }
     attenuation[target] = copy;
   }
-  return { attenuation, proofs };
+  return {
+    attenuation,
+    proofs,
+    ...(delegationMode === undefined ? {} : { delegationMode }),
+  };
 }
 
 /** CIDv1 (raw, BLAKE3) of exact CACAO bytes, as the Node computes a delegation CID. */
@@ -152,7 +203,9 @@ export function decodeOwnerRootCacao(bytes: Uint8Array, expectedCid?: string): D
     resources = payload.resources.map((resource, index) => text(resource, `resources[${index}]`));
   }
   const last = resources.at(-1);
-  const decodedReCap = last?.startsWith(RECAP_PREFIX) ? reCap(last) : { attenuation: Object.create(null) as DecodedOwnerRootCacao["attenuation"], proofs: [] };
+  const decodedReCap = last?.startsWith(RECAP_PREFIX)
+    ? reCap(last)
+    : { attenuation: Object.create(null) as DecodedOwnerRootCacao["attenuation"], proofs: [], delegationMode: undefined };
   const expiresAt = optional("exp");
   const notBefore = optional("nbf");
   return {
@@ -165,5 +218,6 @@ export function decodeOwnerRootCacao(bytes: Uint8Array, expectedCid?: string): D
     resources,
     attenuation: decodedReCap.attenuation,
     reCapProofs: decodedReCap.proofs,
+    ...(decodedReCap.delegationMode === undefined ? {} : { delegationMode: decodedReCap.delegationMode }),
   };
 }

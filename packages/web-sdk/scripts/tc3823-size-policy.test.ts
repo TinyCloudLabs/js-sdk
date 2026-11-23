@@ -7,8 +7,8 @@ import {
 } from "./replica-size-policy";
 
 test("the bot-history key uses its exact measured Web SDK root ceilings", () => {
-  expect(rootCeilingFor({ ...ledger, tc3802SecretKeyCapRoot: undefined }, "index.mjs")).toEqual({ row: "tc3823BotHistoryKeyRoot", ceiling: 1539508 });
-  expect(rootCeilingFor({ ...ledger, tc3802SecretKeyCapRoot: undefined }, "index.cjs")).toEqual({ row: "tc3823BotHistoryKeyRoot", ceiling: 1471446 });
+  expect(rootCeilingFor({ ...ledger, tc3802SecretKeyCapRoot: undefined, tc3862ExplorerOriginRoot: undefined, tc3522InvocationRefusalRoot: undefined, tc3810ReaderRoot: undefined }, "index.mjs")).toEqual({ row: "tc3823BotHistoryKeyRoot", ceiling: 1539508 });
+  expect(rootCeilingFor({ ...ledger, tc3802SecretKeyCapRoot: undefined, tc3862ExplorerOriginRoot: undefined, tc3522InvocationRefusalRoot: undefined, tc3810ReaderRoot: undefined }, "index.cjs")).toEqual({ row: "tc3823BotHistoryKeyRoot", ceiling: 1471446 });
   validateLedger(ledger);
   const row = ledger.tc3823BotHistoryKeyRoot;
   const prior = ledger.tc3969SecretKeyCoverageRoot;

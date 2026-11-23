@@ -8384,7 +8384,7 @@ export class TinyCloudNode {
       throw new SessionExpiredError(new Date(0));
     }
 
-    const sessionExpiry = extractSiweExpiration(session.siwe);
+    const sessionExpiry = this.sessionAuthorityEnd(session);
     if (sessionExpiry !== undefined) {
       const marginMs = TinyCloudNode.SESSION_EXPIRY_SAFETY_MARGIN_MS;
       if (sessionExpiry.getTime() <= Date.now() + marginMs) {

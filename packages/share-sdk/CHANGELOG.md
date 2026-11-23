@@ -1,5 +1,13 @@
 # @tinycloud/share-sdk
 
+## 1.7.0-beta.0
+
+### Minor Changes
+
+- 03d49fe: Read the optional signed ReCap delegation mode on SIWE CACAOs. Both `attenuable` and `terminal` are exposed when present. Existing grants and renewal leases without a mode retain their previous parsed shape.
+
+  Details: TC-3810
+
 ## 1.6.0
 
 ### Minor Changes

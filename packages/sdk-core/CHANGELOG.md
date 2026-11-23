@@ -1,5 +1,37 @@
 # @tinycloudlabs/sdk-core
 
+## 3.14.0-beta.21
+
+### Minor Changes
+
+- 03d49fe: Read the optional signed ReCap delegation mode on SIWE CACAOs. Both `attenuable` and `terminal` are exposed when present. Existing grants and renewal leases without a mode retain their previous parsed shape.
+
+  Details: TC-3810
+
+### Patch Changes
+
+- Updated dependencies [03d49fe]
+  - @tinycloud/share-sdk@1.7.0-beta.0
+
+## 3.14.0-beta.20
+
+### Patch Changes
+
+- f2ce056: Accept signed renewal stamps that share a lease generation when verifying the node's renewal history. Generations must still be positive safe integers and cannot decrease; stamps must still strictly extend expiry and pass all signature and chain checks.
+
+  Details: TC-4024
+
+- Updated dependencies [f2ce056]
+  - @tinycloud/sdk-services@3.14.0-beta.20
+
+## 3.14.0-beta.19
+
+### Patch Changes
+
+- Updated dependencies [71da2dd]
+  - @tinycloud/bootstrap@2.10.0-beta.1
+  - @tinycloud/sdk-services@3.14.0-beta.19
+
 ## 3.14.0-beta.18
 
 ### Minor Changes

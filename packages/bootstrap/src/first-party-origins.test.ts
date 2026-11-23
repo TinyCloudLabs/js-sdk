@@ -10,7 +10,8 @@ const OPENKEY_ONLY_ORIGINS = ["https://lightning-node-1.gecko-snares.ts.net:8451
 //   keeps it, in the same position.
 // - https://app.tinycloud.one (Android) and tinycloudone://app.tinycloud.one (iOS): native webview origins
 //   of TinyChat's apps; permanent SDK-only entries, never on OpenKey's server list.
-const SDK_ONLY_ORIGINS = ["https://tinycloud.one", "https://app.tinycloud.one", "tinycloudone://app.tinycloud.one"];
+// - https://explorer.tinycloud.xyz: SDK bootstrap origin added after this historical OpenKey snapshot.
+const SDK_ONLY_ORIGINS = ["https://tinycloud.one", "https://app.tinycloud.one", "tinycloudone://app.tinycloud.one", "https://explorer.tinycloud.xyz"];
 const publicOrigins = openkey.origins.filter((origin) => !OPENKEY_ONLY_ORIGINS.includes(origin));
 
 test("the SDK exports match OpenKey's pinned first-party origin contract, less its OpenKey-only entries and plus its SDK-only entries", () => {

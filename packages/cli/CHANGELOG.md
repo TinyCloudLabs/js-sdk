@@ -1,5 +1,71 @@
 # @tinycloud/cli
 
+## 1.9.0-beta.21
+
+### Patch Changes
+
+- Updated dependencies [03d49fe]
+  - @tinycloud/sdk-core@3.14.0-beta.21
+  - @tinycloud/share-sdk@1.7.0-beta.0
+  - @tinycloud/node-sdk@3.14.0-beta.21
+  - @tinycloud/operations@0.10.0-beta.20
+
+## 1.9.0-beta.20
+
+### Patch Changes
+
+- f2ce056: `courier watch` and `tc courier watch` now use a verified extension of the owner's grant without restarting. Running watchers can renew existing peer access before the original grants expire, without changing what either peer can read.
+
+  Automatic renewal shortens its cooldown when the owner grant limits a peer grant to a short lifetime. Manual renewal and artifact export retain their existing cooldown.
+
+  Overlapping watch checks no longer treat a peer grant that is being renewed as an orphan and revoke it.
+
+  Installing a successor immediately switches the watcher's hook and read checks to the new grant. A refusal from a superseded grant no longer stops access under its successor.
+
+  Watchers retry a rejected invocation once if it was signed before a suspend or cannot establish which grant was refused. Only a refusal of the installed peer grant stops access; a denial of an expired invocation does not mark a peer as revoked.
+
+  After the original owner deadline, Courier confirms a still-signed-live successor by its exact delegation CID when the node's issued listing does not account for renewal. Missing or revoked authority still fails closed.
+
+  After a sibling grant is revoked, Courier also confirms and revokes any live successor that the issued listing incorrectly reports as expired.
+
+  Details: TC-3522
+
+- Updated dependencies [f2ce056]
+- Updated dependencies [f2ce056]
+- Updated dependencies [f2ce056]
+  - @tinycloud/sdk-services@3.14.0-beta.20
+  - @tinycloud/sdk-core@3.14.0-beta.20
+  - @tinycloud/node-sdk@3.14.0-beta.20
+  - @tinycloud/operations@0.10.0-beta.19
+
+## 1.9.0-beta.19
+
+### Patch Changes
+
+- @tinycloud/sdk-core@3.14.0-beta.19
+- @tinycloud/sdk-services@3.14.0-beta.19
+- @tinycloud/node-sdk@3.14.0-beta.19
+- @tinycloud/operations@0.10.0-beta.18
+
+## 1.9.0-beta.18
+
+### Minor Changes
+
+- 089087a: `tinycloud onboard` can return a private TinyCloud One setup link after a new apps approval. The page shows the connected agent and app list. The link is read-only and lasts up to 24 hours, no longer than the approval. JSON output returns `handoff.url` and `handoff.expiresAt` when a link is available, or `handoff.message` otherwise.
+
+  Details: TC-3302
+
+## 1.9.0-beta.17
+
+### Patch Changes
+
+- 60e7682: Fixed: `tc secrets get` (and `secrets run`) on a profile whose scoped OpenKey login named only that secret's own key (`…:default/secrets/<name>` with `decrypt`) was refused with "lacks the scoped decrypt authority" and asked for decrypt on the whole network. A signed session reports a grant with no limits as an empty caveat list, and the check that lets the secret's own key stand in for the network decrypt only accepted a grant with no caveats field. An empty caveat list now counts as no caveats; a grant with a real caveat is still refused.
+
+  Details: TC-3802
+
+- Updated dependencies [60e7682]
+  - @tinycloud/operations@0.10.0-beta.17
+
 ## 1.9.0-beta.16
 
 ### Minor Changes
