@@ -15,15 +15,15 @@ test("TC-3801 records the exact canonical CI root bytes of #1131", () => {
   expect(row).toEqual(approvedTc3801NamedKeysRoot);
   expect(row.base).toBe("979145a429cbc0fb1c107da4e211dbabeb9afb81");
   expect(row.canonicalCI).toEqual({
-    run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45112808012",
+    run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45128664935",
     jobs: [
-      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45112808012/job/137488758667",
-      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45112808012/job/137488758449",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45128664935/job/137538818194",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45128664935/job/137538818578",
     ],
   });
-  expect(row.sourceCommits).toEqual(["df543dbfdf4d896927bcd7596fbedcde68530e6d"]);
-  expect(row.root.ceiling).toEqual({ "index.mjs": 1539352, "index.cjs": 1471317 });
-  expect(row.root.delta).toEqual({ "index.mjs": 3806, "index.cjs": 4364 });
+  expect(row.sourceCommits).toEqual(["f9fd4d997b3b3d42093650e10b3c175c238d486d"]);
+  expect(row.root.ceiling).toEqual({ "index.mjs": 1539368, "index.cjs": 1471344 });
+  expect(row.root.delta).toEqual({ "index.mjs": 3822, "index.cjs": 4391 });
 
   // The ruling lifts the per-row byte cap for this row: the delta is exactly CI's.
   for (const format of ["index.mjs", "index.cjs"] as const) {
