@@ -166,6 +166,49 @@ jobs:
           records=$(cf "/zones/$zone_id/dns_records?name=mcp.tinycloud.xyz")
           jq -e '.success == true' <<<"$records" >/dev/null || { echo "::error::CLOUDFLARE_API_TOKEN cannot read the mcp.tinycloud.xyz DNS records"; exit 1; }
           echo "Cloudflare: token-verify active; zone tinycloud.xyz and $(jq -r '.result | length' <<<"$records") mcp.tinycloud.xyz record(s) readable"
+  metadata:
+    # Preflight-only runs: a public-safe record of the deployed CVM, booleans and the Phala compose hash only. This
+    # repository's logs are public, so .github/scripts/mcp-deployed-metadata.sh prints one complete record from a
+    # fixed allowlist or one fixed error line: no image references or hashes, container ids, compose text,
+    # environment, logs, jq or Phala error text. No other job needs it, so it cannot gate a build or deploy, and it
+    # is skipped when anything is deployed.
+    needs: [resolve, preflight]
+    if: ${{ inputs.preflight_only }}
+    runs-on: ubuntu-latest
+    environment:
+      name: production
+      deployment: false
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            .github/deploy-tools
+            .github/scripts
+          persist-credentials: false
+      - name: Install pinned Phala deploy tools
+        shell: bash
+        run: |
+          tools="$RUNNER_TEMP/mcp-deploy-tools"
+          mkdir -p "$tools"
+          cp .github/deploy-tools/package.json .github/deploy-tools/package-lock.json "$tools/"
+          npm ci --prefix "$tools" --ignore-scripts --no-audit --no-fund
+          echo "$tools/node_modules/.bin" >> "$GITHUB_PATH"
+      - name: Test the metadata allowlist
+        run: bash .github/scripts/test-mcp-deployed-metadata.sh
+      - name: Record CVM tinycloud-mcp metadata (booleans and compose hash only)
+        env:
+          PHALA_CLOUD_API_KEY: ${{ secrets.PHALA_CLOUD_API_KEY }}
+        shell: bash
+        run: |
+          umask 077
+          work=$(mktemp -d "$RUNNER_TEMP/mcp-metadata.XXXXXX")
+          trap 'rm -rf "$work"' EXIT
+          # Phala's own output and errors never reach the log: only the allowlisted record is printed.
+          phala cvms get tinycloud-mcp --json >"$work/cvm.json" 2>/dev/null || true
+          phala ps tinycloud-mcp --json >"$work/containers.json" 2>/dev/null || true
+          bash .github/scripts/mcp-deployed-metadata.sh "$work/cvm.json" "$work/containers.json"
   image:
     needs: [resolve, preflight]
     if: needs.resolve.outputs.build == 'true'
