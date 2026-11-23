@@ -635,6 +635,9 @@ export class TinyCloudWeb {
       capabilityRequest: this._capabilityRequest,
       signStrategy: this.config.signStrategy,
       ...this.bootstrapSignInPolicy(),
+      // TC-4082: outside first-party origins an owner with no registry record may sign in once the default node is
+      // shown to host their own `applications` space; the node-sdk refuses anything else.
+      allowHostedOwnerProof: this.bootstrapSignInPolicy().requireExistingAccount,
       telemetry: this.config.telemetry,
       retryPolicy: this.config.retryPolicy,
     };
