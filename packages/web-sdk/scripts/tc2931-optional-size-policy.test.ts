@@ -1,7 +1,17 @@
 import { expect, test } from "bun:test";
-import root from "./replica-size-ledger.json";
-import optional from "./replica-optional-size-ledger.json";
-import { approvedTc2931Optional, evaluateOptionalBudget, optionalFormats, optionalSourcePins, validateOptionalEntryTransition, validateOptionalLedger, validateTc2931OptionalTransition, type OptionalLedger } from "./replica-optional-size-policy";
+import rootLedger from "./replica-size-ledger.json";
+import optionalLedger from "./replica-optional-size-ledger.json";
+import { approvedTc2931Optional, evaluateOptionalBudget, optionalFormats, optionalSourcePins, tc2931OptionalAllowance, validateOptionalEntryTransition, validateOptionalLedger, validateTc2931OptionalTransition, type OptionalLedger } from "./replica-optional-size-policy";
+import type { Ledger } from "./replica-size-policy";
+
+// This admission is tested in its own context: the later TC-3947 and TC-3801 rows are removed.
+const root = structuredClone(rootLedger) as Ledger;
+delete root.tc3801NamedKeysRoot;
+delete root.tc3947ReplicaRevokeRoot;
+const optional = structuredClone(optionalLedger) as OptionalLedger;
+delete optional.tc3947;
+optional.entries = optional.entries.filter((entry) => entry.pr !== "#1138");
+optional.allowance = { ...tc2931OptionalAllowance };
 
 const validate = (value: OptionalLedger) => validateOptionalLedger(value, true, true, true, true, true, true, true, true, true, true, true, true, true, root.tc2481OfflineReplicaTransport, root.tc2931BootstrapScope);
 

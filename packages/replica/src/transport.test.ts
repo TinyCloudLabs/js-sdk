@@ -283,6 +283,49 @@ describe("revocation is classified only from typed evidence", () => {
       ),
     ).toBe(ReplicaErrorCode.GRANT_REVOKED);
   });
+
+  // The body tinycloud-node 1.26.21 sends for a request under a revoked grant (captured from its replica e2e run).
+  const NODE_1_26_21_REVOKED = '{"code":"delegation_revoked","error":"delegation-revoked: bafkr4ickkbibo6v3oujyddbwidfffh375ot3ki5genrif2jcsa4pyiglmq"}';
+
+  test("a read's 401 whose body is the node's revocation envelope is a revocation", async () => {
+    expect(await getFailure(fail("AUTH_UNAUTHORIZED", `Failed to get key "notes/a": 401 - ${NODE_1_26_21_REVOKED}`, { status: 401 }), "notes/a")).toBe(
+      ReplicaErrorCode.GRANT_REVOKED,
+    );
+    expect(
+      await batchFailure(
+        fail("AUTH_UNAUTHORIZED", `Failed to batch read 2 key(s): 401 - ${NODE_1_26_21_REVOKED}`, { status: 401 }),
+        ["notes/a", "notes/b"],
+      ),
+    ).toBe(ReplicaErrorCode.GRANT_REVOKED);
+    expect(
+      await batchFailure(
+        fail(
+          "AUTH_UNAUTHORIZED",
+          'Failed to batch read 2 key(s): 401 - {"code":"ancestor_revoked","error":"delegation-ancestor-revoked: ancestor=bafyroot invoked=bafyleaf"}',
+          { status: 401 },
+        ),
+        ["notes/a", "notes/b"],
+      ),
+    ).toBe(ReplicaErrorCode.GRANT_REVOKED);
+  });
+
+  test("a 401 body that is not the whole revocation envelope is not a revocation", async () => {
+    const read = (body: string) => getFailure(fail("AUTH_UNAUTHORIZED", `Failed to get key "notes/a": 401 - ${body}`, { status: 401 }), "notes/a");
+    for (const body of [
+      '{"code":"unauthorized","error":"delegation-revoked: bafyleaf"}',
+      '{"code":"delegation_revoked","error":"delegation-revoked: bafyleaf (while reading notes/a)"}',
+      '{"code":"delegation_revoked","error":"Unauthorized Action: s/kv/notes/a / tinycloud.kv/get"}',
+      '{"code":"delegation_revoked"}',
+      '{"code":"delegation_revoked","error":{"text":"delegation-revoked: bafyleaf"}}',
+      '{"error":"delegation-revoked: bafyleaf"}',
+      '[{"code":"delegation_revoked","error":"delegation-revoked: bafyleaf"}]',
+      '{"code":"delegation_revoked","error":"delegation-revoked: bafyleaf"',
+    ]) {
+      expect({ body, code: await read(body) }).toEqual({ body, code: ReplicaErrorCode.GRANT_UNAUTHORIZED });
+    }
+    // The envelope must be the whole body: text after it is not one.
+    expect(await read(`${NODE_1_26_21_REVOKED} trailing`)).toBe(ReplicaErrorCode.GRANT_UNAUTHORIZED);
+  });
 });
 
 describe("authority bounds on the wire", () => {

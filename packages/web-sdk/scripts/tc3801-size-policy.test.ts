@@ -11,7 +11,7 @@ import {
 test("TC-3801 records the exact canonical CI root bytes of #1131", () => {
   validateLedger(ledger);
   const row = ledger.tc3801NamedKeysRoot;
-  const predecessor = ledger.tc3617HostedMcpLeaseRoot;
+  const predecessor = ledger.tc3947ReplicaRevokeRoot;
   expect(row).toEqual(approvedTc3801NamedKeysRoot);
   expect(row.base).toBe("3ad8bb80e3b3b1f2342f4663cfe72f0ecd881093");
   expect(row.canonicalCI).toEqual({
@@ -22,7 +22,7 @@ test("TC-3801 records the exact canonical CI root bytes of #1131", () => {
     ],
   });
   expect(row.sourceCommits).toEqual(["d8948e01ba76d5cfd3081ac28704a76f15163769"]);
-  expect(row.root.ceiling).toEqual({ "index.mjs": 1539288, "index.cjs": 1471246 });
+  expect(row.root.ceiling).toEqual({ "index.mjs": 1539350, "index.cjs": 1471296 });
   expect(row.root.delta).toEqual({ "index.mjs": 3804, "index.cjs": 4343 });
 
   // The ruling lifts the per-row byte cap for this row: the delta is exactly CI's.
@@ -40,7 +40,7 @@ test("TC-3801 records the exact canonical CI root bytes of #1131", () => {
   ]);
 });
 
-test("TC-3801 refuses mutation, removal, or a missing TC-3617 predecessor", () => {
+test("TC-3801 refuses mutation, removal, or a missing TC-3947 predecessor", () => {
   const row = ledger.tc3801NamedKeysRoot;
   validateTc3801NamedKeysRootTransition(undefined, row);
   validateTc3801NamedKeysRootTransition(row, structuredClone(row));
@@ -58,5 +58,5 @@ test("TC-3801 refuses mutation, removal, or a missing TC-3617 predecessor", () =
   }
 
   expect(() => validateTc3801NamedKeysRootTransition(row, undefined)).toThrow("TC-3801");
-  expect(() => validateLedger({ ...ledger, tc3617HostedMcpLeaseRoot: undefined })).toThrow("TC-3801");
+  expect(() => validateLedger({ ...ledger, tc3947ReplicaRevokeRoot: undefined })).toThrow("TC-3801");
 });
