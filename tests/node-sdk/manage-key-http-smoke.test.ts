@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, expect, test } from "bun:test";
-import { TinyCloudNode } from "@tinycloud/node-sdk";
+import { TinyCloudNode, ownerFullAccess } from "@tinycloud/node-sdk";
 import { privateKeyToAccount } from "viem/accounts";
 import { checkServerHealth, SERVER_URL, TEST_KEY } from "./setup";
 
@@ -173,6 +173,7 @@ beforeAll(async () => {
     privateKey: TEST_KEY,
     autoBootstrapAccount: false,
     autoCreateSpace: true,
+    ...ownerFullAccess(),
   });
   await provisioner.signIn();
   await provisioner.hostOwnedSpace("applications");

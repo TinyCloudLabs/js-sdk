@@ -175,8 +175,8 @@ Secrets are stored as network-encrypted inline envelopes and read through
 identifiers such as `FIREFLIES_API_KEY`. `tinycloud secrets network show` accepts
 either a short network name or a full
 `urn:tinycloud:encryption:<ownerDid>:<network>` identifier, and `tinycloud secrets
-network grant` takes the short name, resolves the network, and issues
-`tinycloud.encryption/decrypt` on that network. Share the decrypt grant
+network grant` takes the short network name, resolves the network, and issues
+`tinycloud.encryption/decrypt` on the whole network: every secret in it, including secrets added later. Share the decrypt grant
 separately from any KV or SQL reads the app also needs.
 
 ```bash

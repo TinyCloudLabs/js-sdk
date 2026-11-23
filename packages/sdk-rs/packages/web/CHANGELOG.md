@@ -1,5 +1,13 @@
 # @tinycloudlabs/web-sdk-wasm
 
+## 1.8.0-beta.0
+
+### Minor Changes
+
+- d382af8: New `validateSessionRoot` checks a session key's wallet-signed root as `validateSessionGrant` does, without its time window, so it accepts roots that have expired or aren't valid yet. Sign-out uses it to choose the roots it sends. The browser bindings include it.
+
+  Details: TC-3443
+
 ## 1.7.8
 
 ### Patch Changes

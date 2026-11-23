@@ -63,6 +63,8 @@ interface StatusSession {
   present: boolean;
   expired: boolean | null;
   expiresAt: string | null;
+  /** The signed end of the owner's renewal lease saved with this session, while it lasts; the node decides whether it still renews. */
+  renewsUntil: string | null;
   permissions: PermissionEntry[];
   permissionsCompact: string[];
 }
@@ -139,7 +141,9 @@ async function inspectProfile(params: {
   const sessionPermissions = session ? sessionPermissionsFromRecap(session) : [];
   const signedExpiry = session ? extractSessionExpiry(session) : null;
   // Past its original grant, a session saved with an owner renewal lease lasts until the lease's signed end.
-  const lease = session && signedExpiry !== null && signedExpiry.getTime() <= Date.now() ? liveStoredLease(session) : undefined;
+  // While the original is live, both ends are reported: the grant's own and the lease's.
+  const liveLease = session ? liveStoredLease(session) : undefined;
+  const lease = signedExpiry !== null && signedExpiry.getTime() <= Date.now() ? liveLease : undefined;
   const sessionExpiry = lease !== undefined ? new Date(lease.expiresAt) : signedExpiry;
   const sessionExpired =
     sessionExpiry === null ? null : sessionExpiry.getTime() <= Date.now();
@@ -147,6 +151,7 @@ async function inspectProfile(params: {
     present: session !== null,
     expired: session === null ? null : sessionExpired,
     expiresAt: sessionExpiry?.toISOString() ?? null,
+    renewsUntil: liveLease === undefined ? null : new Date(liveLease.expiresAt).toISOString(),
     permissions: sessionPermissions,
     permissionsCompact: compactPermissions(sessionPermissions),
   };
@@ -486,9 +491,14 @@ function formatSession(session: StatusSession): string {
     return `${theme.warn("expired")}${formatExpiresAt(session.expiresAt)}`;
   }
   if (session.expired === false) {
-    return `${theme.success("active")}${formatExpiresAt(session.expiresAt)}`;
+    return `${theme.success("active")}${formatExpiresAt(session.expiresAt)}${formatRenewsUntil(session)}`;
   }
-  return `${theme.success("present")}${formatExpiresAt(session.expiresAt)}`;
+  return `${theme.success("present")}${formatExpiresAt(session.expiresAt)}${formatRenewsUntil(session)}`;
+}
+
+/** The lease's end, when it lies past the end already shown. */
+function formatRenewsUntil(session: StatusSession): string {
+  return session.renewsUntil !== null && session.renewsUntil !== session.expiresAt ? `, renews until ${session.renewsUntil}` : "";
 }
 
 function formatDelegation(delegation: StatusDelegation): string {

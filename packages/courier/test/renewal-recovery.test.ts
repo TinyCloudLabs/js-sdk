@@ -7,8 +7,8 @@ test('completes only through successful verified restore of the exact saved pair
   await recoverAdmittedRenewal({ restoreSessionWithRenewal: async (...args) => { seen = args; } }, session, 'exact-saved-lease');
   expect(seen).toEqual([session, 'exact-saved-lease']);
 });
-test('explicit absent/revoked/expired authority requires fresh approval', async () => {
-  for (const code of ['RENEWAL_AUTHORITY_INACTIVE', 'RENEWAL_LEASE_EXPIRED', 'RENEWAL_LEASE_ORIGINAL_EXPIRED']) {
+test('explicit absent/revoked/expired authority or a changed renewer requires fresh approval', async () => {
+  for (const code of ['RENEWAL_AUTHORITY_INACTIVE', 'RENEWAL_LEASE_EXPIRED', 'RENEWAL_LEASE_ORIGINAL_EXPIRED', 'RENEWAL_RENEWER_CHANGED']) {
     await expect(recoverAdmittedRenewal({ restoreSessionWithRenewal: async () => { throw Object.assign(new Error('wording may change'), { code }); } }, session, 'lease')).rejects.toMatchObject({ code: 'renewal-approval-required' });
   }
 });

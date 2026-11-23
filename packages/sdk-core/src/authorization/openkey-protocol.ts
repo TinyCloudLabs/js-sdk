@@ -76,6 +76,13 @@ export interface CapabilityPresentationEnvelopeV1 {
   manifestId?: string;
   manifestDigest?: string;
   /**
+   * Only when the manifest the digest covers holds `{owner}` in a permission path:
+   * the `did:pkh:eip155:<chain>:<EIP-55 address>` the SDK resolved it to. A hint.
+   * OpenKey resolves `{owner}` with the owner it derives itself, and a hint that
+   * differs makes the binding `unsigned`.
+   */
+  owner?: string;
+  /**
    * Full manifest payload(s) the SDK forwards so the OpenKey review UI
    * can render honest provenance labels. Display-only:
    *   - The envelope MUST NEVER expand authority; the ReCap payload is
@@ -591,10 +598,10 @@ export function extractRecapAttenuations(siwe: string): RecapAttenuation {
     const encoded = match[1];
     let decodedJson: string;
     try {
-      // base64url decode, tolerating with or without padding
-      const normalized = encoded.replace(/-/g, "+").replace(/_/g, "/");
-      const padded = normalized + "=".repeat((4 - (normalized.length % 4)) % 4);
-      decodedJson = Buffer.from(padded, "base64").toString("utf8");
+      // base64url decode, with or without padding (atob takes the unpadded form). atob and TextDecoder,
+      // not Node's Buffer: browser bundles may not provide one.
+      const normalized = encoded.replace(/-/g, "+").replace(/_/g, "/").replace(/=+$/, "");
+      decodedJson = new TextDecoder().decode(Uint8Array.from(atob(normalized), (c) => c.charCodeAt(0)));
     } catch (err) {
       throw new Error(
         `Failed to decode urn:recap: payload: ${(err as Error).message}`,

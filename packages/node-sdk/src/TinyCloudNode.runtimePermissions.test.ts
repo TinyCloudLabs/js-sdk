@@ -1435,7 +1435,7 @@ test("runtime grants that include decrypt honour an explicit expiry of one hour 
   expect(Math.abs(delegations[0].expiry.getTime() - target)).toBeLessThanOrEqual(5_000);
 });
 
-test("runtime grants without decrypt keep the 30-day default", async () => {
+test("runtime grants without decrypt keep the 7-day default", async () => {
   const node = makeExpiryTestNode();
   const permission: PermissionEntry = {
     service: "tinycloud.kv",
@@ -1449,7 +1449,7 @@ test("runtime grants without decrypt keep the 30-day default", async () => {
     await node.grantRuntimePermissions([permission]);
   });
 
-  expect(lastPrepareExpiryMs(node)).toBeGreaterThanOrEqual(before + 30 * 24 * 60 * 60_000);
+  expect(lastPrepareExpiryMs(node)).toBeGreaterThanOrEqual(before + 7 * 24 * 60 * 60_000);
 });
 
 test("runtime grants that include decrypt end within a shorter session expiry", async () => {
@@ -1498,7 +1498,7 @@ const MIXED_DECRYPT_KV_PERMISSIONS = (node: TinyCloudNode): PermissionEntry[] =>
   },
 ];
 
-test("non-encryption wildcard runtime grants keep the 30-day default", async () => {
+test("non-encryption wildcard runtime grants keep the 7-day default", async () => {
   const node = makeExpiryTestNode();
   const permission: PermissionEntry = {
     service: "tinycloud.kv",
@@ -1512,7 +1512,7 @@ test("non-encryption wildcard runtime grants keep the 30-day default", async () 
     delegations = await node.grantRuntimePermissions([permission]);
   });
 
-  expectEveryExpiryNear(node, delegations, before + 30 * 24 * 60 * 60_000);
+  expectEveryExpiryNear(node, delegations, before + 7 * 24 * 60 * 60_000);
 });
 
 test("non-encryption wildcard runtime grants accept an explicit 7d expiry", async () => {

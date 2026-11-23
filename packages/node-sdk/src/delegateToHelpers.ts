@@ -92,7 +92,7 @@ export function secretKeyGrantExpiryMs(expiry: string | number | undefined): num
 /**
  * Resolve the `expiry` option of {@link DelegateToOptions} into a concrete
  * millisecond duration from now. Default is {@link DEFAULT_DELEGATION_EXPIRY_MS}
- * (30 days, the SESSION tier).
+ * (7 days, the SESSION tier).
  *
  * Accepts:
  *  - `undefined` → {@link DEFAULT_DELEGATION_EXPIRY_MS}

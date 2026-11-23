@@ -15,6 +15,7 @@ services:
       - TC_MCP_APPROVAL_TTL_SECONDS=900
       - TC_MCP_OAUTH_METADATA_URL=https://api.openkey.so/.well-known/oauth-authorization-server/api/auth
       - TC_OPENKEY_HOST=https://openkey.so
+      - TC_OPENKEY_API_HOST=https://api.openkey.so
       - TC_HOST=https://node.tinycloud.xyz
     volumes:
       - mcp-state:/var/lib/tinycloud-mcp

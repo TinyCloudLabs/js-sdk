@@ -9,6 +9,7 @@ import { DelegationStatusSchema } from "./types.schema";
 import { encodeDagCbor } from "./cacao";
 import {
   MAX_RENEWAL_HISTORY_STAMPS,
+  RENEWAL_RENEWER_CHANGED,
   verifyRenewalHistory,
   type RenewalStampHistoryEntry,
 } from "./renewal";
@@ -103,14 +104,21 @@ describe("verifyRenewalHistory", () => {
       history: [stamp],
       now: 1_700_000_000,
     })).toThrow();
-    expect(() => verifyRenewalHistory({
-      originalCid,
-      leaseCid,
-      leaseExpiresAt: 1_800_000_000,
-      nodeIdentity: { ...identity, renewerEpoch: 2 },
-      history: [stamp],
-      now: 1_700_000_000,
-    })).toThrow();
+    // A rotated renewer epoch never renews this lease again: a coded refusal, not a transient failure.
+    let rotated: unknown;
+    try {
+      verifyRenewalHistory({
+        originalCid,
+        leaseCid,
+        leaseExpiresAt: 1_800_000_000,
+        nodeIdentity: { ...identity, renewerEpoch: 2 },
+        history: [stamp],
+        now: 1_700_000_000,
+      });
+    } catch (error) {
+      rotated = error;
+    }
+    expect(rotated).toMatchObject({ code: RENEWAL_RENEWER_CHANGED });
     expect(() => verifyRenewalHistory({
       originalCid,
       leaseCid,
