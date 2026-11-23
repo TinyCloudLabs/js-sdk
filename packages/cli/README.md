@@ -533,6 +533,9 @@ Secret names are env-style uppercase identifiers such as `FIREFLIES_API_KEY`.
 network grant` takes the short network name, resolves the network, and grants
 `tinycloud.encryption/decrypt` on the whole network: every secret in it,
 including secrets added later. The JSON output carries `"scope":"whole-network"`.
+Your wallet signs the grant, so `tinycloud account delegations revoke <cid>` ends
+it. It lasts 1 hour unless you pass `--expiry`, and at most 7 days; a longer
+value is cut to 7 days. `expiresAt` in the JSON output shows when it ends.
 
 `tinycloud apps install` re-creates the pinned views on every run (reported as
 `viewsRecreated`). Knowledge notes whose bytes differ from the pinned version

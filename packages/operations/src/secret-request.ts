@@ -1,6 +1,7 @@
 // Namespace-shaped so modules that bundle this one stay compatible with
 // lightweight node-sdk test doubles.
 import * as nodeSdk from "@tinycloud/node-sdk";
+import { TC832_RESERVED_SCOPES } from "@tinycloud/sdk-services";
 
 import { CLI_NAME } from "./cli-name.js";
 import type { TinyCloudPosture } from "./contract.js";
@@ -19,7 +20,8 @@ const NAME_RE = /^[A-Z][A-Z0-9_]*$/;
 const MAX_NAME_LENGTH = 64;
 const SCOPE_RE = /^[a-z0-9]+(-[a-z0-9]+)*$/;
 const MAX_SCOPE_LENGTH = 64;
-const RESERVED_SCOPES: readonly string[] = ["default", "global", "scoped"];
+// The SDK's own list (default, global, scoped and TinyChat's bot-history scope): a link never asks for one of them.
+const RESERVED_SCOPES: readonly string[] = TC832_RESERVED_SCOPES;
 const MAX_REQUESTER_LENGTH = 64;
 const CONTROL_OR_FORMAT = /[\p{Cc}\p{Cf}]/u;
 const STATE_RE = /^[A-Za-z0-9._~-]{1,128}$/;

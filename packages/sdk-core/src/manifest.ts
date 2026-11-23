@@ -662,12 +662,13 @@ const SECRET_KEY_NAME_SEGMENT = /^[a-z][a-z0-9_]{0,63}$/;
 /**
  * Whether `keyPath` is the key of exactly one secret: `secrets/<lower NAME>`
  * or `secrets/scoped/<scope>/<lower NAME>`, the secret's catalog key with its
- * name lower-cased.
+ * name lower-cased. A name or scope over 64 characters has no key of its own.
  */
-function isSecretKeyPath(keyPath: string): boolean {
+export function isSecretKeyPath(keyPath: string): boolean {
   const segments = keyPath.split("/");
   const name = segments[segments.length - 1]!;
   if (segments.length < 2 || segments[0] !== "secrets" || !SECRET_KEY_NAME_SEGMENT.test(name)) return false;
+  if (segments.some((segment) => segment.length > 64)) return false;
   return parseSecretCatalogKey([...segments.slice(1, -1), name.toUpperCase()].join("/")) !== undefined;
 }
 

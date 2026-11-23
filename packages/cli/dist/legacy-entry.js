@@ -2328,6 +2328,7 @@ function isSecretKeyPath(keyPath) {
   const segments = keyPath.split("/");
   const name = segments[segments.length - 1];
   if (segments.length < 2 || segments[0] !== "secrets" || !SECRET_KEY_NAME_SEGMENT.test(name)) return false;
+  if (segments.some((segment) => segment.length > 64)) return false;
   return parseSecretCatalogKey([...segments.slice(1, -1), name.toUpperCase()].join("/")) !== void 0;
 }
 function expandSecretKeyPermissionEntry(entry, networkUrn, keyPath) {
@@ -2966,12 +2967,75 @@ var init_manifest = __esm({
   }
 });
 
+// src/lib/secret-keys.ts
+import { BOT_HISTORY_KEY_PATH, MAX_SECRET_SCOPE_LENGTH, parseSecretCatalogKey as parseSecretCatalogKey2, SECRET_SCOPE_RE, secretKeyPath } from "@tinycloud/sdk-services";
+import { formatKeyResource as formatKeyResource2 } from "@tinycloud/sdk-services/encryption/resource";
+function isBotHistoryScope(scope) {
+  return BOT_HISTORY_KEY_PATH.startsWith(`secrets/scoped/${scope}/`);
+}
+function secretKeyResourceForVaultPath(networkId, vaultPath) {
+  if (!vaultPath.startsWith(VAULT_PREFIX)) return void 0;
+  const parsed = parseSecretCatalogKey2(vaultPath.slice(VAULT_PREFIX.length));
+  return parsed === void 0 ? void 0 : formatKeyResource2(networkId, secretKeyPath(parsed.name, parsed.scope));
+}
+function secretKeyResource(networkId, keyPath) {
+  return formatKeyResource2(networkId, keyPath);
+}
+function unreadableSecretNote(flags) {
+  const cli = `CLI version ${LAST_CLI_WITHOUT_NAME_CAP} or earlier.`;
+  const cannot = "so this version can't read or delete it.";
+  if (flags.nameTooLong && flags.scopeTooLong) {
+    return `Name and scope are longer than 64 characters, ${cannot} Rename it and move it to a shorter scope with ${cli}`;
+  }
+  if (flags.nameTooLong) return `Name is longer than 64 characters, ${cannot} Rename it with ${cli}`;
+  if (flags.scopeTooLong) return `Scope is longer than 64 characters, ${cannot} Move it to a shorter scope with ${cli}`;
+  return void 0;
+}
+function isOverlongStoredScope(rawScope) {
+  const trimmed = rawScope?.trim();
+  return trimmed !== void 0 && trimmed.length > MAX_SECRET_SCOPE_LENGTH && SECRET_SCOPE_RE.test(trimmed);
+}
+var VAULT_PREFIX, LAST_CLI_WITHOUT_NAME_CAP;
+var init_secret_keys = __esm({
+  "src/lib/secret-keys.ts"() {
+    "use strict";
+    VAULT_PREFIX = "vault/secrets/";
+    LAST_CLI_WITHOUT_NAME_CAP = "1.8.0";
+  }
+});
+
 // src/lib/raw-encryption.ts
+import { BOT_HISTORY_KEY_PATH as BOT_HISTORY_KEY_PATH2 } from "@tinycloud/sdk-services";
 function isRawEncryptionPermission(permission2) {
   return (permission2.service === ENCRYPTION_PERMISSION_SERVICE || permission2.service === "encryption") && typeof permission2.path === "string" && permission2.path.startsWith("urn:tinycloud:encryption:");
 }
 function isVerifiedRawEncryptionPermission(permission2) {
   return isRawEncryptionPermission(permission2) && (permission2.space === void 0 || permission2.space === "encryption");
+}
+function isSecretsKeyResource(path) {
+  return /^urn:tinycloud:encryption:did:[^/]+\/secrets(?:\/|$)/.test(path);
+}
+function isBotHistoryKeyResource(path) {
+  const slash = path.indexOf("/");
+  if (slash === -1) return false;
+  const key = path.slice(slash + 1).toLowerCase();
+  const folder = BOT_HISTORY_KEY_FOLDER.toLowerCase();
+  return key === folder || key.startsWith(`${folder}/`);
+}
+function assertNoBotHistoryKey(permissions) {
+  if (permissions.some((permission2) => isRawEncryptionPermission(permission2) && isBotHistoryKeyResource(permission2.path))) {
+    throw new CLIError(
+      "INVALID_SECRET_SCOPE",
+      `Secret scope ${JSON.stringify(BOT_HISTORY_SCOPE)} is reserved; omit scope for global secrets.`,
+      ExitCode.USAGE_ERROR
+    );
+  }
+}
+function isExactSecretKeyPermission(permission2) {
+  return isRawEncryptionPermission(permission2) && EXACT_SECRET_KEY_RESOURCE.test(permission2.path) && !isBotHistoryKeyResource(permission2.path) && permission2.actions.length > 0 && permission2.actions.every((action) => action === "tinycloud.encryption/decrypt" || action === "tinycloud.encryption/key.create") && !permission2.caveats?.length;
+}
+function isDecryptOnlyExactSecretKey(permission2) {
+  return isExactSecretKeyPermission(permission2) && permission2.actions.every((action) => action === "tinycloud.encryption/decrypt");
 }
 function isSharePublishingPrefixDecrypt(permission2) {
   return permission2.service === ENCRYPTION_PERMISSION_SERVICE && permission2.space === "default" && permission2.path === "share/" && permission2.actions.length === 1 && permission2.actions[0] === "tinycloud.encryption/decrypt" && !permission2.caveats?.length;
@@ -2995,12 +3059,17 @@ function deviceRefusalMessage(refused, next) {
   const actions = refused.actions.slice(0, 5).map((action) => safeClipped(action)).join(", ") || "no actions";
   return `--device can't ask for ${actions} on space "${safeClipped(refused.space ?? "")}", path "${safeClipped(refused.path)}"${refused.caveats?.length ? " with extra limits" : ""}. ${allowed} ${next}`;
 }
-var DEVICE_DECRYPT_ALLOWED, DEVICE_SECRETS_REFUSAL;
+var EXACT_SECRET_KEY_RESOURCE, BOT_HISTORY_KEY_FOLDER, BOT_HISTORY_SCOPE, DEVICE_DECRYPT_ALLOWED, DEVICE_SECRETS_REFUSAL;
 var init_raw_encryption = __esm({
   "src/lib/raw-encryption.ts"() {
     "use strict";
     init_manifest();
+    init_constants();
+    init_errors();
     init_safe_text();
+    EXACT_SECRET_KEY_RESOURCE = /^urn:tinycloud:encryption:did:[^/]+:default\/secrets\/[a-z0-9][a-z0-9._-]{0,63}(?:\/[a-z0-9][a-z0-9._-]{0,63}){0,6}$/;
+    BOT_HISTORY_KEY_FOLDER = BOT_HISTORY_KEY_PATH2.slice(0, BOT_HISTORY_KEY_PATH2.lastIndexOf("/"));
+    BOT_HISTORY_SCOPE = BOT_HISTORY_KEY_FOLDER.slice(BOT_HISTORY_KEY_FOLDER.lastIndexOf("/") + 1);
     DEVICE_DECRYPT_ALLOWED = 'tinycloud.encryption/decrypt on the default network (space "default", path "")';
     DEVICE_SECRETS_REFUSAL = "--device can't read secrets yet. Use tinycloud auth login --paste instead.";
   }
@@ -3020,8 +3089,12 @@ function canonicalNetworkUrn(path) {
   return match ? `urn:tinycloud:encryption:${canonicalOwnerDid(match[1])}:${match[2]}` : path;
 }
 function rawEncryptionOwnerMatches(path, ownerDid) {
-  const match = /^urn:tinycloud:encryption:(did:pkh:eip155:[1-9]\d*:0x[0-9a-fA-F]{40}):([a-z0-9][a-z0-9-]*)(?:\/share\/(?:[0-9a-f]{32})?)?$/.exec(path);
+  const match = /^urn:tinycloud:encryption:(did:pkh:eip155:[1-9]\d*:0x[0-9a-fA-F]{40}):([a-z0-9][a-z0-9-]*)(?:\/(.*))?$/.exec(path);
   if (!match) return false;
+  const rest = match[3];
+  if (rest !== void 0 && !/^share\/(?:[0-9a-f]{32})?$/.test(rest) && !(match[2] === "default" && isSecretKeyPath(rest))) {
+    return false;
+  }
   try {
     return canonicalOwnerDid(match[1]) === canonicalOwnerDid(ownerDid);
   } catch {
@@ -3033,6 +3106,7 @@ var init_owner_did = __esm({
     "use strict";
     init_constants();
     init_errors();
+    init_manifest();
   }
 });
 
@@ -3402,7 +3476,7 @@ function appManifestEntry(entry, manifest) {
   const path = String(entry.path ?? "");
   const actions = expandActionShortNames(service, Array.isArray(entry.actions) ? entry.actions.map(String) : []);
   if (isRawEncryptionPermission({ service, path })) {
-    return { service, space: ENCRYPTION_MANIFEST_SPACE, path, actions };
+    return { service, space: ENCRYPTION_MANIFEST_SPACE, ...rawEncryptionEntry(path, actions) };
   }
   const encryption = service === ENCRYPTION_PERMISSION_SERVICE;
   const ownSpace = encryption && typeof entry.space === "string" ? entry.space : void 0;
@@ -3413,6 +3487,18 @@ function appManifestEntry(entry, manifest) {
     actions,
     ...Array.isArray(entry.caveats) ? { caveats: entry.caveats } : {}
   };
+}
+function rawEncryptionEntry(path, actions) {
+  const slash = path.indexOf("/");
+  const rest = slash === -1 ? "" : path.slice(slash);
+  if (rest === "" || /^\/share\/(?:[0-9a-f]{32})?$/.test(rest)) return { path, actions };
+  try {
+    const [entry] = expandPermissionEntry({ service: ENCRYPTION_PERMISSION_SERVICE, path, actions, skipPrefix: true });
+    return { path: entry.path, actions: entry.actions };
+  } catch (error) {
+    if (!(error instanceof ManifestValidationError)) throw error;
+    throw new CLIError("INVALID_MANIFEST", `Manifest encryption entry ${JSON.stringify(path)} is not allowed: ${error.message}.`, ExitCode.USAGE_ERROR);
+  }
 }
 async function secretPermissionsFromAppManifest(manifest, profile, requestedOwner) {
   if (manifest.secrets === void 0) {
@@ -3428,16 +3514,18 @@ async function secretPermissionsFromAppManifest(manifest, profile, requestedOwne
   const permissions = resolved.resources.filter(
     (resource) => resource.service === "tinycloud.kv" && resource.space === "secrets" && resource.path.startsWith("vault/secrets/")
   );
-  const needsDecrypt = permissions.some(
-    (permission2) => permission2.actions.includes("tinycloud.kv/get")
-  );
-  if (needsDecrypt) {
-    permissions.push({
-      service: ENCRYPTION_PERMISSION_SERVICE,
-      space: ENCRYPTION_MANIFEST_SPACE,
-      path: await defaultSecretsNetworkId(profile, requestedOwner),
-      actions: ["tinycloud.encryption/decrypt"]
-    });
+  const reads = permissions.filter((permission2) => permission2.actions.includes("tinycloud.kv/get"));
+  if (reads.length > 0) {
+    const network = await defaultSecretsNetworkId(profile, requestedOwner);
+    const keys = reads.flatMap((permission2) => secretKeyResourceForVaultPath(network, permission2.path) ?? []);
+    for (const path of [network, ...new Set(keys)]) {
+      permissions.push({
+        service: ENCRYPTION_PERMISSION_SERVICE,
+        space: ENCRYPTION_MANIFEST_SPACE,
+        path,
+        actions: ["tinycloud.encryption/decrypt"]
+      });
+    }
   }
   return permissions;
 }
@@ -3497,7 +3585,8 @@ async function resolvePermissionSpaces(entries, profile, options = {}) {
     const actions = expandActionShortNames(service, entry.actions);
     if (isRawEncryptionPermission({ service, path: entry.path })) {
       const { skipPrefix: _skipPrefix, ...raw } = entry;
-      resolved.push({ ...raw, service, space: ENCRYPTION_MANIFEST_SPACE, actions });
+      const checked = isSecretsKeyResource(entry.path) ? rawEncryptionEntry(entry.path, actions) : { path: entry.path, actions };
+      resolved.push({ ...raw, service, space: ENCRYPTION_MANIFEST_SPACE, ...checked });
       continue;
     }
     if (isSharePublishingPrefixDecrypt({ ...entry, service, actions })) {
@@ -3596,6 +3685,7 @@ var init_permissions = __esm({
   "src/lib/permissions.ts"() {
     "use strict";
     init_manifest();
+    init_secret_keys();
     init_storage();
     init_profiles();
     init_errors();
@@ -20898,7 +20988,8 @@ async function acquireApprovalRequest(_did, options) {
     targetDid: signer.did,
     targetPublicJwk,
     nodeOrigin: options.host,
-    permissions: options.permissions,
+    // `skipPrefix` tells the local SDK not to prefix a path; the signed request is strict and its paths are final.
+    permissions: options.permissions.map(({ skipPrefix: _skipPrefix, ...entry2 }) => entry2),
     ...options.reason ? { reason: options.reason } : {},
     grantLifetimeSeconds: grantLifetimeSeconds(options.expiry),
     ...options.renewalLeaseSeconds === void 0 ? {} : { renewal: { version: 1, leaseLifetimeSeconds: options.renewalLeaseSeconds } }
@@ -21987,9 +22078,9 @@ import { lstat as lstat8, mkdir as mkdir5, readFile as readFile10, writeFile as 
 import { dirname as dirname6, join as join17 } from "path";
 import { createInterface as createInterface5 } from "readline";
 import { TinyCloudNode as TinyCloudNode3, grantAuthRequest, principalDidEquals as principalDidEquals3, REPLICA_LOGOUT_PENDING_FILE as REPLICA_LOGOUT_PENDING_FILE4, signedCompactUcanExpiry as signedCompactUcanExpiry3 } from "@tinycloud/node-sdk";
-import { composeManifestRequest, ownerFullAccess as ownerFullAccess3 } from "@tinycloud/sdk-core";
+import { composeManifestRequest, ownerFullAccess as ownerFullAccess4 } from "@tinycloud/sdk-core";
 import { invokeOperation } from "@tinycloud/operations";
-import { createProfileRegistryCacheStore as createProfileRegistryCacheStore4, createProfileRegistrySequenceStore as createProfileRegistrySequenceStore4, namedProfilePath as namedProfilePath3, profilePath as profilePath12 } from "@tinycloud/operations/state";
+import { createProfileRegistryCacheStore as createProfileRegistryCacheStore5, createProfileRegistrySequenceStore as createProfileRegistrySequenceStore5, namedProfilePath as namedProfilePath3, profilePath as profilePath12 } from "@tinycloud/operations/state";
 import { REPLICA_GATE_FILE as REPLICA_GATE_FILE3 } from "@tinycloud/sdk-services/kv/replication/contractConstants";
 
 // src/lib/logout-revocation.ts
@@ -37008,6 +37099,50 @@ function createSpaceRecheck() {
 init_scoped_login();
 init_caveat_refusal();
 init_raw_encryption();
+
+// src/lib/exact-key-grant.ts
+init_constants();
+init_errors();
+init_warnings();
+import { ownerFullAccess as ownerFullAccess3 } from "@tinycloud/sdk-core";
+import { createProfileRegistryCacheStore as createProfileRegistryCacheStore4, createProfileRegistrySequenceStore as createProfileRegistrySequenceStore4 } from "@tinycloud/operations/state";
+var MIN_SIGNING_SESSION_MS = 10 * 60 * 1e3;
+async function withExactKeyNode(params, use) {
+  const privateKey = (params.profile?.authMethod === "local" ? params.profile.privateKey : void 0) ?? (process.env.TC_PRIVATE_KEY || void 0);
+  if (!privateKey) {
+    throw new CLIError(
+      "AUTH_REQUIRED",
+      "This profile has no wallet key, and granting access to a secret needs your wallet's own key to sign it. Set `TC_PRIVATE_KEY` and rerun it, or use a profile set up with `tc init --key-only` and `tc auth login --method local`.",
+      ExitCode.AUTH_REQUIRED
+    );
+  }
+  const nodeSdk2 = await import("@tinycloud/node-sdk");
+  const grantMs = nodeSdk2.secretKeyGrantExpiryMs(params.expiry);
+  const keyAbilities = {};
+  for (const entry of params.keyEntries) {
+    keyAbilities[entry.path] = [.../* @__PURE__ */ new Set([...keyAbilities[entry.path] ?? [], ...entry.actions])];
+  }
+  const node = new nodeSdk2.TinyCloudNode({
+    registryCacheStore: createProfileRegistryCacheStore4(params.ctx.profile),
+    registrySequenceStore: createProfileRegistrySequenceStore4(params.ctx.profile),
+    onRegistryFallback: recordRegistryFallbackWarning,
+    tinycloudRegistryUrl: process.env.TC_REGISTRY_URL || params.profile?.tinycloudRegistryUrl,
+    privateKey,
+    ...ownerFullAccess3(),
+    host: params.ctx.host,
+    autoCreateSpace: true,
+    additionalRawAbilities: keyAbilities,
+    sessionExpirationMs: Math.max(grantMs, MIN_SIGNING_SESSION_MS)
+  });
+  try {
+    await node.signIn();
+    return await use(node);
+  } finally {
+    await node.signOut().catch(() => void 0);
+  }
+}
+
+// src/commands/auth.ts
 init_owner_did();
 init_login_commit();
 
@@ -39348,6 +39483,7 @@ ${appsAgentScopeNotice(preset.mode, preset.appIds)}
       const requested = finalizeSigningEntries(
         await resolvePermissionSpaces(entriesForSigning(parsed.requested), ctx.profile)
       );
+      assertNoBotHistoryKey(requested);
       if (profile.authMethod === "openkey") assertNoCaveatLimits(requested);
       const [applications] = await resolvePermissionSpaces(
         [{ service: "tinycloud.kv", space: APPS_AGENT_SPACE, path: "", actions: ["tinycloud.kv/get"] }],
@@ -39402,14 +39538,21 @@ ${scope.text}
           return;
         }
       } else {
-        await ensureDelegationAuthority({
-          ctx,
-          profile,
-          node,
-          requested,
-          expiryOption: parsed.requestedExpiry
-        });
-        grant = await grantAuthRequest(node, resolvedRequest);
+        const keyEntries = requested.filter(isExactSecretKeyPermission);
+        const otherEntries = requested.filter((permission2) => !isExactSecretKeyPermission(permission2));
+        const signWith = async (signer) => {
+          if (otherEntries.length > 0) {
+            await ensureDelegationAuthority({
+              ctx,
+              profile,
+              node: signer,
+              requested: otherEntries,
+              expiryOption: parsed.requestedExpiry
+            });
+          }
+          return grantAuthRequest(signer, resolvedRequest);
+        };
+        grant = keyEntries.length === 0 ? await signWith(node) : await withExactKeyNode({ ctx, profile, keyEntries, expiry: parsed.requestedExpiry }, signWith);
       }
       await appendLocalGrantArtifact(ctx.profile, grant.delegation);
       await appendGrantHistory(ctx.profile, {
@@ -39845,8 +39988,8 @@ async function nodeFromOpenKeyApproval(ctx, session) {
   const host = ctx.host;
   const node = new TinyCloudNode3({
     host,
-    registryCacheStore: createProfileRegistryCacheStore4(ctx.profile),
-    registrySequenceStore: createProfileRegistrySequenceStore4(ctx.profile),
+    registryCacheStore: createProfileRegistryCacheStore5(ctx.profile),
+    registrySequenceStore: createProfileRegistrySequenceStore5(ctx.profile),
     onRegistryFallback: recordRegistryFallbackWarning,
     tinycloudRegistryUrl: process.env.TC_REGISTRY_URL || ctx.tinycloudRegistryUrl
   });
@@ -39956,7 +40099,8 @@ async function ensureDelegationAuthority(params) {
 }
 var OPENKEY_AGENT_MAX_LIFETIME_MS = parseRequestedExpiry(APPS_AGENT_EXPIRY).durationMs;
 function assertOpenKeyAgentRequest(requested) {
-  if (requested.some((permission2) => isRawEncryptionPermission(permission2) || isRawCidRevocationPermission(permission2))) {
+  assertNoBotHistoryKey(requested);
+  if (requested.some((permission2) => isRawEncryptionPermission(permission2) && !isDecryptOnlyExactSecretKey(permission2) || isRawCidRevocationPermission(permission2))) {
     throw new CLIError(
       "RAW_RECAP_RESOURCE_UNSUPPORTED",
       "OpenKey cannot approve raw urn:cid or raw encryption authority for an agent request.",
@@ -40374,8 +40518,8 @@ async function refreshPreparedOpenKeySession(params) {
     permissions
   }], { includeAccountRegistryPermissions: false });
   const node = new TinyCloudNode3({
-    registryCacheStore: createProfileRegistryCacheStore4(profileName2),
-    registrySequenceStore: createProfileRegistrySequenceStore4(profileName2),
+    registryCacheStore: createProfileRegistryCacheStore5(profileName2),
+    registrySequenceStore: createProfileRegistrySequenceStore5(profileName2),
     onRegistryFallback: recordRegistryFallbackWarning,
     tinycloudRegistryUrl: process.env.TC_REGISTRY_URL || profile.tinycloudRegistryUrl,
     host,
@@ -40508,14 +40652,14 @@ async function refreshPreparedKeysSession(params) {
   await assertNodeSupportsNamedKeys(host);
   if (options.force !== true) await assertShareHistoryAllowsKeyDrop(profileName2, "login");
   const node = new TinyCloudNode3({
-    registryCacheStore: createProfileRegistryCacheStore4(profileName2),
-    registrySequenceStore: createProfileRegistrySequenceStore4(profileName2),
+    registryCacheStore: createProfileRegistryCacheStore5(profileName2),
+    registrySequenceStore: createProfileRegistrySequenceStore5(profileName2),
     onRegistryFallback: recordRegistryFallbackWarning,
     tinycloudRegistryUrl: process.env.TC_REGISTRY_URL || profile.tinycloudRegistryUrl,
     host,
     signer: ownerIdentitySigner(owner),
     // The owner login asks OpenKey for every action on the default space, plus the named-key row.
-    ...ownerFullAccess3(),
+    ...ownerFullAccess4(),
     additionalRawAbilities: keyAbilitiesFor(namedKeys),
     includeAccountRegistryPermissions: false,
     autoBootstrapAccount: false,
@@ -45194,7 +45338,7 @@ import {
   verifyRegistryCacheEntry
 } from "@tinycloud/sdk-core";
 import { boundedResponseBytes, publishLocationRecordV2 } from "@tinycloud/sdk-core/registry-publication";
-import { createProfileRegistryCacheStore as createProfileRegistryCacheStore5, createProfileRegistrySequenceStore as createProfileRegistrySequenceStore5 } from "@tinycloud/operations/state";
+import { createProfileRegistryCacheStore as createProfileRegistryCacheStore6, createProfileRegistrySequenceStore as createProfileRegistrySequenceStore6 } from "@tinycloud/operations/state";
 var DISCLOSURE = "Anyone who knows your account ID can look up these server addresses and space names.";
 var EFFECT = "After this, a space that isn't in your storage settings stops with an error instead of using another server.";
 var CONFLICT = "These storage settings changed before they could be published. Run this command again without --yes to review the latest settings.";
@@ -45266,8 +45410,8 @@ function registerRegistryPublishCommand(registry) {
         }
         const storage = await nodeAt(options.server, "--server");
         const encryptionNode = options.decryptionServer === void 0 ? void 0 : await nodeAt(options.decryptionServer, "--decryption-server");
-        const cache5 = createProfileRegistryCacheStore5(context2.profile);
-        const sequences = createProfileRegistrySequenceStore5(context2.profile);
+        const cache5 = createProfileRegistryCacheStore6(context2.profile);
+        const sequences = createProfileRegistrySequenceStore6(context2.profile);
         let previewShown = false;
         const record3 = await publishLocationRecordV2({
           registryUrl: context2.tinycloudRegistryUrl ?? DEFAULT_TINYCLOUD_LOCATION_REGISTRY_URL,
@@ -45374,7 +45518,8 @@ import { CLI_NAME as CLI_NAME34 } from "@tinycloud/operations/cli-name";
 import { readFile as readFile18 } from "fs/promises";
 import { join as join24 } from "path";
 import { constants as osConstants, homedir, hostname, userInfo } from "os";
-import { appSecretScope, SECRET_TYPES as SECRET_TYPES2, secretNameTooLongRefusal } from "@tinycloud/sdk-core";
+import * as nodeSdk from "@tinycloud/node-sdk";
+import { appSecretScope, MAX_SECRET_NAME_LENGTH, SECRET_TYPES as SECRET_TYPES2, secretNameTooLongRefusal } from "@tinycloud/sdk-core";
 import { invokeOperation as invokeOperation4 } from "@tinycloud/operations";
 import { isLocalOwnerProfile as isLocalOwnerProfile4, liveStoredLease as liveStoredLease3, ownerSessionLacksProof as ownerSessionLacksProof5 } from "@tinycloud/operations/profile";
 import {
@@ -45866,7 +46011,10 @@ function statusError(error, profile, warnings) {
 }
 
 // src/commands/secrets.ts
+init_secret_keys();
+init_owner_did();
 init_types();
+import { migrateSecrets } from "@tinycloud/sdk-services/secrets/migrate";
 var SECRETS_SPACE2 = "secrets";
 var SECRET_KV_ABILITIES = {
   get: secretCapabilityAction("get"),
@@ -45881,6 +46029,7 @@ async function readStdin4() {
   }
   return Buffer.concat(chunks);
 }
+var NETWORK_GRANT_NEEDS_WALLET_KEY = "This profile signs in through OpenKey, and `secrets network grant` needs your wallet's own key to sign the grant. Set `TC_PRIVATE_KEY` and rerun it, or use a profile set up with `tc init --key-only` and `tc auth login --method local`.";
 function authOptions(options) {
   const privateKey = options.privateKey || process.env.TC_PRIVATE_KEY;
   return privateKey ? { privateKey } : void 0;
@@ -45914,6 +46063,9 @@ function defaultRequester() {
 function resolveSecretScope(options) {
   return options.scope ? { scope: options.scope } : void 0;
 }
+function refuseReservedSecretScope(options) {
+  canonicalizeSecretScope(resolveSecretScope(options)?.scope);
+}
 async function resolveSecretSpace(input, profileName2) {
   return resolveSpaceUri(input, profileName2, { useProfileDefault: false });
 }
@@ -45940,7 +46092,7 @@ function canonicalizeSecretScope(scope) {
       ExitCode.USAGE_ERROR
     );
   }
-  if (RESERVED_SECRET_SCOPES.has(canonical)) {
+  if (RESERVED_SECRET_SCOPES.has(canonical) || isBotHistoryScope(canonical)) {
     throw new CLIError(
       "INVALID_SECRET_SCOPE",
       `Secret scope ${JSON.stringify(scope)} is reserved; omit scope for global secrets.`,
@@ -46031,7 +46183,8 @@ async function runSecretOperation(params) {
     name: params.name,
     options: params.scopeOptions,
     space: params.space,
-    node: params.node
+    node: params.node,
+    namedKey: params.namedKey
   });
   await withSpinner(
     "Requesting secret permissions...",
@@ -46100,16 +46253,16 @@ async function canonicalSecretGet(params, collect) {
   const auth = authOptions(params.options);
   let ownerNode;
   if (!auth?.privateKey) {
-    const profile2 = await ProfileManager.getProfile(params.ctx.profile).catch(() => null);
-    if (profile2) {
-      const posture = resolveProfilePosture(profile2);
+    const profile = await ProfileManager.getProfile(params.ctx.profile).catch(() => null);
+    if (profile) {
+      const posture = resolveProfilePosture(profile);
       const session = await ProfileManager.getSession(params.ctx.profile);
       if (posture === "delegate-session" && session && isStoredSessionExpired(session)) {
         throw sessionExpiredError(params.ctx.profile, posture);
       }
-      if (profile2.authMethod === "openkey" && canRequestOwnerPermissions(profile2)) {
-        if (!session || isStoredSessionExpired(session) || ownerSessionLacksProof5(session, profile2)) {
-          ownerNode = await ensureSecretsNode(params.ctx, params.options, params.openKeyAcquisition, profile2);
+      if (profile.authMethod === "openkey" && canRequestOwnerPermissions(profile)) {
+        if (!session || isStoredSessionExpired(session) || ownerSessionLacksProof5(session, profile)) {
+          ownerNode = await ensureSecretsNode(params.ctx, params.options, params.openKeyAcquisition, profile);
         }
       }
     }
@@ -46131,45 +46284,70 @@ async function canonicalSecretGet(params, collect) {
   ));
   let first = await invoke();
   if (first.status === "error" && first.error.code === "SESSION_NOT_FOUND" && auth?.privateKey === void 0) {
-    const profile2 = await ProfileManager.getProfile(params.ctx.profile);
-    if (profile2.authMethod === "openkey" && canRequestOwnerPermissions(profile2)) {
+    const profile = await ProfileManager.getProfile(params.ctx.profile);
+    if (profile.authMethod === "openkey" && canRequestOwnerPermissions(profile)) {
       ownerNode = await ensureSecretsNode(
         params.ctx,
         params.options,
         params.openKeyAcquisition,
-        profile2
+        profile
       );
       first = await invoke();
     }
   }
-  if (first.status !== "authority_required") return first;
   if (auth?.privateKey !== void 0) return first;
-  if (first.context.posture !== "owner-openkey" && first.context.posture !== "local-owner-key") {
-    return first;
+  let result = first;
+  let approved;
+  for (let approvals = 0; approvals < 2; approvals++) {
+    const approval = ownerSecretApproval(result, params.name);
+    if (approval === void 0) return result;
+    const asked = JSON.stringify(approval.missing);
+    if (asked === approved) return result;
+    approved = asked;
+    if (result.context.posture !== "owner-openkey" && result.context.posture !== "local-owner-key") {
+      return result;
+    }
+    const profile = await ProfileManager.getProfile(params.ctx.profile);
+    if (!canRequestOwnerPermissions(profile)) return result;
+    assertOwnerApprovalPossible(params.ctx.profile, profile, "get", params.name, approval.missing);
+    const node = params.node ?? ownerNode ?? await ensureSecretsNode(
+      params.ctx,
+      params.options,
+      params.openKeyAcquisition
+    );
+    ownerNode ??= node;
+    await withSpinner(
+      "Requesting secret permissions...",
+      () => ensureDelegationAuthority({
+        ctx: params.ctx,
+        profile,
+        node,
+        requested: approval.missing,
+        expiryOption: void 0,
+        reason: approval.reason,
+        force: true,
+        anchorSpace: params.space ?? SECRETS_SPACE2,
+        openKeyAcquisition: params.openKeyAcquisition
+      })
+    );
+    result = await invoke();
   }
-  const profile = await ProfileManager.getProfile(params.ctx.profile);
-  if (!canRequestOwnerPermissions(profile)) return first;
-  assertOwnerApprovalPossible(params.ctx.profile, profile, "get", params.name, first.missing);
-  const node = params.node ?? ownerNode ?? await ensureSecretsNode(
-    params.ctx,
-    params.options,
-    params.openKeyAcquisition
-  );
-  await withSpinner(
-    "Requesting secret permissions...",
-    () => ensureDelegationAuthority({
-      ctx: params.ctx,
-      profile,
-      node,
-      requested: first.missing,
-      expiryOption: void 0,
-      reason: secretCommandReason("get", params.name),
-      force: true,
-      anchorSpace: params.space ?? SECRETS_SPACE2,
-      openKeyAcquisition: params.openKeyAcquisition
-    })
-  );
-  return invoke();
+  return result;
+}
+function ownerSecretApproval(result, name) {
+  if (result.status === "authority_required") {
+    return { missing: result.missing, reason: secretCommandReason("get", name) };
+  }
+  if (result.status !== "error") return void 0;
+  const { code: code5, details } = result.error;
+  if (code5 !== "SECRET_LEGACY_ENVELOPE" || typeof details?.decrypt !== "string") {
+    return void 0;
+  }
+  return {
+    // The operation may name the network with a lowercase owner; ask in the EIP-55 spelling every other entry uses.
+    missing: [{ service: "tinycloud.encryption", path: canonicalNetworkUrn(details.decrypt), actions: [SECRET_DECRYPT_CAPABILITY] }],
+    reason: `Read the secret ${name}. It's stored in the older format, so reading it needs access to all your encrypted data. Running \`${CLI_NAME34} secrets migrate\` gives it its own key, and then this wider access isn't needed.`
+  };
 }
 function throwCanonicalSecretGetError(result, name) {
   switch (result.status) {
@@ -46576,23 +46754,65 @@ function secretKvAbility(action) {
 }
 function secretPermissionEntries(params) {
   const path = params.action === "list" ? resolveSecretListPrefix(params.options) : resolveSecretPath2(params.name ?? "", params.options).permissionPaths.vault;
+  const namedKeyPut = params.action === "put" && params.namedKey === true;
   const permissions = [{
     service: "tinycloud.kv",
     space: params.space ?? SECRETS_SPACE2,
     path,
-    actions: [secretKvAbility(params.action)],
+    actions: namedKeyPut ? [secretKvAbility("put"), secretKvAbility("get")] : [secretKvAbility(params.action)],
     skipPrefix: true
   }];
+  if (params.action !== "get" && !namedKeyPut) return permissions;
+  const networkId = "getEncryptionNetworkIdForSpace" in params.node && typeof params.node.getEncryptionNetworkIdForSpace === "function" ? params.node.getEncryptionNetworkIdForSpace(params.space ?? SECRETS_SPACE2) : params.node.getDefaultEncryptionNetworkId();
   if (params.action === "get") {
-    const networkId = "getEncryptionNetworkIdForSpace" in params.node && typeof params.node.getEncryptionNetworkIdForSpace === "function" ? params.node.getEncryptionNetworkIdForSpace(params.space ?? SECRETS_SPACE2) : params.node.getDefaultEncryptionNetworkId();
     permissions.push({
       service: "tinycloud.encryption",
       path: networkId,
       actions: [SECRET_DECRYPT_CAPABILITY],
       skipPrefix: true
     });
+    return permissions;
+  }
+  const key = networkId.endsWith(":default") ? secretKeyResourceForVaultPath(networkId, path) : void 0;
+  if (key !== void 0) {
+    permissions.push({
+      service: "tinycloud.encryption",
+      path: key,
+      actions: [SECRET_KEY_CREATE_CAPABILITY, SECRET_DECRYPT_CAPABILITY],
+      skipPrefix: true
+    });
   }
   return permissions;
+}
+var SECRET_KEY_CREATE_CAPABILITY = "tinycloud.encryption/key.create";
+function secretMigrateNetworkId(node, space) {
+  const networkId = node.getEncryptionNetworkIdForSpace(space ?? SECRETS_SPACE2);
+  if (!networkId.endsWith(":default")) {
+    throw new CLIError(
+      "USAGE_ERROR",
+      "Only secrets on the default encryption network can have their own key, so there's nothing to migrate here.",
+      ExitCode.USAGE_ERROR
+    );
+  }
+  return networkId;
+}
+function secretMigratePermissions(space, networkId, dryRun) {
+  const kv3 = {
+    service: "tinycloud.kv",
+    space: space ?? SECRETS_SPACE2,
+    path: resolveSecretListPrefix(),
+    actions: [secretKvAbility("list"), secretKvAbility("get"), ...dryRun ? [] : [secretKvAbility("put")]],
+    skipPrefix: true
+  };
+  return dryRun ? [kv3] : [kv3, { service: "tinycloud.encryption", path: networkId, actions: [SECRET_DECRYPT_CAPABILITY], skipPrefix: true }];
+}
+function secretMigrateKeyPermissions(networkId, keyPaths) {
+  return keyPaths.map((keyPath) => ({
+    service: "tinycloud.encryption",
+    path: secretKeyResource(networkId, keyPath),
+    actions: [SECRET_DECRYPT_CAPABILITY, SECRET_KEY_CREATE_CAPABILITY],
+    skipPrefix: true
+  }));
 }
 function formatSecretScopeFlag(options) {
   return options?.scope ? ` --scope ${JSON.stringify(options.scope)}` : "";
@@ -46810,7 +47030,7 @@ function registerSecretsCommand(program, openKeyAcquisition) {
     try {
       const globalOpts = cmd.optsWithGlobals();
       const ctx = await ProfileManager.resolveContext(globalOpts);
-      const node = await ensureSecretsNode(ctx, options);
+      const node = await ensureSecretsNode(ctx, options, openKeyAcquisition);
       const networkName = options.network ?? "default";
       const networkId = networkName.startsWith("urn:tinycloud:encryption:") ? networkName : node.getDefaultEncryptionNetworkId(networkName);
       const descriptor = await withSpinner(
@@ -46837,13 +47057,15 @@ function registerSecretsCommand(program, openKeyAcquisition) {
         const resolved = resolveSecretPath2(name, scopeOptions);
         const result = await runSecretOperation({
           ctx,
+          openKeyAcquisition,
           node,
           action: "get",
           name,
           scopeOptions,
           space: spaceUri,
           label: `Checking secret ${name}...`,
-          operation: () => secrets2.get(name, { ...scopeOptions, source: "network" })
+          // The user ran doctor on this secret: a missing read grant is asked for, as for `secrets get` (TC-3801).
+          operation: () => secrets2.get(name, { ...scopeOptions, source: "network", requestPermission: true })
         });
         if (result.ok) {
           secret = {
@@ -46899,14 +47121,16 @@ function registerSecretsCommand(program, openKeyAcquisition) {
   });
   secrets.command("list").description("List secrets").option("--scope <scope>", "Logical secret scope").option("--space <name|uri>", "Target a non-default secrets space (short name or full URI)").option("--private-key <hex>", "Ethereum private key (or set TC_PRIVATE_KEY)").action(async (options, cmd) => {
     try {
+      refuseReservedSecretScope(options);
       const globalOpts = cmd.optsWithGlobals();
       const ctx = await ProfileManager.resolveContext(globalOpts);
-      const node = await ensureSecretsNode(ctx, options);
+      const node = await ensureSecretsNode(ctx, options, openKeyAcquisition);
       const scopeOptions = resolveSecretScope(options);
       const spaceUri = await resolveSecretSpace(options.space, ctx.profile);
       const secrets2 = secretsServiceForSpace(node, spaceUri);
       const result = await runSecretOperation({
         ctx,
+        openKeyAcquisition,
         node,
         action: "list",
         scopeOptions,
@@ -46918,9 +47142,15 @@ function registerSecretsCommand(program, openKeyAcquisition) {
         throw cliErrorFromService(result.error);
       }
       const secretNames = Array.isArray(result.data) ? result.data : [];
+      const scopeTooLong = isOverlongStoredScope(scopeOptions?.scope);
+      const unreadable = secretNames.flatMap((name) => {
+        const note = unreadableSecretNote({ nameTooLong: name.length > MAX_SECRET_NAME_LENGTH, scopeTooLong });
+        return note === void 0 ? [] : [{ name, note }];
+      });
       outputJson({
         secrets: secretNames,
         count: secretNames.length,
+        ...unreadable.length > 0 ? { unreadable } : {},
         ...options.scope ? { scope: options.scope } : {},
         ...spaceUri ? { space: spaceUri } : {}
       });
@@ -47009,9 +47239,10 @@ function registerSecretsCommand(program, openKeyAcquisition) {
       const secretType = parseSecretTypeOption(options.type);
       const tooLong = SECRET_NAME_RE2.test(name.trim()) ? secretNameTooLongRefusal(name) : void 0;
       if (tooLong) throw new CLIError("INVALID_SECRET_NAME", tooLong.error.message, ExitCode.USAGE_ERROR);
+      refuseReservedSecretScope(options);
       const globalOpts = cmd.optsWithGlobals();
       const ctx = await ProfileManager.resolveContext(globalOpts);
-      const node = await ensureSecretsNode(ctx, options);
+      const node = await ensureSecretsNode(ctx, options, openKeyAcquisition);
       const spaceUri = await resolveSecretSpace(options.space, ctx.profile);
       const secrets2 = secretsServiceForSpace(node, spaceUri);
       let secretValue;
@@ -47035,9 +47266,11 @@ function registerSecretsCommand(program, openKeyAcquisition) {
       const putOptions = secretType === void 0 && !namedKey ? scopeOptions : { ...scopeOptions, ...secretType === void 0 ? {} : { type: secretType }, ...namedKey ? { namedKey: true } : {} };
       const result = await runSecretOperation({
         ctx,
+        openKeyAcquisition,
         node,
         action: "put",
         name,
+        namedKey,
         scopeOptions,
         space: spaceUri,
         label: `Storing secret ${name}...`,
@@ -47053,14 +47286,16 @@ function registerSecretsCommand(program, openKeyAcquisition) {
   });
   secrets.command("delete <name>").description("Delete a secret").option("--scope <scope>", "Logical secret scope").option("--space <name|uri>", "Target a non-default secrets space (short name or full URI)").option("--private-key <hex>", "Ethereum private key (or set TC_PRIVATE_KEY)").action(async (name, options, cmd) => {
     try {
+      refuseReservedSecretScope(options);
       const globalOpts = cmd.optsWithGlobals();
       const ctx = await ProfileManager.resolveContext(globalOpts);
-      const node = await ensureSecretsNode(ctx, options);
+      const node = await ensureSecretsNode(ctx, options, openKeyAcquisition);
       const scopeOptions = resolveSecretScope(options);
       const spaceUri = await resolveSecretSpace(options.space, ctx.profile);
       const secrets2 = secretsServiceForSpace(node, spaceUri);
       const result = await runSecretOperation({
         ctx,
+        openKeyAcquisition,
         node,
         action: "del",
         name,
@@ -47077,10 +47312,15 @@ function registerSecretsCommand(program, openKeyAcquisition) {
       return handleError(error);
     }
   });
-  network.command("grant").argument("<recipientDid>").argument("[name]", "network name (default: default)").description("Let someone read every secret in an encryption network").option("--private-key <hex>", "Ethereum private key override (or set TC_PRIVATE_KEY)").action(async (recipientDid, name, options, cmd) => {
+  network.command("grant").argument("<recipientDid>").argument("[name]", "network name (default: default)").description("Let someone read every secret in an encryption network").option("--expiry <duration>", "How long the grant lasts, for example 30m, 1h or 2d. Default 1h, at most 7d; longer values are cut to 7d.").option("--private-key <hex>", "Ethereum private key override (or set TC_PRIVATE_KEY)").action(async (recipientDid, name, options, cmd) => {
     try {
+      const expiryMs = nodeSdk.secretKeyGrantExpiryMs(options.expiry);
       const globalOpts = cmd.optsWithGlobals();
       const ctx = await ProfileManager.resolveContext(globalOpts);
+      const profile = await ProfileManager.getProfile(ctx.profile).catch(() => null);
+      if (profile?.authMethod === "openkey" && !effectiveLocal(profile, options)) {
+        throw new CLIError("AUTH_REQUIRED", NETWORK_GRANT_NEEDS_WALLET_KEY, ExitCode.AUTH_REQUIRED);
+      }
       const node = await ensureAuthenticated(ctx, authOptions(options));
       const networkName = name ?? "default";
       const descriptor = await withSpinner(
@@ -47094,7 +47334,7 @@ function registerSecretsCommand(program, openKeyAcquisition) {
       };
       const result = await withSpinner(
         `Granting ${safeInline(recipientDid)} access to read secrets...`,
-        () => node.delegateTo(recipientDid, [permission2], { expiry: CLI_DEFAULT_SESSION_EXPIRY_MS })
+        () => node.delegateTo(recipientDid, [permission2], { expiry: expiryMs, forceWalletSign: true })
       );
       process.stderr.write(networkGrantNotice(recipientDid, networkName, result.delegation.expiry) + "\n");
       outputJson({
@@ -47104,8 +47344,59 @@ function registerSecretsCommand(program, openKeyAcquisition) {
         prompted: result.prompted,
         path: result.delegation.path,
         actions: result.delegation.actions,
-        scope: "whole-network"
+        scope: "whole-network",
+        ...result.delegation.expiry === void 0 ? {} : { expiresAt: result.delegation.expiry.toISOString() }
       });
+    } catch (error) {
+      return handleError(error);
+    }
+  });
+  secrets.command("migrate [names...]").description("Move secrets in the older format onto each secret's own key (counts only, never values)").option("--scope <scope>", "Only secrets in this logical scope").option("--space <name|uri>", "Target a non-default secrets space (short name or full URI)").option("--dry-run", "Count what would move without changing anything").option("--private-key <hex>", "Ethereum private key (or set TC_PRIVATE_KEY)").action(async (names, options, cmd) => {
+    try {
+      refuseReservedSecretScope(options);
+      const globalOpts = cmd.optsWithGlobals();
+      const ctx = await ProfileManager.resolveContext(globalOpts);
+      const node = await ensureSecretsNode(ctx, options);
+      const spaceUri = await resolveSecretSpace(options.space, ctx.profile);
+      const networkId = secretMigrateNetworkId(node, spaceUri);
+      const dryRun = options.dryRun === true;
+      let authorizeKeys;
+      if (!authOptions(options)?.privateKey) {
+        const profile = await ProfileManager.getProfile(ctx.profile);
+        if (!canRequestOwnerPermissions(profile)) {
+          throw new CLIError(
+            "PERMISSION_DENIED",
+            `Only the owner can migrate secrets, and profile "${ctx.profile}" isn't an owner profile. Run this from your owner profile.`,
+            ExitCode.PERMISSION_DENIED
+          );
+        }
+        const approve = (requested, reason) => withSpinner("Requesting secret permissions...", () => ensureDelegationAuthority({
+          ctx,
+          profile,
+          node,
+          requested,
+          expiryOption: void 0,
+          reason,
+          anchorSpace: spaceUri ?? SECRETS_SPACE2
+        }));
+        await approve(
+          secretMigratePermissions(spaceUri, networkId, dryRun),
+          dryRun ? secretCommandReason("list") : "Give each of your older-format secrets its own key. This needs access to all your encrypted data, because only that access can read the older format."
+        );
+        authorizeKeys = async (keyPaths) => {
+          await approve(secretMigrateKeyPermissions(networkId, keyPaths), "Give each secret being moved its own key. This reaches only those secrets, not the rest of your encrypted data.");
+        };
+      }
+      const result = await migrateSecrets(secretsServiceForSpace(node, spaceUri), {
+        ...names.length > 0 ? { names } : {},
+        ...options.scope ? { scope: options.scope } : {},
+        dryRun,
+        ...authorizeKeys === void 0 ? {} : { authorizeKeys }
+      });
+      if (!result.ok) {
+        throw cliErrorFromService(result.error);
+      }
+      outputJson({ ...result.data, ...spaceUri ? { space: spaceUri } : {} });
     } catch (error) {
       return handleError(error);
     }

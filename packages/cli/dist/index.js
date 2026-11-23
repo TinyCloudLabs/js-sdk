@@ -2261,7 +2261,14 @@ var init_hmac = __esm({
 // ../sdk-core/src/manifest.ts
 import { isReservedSecretSpaceKeyPath, resolveSecretPath, SECRET_NAME_RE, parseNetworkId, parseSecretCatalogKey } from "@tinycloud/sdk-services";
 import { formatKeyResource, parseEncryptionResource } from "@tinycloud/sdk-services/encryption/resource";
-var import_ms, SERVICE_SHORT_TO_LONG, ENCRYPTION_PERMISSION_SERVICE, ENCRYPTION_MANIFEST_SPACE, SERVICE_LONG_TO_SHORT2, KEY_SEGMENT, KEY_APP_ID, KEY_PATH;
+function isSecretKeyPath(keyPath) {
+  const segments = keyPath.split("/");
+  const name = segments[segments.length - 1];
+  if (segments.length < 2 || segments[0] !== "secrets" || !SECRET_KEY_NAME_SEGMENT.test(name)) return false;
+  if (segments.some((segment) => segment.length > 64)) return false;
+  return parseSecretCatalogKey([...segments.slice(1, -1), name.toUpperCase()].join("/")) !== void 0;
+}
+var import_ms, SERVICE_SHORT_TO_LONG, ENCRYPTION_PERMISSION_SERVICE, ENCRYPTION_MANIFEST_SPACE, SERVICE_LONG_TO_SHORT2, SECRET_KEY_NAME_SEGMENT, KEY_SEGMENT, KEY_APP_ID, KEY_PATH;
 var init_manifest = __esm({
   "../sdk-core/src/manifest.ts"() {
     "use strict";
@@ -2283,13 +2290,24 @@ var init_manifest = __esm({
         Object.entries(SERVICE_SHORT_TO_LONG).map(([s, l]) => [l, s])
       )
     );
+    SECRET_KEY_NAME_SEGMENT = /^[a-z][a-z0-9_]{0,63}$/;
     KEY_SEGMENT = "[a-z0-9][a-z0-9._-]{0,63}";
     KEY_APP_ID = new RegExp(`^${KEY_SEGMENT}$`);
     KEY_PATH = new RegExp(`^${KEY_SEGMENT}(?:/${KEY_SEGMENT}){2,7}$`);
   }
 });
 
+// src/lib/secret-keys.ts
+import { BOT_HISTORY_KEY_PATH, MAX_SECRET_SCOPE_LENGTH, parseSecretCatalogKey as parseSecretCatalogKey2, SECRET_SCOPE_RE, secretKeyPath } from "@tinycloud/sdk-services";
+import { formatKeyResource as formatKeyResource2 } from "@tinycloud/sdk-services/encryption/resource";
+var init_secret_keys = __esm({
+  "src/lib/secret-keys.ts"() {
+    "use strict";
+  }
+});
+
 // src/lib/raw-encryption.ts
+import { BOT_HISTORY_KEY_PATH as BOT_HISTORY_KEY_PATH2 } from "@tinycloud/sdk-services";
 function isRawEncryptionPermission(permission2) {
   return (permission2.service === ENCRYPTION_PERMISSION_SERVICE || permission2.service === "encryption") && typeof permission2.path === "string" && permission2.path.startsWith("urn:tinycloud:encryption:");
 }
@@ -2299,11 +2317,16 @@ function isVerifiedRawEncryptionPermission(permission2) {
 function isDeviceDefaultDecrypt(permission2) {
   return permission2.service === ENCRYPTION_PERMISSION_SERVICE && permission2.space === "default" && permission2.path === "" && permission2.actions.length === 1 && permission2.actions[0] === "tinycloud.encryption/decrypt" && !permission2.caveats?.length;
 }
+var BOT_HISTORY_KEY_FOLDER, BOT_HISTORY_SCOPE;
 var init_raw_encryption = __esm({
   "src/lib/raw-encryption.ts"() {
     "use strict";
     init_manifest();
+    init_constants();
+    init_errors();
     init_safe_text();
+    BOT_HISTORY_KEY_FOLDER = BOT_HISTORY_KEY_PATH2.slice(0, BOT_HISTORY_KEY_PATH2.lastIndexOf("/"));
+    BOT_HISTORY_SCOPE = BOT_HISTORY_KEY_FOLDER.slice(BOT_HISTORY_KEY_FOLDER.lastIndexOf("/") + 1);
   }
 });
 
@@ -2317,8 +2340,12 @@ function canonicalOwnerDid(did2, label = "--owner") {
   return `did:pkh:eip155:${match[1]}:${ensureEip55(match[2])}`;
 }
 function rawEncryptionOwnerMatches(path, ownerDid) {
-  const match = /^urn:tinycloud:encryption:(did:pkh:eip155:[1-9]\d*:0x[0-9a-fA-F]{40}):([a-z0-9][a-z0-9-]*)(?:\/share\/(?:[0-9a-f]{32})?)?$/.exec(path);
+  const match = /^urn:tinycloud:encryption:(did:pkh:eip155:[1-9]\d*:0x[0-9a-fA-F]{40}):([a-z0-9][a-z0-9-]*)(?:\/(.*))?$/.exec(path);
   if (!match) return false;
+  const rest = match[3];
+  if (rest !== void 0 && !/^share\/(?:[0-9a-f]{32})?$/.test(rest) && !(match[2] === "default" && isSecretKeyPath(rest))) {
+    return false;
+  }
   try {
     return canonicalOwnerDid(match[1]) === canonicalOwnerDid(ownerDid);
   } catch {
@@ -2330,6 +2357,7 @@ var init_owner_did = __esm({
     "use strict";
     init_constants();
     init_errors();
+    init_manifest();
   }
 });
 
@@ -2384,6 +2412,7 @@ async function replayAdditionalDelegations(node, profile, options) {
 var init_permissions = __esm({
   "src/lib/permissions.ts"() {
     "use strict";
+    init_secret_keys();
     init_storage2();
     init_profiles();
     init_errors();
@@ -17295,7 +17324,8 @@ async function acquireApprovalRequest(_did, options) {
     targetDid: signer.did,
     targetPublicJwk,
     nodeOrigin: options.host,
-    permissions: options.permissions,
+    // `skipPrefix` tells the local SDK not to prefix a path; the signed request is strict and its paths are final.
+    permissions: options.permissions.map(({ skipPrefix: _skipPrefix, ...entry2 }) => entry2),
     ...options.reason ? { reason: options.reason } : {},
     grantLifetimeSeconds: grantLifetimeSeconds(options.expiry),
     ...options.renewalLeaseSeconds === void 0 ? {} : { renewal: { version: 1, leaseLifetimeSeconds: options.renewalLeaseSeconds } }

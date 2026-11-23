@@ -1,5 +1,8 @@
+import { BOT_HISTORY_KEY_PATH } from "@tinycloud/sdk-services";
 import type { PermissionEntry } from "@tinycloud/node-sdk";
 import { ENCRYPTION_PERMISSION_SERVICE } from "../../../sdk-core/src/manifest.js";
+import { ExitCode } from "../config/constants.js";
+import { CLIError } from "../output/errors.js";
 import { safeClipped } from "../output/safe-text.js";
 
 /**
@@ -16,6 +19,64 @@ export function isRawEncryptionPermission(permission: Pick<PermissionEntry, "ser
 export function isVerifiedRawEncryptionPermission(permission: Pick<PermissionEntry, "service" | "space" | "path">): boolean {
   return isRawEncryptionPermission(permission) &&
     (permission.space === undefined || permission.space === "encryption");
+}
+
+/** A raw encryption resource under a network's `secrets/` keys: one secret's key, or (refused everywhere) a prefix. */
+export function isSecretsKeyResource(path: string): boolean {
+  return /^urn:tinycloud:encryption:did:[^/]+\/secrets(?:\/|$)/.test(path);
+}
+
+const EXACT_SECRET_KEY_RESOURCE =
+  /^urn:tinycloud:encryption:did:[^/]+:default\/secrets\/[a-z0-9][a-z0-9._-]{0,63}(?:\/[a-z0-9][a-z0-9._-]{0,63}){0,6}$/;
+
+/** TinyChat's reserved bot-history key folder (`secrets/scoped/<scope>`), derived from the SDK's key path. */
+const BOT_HISTORY_KEY_FOLDER = BOT_HISTORY_KEY_PATH.slice(0, BOT_HISTORY_KEY_PATH.lastIndexOf("/"));
+const BOT_HISTORY_SCOPE = BOT_HISTORY_KEY_FOLDER.slice(BOT_HISTORY_KEY_FOLDER.lastIndexOf("/") + 1);
+
+/**
+ * Whether a raw encryption resource names a key in TinyChat's reserved bot-history scope (its key, or the scope as a
+ * prefix), on any network and in any letter case.
+ */
+export function isBotHistoryKeyResource(path: string): boolean {
+  const slash = path.indexOf("/");
+  if (slash === -1) return false;
+  const key = path.slice(slash + 1).toLowerCase();
+  const folder = BOT_HISTORY_KEY_FOLDER.toLowerCase();
+  return key === folder || key.startsWith(`${folder}/`);
+}
+
+/** Refuses a request naming the reserved bot-history key, before anything is signed, asked or stored. */
+export function assertNoBotHistoryKey(permissions: readonly Pick<PermissionEntry, "service" | "path">[]): void {
+  if (permissions.some((permission) => isRawEncryptionPermission(permission) && isBotHistoryKeyResource(permission.path))) {
+    throw new CLIError(
+      "INVALID_SECRET_SCOPE",
+      `Secret scope ${JSON.stringify(BOT_HISTORY_SCOPE)} is reserved; omit scope for global secrets.`,
+      ExitCode.USAGE_ERROR,
+    );
+  }
+}
+
+/**
+ * One secret's own key and nothing wider: `<network>/secrets/<name>` (or `secrets/scoped/<scope>/<name>`), never the
+ * bare network, a `secrets/` prefix or a trailing `/`, and only decrypt and key creation on it. An owner's wallet
+ * signs such an entry for an agent; an OpenKey owner's agent request carries it with decrypt only (TC-3800). The
+ * reserved bot-history key is never one of them.
+ */
+export function isExactSecretKeyPermission(
+  permission: Pick<PermissionEntry, "service" | "path" | "actions" | "caveats">,
+): boolean {
+  return isRawEncryptionPermission(permission) && EXACT_SECRET_KEY_RESOURCE.test(permission.path) &&
+    !isBotHistoryKeyResource(permission.path) &&
+    permission.actions.length > 0 &&
+    permission.actions.every((action) => action === "tinycloud.encryption/decrypt" || action === "tinycloud.encryption/key.create") &&
+    !permission.caveats?.length;
+}
+
+/** {@link isExactSecretKeyPermission} with decrypt as the only action: the one raw entry OpenKey signs for an agent. */
+export function isDecryptOnlyExactSecretKey(
+  permission: Pick<PermissionEntry, "service" | "path" | "actions" | "caveats">,
+): boolean {
+  return isExactSecretKeyPermission(permission) && permission.actions.every((action) => action === "tinycloud.encryption/decrypt");
 }
 
 /**
