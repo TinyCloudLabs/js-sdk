@@ -33,8 +33,8 @@ env:
   # tinycloud-node 1.26.21, pinned by digest. Its 401 body for a revoked grant is the JSON envelope
   # {"code":"delegation_revoked","error":"delegation-revoked: <cid>"}, which the revocation e2e tests read (TC-3947).
   TINYCLOUD_NODE_IMAGE: ghcr.io/tinycloudlabs/tinycloud-node:1.26.21@sha256:fc9fd4efa884be75d05fe61dd55ffa6559a48df824647ce8c10739c7553afc26
-  # The revoke-lookup and share-revoke suites run against this earlier binary, as they did before the pin above moved.
-  # Against 1.26.21 the revoke-lookup suite reports targetSpaceSource "node" and authorityScopeSource "cid-resource" (TC-3947).
+  # The revoke-lookup fallback-path suite runs against this earlier binary; the pin above is 1.26.21.
+  # On 1.26.21 the revoke-lookup suite reports targetSpaceSource "node" and authorityScopeSource "cid-resource" (TC-3947).
   TINYCLOUD_EARLIER_NODE_IMAGE: ghcr.io/tinycloudlabs/tinycloud-node:1.20.6@sha256:41667d3d133aaa12290a2f3a744afacd838988327552d159c60f04466e66f86f
 
 concurrency:
@@ -329,7 +329,14 @@ jobs:
             exit 1
           fi
 
-      - name: tc delegation revoke from a profile with no grant record, against the node
+      - name: tc delegation revoke from a profile with no grant record, against the shipped node (TC-3951)
+        if: ${{ steps.relevance.outputs.relevant == 'true' && matrix.database == 'sqlite' }}
+        env:
+          TC_REPLICATION_E2E_NODE_BIN: ${{ runner.temp }}/tinycloud
+        run: bash "$GITHUB_WORKSPACE/.github/scripts/run-private-tests.sh" bun test --max-concurrency=1 packages/cli/src/commands/delegation-revoke-lookup.shipped-node.e2e.test.ts
+
+      # The earlier node refuses a root raw-CID revoke authority, so the CLI takes the space-scoped fallback; this step covers that path.
+      - name: tc delegation revoke from a profile with no grant record, against the earlier node (fallback path)
         if: ${{ steps.relevance.outputs.relevant == 'true' && matrix.database == 'sqlite' }}
         env:
           TC_REPLICATION_E2E_NODE_BIN: ${{ runner.temp }}/tinycloud-earlier
@@ -338,7 +345,7 @@ jobs:
       - name: tc share revoke by ID across re-login and logout, against the node (TC-1669)
         if: ${{ steps.relevance.outputs.relevant == 'true' && matrix.database == 'sqlite' }}
         env:
-          TC_REPLICATION_E2E_NODE_BIN: ${{ runner.temp }}/tinycloud-earlier
+          TC_REPLICATION_E2E_NODE_BIN: ${{ runner.temp }}/tinycloud
         run: bash "$GITHUB_WORKSPACE/.github/scripts/run-private-tests.sh" bun test --max-concurrency=1 packages/cli/src/commands/share-history-revoke.e2e.test.ts
 
       # tests/cli suites that talk to a node through TC_TEST_SERVER (tests/cli/setup.ts).
