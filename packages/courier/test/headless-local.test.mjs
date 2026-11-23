@@ -205,7 +205,9 @@ test('public Courier API: Bun/Node loopback pairs, replies once and isolates two
   assert.deepEqual(inbox.items.filter(item => item.threadId === request.threadId).map(item => [item.peer, item.messageId, item.text]), [['owner-two', refused.messageId, 'I cannot perform actions.']]);
   const replyWire = await own.get(k.msg('remote', ask.threadId, resumed.messageId), full);
   assert.ok(replyWire.ok);
-  assert.equal(replyWire.data.data.metadata[EXT].inReplyTo, ask.messageId);
+  // Courier's contract (store.ts getJson): a JSON value may come back from the Node as JSON text.
+  const replyBody = typeof replyWire.data.data === 'string' ? JSON.parse(replyWire.data.data) : replyWire.data.data;
+  assert.equal(replyBody.metadata[EXT].inReplyTo, ask.messageId);
 
   // Inventory must include exact unrecorded siblings, but never touch other mailboxes or the other owner.
   const sibling = (await one.node.delegateTo(initiator.courierDid, peerReadPermissions('remote', one.spaceId), { expiry: '20m', requireActivation: true })).delegation;
@@ -262,4 +264,12 @@ test('public Courier API: Bun/Node loopback pairs, replies once and isolates two
   const fresh = await acceptPairing(one, JSON.stringify(A));
   assert.notEqual(fresh.pairingId, stranded.pairingId);
   await unpair(one, fresh);
+
+  // A live grant from an earlier use of the handle, recorded nowhere, blocks reuse until it is revoked; accept never revokes it.
+  const leftover = (await one.node.delegateTo(initiator.courierDid, peerReadPermissions('remote', one.spaceId), { expiry: '20m', requireActivation: true })).delegation;
+  await assert.rejects(acceptPairing(one, JSON.stringify(A)), { code: 'mailbox-in-use' });
+  const stillLive = await manager.queryAllIssued({ space: one.spaceId });
+  assert.equal(stillLive.ok && stillLive.data.find(grant => grant.cid === leftover.cid)?.status, 'active');
+  assert.ok((await manager.revokeIssued(leftover.cid)).ok);
+  await unpair(one, await acceptPairing(one, JSON.stringify(A)));
 });

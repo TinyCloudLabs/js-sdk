@@ -12,7 +12,7 @@ import { artifactWithDelegation, parseArtifact, validateArtifactIdentity, type P
 import { assertPairCompletion, assertSignedPairCompletion, inboundGrant, issuePairDelegation, pendingFromA, recordOutbound, verifyPairDelegation } from './pairing-flow.js';
 import type { StoredPeer } from './profile.js';
 import { HANDLE, ULID } from './request.js';
-import { issuedPeerGrants, revokePeerGrants } from './revoke.js';
+import { issuedPeerGrants, liveMailboxGrants, revokePeerGrants } from './revoke.js';
 import { publishMessage } from './send.js';
 import { deleteAll, getJson, getJsonMany, listAll, putCreate } from './store.js';
 
@@ -159,6 +159,11 @@ export async function acceptPairing(ctx: HeadlessCourierContext, artifactA: stri
     } else {
       // A is not signed. Never expose pre-existing data to the identity named in an unsigned artifact.
       if ((await listAll(ctx.node.kv, k.toPeer(handle))).length !== 0) return refuse('mailbox-in-use', 'The requested Courier mailbox is not empty.');
+      // A grant left from an earlier use of this handle would let its holder read the new peer's mailbox. Refuse; never
+      // revoke here. Only grants the node already lists are seen; an activation still in flight is not.
+      if ((await liveMailboxGrants(ctx.node, scope, handle, reason => refuse('mailbox-unconfirmed', `Courier could not confirm the mailbox is unshared: ${reason}.`))).length !== 0) {
+        return refuse('mailbox-in-use', 'An earlier grant for this Courier mailbox is still live; it must be revoked first.');
+      }
       const peer = pendingFromA(art);
       const challenge = randomBytes(32).toString('base64url');
       const pending: CourierPeerRecord = { version: 1, scope, pairingId: challenge, phase: 'pending', peer };

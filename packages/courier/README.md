@@ -1093,11 +1093,19 @@ await unpair(ctx, paired);
 
 `HeadlessCourierContext` names the owner, the agent's Courier DID, the pinned Node origin, an exclusively owned Node session restored from the agent's finite Courier grant, a `createReader()` factory for a fresh session with the same grant, and a `store` that serializes each owner scope and persists `CourierPeerRecord`s. Records hold signed delegations: keep them in the tenant's private store, never in a mailbox.
 
+The store contract:
+
+- `transaction(scope, operation)` must be a mutex per owner scope (owner DID, Courier DID, space, host), held across processes if you run more than one. Every Courier call runs inside one transaction.
+- `save` is durable once it resolves and is never rolled back: Courier saves checkpoints mid-operation, before and after network steps, and an operation that later throws leaves them in place. Do not wrap a transaction in a database transaction that aborts on error. Recovery is always a retry with the same input or reference.
+
+Artifact A is unsigned, so anyone who can reach your accept endpoint can make Courier sign and activate a peer grant (up to 7 days, over an empty mailbox) for the identity A names, and save a pending record. The pending pairing lapses after 15 minutes, but its grant lasts until it is revoked. Rate-limit `acceptPairing` per owner and per caller, and sweep pending records past `expiresAt` by calling `unpair` with their reference.
+
 - Only initiators that sign pairing completion are accepted (`courier-update-required` otherwise). Artifact C must carry a valid Ed25519 signature over B's 32-byte challenge from the Courier DID that A named; an unsigned or replayed C is refused.
 - A pending pairing expires after 15 minutes. Peer grants last up to 7 days; headless renewal is not part of this API yet.
 - `sendMessage` only answers a readable incoming message from that peer in the same thread, and never an `inform`. A retry with the same idempotency key returns the original message ID; changed text is refused.
 - `unpair` latches the peer off before any network call. If revocation or cleanup fails it throws (`revoke-failed`, `unpair-pending`) and keeps the record; call it again with the same reference.
 - If `acceptPairing` throws after it saved the record (for example, the Node never confirmed the grant), retries refuse with `pair-pending` instead of signing a second grant. Read the record for that handle from your store and call `unpair(ctx, peerReference(record))`, then accept again.
+- A new handle is refused with `mailbox-in-use` while its mailbox holds data or any grant this agent issued over it is still live, whoever holds it; `acceptPairing` never revokes such a grant. The check sees only grants the Node has already listed: an activation still in flight when it runs is not caught. `mailbox-unconfirmed` means the Node's grant list could not be read; retry.
 
 Details: TC-4061
 

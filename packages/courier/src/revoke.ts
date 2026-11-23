@@ -29,6 +29,25 @@ export async function issuedPeerGrants(node: TinyCloudNode, scope: Scope, peer: 
   });
 }
 
+/**
+ * Grants this agent issued over any part of a mailbox, to any audience, that the node does not show are over. Fail
+ * closed: only a revocation, or an `expired` status whose own expiry has passed, ends one; `pending` stays live.
+ */
+export async function liveMailboxGrants(node: TinyCloudNode, scope: Scope, handle: string, failed: Fail): Promise<AccountDelegationRecord[]> {
+  const listed = await node.delegationManager.queryAllIssued({ space: scope.spaceId });
+  if (!listed.ok) return failed(nodeFailure(listed.error.code));
+  const [read, subscribe] = peerReadPermissions(handle, scope.spaceId);
+  const kv = `${scope.spaceId}/kv/${read!.path}`;
+  const hooks = `${scope.spaceId}/hooks/${subscribe!.path}`;
+  const now = Date.now();
+  return listed.data.filter((record) => {
+    if (bareDid(record.delegatorDid) !== scope.courierDid) return false;
+    if (!record.resources.some((r) => r.resource.startsWith(kv) || r.resource === hooks || r.resource.startsWith(`${hooks}/`))) return false;
+    if (record.status === 'revoked' || record.status === 'ancestor_revoked') return false;
+    return !(record.status === 'expired' && record.expiresAt !== null && record.expiresAt.getTime() <= now);
+  });
+}
+
 /** Reconcile node-issued children, including replacements not yet saved in the local ledger. */
 export async function revokePeerGrants(
   node: TinyCloudNode, scope: Scope, getPeer: () => StoredPeer, save: () => void | Promise<void>, failed: Fail,
