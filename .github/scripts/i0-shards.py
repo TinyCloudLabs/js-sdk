@@ -29,10 +29,12 @@ CHECKS = [
     "packages/cli/scripts/check-skill-pack.mjs",
     "tests/mcp-sdk-contract/scripts/verify-packed-public-api.ts",
 ]
-# These two entire files were already opt-in/skip-only in the serial gate.
+# These entire files are opt-in/skip-only: each needs a local TinyCloud Node binary
+# (interim-local and revoke-issued-local predate the sharded gate; headless-local is TC-4061's loopback).
 # Keep them visible as SKIPPED, never count them as executed, and fail if they
 # disappear or start running so this exception cannot silently become stale.
 KNOWN_SKIP_ONLY = [
+    "packages/courier/test/headless-local.test.mjs",
     "packages/courier/test/interim-local.test.mjs",
     "packages/courier/test/revoke-issued-local.test.mjs",
 ]
