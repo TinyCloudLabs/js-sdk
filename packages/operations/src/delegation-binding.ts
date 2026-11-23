@@ -12,7 +12,7 @@ import type {
   ValidatedRuntimeDelegation,
 } from "@tinycloud/node-sdk";
 
-import { DelegationRequestBindingSchema } from "./artifacts.js";
+import { DelegationImportArtifactSchema, DelegationRequestBindingSchema } from "./artifacts.js";
 import { delegationWithinRequest, type OperationSpaceResolver } from "./authority.js";
 import { DELEGATION_CID_PATTERN, STORED_GRANT_SKIP_REASONS, type OperationWarning, type StoredGrantSkipReason } from "./contract.js";
 import {
@@ -496,7 +496,17 @@ async function assess(
   const kind = storedDelegationKind(entry);
   const delegation = normalizeStoredDelegation(entry);
   if (kind === "refused" || delegation === undefined) return skipped("malformed");
-  if (delegation.expiry.getTime() <= Date.now()) return NOT_REPLAYED;
+  const pastSignedEnd = delegation.expiry.getTime() <= Date.now();
+  let lease: string | undefined;
+  if (pastSignedEnd) {
+    if (!mode.activate || !isRecord(entry)) return NOT_REPLAYED;
+    const parsed = DelegationImportArtifactSchema.shape.renewal.safeParse(entry.renewal);
+    if (!parsed.success || parsed.data === undefined ||
+        parsed.data.receipt.originalCid !== delegation.cid ||
+        Date.parse(parsed.data.receipt.leaseExpiresAt) <= Date.now()) return NOT_REPLAYED;
+    // Node verifies the signed lease and renewal history, never just the persisted metadata.
+    lease = parsed.data.receipt.leaseAuthorization;
+  }
   if (kind === "other") return skipped("proof_missing");
   const limit = replayLimit(entry);
   if (limit === undefined) return skipped("unbound");
@@ -512,6 +522,7 @@ async function assess(
   try {
     const installed = await nodeSdk.activateValidatedRuntimeDelegation(node, toActivate, {
       host: options.host,
+      ...(lease === undefined ? {} : { renewal: { leaseAuthorization: lease } }),
       authorize: (effective) => {
         verifyCompactProof(toActivate);
         outsideRequest = !delegationWithinRequest(limit, effective, options.resolveSpace);

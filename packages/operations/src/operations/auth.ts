@@ -443,7 +443,12 @@ async function importRequestBoundDelegation(
           context.summary.profile,
           "additional-delegations",
           (records) => {
-            const record = { delegation, permissions: effectivePermissions, authorityRequest };
+            const record = {
+              delegation,
+              permissions: effectivePermissions,
+              authorityRequest,
+              ...(input.renewal === undefined ? {} : { renewal: input.renewal }),
+            };
             const position = records.findIndex((entry) => delegationCid(entry) === inspected.cid);
             const others = records.filter((entry) => delegationCid(entry) !== inspected.cid);
             return {

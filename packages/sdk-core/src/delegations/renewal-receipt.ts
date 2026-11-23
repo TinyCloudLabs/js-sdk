@@ -1,6 +1,8 @@
 import { parseSignedSiweCacao } from "./cacao";
 import { principalDidEquals } from "../identity";
-import { assertRenewalNodeIdentity, type RenewalNodeIdentity } from "./renewal";
+import { assertRenewalNodeIdentity, OwnerRenewalMismatchError, type RenewalNodeIdentity } from "./renewal";
+
+export { OwnerRenewalMismatchError, RENEWAL_LEASE_MISMATCH } from "./renewal";
 
 /** An owner-approved renewal as returned with an approval result (share-envelope `ApprovalRenewal`, already parsed). */
 export interface OwnerRenewalApproval {
@@ -21,17 +23,6 @@ export interface OwnerRenewalOriginal {
   readonly delegationCid: string;
   /** The agent key the original grant delegates to. */
   readonly verificationMethod: string;
-}
-
-export const RENEWAL_LEASE_MISMATCH = "RENEWAL_LEASE_MISMATCH";
-
-/** The lease or its receipt does not match the signed original grant or the verified node. */
-export class OwnerRenewalMismatchError extends Error {
-  readonly code = RENEWAL_LEASE_MISMATCH;
-  constructor(message: string) {
-    super(message);
-    this.name = "OwnerRenewalMismatchError";
-  }
 }
 
 /** Three production scheduler intervals (300 s each): a new lease is never admitted closer than this to original expiry. */

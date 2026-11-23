@@ -91,6 +91,32 @@ export const DelegationImportArtifactSchema = z.object({
   permissions: z.array(PermissionEntrySchema).optional(),
   expiry: z.string().datetime({ offset: true }).optional(),
   prompted: z.boolean().optional(),
+  /**
+   * The owner's renewal lease for this delegation, stored with it. Metadata, not authority: replay past
+   * the signed end sends the signed lease to node-sdk, which checks it and the node's renewal record.
+   */
+  renewal: z.object({
+    version: z.literal(1),
+    approvedLeaseLifetimeSeconds: z.number().int().positive().safe().max(365 * 86_400),
+    approvedAt: z.string().datetime({ precision: 3 }),
+    receipt: z.object({
+      originalCid: z.string().min(1),
+      leaseCid: z.string().min(1),
+      leaseAuthorization: z.string().min(1),
+      leaseExpiresAt: z.string().datetime({ precision: 3 }),
+      leaseGeneration: z.number().int().positive().safe(),
+      nodeIdentity: z.object({
+        nodeDid: z.string().startsWith("did:key:z"),
+        renewerDid: z.string().startsWith("did:key:z"),
+        renewerPublicKey: z.string().min(1),
+        renewerEpoch: z.number().int().nonnegative().safe(),
+      }).strict(),
+    }).strict(),
+  }).strict().refine(({ approvedAt, approvedLeaseLifetimeSeconds, receipt }) => {
+    const approved = Date.parse(approvedAt);
+    const end = Date.parse(receipt.leaseExpiresAt);
+    return end > approved && end <= approved + approvedLeaseLifetimeSeconds * 1000;
+  }).optional(),
 }).strict();
 
 /**
