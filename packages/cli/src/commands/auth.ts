@@ -98,6 +98,7 @@ import { canonicalOwnerDid } from "../lib/owner-did.js";
 import { assertNotLocalOwner, assertSessionReplaceable, commitLogin, readProfileSnapshot } from "../auth/login-commit.js";
 import { previousSignInNotice } from "../auth/previous-sign-in.js";
 import { ownerIdentitySigner, startPreparedOpenKeyHandoff, type PreparedOpenKeyHandoff } from "../auth/prepared-openkey.js";
+import { loadAppKeyPermit, loginWithAppKey, removeAppKeyPermit } from "../auth/app-key.js";
 import { announceFirstOwner, openKeyPrimaryFlag, ownerLoginPermissions, warnIfNotPrimaryKey, withOwnerKeyPrimary } from "../auth/owner-key.js";
 import { SHARE_PUBLISHING_MANIFEST_REF } from "../share/publishing-manifest.js";
 import {
@@ -666,7 +667,8 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
     .option("--owner <did>", "Sign in as this owner (did:pkh:eip155:CHAIN:ADDRESS): OpenKey preselects that key, e.g. one that is not the account's primary key, and an approval by any other identity is refused. With --manifest, also names the secrets owner for a manifest's `secrets` on a profile with no recorded owner")
     .option("--replace-session", "Scoped or device login: replace this profile's live session even though the new scope would narrow, change or shorten it (prefer a new profile)")
     .option("--force", "Replica-enabled OpenKey login: replace the stored session key even when recorded shares could not be checked or hold unexpired shares that need the current key")
-    .option("--keys <folder>", "Also let this sign-in create and use encryption keys in this folder (for example `qa`). The node must support named keys. With OpenKey, the first time on a profile also needs `--owner`.")
+    .option("--keys <folder>", "Also let this sign-in create and use encryption keys in this folder (for example `qa`). The node must support named keys. With OpenKey, the first time on a profile also needs `--owner`. With `--app-key`, the full key of one app instead of a folder.")
+    .option("--app-key", "With `--keys <full-app-key>`, such as apps/xyz.tinycloud.share/xyz.tinycloud.tinyapps.contacts/seal-v1: ask the owner to approve that one key on the default encryption network. It lets this profile create the key and decrypt with it, nothing else, and only for that app. Needs `--owner`. Lasts up to 7d (default 1h, set with `--expiry`) and the owner may shorten it. Use a profile with no other sign-in. Read and write sealed values with `keys encrypt` and `keys decrypt` and `--record-key`.")
     .option("--replication-prefix <prefix>", "Add replication get+sync authority for a folder prefix ending in /, or root (repeatable)", (prefix: string, values: string[] = []) => [...values, prefix])
     .option("--replication-allow-secrets", "Allow replication of secret material (network-wide decrypt warning)")
     .action(async (options, cmd) => {
@@ -695,6 +697,17 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
         const globalOpts = cmd.optsWithGlobals();
         const ctx = await ProfileManager.resolveContext(globalOpts, { storedSession: "unused" });
         await recoverPendingLogout(ctx.profile);
+        if (options.appKey === true) {
+          await handleAppKeyLogin(ctx, globalOpts, options);
+          return;
+        }
+        if (await loadAppKeyPermit(ctx.profile).then((permit) => permit !== undefined, () => true)) {
+          throw new CLIError(
+            "APP_KEY_PROFILE",
+            `Profile "${ctx.profile}" holds an app-key approval, so no other sign-in can be saved on it. Use another profile, or run \`${CLI_NAME} --profile ${ctx.profile} auth logout\` first.`,
+            ExitCode.USAGE_ERROR,
+          );
+        }
         const owner = options.owner === undefined ? undefined : canonicalOwnerDid(options.owner);
         const permissions = options.manifest
           ? await loadManifestPermissions(options.manifest, ctx.profile, { allowLogicalSpaces: true, ownerDid: owner, device: options.device === true })
@@ -849,6 +862,7 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
         if (!options.revoke && !options.force && (options.keepReplicas || !await logoutWillKeepKey(ctx.profile))) {
           await assertShareHistoryAllowsKeyDrop(ctx.profile, "logout");
         }
+        await removeAppKeyPermit(ctx.profile);
         const online = options.revoke ? await revokeForLogout(ctx, options.discardLocalChanges === true) : undefined;
         const replicasRemoved = await finishProfileLogout(ctx, {
           keepReplicas: options.keepReplicas,
@@ -2991,6 +3005,73 @@ const keysNotGrantedAfterLogin = (profileName: string): string =>
   `You're signed in, but without named keys: the tinycloud.encryption permission wasn't approved. To add them, sign in again with \`${CLI_NAME} --profile ${profileName} auth login --keys <folder>\` and leave the row that mentions tinycloud.encryption ticked.\n`;
 
 const KEYS_FOLDER_NOT_READY = `You're signed in, but your encryption keys aren't set up yet. Try \`${CLI_NAME} keys ensure <folder>/<name>\` again in a minute.\n`;
+
+/** `auth login --keys <full-app-key> --app-key`: one exact app key for one owner, on a profile with no other sign-in. */
+async function handleAppKeyLogin(ctx: CLIContext, globalOpts: Record<string, unknown>, options: Record<string, unknown>): Promise<void> {
+  const usage = (message: string): CLIError => new CLIError("INVALID_ARGUMENT", message, ExitCode.USAGE_ERROR);
+  if (typeof options.keys !== "string") throw usage("`--app-key` needs `--keys <full-app-key>`.");
+  if (typeof options.owner !== "string") {
+    throw usage("`--app-key` needs `--owner did:pkh:eip155:<chain>:<address>`, the account that approves the key. Nothing was started.");
+  }
+  const conflicting = [
+    ["--device", options.device], ["--manifest", options.manifest], ["--method", options.method], ["--renew", options.renew],
+    ["--replace-session", options.replaceSession], ["--force", options.force],
+    ["--replication-prefix", options.replicationPrefix], ["--replication-allow-secrets", options.replicationAllowSecrets],
+  ].filter(([, value]) => value !== undefined && value !== false).map(([flag]) => flag);
+  if (conflicting.length > 0) throw usage(`\`--app-key\` can't be used with ${conflicting.join(", ")}.`);
+  const paste = options.paste === true;
+  const noPopup = options.popup === false;
+  if (!paste && !noPopup && !process.stdin.isTTY && !process.stderr.isTTY) {
+    throw new CLIError(
+      "INTERACTIVE_LOGIN_REQUIRED",
+      "Browser login needs a visible approval URL and would wait silently here. Use `--paste` to print the URL and provide the owner's code on stdin.",
+      ExitCode.USAGE_ERROR,
+    );
+  }
+  const owner = canonicalOwnerDid(options.owner);
+  const expiry = parseExpiryOption(options.expiry);
+  const profile = await ProfileManager.getProfile(ctx.profile).catch((error: unknown) => {
+    if (error instanceof CLIError && error.code === "PROFILE_NOT_FOUND") return undefined;
+    throw error;
+  });
+  const result = await loginWithAppKey({
+    profileName: ctx.profile,
+    host: ctx.host,
+    openKeyHost: resolveOpenKeyHost(profile ?? ({} as ProfileConfig)),
+    ownerDid: owner,
+    fullKey: options.keys,
+    lifetimeMs: expiry === undefined ? undefined : parseRequestedExpiry(expiry).durationMs,
+    registryUrl: process.env.TC_REGISTRY_URL || ctx.tinycloudRegistryUrl || profile?.tinycloudRegistryUrl || undefined,
+    paste,
+    noPopup,
+    assertDedicatedProfile: async () => {
+      if (profile !== undefined && (profile.authMethod !== undefined || profile.ownerDid !== undefined || profile.sessionDid !== undefined ||
+        await ProfileManager.getSession(ctx.profile) !== null)) {
+        throw new CLIError(
+          "APP_KEY_PROFILE",
+          `Profile "${ctx.profile}" already has a sign-in. Use a profile with no other sign-in for an app key, for example \`--profile app-keys\`. Nothing was started.`,
+          ExitCode.USAGE_ERROR,
+        );
+      }
+    },
+    ensureProfile: async () => {
+      const created = await ProfileManager.withLock(ctx.profile, async () => {
+        if (await ProfileManager.profileExists(ctx.profile)) return undefined;
+        return createKeyOnlyProfile(ctx.profile, typeof globalOpts.host === "string" ? globalOpts.host : DEFAULT_HOST);
+      });
+      if (created) process.stderr.write(`Created profile "${ctx.profile}"\n`);
+    },
+  });
+  outputJson({
+    authenticated: true,
+    profile: result.profile,
+    mode: "app-key",
+    appKey: result.appKey,
+    ownerDid: result.ownerDid,
+    host: result.host,
+    expiresAt: result.expiresAt,
+  });
+}
 
 /** Create the default encryption network when the account has none yet; a failure only means the keys aren't ready. */
 async function readyNamedKeysNetwork(node: TinyCloudNode): Promise<void> {
