@@ -1,5 +1,13 @@
 # @tinycloudlabs/node-sdk
 
+## 3.14.0-beta.12
+
+### Minor Changes
+
+- 2790836: `hasRuntimePermissions` and `getRuntimePermissionDelegations` take an optional filter naming which approvals to count. `grantRuntimePermissions` takes `reuseExisting: false` to sign a new approval even when an installed one already covers the access. Existing calls and defaults behave the same.
+
+  Details: TC-3549
+
 ## 3.14.0-beta.11
 
 ### Patch Changes

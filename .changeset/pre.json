@@ -45,6 +45,8 @@
     "tc-3443-validate-session-root",
     "tc-3485-courier-revoke-renewal-fence",
     "tc-3522-renewal-lease-ask",
+    "tc-3549-keep-approvals-across-reload",
+    "tc-3549-node-approval-filter",
     "tc-3639-recap-decode-without-buffer",
     "tc-3661-share-link-host",
     "tc-3731-manifest-owner-placeholder",
