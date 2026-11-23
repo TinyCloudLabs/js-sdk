@@ -87,7 +87,10 @@ describe.skipIf(!nodeBinary)(
       const ownerNetwork = `urn:tinycloud:encryption:did:pkh:eip155:1:${await new PrivateKeySigner(privateKey).getAddress()}:default`;
       const capabilityRequest = composeManifestRequest([{
         app_id: "delegated-encryption.test", name: "Delegated encryption e2e", prefix: "", space: "default", defaults: "all",
-        permissions: [{ service: "tinycloud.kv", space: "secrets", path: "vault/secrets/", actions: ["get", "put", "del", "list", "metadata"] }],
+        permissions: [
+          { service: "tinycloud.kv", space: "secrets", path: "vault/secrets/", actions: ["get", "put", "del", "list", "metadata"] },
+          { service: "tinycloud.kv", space: "applications", path: "vault/secrets/", actions: ["get", "put", "del", "list", "metadata"] },
+        ],
       }]);
       capabilityRequest.resources.push(
         { service: "tinycloud.encryption", space: "encryption", path: ownerNetwork, actions: ["tinycloud.encryption/decrypt"], skipPrefix: true },
