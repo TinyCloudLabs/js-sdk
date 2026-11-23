@@ -192,6 +192,13 @@ describe("which grants are a set of the owner's secrets' own keys", () => {
   test("refused: an empty set", () => {
     expect(isSecretKeyResourceSet([], OWNER)).toBe(false);
   });
+
+  test("refused: secrets/scoped, the parent of every scoped key, alone or beside a valid key; a name SCOPED inside a scope is a key", () => {
+    const parent = key("secrets/scoped");
+    expect(isSecretKeyResourceSet([parent], OWNER)).toBe(false);
+    expect(isSecretKeyResourceSet([FIREFLIES, parent, MEET], OWNER)).toBe(false);
+    expect(isSecretKeyResourceSet([key("secrets/scoped/food/scoped")], OWNER)).toBe(true);
+  });
 });
 
 describe("an approved request keeps only a secret-key grant", () => {

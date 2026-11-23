@@ -8,7 +8,9 @@ import {
   appSecretScope,
   canonicalizeSecretScope,
   parseSecretCatalogKey,
+  parseSecretKeyPath,
   resolveSecretPath,
+  secretKeyPath,
 } from "./index";
 
 describe("appSecretScope", () => {
@@ -74,5 +76,20 @@ describe("resolveSecretPath name and scope limits", () => {
     expect(parseSecretCatalogKey(`${longest}C`)).toBeUndefined();
     expect(parseSecretCatalogKey(`scoped/food/${longest}C`)).toBeUndefined();
     expect(parseSecretCatalogKey(`scoped/${"a".repeat(65)}/API_KEY`)).toBeUndefined();
+  });
+});
+
+describe("the key of the unscoped name SCOPED", () => {
+  it("is refused: secrets/scoped is the parent of every scoped key", () => {
+    expect(() => secretKeyPath("SCOPED")).toThrow("is reserved");
+    expect(() => resolveSecretPath("SCOPED")).toThrow("is reserved");
+    expect(parseSecretKeyPath("secrets/scoped")).toBeUndefined();
+  });
+
+  it("is a name like any other inside a scope, and no other key path is affected", () => {
+    expect(secretKeyPath("SCOPED", "food")).toBe("secrets/scoped/food/scoped");
+    expect(parseSecretKeyPath("secrets/scoped/food/scoped")).toEqual({ name: "SCOPED", scope: "food" });
+    expect(secretKeyPath("SCOPED_KEY")).toBe("secrets/scoped_key");
+    expect(parseSecretKeyPath("secrets/scoped_key")).toEqual({ name: "SCOPED_KEY" });
   });
 });

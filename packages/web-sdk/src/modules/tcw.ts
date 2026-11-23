@@ -1927,8 +1927,8 @@ export class TinyCloudWeb {
    *
    * An approved request that is not elevated (no decrypt or key creation, nothing in the secrets
    * space, no caveats) is kept with the session and active again after a page reload, with its own
-   * signed expiry. An elevated one is not kept across a reload, except a grant of exactly one of the owner's own
-   * secrets' keys (decrypt and/or key creation), which is kept for its signed expiry.
+   * signed expiry. An elevated one is not kept across a reload, except a grant made only of exact keys of the owner's
+   * own secrets (decrypt and/or key creation, any number of keys), which is kept for its signed expiry.
    */
   requestPermissions(
     additional: PermissionEntry[],
