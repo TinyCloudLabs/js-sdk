@@ -9654,10 +9654,11 @@ export class TinyCloudNode {
     );
     const missing = requested.filter((entry) => {
       const raw = this.isEncryptionPermissionEntry(entry) || this.isRawRevocationPermissionEntry(entry);
-      // A requested owner spelled in another case takes the signed spelling:
-      // key and prefix resources parse only with the canonical (EIP-55) owner.
+      // Only bare networks need the signed spelling for string comparison.
+      // Named keys are already canonical: a bare grant may spell the same owner
+      // in lowercase, which would make the named key fail to parse.
       const comparable = raw && this.isEncryptionPermissionEntry(entry)
-        ? { ...entry, space: "encryption", path: this.signedOwnerSpelling(entry.path, rawGranted) }
+        ? { ...entry, space: "encryption", path: entry.path.includes("/") ? entry.path : this.signedOwnerSpelling(entry.path, rawGranted) }
         : entry;
       return !isCapabilitySubset([comparable], raw ? rawGranted : spaceGranted).subset;
     });
