@@ -13,6 +13,7 @@ import { canonicalize } from "@tinycloud/share-envelope";
 import { checkLinkRecord, linkIssuerPublicKey, resolveApprovalRequest, type CheckedLinkRecord, type LinkRecord, type OpenKeyApprovalRequestV1 } from "@tinycloud/share-envelope/links";
 import { additionalDelegationsPath, profileConfigPath, profilePath, readJson, sessionPath, withTinyCloudStateRoot, writeJsonAtomic } from "@tinycloud/operations/state";
 import { startUnregisteredLocationRegistry, type UnregisteredLocationRegistry } from "../../../node-sdk/src/test-support/unregistered-location-registry";
+import { verifyOnboardingHandoff } from "./onboard-handoff.test-support.js";
 
 // Real-node e2e for `tinycloud onboard`: an owned synthetic OpenKey transport
 // opens the CLI's signed immutable requests and returns real owner-signed,
@@ -490,7 +491,7 @@ globalThis.fetch = ((input: Parameters<typeof fetch>[0], init?: Parameters<typeo
     expect(approval.ackId).toBeUndefined();
     expect((await cli("agent", ["kv", "get", "--space", "account", "spaces/applications"])).stderr).toContain("AUTH_REQUIRED");
     const done = await onboardWithApprovals("agent", () => ownerSigner, ["onboard", "--timeout", "1s"]);
-    expect(done.exitCode, done.stderr + done.stdout).toBe(0);
+    expect(done.exitCode).toBe(0);
     expect(done.offered.map(entry => entry.id)).toEqual([approval.id]);
     expect(done.links).toEqual(first.links);
     expect(approvalRequests.size - countBefore).toBe(1);
@@ -624,5 +625,8 @@ globalThis.fetch = ((input: Parameters<typeof fetch>[0], init?: Parameters<typeo
     const ownerList = await cli("feed-owner", ["feed", "list", "--agent", "demo", "--space", "applications"]);
     expect(ownerList.exitCode, ownerList.stderr).toBe(0);
     expect(ownerList.stdout).toContain("demo-card-1");
+  });
+  test("TC3302 synthetic handoff", async () => {
+    await verifyOnboardingHandoff({ host, registryOrigin: registry.url.origin, ownerSigner, cli, onboardWithApprovals });
   });
 });

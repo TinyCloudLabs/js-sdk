@@ -1,10 +1,11 @@
 import { Command } from "commander";
 import { CLI_NAME } from "@tinycloud/operations/cli-name";
-import type { PermissionEntry } from "@tinycloud/node-sdk";
+import type { PermissionEntry, TinyCloudNode } from "@tinycloud/node-sdk";
 import { startAuthFlow, delegationFromInput } from "../auth/browser-auth.js";
 import { sessionStateIsUsable, storedSessionState } from "../auth/scoped-login.js";
 import { completeApprovalResult } from "../auth/approval-request.js";
 import { APPROVAL_TIMEOUT_OPTION_DESCRIPTION, parseApprovalTimeout, spaceSetupTimeoutMs } from "../auth/approval-wait.js";
+import { onboardingHandoff } from "../auth/onboarding-handoff.js";
 import { onboardingPlan } from "../auth/onboarding-scope.js";
 import { createSpaceRecheck, ensureSpaceSetup } from "../auth/space-setup.js";
 import { ExitCode } from "../config/constants.js";
@@ -83,23 +84,24 @@ export function registerOnboardCommand(program: Command): void {
         await completeApprovalResult(ctx.profile);
         let code = typeof options.code === "string" && options.code.trim() !== "" ? options.code.trim() : undefined;
         let currentStep = 1;
+        let approvalCid: string | undefined;
         const acquire: OpenKeyAcquisition = async (did, flow = {}) => {
-          if (code !== undefined) {
-            const pasted = code;
-            code = undefined;
-            return delegationFromInput(pasted, did, flow);
-          }
-          return startAuthFlow(did, {
+          const pasted = code;
+          code = undefined;
+          const approval = pasted !== undefined ? await delegationFromInput(pasted, did, flow) : await startAuthFlow(did, {
             ...flow, profileName: ctx.profile, noPopup: true,
             ...(deadlineMs === undefined ? {} : { approvalWait: { deadlineMs, step: currentStep, of: steps.length } }),
             onApprovalRequest: ({ approvalUrl }) => {
               console.error(`Approve in OpenKey (open the complete link):\n${approvalUrl}\n${deadlineMs === undefined ? "\nWaiting for approval. Re-run this command after an interruption; no code is needed." : ""}`);
             },
           });
+          approvalCid = approval.delegationCid;
+          return approval;
         };
 
         // A re-run after SPACE_SETUP_PENDING has a usable session on a space the node does not host yet; the session's space is asked once per run.
         const spaceRecheck = createSpaceRecheck();
+        let onboardedNode: TinyCloudNode | undefined;
         for (const [index, step] of steps.entries()) {
           const reason = step.asks;
           currentStep = index + 1;
@@ -144,10 +146,12 @@ export function registerOnboardCommand(program: Command): void {
             })),
           }, requested, deadlineMs === undefined ? undefined : spaceSetupTimeoutMs({ deadlineMs, step: currentStep, of: steps.length }),
           async () => ({ node }));
+          onboardedNode = node;
         }
 
         profile = await ProfileManager.getProfile(ctx.profile);
         const session = await ProfileManager.getSession(ctx.profile) as Record<string, unknown> | null;
+        const handoff = await onboardingHandoff(permissions, approvalCid, async () => onboardedNode ?? ensureAuthenticated(ctx));
         output({
           onboarded: true,
           profile: ctx.profile,
@@ -155,7 +159,8 @@ export function registerOnboardCommand(program: Command): void {
           host: ctx.host,
           granted: [...new Set(permissions.map(p => p.space))].map(space => ({ space, asks })),
           expiresAt: storedSessionState(session, profile).expiresAt,
-        }, () => `Onboarded: profile ${ctx.profile} acts for ${profile.ownerDid ?? "the owner"}.\n${steps.map(({ asks }) => `  ${asks}`).join("\n")}`);
+          handoff,
+        }, () => `Onboarded: profile ${ctx.profile} acts for ${profile.ownerDid ?? "the owner"}.\n${steps.map(({ asks }) => `  ${asks}`).join("\n")}\n${"url" in handoff ? handoff.url : handoff.message}`);
       } catch (error) {
         return handleError(error);
       }
