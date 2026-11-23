@@ -32,6 +32,16 @@ async function freePort(): Promise<number> {
   return promise;
 }
 
+// The CLI falls back to openkey.so, its device API and the links API when these are unset. Every child run points them at a
+// dead loopback origin, so a stray OpenKey or links call fails at once instead of reaching production. The node host is
+// always the loopback node (`--host` or the profile) and TC_HOST is not inherited.
+const DEAD_ORIGIN = "http://127.0.0.1:9";
+const NO_PROD_ORIGINS = {
+  TC_OPENKEY_HOST: DEAD_ORIGIN,
+  TC_OPENKEY_API_HOST: DEAD_ORIGIN,
+  TC_LINKS_API_ORIGIN: DEAD_ORIGIN,
+} as const;
+
 describe.skipIf(!NODE_BIN)("a scoped OpenKey session reads a secret on its own key", () => {
   const wasm = new NodeWasmBindings();
   let node: ChildProcess | undefined;
@@ -42,7 +52,7 @@ describe.skipIf(!NODE_BIN)("a scoped OpenKey session reads a secret on its own k
   let ownerDid: string;
 
   function env(extra: Record<string, string> = {}): Record<string, string> {
-    return { PATH: process.env.PATH ?? "", HOME: home, TC_HOME: home, ...extra };
+    return { PATH: process.env.PATH ?? "", HOME: home, TC_HOME: home, ...NO_PROD_ORIGINS, ...extra };
   }
 
   async function tc(args: string[], stdin = "", extra: Record<string, string> = {}): Promise<{ exitCode: number; stdout: string; stderr: string }> {
@@ -156,7 +166,10 @@ describe.skipIf(!NODE_BIN)("a scoped OpenKey session reads a secret on its own k
     await rm(root, { recursive: true, force: true });
   });
 
-  test("a get with no prior put reads the value; another secret is refused, never asked for network-wide decrypt", async () => {
+  test("a get with no prior put reads the value; a secret outside the manifest is refused", async () => {
+    // No child run can reach OpenKey or the links API in production.
+    expect(env()).toMatchObject({ TC_OPENKEY_HOST: DEAD_ORIGIN, TC_OPENKEY_API_HOST: DEAD_ORIGIN, TC_LINKS_API_ORIGIN: DEAD_ORIGIN });
+    expect(env().TC_HOST).toBeUndefined();
     const value = `scoped-${randomBytes(12).toString("hex")}`;
     // The owner writes both secrets on their own keys (writers default to the older format, so opt in).
     await ok(["--profile", "owner", "secrets", "put", "SCOPED_GET_ONE", "--stdin"], value, { TC_SECRETS_NAMED_KEY_WRITES: "1" });
