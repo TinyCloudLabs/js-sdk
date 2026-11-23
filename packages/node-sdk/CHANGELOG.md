@@ -1,5 +1,50 @@
 # @tinycloudlabs/node-sdk
 
+## 3.14.0-beta.16
+
+### Patch Changes
+
+- 9919d97: `hasPermissions` and `hasRuntimePermissions` recognize exact secret-key permissions signed in the session, even when the same session has a bare encryption-network grant. An exact key does not cover a different key, a broader prefix or an unsigned action.
+
+  Details: TC-3969
+
+- 9919d97: Secrets permission checks use the signed-in owner's resolved manifest when the app declares an encryption path with `{owner}`. The template remains unchanged for sign-in. Apps can read secrets sealed to the network key and write secrets without asking again for permissions already granted.
+
+  Details: TC-3971
+
+## 3.14.0-beta.15
+
+### Minor Changes
+
+- 171a7b3: Opted-in writes seal each secret to its own key, `secrets/<name>` (or `secrets/scoped/<scope>/<name>`), so one secret can be shared without the others. The content key is wrapped once, to that key only. Pass `{ namedKey: true }` to SDK `secrets.put`, or set `TC_SECRETS_NAMED_KEY_WRITES=1` for `tc secrets put`. Without opt-in, writes seal to the network key. Node support alone does not change the write format. Readers open both formats with the corresponding grant, including network-wrapped secrets written without AAD. A reader holding only one secret's key gets `legacy_envelope` / `LEGACY_ENVELOPE` for a network-wrapped copy. `secretKeyPath`, `parseSecretKeyPath` and `secretReadPermissions` build the exact key and grant.
+
+  `vault.resealToKey(key, keyPath, { dryRun })` moves one record onto its own key: it seals a new copy, checks it opens to the same bytes, and overwrites only if the record is unchanged (`ifMatch`). Any failure keeps the old copy.
+
+  Upgrading (node-sdk): `secrets.get` and `secrets.getEntry` ask the wallet for missing authority only with `requestPermission: true`. Pass it for a read the user started. Without a live grant on the secret's own key the read is `DECRYPT_DENIED` with `permissionHint` naming that key, and a node refusing that key gives the same code. `namedKeyOnly: true` opens only a copy sealed to the secret's own key. Both are on the new `SecretGetOptions`. `put`, `delete` and `list` ask without the flag.
+
+  web-sdk keeps approved grants for one secret's own key across reloads, like panel grants. In web-sdk, `secrets.get` and `secrets.getEntry` with `requestPermission: true` ask the page's permission prompt for exactly that key on the space's own network, then read once more. That prompt always shows, even after "don't ask for 30 days". A declined or closed prompt returns `PERMISSION_DENIED`, and the next opted-in read shows the prompt. Without the flag they never ask. A node-sdk node restored without a signer reports that it can't ask for authority.
+
+  A runtime grant or a `delegateTo` delegation on a secret's own key (or keys under `secrets`) lasts 1 hour unless an expiry is asked, is capped at 7 days, and ends no later than the session; the returned `delegation.expiry` is the expiry signed. Other `delegateTo` delegations, network-root decrypt included, keep the 7-day default. node-sdk exports the limits as `SECRET_KEY_GRANT_DEFAULT_MS` and `SECRET_KEY_GRANT_MAX_MS`, and `secretKeyGrantExpiryMs(expiry)` applies them. Secret names and scopes are limited to 64 characters (`MAX_SECRET_NAME_LENGTH`, `MAX_SECRET_SCOPE_LENGTH`); a longer one is `INVALID_INPUT`. `resealToKey` throws unless `keyPath` is the record's own secret key.
+
+  `delegateTo` of a secret's key needs that key in the signed session: sign in with an explicit `capabilityRequest` that includes `<network>/secrets/` (decrypt, key.create). The default sign-in does not include it. `delegateTo` refuses any `secrets` path that is not one secret's exact key.
+
+  An opted-in write to a node without `encryption-named-keys-v1` returns `NAMED_KEYS_UNSUPPORTED` (`service: "secrets"`) before any secret permission request, grant or write. An expired session's sign-in may run first. `tc secrets put` exits 11 for that code. Default network-wrapped writes and reads of existing secrets do not require the feature. `NAMED_KEYS_UNSUPPORTED`, `NAMED_KEYS_UNSUPPORTED_MESSAGE` and `namedKeysUnsupportedResult()` are exported from sdk-services and sdk-core, and `TinyCloudNode.namedKeysSupported()` reports the node's answer. A node without the feature receives a sign-in request without per-secret key entries; that request retains its other entries, including bare-network decrypt. Sign-in checks `/info` once before building a request that names secret keys.
+
+  When the node's features can't be checked, an opted-in write returns `NAMED_KEYS_CHECK_FAILED` (`service: "secrets"`, `meta.retryable: true`) before any secret permission request, grant or write. An expired session's sign-in may run first. `tc secrets put` exits 6 for that code. `NAMED_KEYS_CHECK_FAILED`, `NAMED_KEYS_CHECK_FAILED_MESSAGE` and `namedKeysPutRefusal(supported)` are exported from sdk-services and sdk-core.
+
+  Upgrading: a secret stored under a name or scope longer than 64 characters can't be read, written or deleted through `get`, `put` or `delete`. It is not hidden: `listAll()` returns it with `nameTooLong: true` and/or `scopeTooLong: true` (the scope as stored), and `list()` includes its name. A `put` of a name over 64 characters returns `INVALID_INPUT` ("This secret wasn't saved: its name is N characters, and names can be at most 64. Choose a shorter name.") before any secret permission request, grant or write, and `tc secrets put` prints the same words with exit 2. `parseStoredSecretCatalogKey`, `secretNameTooLongMessage` and `secretNameTooLongRefusal(name)` are exported from sdk-services and sdk-core; `parseSecretCatalogKey` returns nothing for such a key. Self-hosted owners who hold such a secret can rename it with the previous CLI first.
+
+  The unscoped secret name `SCOPED` is reserved: its key, `secrets/scoped`, is the parent of every scoped key, so `secretKeyPath`, `resolveSecretPath` and the calls built on them throw `Secret name "SCOPED" is reserved.` and the services return `INVALID_INPUT`. Upgrading: a secret stored under the unscoped name `SCOPED` can't be read, written or deleted through `get`, `put` or `delete`. A secret named `SCOPED` inside a scope is not affected.
+
+  Details: TC-3801
+
+### Patch Changes
+
+- Updated dependencies [171a7b3]
+  - @tinycloud/sdk-services@3.14.0-beta.15
+  - @tinycloud/sdk-core@3.14.0-beta.15
+  - @tinycloud/replica@0.4.7-beta.2
+
 ## 3.14.0-beta.14
 
 ### Patch Changes
