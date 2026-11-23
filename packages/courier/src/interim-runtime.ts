@@ -3,7 +3,7 @@ import { CourierError, errInfo, isAuthorizationRefusal, isNotFoundError } from '
 import { cmd } from './program.js';
 import { stateKeys } from './keys.js';
 import { oneLine } from './a2a.js';
-import { loadGrant, loadProfile, withProfileTransaction } from './profile.js';
+import { loadGrant, loadProfile, saveProfile, withProfileLock, withProfileTransaction } from './profile.js';
 import type { StoredPeer } from './profile.js';
 import { courierNode, peerKv } from './node.js';
 import { clearLocalCaches } from './thread.js';
@@ -50,7 +50,7 @@ function checkOutboundInOrder(handle: string, check: () => Promise<void>): Promi
  * with `collect`, its grant to us readable), throw `authority-unverified` so the action fails closed and stays queued.
  * A peer that is no longer eligible is not an error: the caller drops its work.
  */
-export async function maintainPeerSet(node: TinyCloudNode, target?: string, collect = false, strict = false): Promise<void> {
+export async function maintainPeerSet(node: TinyCloudNode, target?: string, collect = false, strict = false, onRenewed?: (peer: StoredPeer) => void): Promise<void> {
   const handles = Object.values(loadProfile().peers).filter(peer => peer.status === 'paired' && (!target || peer.handle === target)).map(peer => peer.handle);
   let canRequestApproval = true;
   const verdicts = new Map<string, string>();
@@ -85,9 +85,14 @@ export async function maintainPeerSet(node: TinyCloudNode, target?: string, coll
         const current = loadProfile();
         const peer = current.peers[handle];
         if (peer && watchPeerEligible(peer)) {
-          try { await peerKv(node, current, peer); }
+          const cid = peer.inbound!.cid;
+          try { await peerKv(node, current, peer, onRenewed ? { onRenewed } : undefined); }
           catch (error) {
-            if (isAuthorizationRefusal(error)) { await recordAuthorityRefusal(`peer:${handle}`); verdicts.set(handle, 'ineligible'); }
+            if (isAuthorizationRefusal(error)) {
+              await recordAuthorityRefusal(`peer:${handle}`, cid);
+              const latest = loadProfile().peers[handle];
+              verdicts.set(handle, latest && watchPeerEligible(latest) ? 'error: peer-changed' : 'ineligible');
+            }
             else if (!(error instanceof CourierError)) throw error;
             else verdicts.set(handle, `error: ${error.code}`);
           }
@@ -137,16 +142,19 @@ export function watchPeerEligible(peer: StoredPeer, now = Date.now()): boolean {
     && !peer.interim?.latchedAt && !peer.interim?.inboundRefusedAt;
 }
 
-export async function recordAuthorityRefusal(source: string): Promise<void> {
+export async function recordAuthorityRefusal(source: string, inboundCid?: string): Promise<void> {
   clearLocalCaches();
   if (!source.startsWith('peer:')) { await markOwnerRefused(); return; }
-  const handle = source.split(':')[1];
-  await withProfileTransaction(async (profile, save) => {
+  const [, handle, hookCid] = source.split(':');
+  const refusedCid = inboundCid ?? hookCid;
+  withProfileLock(() => {
+    const profile = loadProfile();
     const peer = profile.peers[handle];
-    if (!peer) return;
+    // A late refusal from a retired hook or read says nothing about the installed successor.
+    if (!peer || (refusedCid !== undefined && peer.inbound?.cid !== refusedCid)) return;
     peer.interim ??= { cleanup: {} };
     peer.interim.inboundRefusedAt ??= new Date().toISOString();
-    profile.version = 4; save();
+    profile.version = 4; saveProfile(profile);
   });
 }
 

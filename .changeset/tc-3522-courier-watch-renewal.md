@@ -9,4 +9,6 @@ Automatic renewal shortens its cooldown when the owner grant limits a peer grant
 
 Overlapping watch checks no longer treat a peer grant that is being renewed as an orphan and revoke it.
 
+Installing a successor immediately switches the watcher's hook and read checks to the new grant. A refusal from a superseded grant no longer stops access under its successor.
+
 Details: TC-3522

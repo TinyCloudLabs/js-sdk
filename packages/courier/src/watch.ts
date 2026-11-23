@@ -232,7 +232,7 @@ export interface WatchDeps {
    * every cycle, and before anything is imported from a peer whose last check is older than `pollMs`.
    */
   checkAuthority?(handle?: string): Promise<void>;
-  onAuthorityRefusal?(source: string): Promise<void>;
+  onAuthorityRefusal?(source: string, inboundCid?: string): Promise<void>;
   selfKv: KV;
   /**
    * This side's Courier agent DID. Its watch state, pause markers and wake claims live under its own keys
@@ -358,7 +358,7 @@ export class Watcher {
   private readonly factIdentity: Map<string, PeerIdentity>;
   /** The local cache changed since it was last saved. */
   private localDirty = false;
-  private readonly syncing = new Map<string, { again: boolean; via: Via; listPaused: boolean }>();
+  private readonly syncing = new Map<string, { again: boolean; via: Via; listPaused: boolean; successor?: StoredPeer }>();
   /** Peers whose last sync did not finish: a cycle between full catch-ups lists only these again. */
   private readonly dirtyPeers = new Set<string>();
   private approvalsDirty = false;
@@ -368,6 +368,7 @@ export class Watcher {
   private readonly authorityDue = new Set<string>();
   /** Open hook streams by subscription id; absent while one is failed, ended or not yet opened. */
   private readonly hookStreams = new Map<string, { openedAt: number; proven: boolean }>();
+  private reconcileHooks?: () => void;
   /** Message keys each peer's receipts already list; receipts only grow, so a listing within this set has nothing new. */
   private readonly receipted: Map<string, Set<string>>;
   private stateQueue: Promise<unknown> = Promise.resolve();
@@ -665,6 +666,20 @@ export class Watcher {
 
   // ---------- catch-up and delivery ----------
 
+  /** The validated successor is on disk and its reader is ready. Rebind and check it now. */
+  inboundRenewed(peer: StoredPeer): void {
+    if (this.stopping) return;
+    this.reconcileHooks?.();
+    this.authorityDue.add(peer.handle);
+    const running = this.syncing.get(peer.handle);
+    if (running) {
+      running.successor = peer;
+      running.again = true;
+    } else {
+      void this.sync(peer, 'hook');
+    }
+  }
+
   /**
    * Serialises syncs per peer; a request that arrives mid-sync reruns once after it. `pausedListed`: the caller has
    * just listed the pause markers for this cycle, so the sync shares that listing instead of making its own.
@@ -676,10 +691,14 @@ export class Watcher {
       running.listPaused ||= !pausedListed;
       return;
     }
-    const entry = { again: false, via, listPaused: !pausedListed };
+    const entry: { again: boolean; via: Via; listPaused: boolean; successor?: StoredPeer } = { again: false, via, listPaused: !pausedListed };
     this.syncing.set(peer.handle, entry);
     try {
       do {
+        if (entry.successor) {
+          peer = entry.successor;
+          entry.successor = undefined;
+        }
         entry.again = false;
         const listPaused = entry.listPaused;
         entry.listPaused = false;
@@ -688,6 +707,7 @@ export class Watcher {
         try {
           await this.syncPeer(peer, entry.via, listPaused, renew);
         } catch (error) {
+          if (entry.successor) continue; // An in-flight read against the old binding cannot affect the new one.
           if (!isAuthorizationRefusal(error)) {
             this.dirtyPeers.add(peer.handle);
             this.deps.log('sync-error', { peer: peer.handle, ...errInfo(error) });
@@ -703,7 +723,8 @@ export class Watcher {
             continue;
           }
           if (!renewed) {
-            await this.deps.onAuthorityRefusal?.(`peer:${peer.handle}`);
+            if (this.syncing.get(peer.handle)?.successor) continue;
+            await this.deps.onAuthorityRefusal?.(`peer:${peer.handle}`, peer.inbound?.cid);
             return;
           }
           peer = renewed;
@@ -721,6 +742,11 @@ export class Watcher {
    */
   private async afterRefusal(peer: StoredPeer, markerRead: boolean): Promise<StoredPeer | undefined> {
     const refused = peer.inbound?.cid;
+    const latest = this.deps.loadPeers().find(candidate => candidate.handle === peer.handle);
+    if (latest?.inbound && latest.inbound.cid !== refused) {
+      this.authorityDue.add(peer.handle);
+      return latest;
+    }
     try {
       if (!markerRead) {
         await this.deps.kvFor(peer, true);
@@ -794,6 +820,12 @@ export class Watcher {
     const { selfKv, log } = this.deps;
     const mailbox = peer.theirHandleForMe;
     const peerKv = await this.deps.kvFor(peer, renew);
+    const readerCid = peer.inbound.cid;
+    const readerCurrent = () => {
+      const successor = this.syncing.get(peer.handle)?.successor;
+      return !successor || successor.inbound?.cid === readerCid;
+    };
+    if (!readerCurrent()) return;
     if (renew) {
       this.renewalDue.delete(peer.handle);
       this.markerReadAt.set(peer.handle, this.now());
@@ -804,13 +836,14 @@ export class Watcher {
       // The marker changed: check now, even with nothing to import; the verdict also serves this sync's imports.
       try { allowed = Promise.resolve(await this.authorized(peer)); } catch (error) { this.authorityDue.add(peer.handle); throw error; }
     }
-    const authorized = () => allowed ??= this.authorized(peer);
-    // Pause markers are read with every listing (a cycle lists them once for all its peers just before), so a
+    if (!readerCurrent()) return;
+    const authorized = async () => readerCurrent() && await (allowed ??= this.authorized(peer)) && readerCurrent();
     // `courier resume` or `courier pause` takes effect on the very next message instead of at the next poll (a
     // message delivered while the watcher still thought the thread was paused would never wake anyone).
     const prefix = peer.sessionId ? `${k.threadRoot(mailbox, peer.sessionId)}/` : `${PREFIX}/to/${mailbox}/threads/`;
     const [keys] = await Promise.all([listAll(peerKv, prefix), listPaused ? this.syncPaused() : undefined]);
     // Receipts are read only when the listing holds a message they were not already known to cover.
+    if (!readerCurrent()) return;
     const seen = this.receipted.get(peer.handle) ?? new Set<string>();
     const unseen = selectUndelivered(keys, { v: 1, threads: {} }).filter(item => !seen.has(`${item.threadId}/${item.messageId}`));
     let receipts: Receipts = { v: 1, threads: {} };
@@ -1833,13 +1866,19 @@ export class Watcher {
       await this.pruneClaimsIfDue();
       let approvalsHooks: HooksLike | undefined;
       const reconcile = () => {
-        const desired = new Map<string, { sub: HookSubscription; hooks: () => Promise<HooksLike>; onEvent: (event?: HookEventLike) => void }>();
+        const desired = new Map<string, { sub: HookSubscription; hooks: () => Promise<HooksLike>; onEvent: (event?: HookEventLike) => void; onRefused?: () => void }>();
         for (const peer of this.deps.loadPeers()) {
           if (peer.status !== 'paired' || !peer.inbound || !peer.theirHandleForMe) continue;
           // The id carries the delegation CID: a renewed delegation restarts the subscription.
-          desired.set(`peer:${peer.handle}:${peer.inbound.cid}`, {
+          const cid = peer.inbound.cid;
+          desired.set(`peer:${peer.handle}:${cid}`, {
             sub: { space: peer.spaceId, service: 'kv', pathPrefix: peer.sessionId ? k.threadRoot(peer.theirHandleForMe, peer.sessionId) : `${PREFIX}/to/${peer.theirHandleForMe}` },
             hooks: () => this.deps.peerHooks(peer),
+            onRefused: () => {
+              const current = this.deps.loadPeers().find(candidate => candidate.handle === peer.handle);
+              if (current?.inbound && current.inbound.cid !== cid) this.inboundRenewed(current);
+              else reconcile();
+            },
             onEvent: (event) => {
               // A peer renewing or replacing its delegation to us writes this marker (a path-less event may be it):
               // read the marker and check the peer's authority now, not at the next scheduled check.
@@ -1871,13 +1910,14 @@ export class Watcher {
           if (supervisors.has(id)) continue;
           const controller = new AbortController();
           supervisors.set(id, controller);
-          void this.supervise(id, source.sub, source.hooks, source.onEvent, controller.signal);
+          void this.supervise(id, source.sub, source.hooks, source.onEvent, controller.signal, source.onRefused);
         }
       };
       if (options.once) {
         await this.pollOnce('startup', false);
         await this.tick(true);
       } else {
+        this.reconcileHooks = reconcile;
         // Open the subscriptions first, then catch up: a write between the two is seen by one or the other.
         reconcile();
         await sleep(RECONNECT_CATCH_UP_MS, signal);
@@ -1911,6 +1951,7 @@ export class Watcher {
       if (isAuthorizationRefusal(error)) await this.deps.onAuthorityRefusal?.('self');
       throw error;
     } finally {
+      this.reconcileHooks = undefined;
       clearInterval(ticker);
       for (const controller of supervisors.values()) controller.abort();
       this.hookStreams.clear();
@@ -1932,6 +1973,7 @@ export class Watcher {
     hooks: () => Promise<HooksLike>,
     onEvent: (event?: HookEventLike) => void,
     signal: AbortSignal,
+    onRefused?: () => void,
   ): Promise<void> {
     let failures = 0;
     let opened = false;
@@ -1962,7 +2004,11 @@ export class Watcher {
         // A superseded stream must not clear the replacement or latch a late refusal.
         if (signal.aborted) return;
         this.hookStreams.delete(id);
-        if (isAuthorizationRefusal(error)) { await this.deps.onAuthorityRefusal?.(id); return; }
+        if (isAuthorizationRefusal(error)) {
+          await this.deps.onAuthorityRefusal?.(id);
+          if (!signal.aborted) onRefused?.();
+          return;
+        }
         failures++;
         this.deps.log('hook-error', { source: id.split(':').slice(0, 2).join(':'), ...errInfo(error) });
         onEvent();
