@@ -2,6 +2,8 @@
 "@tinycloud/mcp": minor
 ---
 
-The hosted MCP removes an account's stored authority after 30 days with no authenticated call: its delegate key, session, grants and pending approvals. The account's next call creates a new delegate key and asks for the connection approval again. Each authenticated call is recorded on disk at most once an hour, so the 30 days count across restarts. A sweep runs one minute after start, then every 6 hours, and logs `idle tenant removed` for each account it clears.
+The hosted MCP retires an idle delegate after the later of its last verified approval and its last authenticated use accepted by the node. A sweep starts one minute after startup and normally runs hourly; accounts become eligible after six days. After the node confirms retirement, the hosted MCP removes the delegate key, session, grants and pending approvals. The node refuses further use and renewal. If the node cannot confirm retirement, the server keeps the state and retries.
+
+Disconnecting an assistant does not immediately stop renewal. To stop renewal directly, use OpenKey Settings → Renewing permissions → Stop renewal.
 
 Details: TC-3617

@@ -181,8 +181,8 @@ function createHostedSurface(
         ? () => store.validateTenant(subject, ownerDids)
         : () => store.assertNativeGrantActive(nativeOwner),
       ...(nativeOwner === undefined ? {
-        transformOperationResult: (result: unknown, invocation: McpOperationInvocation) =>
-          store.decorateAuthorityResult(subject, ownerDids, result, invocation),
+        transformOperationResult: (result: unknown, invocation: McpOperationInvocation, acceptedNodeInvocation: boolean) =>
+          store.decorateAuthorityResult(subject, ownerDids, result, invocation, acceptedNodeInvocation),
       } : {}),
     }, validator);
     if (nativeOwner === undefined) registerConnectTool(server, validator, store, identity, surface, annotationTitles);

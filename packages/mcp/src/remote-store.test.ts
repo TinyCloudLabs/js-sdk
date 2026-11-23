@@ -946,7 +946,7 @@ test("a wallet outside the link's accounts cannot become the owner of a first ap
   expect(await exists(join(tenantRoot, ".tinycloud/profiles/agent/session.json"))).toBe(false);
 });
 
-test("a tenant with no call for 30 days loses its key and authority; a recent call keeps a tenant across a restart", async () => {
+test("an idle tenant loses its key and authority after retirement; a recent call keeps a tenant across a restart", async () => {
   const hermetic = await createHermeticNode();
   const store = await testStore(hermetic.host);
   const requester = hermetic.ownerDid;
@@ -977,8 +977,17 @@ test("a tenant with no call for 30 days loses its key and authority; a recent ca
   const stateDir = dirname(dirname(store.tenantStateRoot(subjects[0]!)));
   await store.close();
 
-  // Every key and session was written over 30 days ago; only "marked" called within them.
+  // Every key and session was written before the idle threshold; only "marked" has a recent persisted call.
   const old = new Date(Date.now() - TENANT_IDLE_MS - 60_000);
+  const exposuresPath = join(idleRoot, ".tinycloud/lease-exposures.json");
+  const exposures = JSON.parse(await readFile(exposuresPath, "utf8")) as {
+    pending: Record<string, { createdAt: number; expiresAt: number }>;
+  };
+  for (const entry of Object.values(exposures.pending)) {
+    entry.createdAt = old.getTime() - 300_000;
+    entry.expiresAt = old.getTime();
+  }
+  await writeFile(exposuresPath, JSON.stringify(exposures));
   for (const subject of subjects) {
     const files = [".tinycloud/profiles/agent/key.json", ".tinycloud/profiles/agent/session.json"];
     if (subject !== "openkey-user-marked") files.push(".tinycloud/last-call");
@@ -986,7 +995,18 @@ test("a tenant with no call for 30 days loses its key and authority; a recent ca
   }
   const restarted = await testStore(hermetic.host, stateDir);
   expect(await restarted.connectStatus("openkey-user-called", [requester])).toMatchObject({ connected: true });
-  expect(await restarted.sweepIdleTenants()).toBe(1);
+  const upstream = globalThis.fetch;
+  globalThis.fetch = Object.assign(async (input: string | URL | Request, init?: RequestInit) => {
+    const url = input instanceof Request ? input.url : String(input);
+    const method = init?.method ?? (input instanceof Request ? input.method : "GET");
+    if (method === "POST" && url === `${hermetic.host}/session/retire`) return Response.json({ recorded: true });
+    return upstream(input, init);
+  }, upstream);
+  try {
+    expect(await restarted.sweepIdleTenants()).toBe(1);
+  } finally {
+    globalThis.fetch = upstream;
+  }
 
   expect(await exists(restarted.tenantStateRoot("openkey-user-idle"))).toBe(false);
   for (const subject of ["openkey-user-called", "openkey-user-marked"]) {

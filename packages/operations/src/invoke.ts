@@ -55,6 +55,8 @@ import {
 /** Value-free counters; the caller owns this optional diagnostic sink. */
 export interface OperationMetrics {
   replayedGrants: number;
+  /** Set to false by callers that need to distinguish successful signed node activity. */
+  acceptedNodeInvocation?: boolean;
 }
 
 /** The sole projection-facing execution API. */
@@ -75,17 +77,29 @@ export async function invokeOperation(
     );
   }
   const run = withTinyCloudStateRoot(target.stateRoot, async () => {
+    let executedWithNode = false;
+    let executing = false;
+    const observe = metrics?.acceptedNodeInvocation === undefined ? undefined : () => {
+      if (executing) executedWithNode = true;
+    };
     const prepared = await prepareInvocation(
       operationId,
       operationVersion,
       target,
       unknownInput,
+      observe,
     );
     if (isPreparedError(prepared)) return prepared.result;
     if (metrics !== undefined) {
       metrics.replayedGrants = prepared.runtimeResolution.context.runtime?.replayedGrants ?? 0;
     }
-    return withRuntimeWarnings(await executePreparedInvocation(prepared), prepared);
+    executing = true;
+    const result = await executePreparedInvocation(prepared);
+    executing = false;
+    if (observe !== undefined && metrics !== undefined) {
+      metrics.acceptedNodeInvocation = result.status === "ok" && executedWithNode;
+    }
+    return withRuntimeWarnings(result, prepared);
   });
   // Lazy like prepareInvocation's lookup: the packed root entrypoint stays
   // free of registry/SDK initialization until a call is made.
@@ -349,6 +363,7 @@ async function prepareInvocation(
   operationVersion: number,
   invocationTarget: InvocationTarget,
   unknownInput: unknown,
+  onAcceptedInvocation?: () => void,
 ): Promise<PreparedInvocation> {
   const operation: OperationRef = { operationId, operationVersion };
   const target = normalizeInvocationTarget(invocationTarget);
@@ -450,7 +465,7 @@ async function prepareInvocation(
   const runtimeResolution =
     definition.runtime === "inspection"
       ? inspectionResolution
-      : await resolveRuntime(target, definition.runtime);
+      : await resolveRuntime(target, definition.runtime, onAcceptedInvocation);
   if (!runtimeResolution.ok) {
     // Runtime-preparation errors share the execution errors' detail allowlist.
     const result = errorResult(
@@ -788,13 +803,14 @@ function normalizeInvocationTarget(
 async function resolveRuntime(
   target: InvocationTarget,
   requirement: OperationRuntimeRequirement,
+  onAcceptedInvocation?: () => void,
 ): Promise<InvocationRuntimeResolution> {
   try {
     // Keep the root package loadable for projections that only inspect its
     // public invocation export. The SDK runtime is needed only once a valid
     // operation reaches runtime construction.
     const { createInvocationRuntime } = await import("./runtime.js");
-    return await createInvocationRuntime(target, requirement);
+    return await createInvocationRuntime(target, requirement, onAcceptedInvocation);
   } catch (error) {
     return {
       ok: false,

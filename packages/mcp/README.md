@@ -138,8 +138,9 @@ Opening an approval URL creates an OpenKey approval request signed by the
 tenant's own key and redirects to its OpenKey link. The server collects the
 approved delegation from OpenKey's result API: in the background every 2
 seconds for the first minute and every 10 seconds after that, and before each
-call from that account. A refused approval leaves the same URL usable for a
-new attempt. `TC_OPENKEY_API_HOST` names the OpenKey API origin results are
+call from that account. The server can finish an approval even if the client
+never returns. A refused approval leaves the same URL usable for a new
+attempt. `TC_OPENKEY_API_HOST` names the OpenKey API origin results are
 fetched from; it defaults to `https://api.openkey.so` when `TC_OPENKEY_HOST` is
 `https://openkey.so`, and to `TC_OPENKEY_HOST` otherwise. Results are fetched
 only from that origin. `TC_LINKS_API_ORIGIN` names the links service that holds
@@ -207,14 +208,12 @@ partial failures. Report partial outcomes rather than replaying the batch.
 `TIMEZONE_REQUIRED` requires setting the owner's timezone before writing.
 
 Production requests 30-day grants and uses 15-minute approval links. The
-connection approval also asks the owner for a 90-day renewal lease: with it,
-the node renews the account grant until the lease ends; without it, the grant
-ends after 30 days. Per-request grants are renewed by the owner. Expired or
-missing sessions return a fresh link in `error.details`; expired grants use
-`authority_required`. A lease the node no longer renews (it ended, or the
-node's renewer changed) starts a fresh connection approval. To stop renewal,
-open OpenKey Settings, go to Renewing permissions and select Stop renewal.
-Removing the connection does not stop renewal.
+connection approval also asks the owner for a 90-day renewal lease. Without
+a lease, the grant ends at its signed expiry. A connection grant that no
+longer renews needs a fresh connection approval. Per-request grants are
+renewed by the owner. To stop renewal directly, open OpenKey Settings, go to
+Renewing permissions and select Stop renewal. Removing the connection does
+not immediately stop renewal.
 
 The hosted server checks the account approval with the node when a client
 connects or calls an authenticated tool. Successful checks are cached for up
@@ -224,15 +223,27 @@ renews only that grant. Other node responses keep stored approvals available for
 tool calls. `tinycloud_connect` reports `connected: true` only after a positive
 check; when the node cannot confirm the account, it reports `connected: false`
 without an approval URL and the caller retries shortly.
-The account's delegate key stays in place while the owner signs new permissions
-through the usual OpenKey approval flow. An account with no authenticated call
-for 30 days loses its delegate key, session, grants and open approval links; its
-next call asks for the connection approval again.
+The account becomes eligible for retirement six days after the later of its
+last verified approval and its last authenticated use accepted by the node.
+The sweep starts one minute after startup and runs hourly while the service
+is healthy. If an approval result cannot be recovered, the server retains the
+delegate key and the request's time, and does not retire the key while the
+request remains open. Only after the node confirms retirement does the server
+remove the account's key, session, grants and open approval links. The node
+then refuses further use and renewal. If the node cannot confirm retirement,
+the server retains the account's state and retries.
+The day-seven bound assumes the service and node are available and the sweep
+can process the due holders within its schedule. A refusal, outage or
+excessive backlog can delay confirmation.
 
 HTTP integration tests cover approval renewal with an in-process node by
 default. The additional local-node case uses a v1.21.0 node binary when
 `TC_MCP_TEST_NODE` is set to its absolute path; otherwise that case is skipped.
 The test starts and stops its own node process.
+Use a node supporting `/session/retire` for the idle-retirement tests. To
+exercise the scheduler on the same holder and a live control, set
+`TC_MCP_TEST_CLOCK_NODE` to a debug node built with `renewal-test-clock`.
+The test supplies a temporary clock file and loopback node configuration.
 
 If the owner declines, stop rather than asking again in that conversation.
 
