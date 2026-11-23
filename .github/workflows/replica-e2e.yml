@@ -2,7 +2,7 @@ name: Replica e2e
 
 # `tc replica` (TC-18) against a real TinyCloud node through the public CLI:
 # device grant, sync, offline restart reads, catch-up, scope. The node binary
-# comes from the GHCR image of tinycloud-node v1.20.6 (revision e18578ff),
+# comes from the GHCR image of tinycloud-node v1.26.21 (earlier: v1.20.6, revision e18578ff),
 # pinned by digest. It serves `tinycloud.kv/sync` (`kv-sync-v1`), supports the
 # `tinycloud.kv/retain` / `retainUntil` retention test, and includes the TC-899
 # "database is locked" first-write fix (37277f0, PR #268) that the earlier
@@ -30,7 +30,9 @@ on:
 
 env:
   TC858_MODEL_FULL: ${{ github.event_name == 'schedule' && '1' || '0' }}
-  TINYCLOUD_NODE_IMAGE: ghcr.io/tinycloudlabs/tinycloud-node:1.20.6@sha256:41667d3d133aaa12290a2f3a744afacd838988327552d159c60f04466e66f86f
+  # tinycloud-node 1.26.21, pinned by digest. Its 401 body for a revoked grant is the JSON envelope
+  # {"code":"delegation_revoked","error":"delegation-revoked: <cid>"}, which the revocation e2e tests read (TC-3947).
+  TINYCLOUD_NODE_IMAGE: ghcr.io/tinycloudlabs/tinycloud-node:1.26.21@sha256:fc9fd4efa884be75d05fe61dd55ffa6559a48df824647ce8c10739c7553afc26
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}

@@ -69,18 +69,44 @@ const REVOKED_CODES = new Set(["AUTH_DELEGATION_REVOKED", "AUTH_DELEGATION_ANCES
 const REVOKED_BODY =
   /^(?:Invalid invocation: )?(?:delegation-revoked: [A-Za-z0-9]+|delegation-ancestor-revoked: ancestor=[A-Za-z0-9]+ (?:invoked|parent)=[A-Za-z0-9]+)$/;
 
+/** The codes a node since 1.25.17 puts beside the text of a revocation refusal (TC-2381). */
+const NODE_REVOCATION_CODES: ReadonlySet<string> = new Set(["delegation_revoked", "parent_revoked", "ancestor_revoked"]);
+
+/**
+ * The refusal text of a node's 401 body. A node since 1.25.17 answers a revoked chain with
+ * `{"code": "<revocation code>", "error": "<text>"}`; an older node answers the text alone.
+ * Only that envelope is opened; any other body is returned as it is.
+ */
+function refusalTextOf(body: string): string {
+  if (!body.startsWith("{")) return body;
+  try {
+    const parsed: unknown = JSON.parse(body);
+    if (
+      typeof parsed === "object" && parsed !== null && !Array.isArray(parsed) &&
+      "code" in parsed && typeof parsed.code === "string" && NODE_REVOCATION_CODES.has(parsed.code) &&
+      "error" in parsed && typeof parsed.error === "string"
+    ) {
+      return parsed.error;
+    }
+  } catch {
+    // Not JSON: the body is the text.
+  }
+  return body;
+}
+
 /**
  * Revocation only from typed evidence: the SDK's revocation codes, or (for
  * reads, which the SDK reports as `AUTH_UNAUTHORIZED`) a 401 whose message is
  * exactly the SDK's `<request>: 401 - <body>` with the body the node's
- * revocation denial. Free text is never searched: messages carry keys and
- * prefixes, which anyone with write access chooses.
+ * revocation denial, alone or in the node's revocation envelope. Free text is
+ * never searched: messages carry keys and prefixes, which anyone with write
+ * access chooses.
  */
 function isRevocation(error: ServiceError, status: number | undefined, request: string | undefined): boolean {
   if (REVOKED_CODES.has(error.code)) return true;
   if (status !== 401 || request === undefined) return false;
   const lead = `${request}: 401 - `;
-  return error.message.startsWith(lead) && REVOKED_BODY.test(error.message.slice(lead.length));
+  return error.message.startsWith(lead) && REVOKED_BODY.test(refusalTextOf(error.message.slice(lead.length)));
 }
 
 /**
