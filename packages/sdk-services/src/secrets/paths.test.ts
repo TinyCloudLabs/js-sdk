@@ -33,7 +33,7 @@ describe("appSecretScope", () => {
   });
 
   it("rejects ids that derive a reserved scope", () => {
-    expect(TC832_RESERVED_SCOPES).toEqual(["default", "global", "scoped"]);
+    expect(TC832_RESERVED_SCOPES).toEqual(["default", "global", "scoped", "tinychat-bot-history"]);
     for (const appId of ["Default", "global", "SCOPED"]) {
       expect(() => appSecretScope(appId)).toThrow();
     }

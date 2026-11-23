@@ -28,7 +28,7 @@ test("TC-3549 records the exact canonical CI root bytes of #1102 within the rule
 
   for (const format of ["index.mjs", "index.cjs"] as const) {
     expect(row.root.ceiling[format] - predecessor.root.ceiling[format]).toBe(row.root.delta[format]);
-    expect(rootCeilingFor({ ...ledger, tc3617HostedMcpLeaseRoot: undefined, tc3947ReplicaRevokeRoot: undefined, tc3801NamedKeysRoot: undefined, tc3969SecretKeyCoverageRoot: undefined }, format)).toEqual({ row: "tc3549KeptApprovalsRoot", ceiling: row.root.ceiling[format] });
+    expect(rootCeilingFor({ ...ledger, tc3617HostedMcpLeaseRoot: undefined, tc3947ReplicaRevokeRoot: undefined, tc3801NamedKeysRoot: undefined, tc3969SecretKeyCoverageRoot: undefined, tc3823BotHistoryKeyRoot: undefined }, format)).toEqual({ row: "tc3549KeptApprovalsRoot", ceiling: row.root.ceiling[format] });
   }
 
   expect(ancestryPins(ledger, false)).toContainEqual({

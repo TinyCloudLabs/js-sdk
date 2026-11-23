@@ -8,7 +8,7 @@
  */
 import type { PermissionEntry } from "@tinycloud/sdk-core";
 import type { PortableDelegation } from "@tinycloud/node-sdk/core";
-import { parseSecretKeyPath } from "@tinycloud/sdk-services";
+import { isReservedSecretSpaceKeyPath, parseSecretKeyPath } from "@tinycloud/sdk-services";
 
 import { TAB_PERMISSION } from "../ui/data/authority";
 
@@ -81,24 +81,25 @@ export function isPanelGrant(grant: PortableDelegation, address: string): boolea
 const SECRET_KEY_ACTIONS = ["tinycloud.encryption/decrypt", "tinycloud.encryption/key.create"];
 
 /**
- * True when every resource is the exact key of one of this owner's secrets on the owner's default network
- * (`secrets/<name>` or `secrets/scoped/<scope>/<name>`, as `secretKeyPath` derives it), with decrypt and/or
- * key.create only and no caveats (TC-3284). One resource that is anything else (a prefix, another network or owner,
- * another key, any other service) refuses the whole set.
+ * Matches exact secret keys on the owner's default network, or the reserved bot-history
+ * key by itself. Only decrypt and/or key.create, and no caveats.
  */
 export function isSecretKeyResourceSet(
   resources: readonly Resource[],
   owner: { readonly address: string; readonly chainId: number },
 ): boolean {
   const network = `urn:tinycloud:encryption:did:pkh:eip155:${owner.chainId}:${owner.address}:default/`.toLowerCase();
-  return resources.length > 0 && resources.every((resource) =>
-    longService(resource.service) === "tinycloud.encryption" &&
-    (resource.space === "encryption" || resource.space === "") &&
-    (resource.caveats?.length ?? 0) === 0 &&
-    resource.path.slice(0, network.length).toLowerCase() === network &&
-    parseSecretKeyPath(resource.path.slice(network.length)) !== undefined &&
-    resource.actions.length > 0 &&
-    resource.actions.every((action) => SECRET_KEY_ACTIONS.includes(action)));
+  return resources.length > 0 && resources.every((resource) => {
+    const keyPath = resource.path.slice(network.length);
+    return longService(resource.service) === "tinycloud.encryption" &&
+      (resource.space === "encryption" || resource.space === "") &&
+      (resource.caveats?.length ?? 0) === 0 &&
+      resource.path.slice(0, network.length).toLowerCase() === network &&
+      (parseSecretKeyPath(keyPath) !== undefined ||
+        (resources.length === 1 && isReservedSecretSpaceKeyPath(keyPath))) &&
+      resource.actions.length > 0 &&
+      resource.actions.every((action) => SECRET_KEY_ACTIONS.includes(action));
+  });
 }
 
 /** True when `grant` is exactly a grant of the session owner's own secrets' keys (see `isSecretKeyResourceSet`). */

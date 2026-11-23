@@ -17,7 +17,7 @@
 
 import ms from "ms";
 import { ACCOUNT_MANIFEST_PERMISSIONS } from "@tinycloud/bootstrap";
-import { resolveSecretPath, SECRET_NAME_RE, parseNetworkId, parseSecretCatalogKey } from "@tinycloud/sdk-services";
+import { isReservedSecretSpaceKeyPath, resolveSecretPath, SECRET_NAME_RE, parseNetworkId, parseSecretCatalogKey } from "@tinycloud/sdk-services";
 import { formatKeyResource, parseEncryptionResource } from "@tinycloud/sdk-services/encryption/resource";
 
 // ---------------------------------------------------------------------------
@@ -672,18 +672,17 @@ function isSecretKeyPath(keyPath: string): boolean {
 }
 
 /**
- * Expand an exact per-secret key entry: decrypt and/or key.create on one
- * secret's key on the owner's `default` network. Every other named key or
- * prefix, including any `secrets/` prefix, is refused. The resource is
- * emitted with the owner in EIP-55 form, the only spelling the node accepts
- * for a key id.
+ * Expand decrypt and/or key.create on exactly one secret's key or the reserved
+ * bot-history key on the owner's `default` network. Every other named key or
+ * prefix is refused. The resource uses the owner's EIP-55 spelling required
+ * for a key ID.
  */
 function expandSecretKeyPermissionEntry(
   entry: PermissionEntry,
   networkUrn: string,
   keyPath: string,
 ): PermissionEntry {
-  if (!isSecretKeyPath(keyPath)) {
+  if (!isReservedSecretSpaceKeyPath(keyPath) && !isSecretKeyPath(keyPath)) {
     if (keyPath === "secrets" || keyPath.startsWith("secrets/")) {
       throw new ManifestValidationError(
         "secret keys must be exact: secrets/<name> or secrets/scoped/<scope>/<name>, with the name in lower case",
