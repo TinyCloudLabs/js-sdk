@@ -186,9 +186,6 @@ export type SpaceHosting = "hosted" | "not-hosted" | "unknown";
  * session and one owner, and never written to a registry, a cache or the session store.
  */
 export interface HostedOwnerProof {
-  /** Lowercase signer address. */
-  owner: string;
-  chainId: number;
   /** Always the literal default node; no configured host is consulted. */
   host: string;
   /** The owner's own `applications` space: the only space the proof covers. */
@@ -935,8 +932,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
     const session = this._tinyCloudSession;
     if (!session) return;
     this._hostedOwnerProof = {
-      owner: session.address.toLowerCase(), chainId: session.chainId, host: candidate.host, spaceId: candidate.spaceId,
-      delegationCid: session.delegationCid, status: "proven",
+      host: candidate.host, spaceId: candidate.spaceId, delegationCid: session.delegationCid, status: "proven",
     };
   }
 
@@ -954,7 +950,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
     const { assessHostedOwnerRecap, hostedOwnerPlanOperations } = await import("../space-hosting.js");
     if (pkhSpaceIdentity(plan.spaceId) !== pkhSpaceIdentity(spaceId) ||
       assessHostedOwnerRecap(hostedOwnerPlanOperations(plan), spaceId) === undefined) return undefined;
-    this._pendingHostedOwnerProof = { owner: address.toLowerCase(), chainId, host: DEFAULT_TINYCLOUD_FALLBACK_HOST, spaceId, status: "pending" };
+    this._pendingHostedOwnerProof = { host: DEFAULT_TINYCLOUD_FALLBACK_HOST, spaceId, status: "pending" };
     return { url: DEFAULT_TINYCLOUD_FALLBACK_HOST };
   }
 
