@@ -32,6 +32,18 @@ export async function prepareOwnerAccess(request = false) {
   return requireOwnerAccess(await preflightOwner({ request }));
 }
 
+// A marker hook can check the same peer while housekeeping is between activation and
+// receipt. Take a fresh profile snapshot after the previous outbound check finishes.
+const outboundChecks = new Map<string, Promise<void>>();
+function checkOutboundInOrder(handle: string, check: () => Promise<void>): Promise<void> {
+  const prior = outboundChecks.get(handle);
+  const pending = prior ? prior.then(check, check) : check();
+  outboundChecks.set(handle, pending);
+  return pending.finally(() => {
+    if (outboundChecks.get(handle) === pending) outboundChecks.delete(handle);
+  });
+}
+
 /**
  * Explicit and automatic paths use the same profile transaction and the same issuance policy. `strict` (the watcher,
  * before acting for `target`): unless that peer's check gave a positive verdict (our grant live or just renewed, and,
@@ -44,7 +56,7 @@ export async function maintainPeerSet(node: TinyCloudNode, target?: string, coll
   const verdicts = new Map<string, string>();
   for (const handle of handles) {
     try {
-      await withProfileTransaction(async (profile, save) => {
+      await checkOutboundInOrder(handle, () => withProfileTransaction(async (profile, save) => {
         const peer = profile.peers[handle];
         if (!peer || !watchPeerEligible(peer)) { verdicts.set(handle, 'ineligible'); return; }
         if (node.credentialHolderDid !== profile.courierDid) { canRequestApproval = false; verdicts.set(handle, 'holder-mismatch'); return; }
@@ -68,7 +80,7 @@ export async function maintainPeerSet(node: TinyCloudNode, target?: string, coll
           peer.interim.unavailableAt ??= new Date().toISOString();
           profile.version = 4; save();
         }
-      });
+      }));
       if (collect) {
         const current = loadProfile();
         const peer = current.peers[handle];

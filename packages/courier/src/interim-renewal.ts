@@ -6,7 +6,7 @@ import { bareDid, CLOCK_SKEW_MS } from './authority.js';
 import { CourierError } from './errors.js';
 import { cmd } from './program.js';
 import { k, peerReadPermissions } from './keys.js';
-import type { Profile, StoredPeer } from './profile.js';
+import type { Profile, ProfileSave, StoredPeer } from './profile.js';
 import { getJson, putCreate, putMatch } from './store.js';
 
 const DAY = 86_400_000;
@@ -166,11 +166,17 @@ async function issued(node: TinyCloudNode, profile: Profile): Promise<AccountDel
   return result.data;
 }
 
-async function cleanup(node: TinyCloudNode, peer: InterimPeer, cid: string, save: () => void): Promise<boolean> {
+async function cleanup(node: TinyCloudNode, peer: InterimPeer, cid: string, save: ProfileSave, beforeIntent?: Parameters<ProfileSave>[0]): Promise<boolean> {
   const state = stateOf(peer);
+  const previousIntent = state.cleanup[cid];
   state.cleanup[cid] ??= { intentAt: new Date().toISOString() };
   // The pairing may already be gone locally (a concurrent revoke won the race): the node-side revoke still has to run.
-  try { save(); } catch (error) { if (!(error instanceof CourierError) || error.code !== 'peer-revoked') throw error; }
+  try { save(beforeIntent); } catch (error) {
+    if (!(error instanceof CourierError) || error.code !== 'peer-revoked') {
+      if (!previousIntent) delete state.cleanup[cid];
+      throw error;
+    }
+  }
   if (stateOf(peer).cleanup[cid].revokedAt) return true;
   const result = await node.delegationManager.revokeIssued(cid);
   if (!result.ok) return false;
@@ -183,7 +189,7 @@ async function cleanup(node: TinyCloudNode, peer: InterimPeer, cid: string, save
 }
 
 /** Network queries run unlocked; the caller persists each local change with a locked merge. */
-async function checkSiblings(node: TinyCloudNode, profile: Profile, peer: InterimPeer, save: () => void, now: number): Promise<{ tip: AccountDelegationRecord; records: AccountDelegationRecord[] } | InterimResult> {
+async function checkSiblings(node: TinyCloudNode, profile: Profile, peer: InterimPeer, save: ProfileSave, now: number): Promise<{ tip: AccountDelegationRecord; records: AccountDelegationRecord[] } | InterimResult> {
   parentOf(node, profile, now);
   const records = await issued(node, profile);
   const ledger = peer.outbound as LedgerEntry[];
@@ -210,7 +216,13 @@ async function checkSiblings(node: TinyCloudNode, profile: Profile, peer: Interi
   for (const record of siblings) {
     if (record.status === 'active' && record.expiresAt && record.expiresAt.getTime() > now && !ledger.some(entry => entry.cid === record.cid)) {
       orphaned = true;
-      await cleanup(node, peer, record.cid, save);
+      await cleanup(node, peer, record.cid, save, disk => {
+        // Reconciliation queried the node without holding the profile lock. Never claim
+        // an orphan cleanup if another writer has since recorded that CID.
+        if (disk?.peers[peer.handle]?.outbound.some(entry => entry.cid === record.cid)) {
+          throw new CourierError('profile-changed', `Access for ${peer.handle} changed during renewal. It was left unchanged.`);
+        }
+      });
     }
   }
   if (orphaned) return { state: 'unavailable' };
@@ -271,8 +283,8 @@ export function assertSuccessor(profile: Profile, peer: StoredPeer, prior: Accou
 }
 
 /** Issue only our own child; persist intent and issued children before subsequent network actions. */
-export async function maintainOutbound(node: TinyCloudNode, profile: Profile, peer: InterimPeer, persist: () => void, options: { force?: boolean; manual?: boolean; extendOnly?: boolean } = {}): Promise<InterimResult> {
-  const save = () => { profile.version = 4; persist(); };
+export async function maintainOutbound(node: TinyCloudNode, profile: Profile, peer: InterimPeer, persist: ProfileSave, options: { force?: boolean; manual?: boolean; extendOnly?: boolean } = {}): Promise<InterimResult> {
+  const save: ProfileSave = beforeSave => { profile.version = 4; persist(beforeSave); };
   const local = interimLocalState(peer);
   if (local !== 'live') return { state: local };
   if (peer.status !== 'paired') return { state: 'unavailable' };

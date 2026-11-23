@@ -7,4 +7,6 @@
 
 Automatic renewal shortens its cooldown when the owner grant limits a peer grant to a short lifetime. Manual renewal and artifact export retain their existing cooldown.
 
+Overlapping watch checks no longer treat a peer grant that is being renewed as an orphan and revoke it.
+
 Details: TC-3522
