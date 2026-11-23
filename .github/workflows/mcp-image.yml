@@ -230,6 +230,18 @@ jobs:
           npm ci --prefix "$tools" --ignore-scripts --no-audit --no-fund
           echo "MCP_DEPLOY_TOOLS=$tools" >> "$GITHUB_ENV"
           echo "$tools/node_modules/.bin" >> "$GITHUB_PATH"
+      # Names only, before any environment sync or deploy. A full environment write carries only this deploy's keys, so
+      # stop if the CVM allowlist holds any other name (for example one added by hand). Prints "extras: none" or the
+      # extra names; never a value, the compose file or a manifest. The allowlist is read with the same credential and
+      # client library as the deploy step, and nothing is changed.
+      - name: Check the CVM allowlist for names this deploy does not feed
+        env:
+          PHALA_CLOUD_API_KEY: ${{ secrets.PHALA_CLOUD_API_KEY }}
+          PHALA_CVM_ID: tinycloud-mcp
+        shell: bash
+        run: |
+          set -euo pipefail
+          node "$MCP_DEPLOY_TOOLS/mcp-sync-allowed-envs.mjs" check-extras
       - name: Deploy hosted MCP
         env:
           PHALA_CLOUD_API_KEY: ${{ secrets.PHALA_CLOUD_API_KEY }}
