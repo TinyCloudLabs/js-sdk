@@ -3955,21 +3955,21 @@ export const approvedTc3549KeptApprovalsRoot: LogoutRatchet = {
 /** The exact TC-3617 renewer-changed session renewal root allowance from canonical CI. */
 export const approvedTc3617HostedMcpLeaseRoot: LogoutRatchet = {
   "label": "a session renewal whose lease names a replaced renewer asks the owner again (TC-3617)",
-  "ruling": "size-ruling: TC-3617 (2026-11-23) row tc3617HostedMcpLeaseRoot index.mjs 1535487 (+62), index.cjs 1466902 (+15) gzip bytes over the tc3549KeptApprovalsRoot ceilings, CI's canonical figure, within the ruled +100 B / +100 B. Details: TC-3617",
-  "base": "27908364d46dddf263611b9f8a93ee63af53ee7c",
-  "sourceCommits": ["1ab6415b039523393580e9c40af71e466fd90959"],
+  "ruling": "size-ruling: TC-3617 (2026-11-23) row tc3617HostedMcpLeaseRoot index.mjs 1535484 (+59), index.cjs 1466903 (+16) gzip bytes over the tc3549KeptApprovalsRoot ceilings, CI's canonical figure, within the ruled +100 B / +100 B. Details: TC-3617",
+  "base": "d4c0cf6b3df06f79bd9acfeadc31970e9a41da86",
+  "sourceCommits": ["cea5dad7992f88b7bd1ee2ad1e154967f139b7bd"],
   "canonicalCI": {
-    "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44978134650",
+    "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45089187188",
     "jobs": [
-      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44978134650/job/137072507863",
-      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44978134650/job/137072507943"
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45089187188/job/137414613992",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45089187188/job/137414613915"
     ]
   },
   "root": {
-    "delta": { "index.mjs": 62, "index.cjs": 15 },
-    "ceiling": { "index.mjs": 1535487, "index.cjs": 1466902 }
+    "delta": { "index.mjs": 59, "index.cjs": 16 },
+    "ceiling": { "index.mjs": 1535484, "index.cjs": 1466903 }
   },
-  "reason": "TinyCloudNode.getRenewalEffectiveExpiry refuses a session lease issued to a renewer the node no longer advertises with the coded RenewalRenewerChangedError, so the owner is asked again; node-sdk is bundled into the web-sdk root. Provisional: CI on #1122 (1ab6415b) measured +62 and +15 over the TC-2490 ceilings 1529858 and 1462849; re-chained over the tc3549KeptApprovalsRoot ceilings 1535425 and 1466887. No other ceiling moves. Details: TC-3617"
+  "reason": "TinyCloudNode.getRenewalEffectiveExpiry refuses a session lease issued to a renewer the node no longer advertises with the coded RenewalRenewerChangedError, so the owner is asked again; node-sdk is bundled into the web-sdk root. Canonical Node 22/Bun 1.3.14 CI on #1122 (cea5dad7, master 27908364) measured index.mjs 1535484 and index.cjs 1466903 gzip -9 bytes: +59 and +16 over the tc3549KeptApprovalsRoot ceilings 1535425 and 1466887. No other ceiling moves. Details: TC-3617"
 };
 
 export const approvedLedgerRows: Record<string, unknown> = {
