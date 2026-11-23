@@ -1,0 +1,54 @@
+{
+  "tag": "staging",
+  "sharePair": {
+    "@tinycloud/share-sdk": "1.6.0",
+    "@tinycloud/share-envelope": "1.6.0"
+  },
+  "devOnly": ["@tinycloud/sdk-rs", "@tinycloud/web-sdk-wasm"],
+  "plans": {
+    "courier-0.8.0": {
+      "base": "a0b24da8f04d674e651558d6f11376ce1ddb4def",
+      "releaseSha": "eb296d19e0fa73f2ec511ac7dc88276bf00bf413",
+      "sourceSha": "a0b24da8f04d674e651558d6f11376ce1ddb4def",
+      "expectedDelta": [
+        "bun.lock",
+        "packages/bootstrap/package.json",
+        "packages/cli/package.json",
+        "packages/courier/package.json",
+        "packages/node-sdk/package.json",
+        "packages/operations/package.json",
+        "packages/replica/package.json",
+        "packages/sdk-core/package.json",
+        "packages/sdk-rs/packages/node/package.json",
+        "packages/sdk-services/package.json"
+      ],
+      "buildExclude": ["@tinycloud/web-sdk"],
+      "packages": [
+        { "name": "@tinycloud/bootstrap", "dir": "packages/bootstrap", "from": "2.10.0-beta.1", "stable": "2.10.0" },
+        { "name": "@tinycloud/node-sdk-wasm", "dir": "packages/sdk-rs/packages/node", "from": "1.8.0-beta.0", "stable": "1.8.0" },
+        { "name": "@tinycloud/sdk-services", "dir": "packages/sdk-services", "from": "3.14.0-beta.20", "stable": "3.14.0" },
+        { "name": "@tinycloud/sdk-core", "dir": "packages/sdk-core", "from": "3.14.0-beta.20", "stable": "3.14.0" },
+        { "name": "@tinycloud/replica", "dir": "packages/replica", "from": "0.4.7-beta.6", "stable": "0.4.7" },
+        { "name": "@tinycloud/node-sdk", "dir": "packages/node-sdk", "from": "3.14.0-beta.20", "stable": "3.14.0" },
+        { "name": "@tinycloud/operations", "dir": "packages/operations", "from": "0.10.0-beta.19", "stable": "0.10.0" },
+        { "name": "@tinycloud/courier", "dir": "packages/courier", "from": "0.8.0-beta.19", "stable": "0.8.0" },
+        { "name": "@tinycloud/cli", "dir": "packages/cli", "from": "1.9.0-beta.20", "stable": "1.9.0" }
+      ],
+      "pins": []
+    },
+    "courier-0.8.1": {
+      "base": "a0b24da8f04d674e651558d6f11376ce1ddb4def",
+      "releaseSha": null,
+      "sourceSha": "fe46e1d6766f6e8bd3f68bbc78c9731358327b17",
+      "expectedDelta": null,
+      "buildExclude": ["@tinycloud/web-sdk"],
+      "packages": [
+        { "name": "@tinycloud/courier", "dir": "packages/courier", "from": "0.8.0-beta.19", "stable": "0.8.1" }
+      ],
+      "pins": [
+        { "name": "@tinycloud/node-sdk", "from": "3.14.0-beta.20", "to": "3.14.0" },
+        { "name": "@tinycloud/sdk-core", "from": "3.14.0-beta.20", "to": "3.14.0" }
+      ]
+    }
+  }
+}
