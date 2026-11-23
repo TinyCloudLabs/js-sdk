@@ -38,9 +38,27 @@
     },
     "courier-0.8.1": {
       "base": "a0b24da8f04d674e651558d6f11376ce1ddb4def",
-      "releaseSha": null,
+      "releaseSha": "ff6ad2212bea19b255e10fbc8e8bff7b7929b4cb",
       "sourceSha": "fe46e1d6766f6e8bd3f68bbc78c9731358327b17",
-      "expectedDelta": null,
+      "expectedDelta": [
+        ".changeset/tc-4061-courier-headless.md",
+        "bun.lock",
+        "packages/courier/README.md",
+        "packages/courier/package.json",
+        "packages/courier/src/a2a.ts",
+        "packages/courier/src/commands.ts",
+        "packages/courier/src/headless.ts",
+        "packages/courier/src/inbox.ts",
+        "packages/courier/src/index.ts",
+        "packages/courier/src/outbox.ts",
+        "packages/courier/src/pairing-flow.ts",
+        "packages/courier/src/pairing.ts",
+        "packages/courier/src/revoke.ts",
+        "packages/courier/src/send.ts",
+        "packages/courier/src/store.ts",
+        "packages/courier/test/delete-all.test.mjs",
+        "packages/courier/test/headless-local.test.mjs"
+      ],
       "buildExclude": ["@tinycloud/web-sdk"],
       "packages": [
         { "name": "@tinycloud/courier", "dir": "packages/courier", "from": "0.8.0-beta.19", "stable": "0.8.1" }
