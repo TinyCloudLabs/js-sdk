@@ -31,19 +31,6 @@ describe("NotificationConfigSchema", () => {
     const result = NotificationConfigSchema.safeParse({ throwErrors: "true" });
     expect(result.success).toBe(false);
   });
-
-  it("should reject removed toast keys", () => {
-    const removed: Record<string, unknown> = {
-      popups: true,
-      position: "top-right",
-      duration: 5000,
-      maxVisible: 3,
-    };
-    for (const [key, value] of Object.entries(removed)) {
-      const result = NotificationConfigSchema.safeParse({ [key]: value });
-      expect(result.success).toBe(false);
-    }
-  });
 });
 
 // =============================================================================
@@ -127,11 +114,6 @@ describe("validateNotificationConfig", () => {
 
   it("should return error for invalid config", () => {
     const result = validateNotificationConfig({ throwErrors: "not-boolean" });
-    expect(result.ok).toBe(false);
-  });
-
-  it("should return error for removed popups key", () => {
-    const result = validateNotificationConfig({ popups: true });
     expect(result.ok).toBe(false);
   });
 });

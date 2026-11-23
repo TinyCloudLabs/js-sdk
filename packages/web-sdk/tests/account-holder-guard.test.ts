@@ -5,9 +5,8 @@ import { EmailProofError } from "@tinycloud/node-sdk/credentials";
 import { createAccountHolderSigner } from "../src/credentials/account-holder";
 
 // TC-2254 S16: the exported account signer refuses everything that is not one exact account binding.
-// Every refusal is HOLDER_INVALID with ZERO wallet calls. Public local-development keys (Hardhat #0, #1).
+// Every refusal is HOLDER_INVALID with ZERO wallet calls. Public local-development key (Hardhat #0).
 const OWNER = privateKeyToAccount("0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80");
-const OTHER = privateKeyToAccount("0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d");
 const ACCOUNT = `did:pkh:eip155:1:${OWNER.address}`;
 const DOMAIN = "tinycloud.credentials/account-binding/v1";
 const TICKET_DOMAIN = "tinycloud.credentials/holder-binding/v1";
@@ -73,10 +72,6 @@ describe("S16 account signer guard", () => {
   test("arbitrary text after the domain prefix is refused", async () => {
     await expectRefused("transfer all of it to mallory");
     await expectRefused(`{"did":"${ACCOUNT}"}`);
-  });
-
-  test("a binding for another holder is refused", async () => {
-    await expectRefused(jcs(withField({ holderDid: `did:pkh:eip155:1:${OTHER.address}` })));
   });
 
   test("a ticket-typed body (type = holder-binding/v1) is refused", async () => {

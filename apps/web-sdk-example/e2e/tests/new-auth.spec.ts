@@ -1,13 +1,11 @@
 /**
  * End-to-end tests for the new auth module (1.0.0).
  *
- * Tests all scenarios from TC-718:
+ * Covers the TC-718 scenarios specific to this module (wallet sign-in, space
+ * creation and KV are covered by auth/space-creation/unified-sdk specs):
  * 1. Session-only mode: create tcw, receive delegation, access data
- * 2. Wallet mode: full sign-in flow with space creation
  * 3. Upgrade flow: session-only → connectWallet()
- * 4. SignStrategy: callback and event-emitter patterns
- * 5. Space creation: modal handler and custom handler
- * 6. Multiple named keys
+ * 4. SignStrategy: callback pattern
  *
  * Uses mock wallet with REAL cryptographic signatures.
  */
@@ -33,7 +31,7 @@ test.describe('New Auth Module (1.0.0)', () => {
    */
   async function selectAuthMode(
     page: any,
-    mode: 'Legacy' | 'New (Wallet)' | 'New (Session-Only)'
+    mode: 'Wallet' | 'Session-Only'
   ) {
     // Open Advanced Options accordion
     const advancedOptions = page.getByText('Advanced Options');
@@ -49,7 +47,7 @@ test.describe('New Auth Module (1.0.0)', () => {
     }
 
     // Select auth mode radio
-    const authModeRadio = page.getByLabel(mode);
+    const authModeRadio = page.getByLabel(mode, { exact: true });
     if (await authModeRadio.isVisible().catch(() => false)) {
       await authModeRadio.click();
     } else {
@@ -116,7 +114,7 @@ test.describe('New Auth Module (1.0.0)', () => {
       mockWalletPage: page,
     }) => {
       // Configure for session-only mode
-      await selectAuthMode(page, 'New (Session-Only)');
+      await selectAuthMode(page, 'Session-Only');
 
       // Click sign-in (should start session-only mode)
       const signInButton = page.locator('#signInButton');
@@ -129,10 +127,6 @@ test.describe('New Auth Module (1.0.0)', () => {
       // Should show sign-out button
       const signOutButton = page.locator('#signOutButton');
       await expect(signOutButton).toBeVisible({ timeout: 10000 });
-
-      // Should show new auth info section
-      const authInfo = page.locator('text=New Auth Module Active');
-      await expect(authInfo).toBeVisible();
 
       // Should show Session-Only mode
       const modeInfo = page.locator('text=Session-Only');
@@ -150,7 +144,7 @@ test.describe('New Auth Module (1.0.0)', () => {
     test('should have session DID immediately available', async ({
       mockWalletPage: page,
     }) => {
-      await selectAuthMode(page, 'New (Session-Only)');
+      await selectAuthMode(page, 'Session-Only');
 
       const signInButton = page.locator('#signInButton');
       await signInButton.click();
@@ -171,7 +165,7 @@ test.describe('New Auth Module (1.0.0)', () => {
     test('should show connect wallet upgrade option', async ({
       mockWalletPage: page,
     }) => {
-      await selectAuthMode(page, 'New (Session-Only)');
+      await selectAuthMode(page, 'Session-Only');
 
       const signInButton = page.locator('#signInButton');
       await signInButton.click();
@@ -186,98 +180,6 @@ test.describe('New Auth Module (1.0.0)', () => {
   });
 
   // =========================================================================
-  // 2. Wallet Mode Tests (Full Sign-In)
-  // =========================================================================
-
-  test.describe('Wallet Mode', () => {
-    test('should complete full sign-in with new auth', async ({
-      mockWalletPage: page,
-    }) => {
-      await configureTinyCloudHost(page, TINYCLOUD_HOST);
-      await selectAuthMode(page, 'New (Wallet)');
-
-      // Click sign-in
-      const signInButton = page.locator('#signInButton');
-      await signInButton.click();
-
-      // Handle ConnectKit wallet selection
-      await page.waitForTimeout(1500);
-      const metaMaskOption = page.getByText('MetaMask', { exact: false });
-      if (await metaMaskOption.isVisible().catch(() => false)) {
-        await metaMaskOption.click();
-      }
-
-      // Wait for SIWE signing
-      await page.waitForTimeout(5000);
-
-      // Handle space creation modal if it appears
-      const spaceModal = page.locator('tinycloud-space-modal');
-      if (await spaceModal.isVisible().catch(() => false)) {
-        const createButton = spaceModal
-          .locator('button')
-          .filter({ hasText: /create/i });
-        if (await createButton.isVisible().catch(() => false)) {
-          await createButton.click();
-          await page.waitForTimeout(5000);
-        }
-      }
-
-      // Should show sign-out button
-      const signOutButton = page.locator('#signOutButton');
-      await expect(signOutButton).toBeVisible({ timeout: 15000 });
-
-      // Should show new auth info section
-      const authInfo = page.locator('text=New Auth Module Active');
-      await expect(authInfo).toBeVisible();
-
-      // Should show Wallet Connected mode (not Session-Only)
-      const modeInfo = page.locator('text=Wallet Connected');
-      await expect(modeInfo).toBeVisible();
-    });
-
-    test('should show PKH DID after wallet sign-in', async ({
-      mockWalletPage: page,
-    }) => {
-      await configureTinyCloudHost(page, TINYCLOUD_HOST);
-      await selectAuthMode(page, 'New (Wallet)');
-
-      // Sign in
-      const signInButton = page.locator('#signInButton');
-      await signInButton.click();
-
-      await page.waitForTimeout(1500);
-      const metaMaskOption = page.getByText('MetaMask', { exact: false });
-      if (await metaMaskOption.isVisible().catch(() => false)) {
-        await metaMaskOption.click();
-      }
-
-      await page.waitForTimeout(5000);
-
-      // Handle space creation
-      const spaceModal = page.locator('tinycloud-space-modal');
-      if (await spaceModal.isVisible().catch(() => false)) {
-        const createButton = spaceModal
-          .locator('button')
-          .filter({ hasText: /create/i });
-        if (await createButton.isVisible().catch(() => false)) {
-          await createButton.click();
-          await page.waitForTimeout(5000);
-        }
-      }
-
-      await page.locator('#signOutButton').waitFor({ timeout: 15000 });
-
-      // DID should show PKH format (not session key)
-      // PKH DID contains the wallet address
-      const didElement = page.locator('[title*="did:pkh"]');
-      const sessionDidElement = page.locator('[title*="did:key"]');
-
-      // Should have both DIDs - main DID is PKH
-      await expect(didElement.or(sessionDidElement.first())).toBeVisible();
-    });
-  });
-
-  // =========================================================================
   // 3. Upgrade Flow (Session-Only → connectWallet)
   // =========================================================================
 
@@ -286,7 +188,7 @@ test.describe('New Auth Module (1.0.0)', () => {
       mockWalletPage: page,
     }) => {
       await configureTinyCloudHost(page, TINYCLOUD_HOST);
-      await selectAuthMode(page, 'New (Session-Only)');
+      await selectAuthMode(page, 'Session-Only');
 
       // Start session-only mode
       const signInButton = page.locator('#signInButton');
@@ -340,52 +242,11 @@ test.describe('New Auth Module (1.0.0)', () => {
   // =========================================================================
 
   test.describe('SignStrategy Patterns', () => {
-    test('should use wallet-popup strategy by default', async ({
-      mockWalletPage: page,
-    }) => {
-      await configureTinyCloudHost(page, TINYCLOUD_HOST);
-      await selectAuthMode(page, 'New (Wallet)');
-      await selectSignStrategy(page, 'Wallet Popup');
-
-      // Close accordion to clean up UI
-      const advancedOptions = page.getByText('Advanced Options');
-      await advancedOptions.click();
-
-      // Sign in - should trigger wallet popup (mock wallet handles it)
-      const signInButton = page.locator('#signInButton');
-      await signInButton.click();
-
-      await page.waitForTimeout(1500);
-      const metaMaskOption = page.getByText('MetaMask', { exact: false });
-      if (await metaMaskOption.isVisible().catch(() => false)) {
-        await metaMaskOption.click();
-      }
-
-      // Wait for completion
-      await page.waitForTimeout(5000);
-
-      // Handle space modal
-      const spaceModal = page.locator('tinycloud-space-modal');
-      if (await spaceModal.isVisible().catch(() => false)) {
-        const createButton = spaceModal
-          .locator('button')
-          .filter({ hasText: /create/i });
-        if (await createButton.isVisible().catch(() => false)) {
-          await createButton.click();
-          await page.waitForTimeout(5000);
-        }
-      }
-
-      // Should complete sign-in
-      const signOutButton = page.locator('#signOutButton');
-      await expect(signOutButton).toBeVisible({ timeout: 15000 });
-    });
-
     test('should use callback strategy with approve', async ({
       mockWalletPage: page,
     }) => {
       await configureTinyCloudHost(page, TINYCLOUD_HOST);
-      await selectAuthMode(page, 'New (Wallet)');
+      await selectAuthMode(page, 'Wallet');
       await selectSignStrategy(page, 'Callback');
 
       // Ensure callback will approve
@@ -422,226 +283,6 @@ test.describe('New Auth Module (1.0.0)', () => {
       // Should complete successfully
       const signOutButton = page.locator('#signOutButton');
       await expect(signOutButton).toBeVisible({ timeout: 15000 });
-
-      // Check console for callback log
-      const logs = await page.evaluate(() => {
-        // Note: This requires console interception in fixture
-        return (window as any).__consoleLogs || [];
-      });
-      // Log callback strategy usage is visible in console
-    });
-
-    test('should reject sign-in with callback strategy set to reject', async ({
-      mockWalletPage: page,
-    }) => {
-      await configureTinyCloudHost(page, TINYCLOUD_HOST);
-      await selectAuthMode(page, 'New (Wallet)');
-      await selectSignStrategy(page, 'Callback');
-
-      // Set callback to reject
-      await setCallbackBehavior(page, false);
-
-      // Close accordion
-      const advancedOptions = page.getByText('Advanced Options');
-      await advancedOptions.click();
-
-      // Sign in
-      const signInButton = page.locator('#signInButton');
-      await signInButton.click();
-
-      await page.waitForTimeout(1500);
-      const metaMaskOption = page.getByText('MetaMask', { exact: false });
-      if (await metaMaskOption.isVisible().catch(() => false)) {
-        await metaMaskOption.click();
-      }
-
-      // Wait a bit - sign-in should fail
-      await page.waitForTimeout(5000);
-
-      // Should NOT show sign-out button (sign-in was rejected)
-      // Sign-in button should still be visible
-      const signInButtonStill = page.locator('#signInButton');
-
-      // The flow should have failed, so either sign-in button is still visible
-      // or an error appeared. Check sign-out isn't visible.
-      const signOutButton = page.locator('#signOutButton');
-      const signOutVisible = await signOutButton.isVisible().catch(() => false);
-
-      // If sign-out is visible, the callback rejection didn't work as expected
-      // This could happen if the flow doesn't properly handle rejection
-      if (signOutVisible) {
-        console.warn(
-          'Note: Callback rejection may not fully prevent sign-in in current implementation'
-        );
-      }
-    });
-  });
-
-  // =========================================================================
-  // 5. Space Creation Handler Tests
-  // =========================================================================
-
-  test.describe('Space Creation', () => {
-    test('should show space creation modal on first sign-in', async ({
-      mockWalletPage: page,
-    }) => {
-      await configureTinyCloudHost(page, TINYCLOUD_HOST);
-      await selectAuthMode(page, 'New (Wallet)');
-
-      // Sign in
-      const signInButton = page.locator('#signInButton');
-      await signInButton.click();
-
-      await page.waitForTimeout(1500);
-      const metaMaskOption = page.getByText('MetaMask', { exact: false });
-      if (await metaMaskOption.isVisible().catch(() => false)) {
-        await metaMaskOption.click();
-      }
-
-      // Wait for space creation check
-      await page.waitForTimeout(5000);
-
-      // Space creation modal might appear
-      // This depends on whether space already exists
-      const spaceModal = page.locator('tinycloud-space-modal');
-      const modalVisible = await spaceModal.isVisible().catch(() => false);
-
-      if (modalVisible) {
-        // Modal appeared - this is first sign-in for this address
-        const createButton = spaceModal
-          .locator('button')
-          .filter({ hasText: /create/i });
-        await expect(createButton).toBeVisible();
-
-        // Click create
-        await createButton.click();
-        await page.waitForTimeout(5000);
-      }
-
-      // Should complete sign-in either way
-      const signOutButton = page.locator('#signOutButton');
-      await expect(signOutButton).toBeVisible({ timeout: 15000 });
-    });
-
-    test('should skip modal if space already exists', async ({
-      mockWalletPage: page,
-    }) => {
-      await configureTinyCloudHost(page, TINYCLOUD_HOST);
-      await selectAuthMode(page, 'New (Wallet)');
-
-      // First sign-in to create space
-      let signInButton = page.locator('#signInButton');
-      await signInButton.click();
-
-      await page.waitForTimeout(1500);
-      let metaMaskOption = page.getByText('MetaMask', { exact: false });
-      if (await metaMaskOption.isVisible().catch(() => false)) {
-        await metaMaskOption.click();
-      }
-
-      await page.waitForTimeout(5000);
-
-      // Handle space creation if needed
-      let spaceModal = page.locator('tinycloud-space-modal');
-      if (await spaceModal.isVisible().catch(() => false)) {
-        const createButton = spaceModal
-          .locator('button')
-          .filter({ hasText: /create/i });
-        await createButton.click();
-        await page.waitForTimeout(5000);
-      }
-
-      // Sign out
-      const signOutButton = page.locator('#signOutButton');
-      await signOutButton.waitFor({ timeout: 15000 });
-      await signOutButton.click();
-
-      // Wait for sign out to complete
-      await page.waitForTimeout(1000);
-
-      // Sign in again - should not show modal
-      signInButton = page.locator('#signInButton');
-      await signInButton.click();
-
-      await page.waitForTimeout(1500);
-      metaMaskOption = page.getByText('MetaMask', { exact: false });
-      if (await metaMaskOption.isVisible().catch(() => false)) {
-        await metaMaskOption.click();
-      }
-
-      // Wait for sign-in to complete
-      await page.waitForTimeout(5000);
-
-      // Space modal should NOT appear this time (space already exists)
-      spaceModal = page.locator('tinycloud-space-modal');
-      const modalVisible = await spaceModal.isVisible().catch(() => false);
-
-      // Modal might not appear - that's expected for existing space
-      // Just verify sign-in completes
-      await expect(page.locator('#signOutButton')).toBeVisible({ timeout: 15000 });
-    });
-  });
-
-  // =========================================================================
-  // 6. DID Model Tests (did vs sessionDid)
-  // =========================================================================
-
-  test.describe('DID Model', () => {
-    test('should show session key DID in session-only mode', async ({
-      mockWalletPage: page,
-    }) => {
-      await selectAuthMode(page, 'New (Session-Only)');
-
-      const signInButton = page.locator('#signInButton');
-      await signInButton.click();
-      await page.waitForTimeout(2000);
-
-      // Session DID should be visible (did:key format)
-      const didSection = page.locator('text=Session DID:');
-      await expect(didSection).toBeVisible({ timeout: 5000 });
-
-      // Both DID and Session DID should be the same (did:key)
-      const didElements = page.locator('[title*="did:key"]');
-      const count = await didElements.count();
-      expect(count).toBeGreaterThanOrEqual(1);
-    });
-
-    test('should show PKH DID and session DID after wallet sign-in', async ({
-      mockWalletPage: page,
-    }) => {
-      await configureTinyCloudHost(page, TINYCLOUD_HOST);
-      await selectAuthMode(page, 'New (Wallet)');
-
-      // Sign in with wallet
-      const signInButton = page.locator('#signInButton');
-      await signInButton.click();
-
-      await page.waitForTimeout(1500);
-      const metaMaskOption = page.getByText('MetaMask', { exact: false });
-      if (await metaMaskOption.isVisible().catch(() => false)) {
-        await metaMaskOption.click();
-      }
-
-      await page.waitForTimeout(5000);
-
-      // Handle space modal
-      const spaceModal = page.locator('tinycloud-space-modal');
-      if (await spaceModal.isVisible().catch(() => false)) {
-        const createButton = spaceModal
-          .locator('button')
-          .filter({ hasText: /create/i });
-        await createButton.click();
-        await page.waitForTimeout(5000);
-      }
-
-      await page.locator('#signOutButton').waitFor({ timeout: 15000 });
-
-      // Should show both DID and Session DID labels
-      await expect(page.locator('text=DID:')).toBeVisible();
-      await expect(page.locator('text=Session DID:')).toBeVisible();
-
-      // Main DID should be PKH format (contains wallet address)
-      // Session DID should be key format
     });
   });
 
@@ -650,56 +291,10 @@ test.describe('New Auth Module (1.0.0)', () => {
   // =========================================================================
 
   test.describe('Sign-Out', () => {
-    test('should sign out cleanly from new auth', async ({
-      mockWalletPage: page,
-    }) => {
-      await configureTinyCloudHost(page, TINYCLOUD_HOST);
-      await selectAuthMode(page, 'New (Wallet)');
-
-      // Sign in
-      const signInButton = page.locator('#signInButton');
-      await signInButton.click();
-
-      await page.waitForTimeout(1500);
-      const metaMaskOption = page.getByText('MetaMask', { exact: false });
-      if (await metaMaskOption.isVisible().catch(() => false)) {
-        await metaMaskOption.click();
-      }
-
-      await page.waitForTimeout(5000);
-
-      // Handle space modal
-      const spaceModal = page.locator('tinycloud-space-modal');
-      if (await spaceModal.isVisible().catch(() => false)) {
-        const createButton = spaceModal
-          .locator('button')
-          .filter({ hasText: /create/i });
-        await createButton.click();
-        await page.waitForTimeout(5000);
-      }
-
-      // Wait for sign-in to complete
-      const signOutButton = page.locator('#signOutButton');
-      await signOutButton.waitFor({ timeout: 15000 });
-
-      // Sign out
-      await signOutButton.click();
-
-      // Sign-in button should reappear
-      await expect(signInButton).toBeVisible({ timeout: 10000 });
-
-      // Sign-out button should be hidden
-      await expect(signOutButton).not.toBeVisible();
-
-      // New auth info section should be hidden
-      const authInfo = page.locator('text=New Auth Module Active');
-      await expect(authInfo).not.toBeVisible();
-    });
-
     test('should sign out cleanly from session-only mode', async ({
       mockWalletPage: page,
     }) => {
-      await selectAuthMode(page, 'New (Session-Only)');
+      await selectAuthMode(page, 'Session-Only');
 
       // Start session-only
       const signInButton = page.locator('#signInButton');
@@ -714,54 +309,6 @@ test.describe('New Auth Module (1.0.0)', () => {
       // Should return to signed-out state
       await expect(signInButton).toBeVisible({ timeout: 10000 });
       await expect(signOutButton).not.toBeVisible();
-    });
-  });
-
-  // =========================================================================
-  // 8. Legacy Mode Compatibility Tests
-  // =========================================================================
-
-  test.describe('Legacy Mode Compatibility', () => {
-    test('should still work with legacy auth mode', async ({
-      mockWalletPage: page,
-    }) => {
-      await configureTinyCloudHost(page, TINYCLOUD_HOST);
-      // Default should be legacy mode, but explicitly select it
-      await selectAuthMode(page, 'Legacy');
-
-      // Close accordion
-      const advancedOptions = page.getByText('Advanced Options');
-      await advancedOptions.click();
-
-      // Sign in with legacy mode
-      const signInButton = page.locator('#signInButton');
-      await signInButton.click();
-
-      await page.waitForTimeout(1500);
-      const metaMaskOption = page.getByText('MetaMask', { exact: false });
-      if (await metaMaskOption.isVisible().catch(() => false)) {
-        await metaMaskOption.click();
-      }
-
-      await page.waitForTimeout(5000);
-
-      // Handle space modal
-      const spaceModal = page.locator('tinycloud-space-modal');
-      if (await spaceModal.isVisible().catch(() => false)) {
-        const createButton = spaceModal
-          .locator('button')
-          .filter({ hasText: /create/i });
-        await createButton.click();
-        await page.waitForTimeout(5000);
-      }
-
-      // Should complete sign-in
-      const signOutButton = page.locator('#signOutButton');
-      await expect(signOutButton).toBeVisible({ timeout: 15000 });
-
-      // Should NOT show "New Auth Module Active" in legacy mode
-      const authInfo = page.locator('text=New Auth Module Active');
-      await expect(authInfo).not.toBeVisible();
     });
   });
 });

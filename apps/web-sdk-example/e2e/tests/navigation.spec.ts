@@ -96,18 +96,6 @@ test.describe('Navigation', () => {
     await expect(page.getByText('Off').first()).toBeVisible();
   });
 
-  test('should navigate to share page', async ({ mockWalletPage: page }) => {
-    // Navigate directly to share page
-    await page.goto('/share');
-
-    // Wait for page to load
-    await page.waitForLoadState('networkidle');
-
-    // The share page should be accessible
-    // Check for some indicator that we're on the share page
-    await expect(page).toHaveURL(/\/share/);
-  });
-
   test('should handle URL prefix parameter', async ({ mockWalletPage: page }) => {
     // Navigate with prefix query parameter
     await page.goto('/?prefix=custom-prefix');

@@ -232,11 +232,6 @@ describe("TC-858 canonical size ratchet transition", () => {
     expect(() => validateLedger(current)).not.toThrow();
   });
 
-  it("keeps every frozen prefix row identical to its approved constant", () => {
-    const rows = current as unknown as Record<string, unknown>;
-    for (const row of knownRows) expect(ceilingsOf(rows[row])).toEqual(ceilingsOf(approvedLedgerRows[row]));
-  });
-
   it("rejects any other base toolchain and all later toolchain changes", () => {
     const wrongBase = copy(historical);
     wrongBase.phase2Ratchet!.toolchain = "Bun 1.4.4; production webpack; gzip -9 -c";

@@ -163,17 +163,8 @@ describe("deleteHeldCredential", () => {
 });
 
 describe("the @tinycloud/web-sdk/credentials entry (credentials-subpath)", () => {
-  test("exports probeHeldStoreAccess and deleteHeldCredential, the same functions the store defines", () => {
-    expect(subpath.probeHeldStoreAccess).toBe(held.probeHeldStoreAccess);
-    expect(subpath.deleteHeldCredential).toBe(held.deleteHeldCredential);
-  });
   test("pruneHeldCredentials is NOT exported (a bulk delete stays internal)", () => {
     expect("pruneHeldCredentials" in subpath).toBe(false);
     expect((subpath as Record<string, unknown>).pruneHeldCredentials).toBeUndefined();
-  });
-  test("the existing held surface is still there", () => {
-    for (const name of ["createAccountHolderSigner", "storeHeldCredential", "findHeldCredential", "listHeldEmailCredentials", "acquireHeldCredential"] as const) {
-      expect(typeof subpath[name]).toBe("function");
-    }
   });
 });

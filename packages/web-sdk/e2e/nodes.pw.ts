@@ -341,15 +341,6 @@ test.describe("phone and touch", () => {
     await expect.poll(() => lastClipboardWrite(page)).toBe(HOSTED_DID);
   });
 
-  test("reduced motion: no animation runs on the node cards", async ({ page }) => {
-    await page.emulateMedia({ reducedMotion: "reduce" });
-    await mountHarness(page, "light", { width: 1280, height: 800 }, populatedSeed);
-    await open(page, "drawer");
-
-    const running = await cards(page).first().evaluate((el) => el.getAnimations({ subtree: true }).length);
-    expect(running).toBe(0);
-  });
-
   test("360 px: the page reflows without horizontal scroll and every control is on screen", async ({ page }) => {
     await mountHarness(page, "light", { width: 360, height: 740 }, populatedSeed);
     await open(page, "page");

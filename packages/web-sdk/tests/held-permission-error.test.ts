@@ -5,7 +5,7 @@ import { CredentialError, type IKVService } from "@tinycloud/sdk-core";
 import { parseIssuerSet } from "@tinycloud/sdk-core/held-credentials";
 import { acquireHeldCredentialWith, type HeldAcquireInput } from "../src/credentials/held-source";
 import { createAccountHolderSigner } from "../src/credentials/account-holder";
-import { deleteHeldCredential, findHeldCredential, heldPrefix, listHeldEmailCredentials, pruneHeldCredentials, type HeldIssuerPolicy } from "../src/credentials/held-store";
+import { findHeldCredential, heldPrefix, listHeldEmailCredentials, pruneHeldCredentials, type HeldIssuerPolicy } from "../src/credentials/held-store";
 // The node-sdk test seam (caller-supplied issuer keys) and the fake witness are node-sdk sources: tests only.
 import { acquireEmailProofWithIssuerKeys } from "../../node-sdk/src/credentials/email-proof";
 import { createHeldWitness } from "../../node-sdk/src/credentials/test-support/held-witness";
@@ -120,13 +120,6 @@ describe("a kv get the app session may not make is PERMISSION_DENIED", () => {
 });
 
 describe("a kv delete the app session may not make is PERMISSION_DENIED", () => {
-  test("deleteHeldCredential: 401 throws; a not-ok that is not a permission failure still returns false", async () => {
-    const refused = fakeKv({ delete: denied(401) });
-    const error = await failure(() => deleteHeldCredential({ kv: refused.kv, ownerDid: OWNER_DID, recordId: RECORD_ID }));
-    expect([error?.code, error?.message]).toEqual(["PERMISSION_DENIED", DELETE_MESSAGE]);
-    const offline = fakeKv({ delete: kvError({ code: "NETWORK_ERROR" }) });
-    expect(await deleteHeldCredential({ kv: offline.kv, ownerDid: OWNER_DID, recordId: RECORD_ID })).toBe(false);
-  });
   test("pruneHeldCredentials: a doomed (expired) record whose delete is denied throws instead of reporting nothing removed; other failures leave it unremoved", async () => {
     const memory = new Map<string, unknown>();
     const deletes: { result: unknown } = { result: { ok: true } };

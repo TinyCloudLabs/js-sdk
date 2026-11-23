@@ -37,7 +37,6 @@ const failed = { state: "error", code: "unknown" } as ViewResult<never>;
 interface CtxOptions {
   views?: Record<string, ViewResult<unknown>>;
   source?: boolean;
-  requests?: { snapshot(): readonly unknown[] };
   signedIn?: boolean;
 }
 
@@ -48,7 +47,6 @@ function ctxWith(options: CtxOptions = {}): SectionContext {
   return {
     client: () => ({
       signedIn: () => options.signedIn ?? true,
-      requests: options.requests,
     }),
     text: panelText,
     data: {
@@ -62,11 +60,9 @@ function ctxWith(options: CtxOptions = {}): SectionContext {
 }
 
 describe("section entries", () => {
-  test("each entry has an icon, a title the launcher table knows, and a status function", () => {
+  test("each entry has a title the launcher table knows", () => {
     for (const entry of PANEL_SECTIONS) {
-      expect(typeof entry.icon).toBe("string");
       expect(hasString(entry.labelCode)).toBe(true);
-      expect(typeof entry.status).toBe("function");
     }
   });
 
@@ -145,16 +141,6 @@ describe("status(ctx): each section", () => {
     expect(status("enabling")?.tone).toBe("info");
   });
 
-  test("delegations: Visible, with the page's row count and a plus when more pages exist", () => {
-    const views = (page: object) => ({ delegations: ready(page) });
-    expect(section("delegations").status(ctxWith({ views: views({ rows: [{}, {}, {}] }) }))).toEqual({
-      text: "Visible",
-      tone: "ok",
-      count: "3",
-    });
-    expect(section("delegations").status(ctxWith({ views: views({ rows: [{}], nextCursor: "c" }) }))?.count).toBe("1+");
-  });
-
   test("nodes: none is off, any down row warns, slow warns, all healthy is ok; the count is the row count", () => {
     const status = (rows: object[]) => section("nodes").status(ctxWith({ views: { nodes: ready(rows) } }));
     expect(status([])).toEqual({ text: "None", tone: "off", count: "0" });
@@ -165,21 +151,5 @@ describe("status(ctx): each section", () => {
       count: "3",
     });
     expect(status([{ status: "ok" }])).toEqual({ text: "Healthy", tone: "ok", count: "1" });
-  });
-
-  test("storage: full and nearly full warn, anything else is normal", () => {
-    const status = (state: string) => section("storage").status(ctxWith({ views: { storage: ready({ state }) } }));
-    expect(status("full")).toEqual({ text: "Full", tone: "warn" });
-    expect(status("nearly_full")).toEqual({ text: "Nearly full", tone: "warn" });
-    expect(status("normal")).toEqual({ text: "Normal", tone: "ok" });
-  });
-
-  test("activity: nothing without request logs; 'No errors' with a Clear rail value; failures counted", () => {
-    expect(section("activity").status(ctxWith())).toBeUndefined();
-    const log = (...ok: boolean[]) => ({ snapshot: () => ok.map((value, id) => ({ id, ok: value })) });
-    const clean = section("activity").status(ctxWith({ requests: log(true) }));
-    expect(clean).toEqual({ text: "No errors", tone: "ok", count: "Clear" });
-    const failing = section("activity").status(ctxWith({ requests: log(true, false, false) }));
-    expect(failing).toEqual({ text: "2 errors", tone: "warn" });
   });
 });

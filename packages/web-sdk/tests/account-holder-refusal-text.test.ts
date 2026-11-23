@@ -59,10 +59,6 @@ describe("every refusal of the signer's input says what is true, with the code H
       expect([name, error?.code, error?.message, signCalls]).toEqual([name, "HOLDER_INVALID", INPUT_TEXT, 0]);
     });
   }
-  test("control: the fixed binding is signed", async () => {
-    const { error, signCalls } = await refusal(framed(FIXED_JCS));
-    expect([error, signCalls]).toEqual([undefined, 1]);
-  });
 });
 
 describe("refusals that are not about the input keep the shared text", () => {

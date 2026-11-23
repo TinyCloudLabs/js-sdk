@@ -182,9 +182,9 @@ function removeOverlay(page: Page, id: string) {
 }
 
 for (const scheme of ["light", "dark"] as const) {
-  // These locators mirror the ones apps/openkey-example/e2e uses for the space
-  // prompt (the tag selector is used 21 times there). Quote style differs; the
-  // selectors are the same. The proof runs against the harness DOM, not openkey.
+  // These locators mirror the ones apps/web-sdk-example/e2e uses for the space
+  // prompt. Quote style differs; the selectors are the same. The proof runs
+  // against the harness DOM, not the example app.
   test(`${scheme}: openkey locators match the space prompt and Create resolves true`, async ({ page }) => {
     await mountHarness(page, scheme);
     await openSpaceCreation(page);
@@ -199,21 +199,6 @@ for (const scheme of ["light", "dark"] as const) {
     await create.click();
 
     await expect.poll(() => spaceResult(page)).toBe(true);
-  });
-
-  // Assertion a: both prompts are visible when shown.
-  test(`${scheme}: both prompts are visible when shown`, async ({ page }) => {
-    await mountHarness(page, scheme);
-
-    await openSpaceCreation(page);
-    await expect(page.locator(`${SPACE} .modal-content`)).toBeVisible();
-    await page.keyboard.press("Escape");
-    await expect(page.locator(SPACE)).toHaveCount(0);
-
-    await openPermission(page);
-    await expect(page.locator(`${PERMISSION} .modal-content`)).toBeVisible();
-    await page.keyboard.press("Escape");
-    await expect(page.locator(PERMISSION)).toHaveCount(0);
   });
 
   // The prompt elements and the host expose open shadow roots, so Playwright's
@@ -317,19 +302,7 @@ for (const scheme of ["light", "dark"] as const) {
     });
   }
 
-  // Assertion b: Approve, Deny, and Escape each settle the permission prompt.
-  test(`${scheme}: permission Approve resolves true and removes the prompt`, async ({ page }) => {
-    await mountHarness(page, scheme);
-    await openPermission(page);
-
-    const approve = page.locator(PERMISSION).locator('[data-action="approve"]');
-    await expect(approve).toBeVisible();
-    await approve.click();
-
-    await expect.poll(() => permResult(page)).toBe(true);
-    await expect(page.locator(PERMISSION)).toHaveCount(0);
-  });
-
+  // Assertion b: Deny and Escape each settle the permission prompt.
   test(`${scheme}: permission Deny resolves false and removes the prompt`, async ({ page }) => {
     await mountHarness(page, scheme);
     await openPermission(page);

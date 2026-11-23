@@ -36,7 +36,6 @@
     "web-vitals": "^5.2.0"
   },
   "devDependencies": {
-    "@playwright/test": "^1.40.0",
     "@babel/plugin-proposal-private-property-in-object": "^7.21.11",
     "@radix-ui/react-slot": "^1.1.2",
     "autoprefixer": "^10.4.21",
@@ -57,13 +56,7 @@
     "build": "GENERATE_SOURCEMAP=false npx react-app-rewired build",
     "build:analyze": "GENERATE_SOURCEMAP=false ANALYZE=true npx react-app-rewired build",
     "eject": "npx react-app-rewired eject",
-    "clean": "rimraf build",
-    "test": "npm run build && npm run test:e2e",
-    "test:e2e": "npx playwright test",
-    "test:e2e:ui": "npx playwright test --ui",
-    "test:e2e:headed": "npx playwright test --headed",
-    "test:e2e:debug": "npx playwright test --debug",
-    "playwright:install": "npx playwright install chromium"
+    "clean": "rimraf build"
   },
   "eslintConfig": {
     "extends": [

@@ -122,6 +122,14 @@ async function withNodeFetch<T>(run: () => Promise<T>): Promise<T> {
   }
 }
 
+// An unprepared signIn opens the OpenKey popup only after the click handler returns.
+async function expectUnprepared(web: { signIn(): Promise<unknown> }) {
+  open.mockClear();
+  const signing = web.signIn();
+  expect(open.mock.calls).toHaveLength(0);
+  await signing.catch(() => undefined);
+}
+
 test("prepared OpenKey sign-in opens the popup in the click handler", async () => {
   open.mockClear();
   const setup = client();
@@ -176,7 +184,6 @@ test("prepared OpenKey approval completes a session and reaches activation", asy
     expect(web.session()?.address).toBe(address);
     expect(open.mock.calls).toHaveLength(1);
     expect(setup.legacyCalls).toEqual([]);
-    expect((web as any).preparedSignIn).toBeUndefined();
   });
 });
 
@@ -201,15 +208,17 @@ test("the prepared slot is consumed after a canceled approval", async () => {
   const web = await client().create();
   await web.prepareSignIn();
   await expect(web.signIn()).rejects.toThrow("approval stopped by test");
-  expect((web as any).preparedSignIn).toBeUndefined();
+  await expectUnprepared(web);
 });
 
 test("a wallet SIWE override leaves the prepared request available", async () => {
   const web = await client().create();
   await web.prepareSignIn();
-  const pending = (web as any).preparedSignIn;
   await expect(web.signIn({ nonce: "n" })).rejects.toThrow("wallet SIWE overrides");
-  expect((web as any).preparedSignIn).toBe(pending);
+  open.mockClear();
+  const signing = web.signIn();
+  expect(open.mock.calls).toHaveLength(1);
+  await expect(signing).rejects.toThrow("approval stopped by test");
 });
 
 test("the latest concurrent preparation owns the prepared slot", async () => {
@@ -251,7 +260,7 @@ test("sign-out clears a prepared request", async () => {
   const web = await client().create();
   await web.prepareSignIn();
   await web.signOut();
-  expect((web as any).preparedSignIn).toBeUndefined();
+  await expectUnprepared(web);
 });
 
 test("connectWallet clears a prepared request", async () => {
@@ -259,21 +268,21 @@ test("connectWallet clears a prepared request", async () => {
   const web = await setup.create();
   await web.prepareSignIn();
   expect(() => web.connectWallet(setup.provider)).toThrow("Signer already connected");
-  expect((web as any).preparedSignIn).toBeUndefined();
+  await expectUnprepared(web);
 });
 
 test("setManifest clears a prepared request", async () => {
   const web = await client().create();
   await web.prepareSignIn();
   web.setManifest({ name: "Example", app_id: "example", permissions: [] } as any);
-  expect((web as any).preparedSignIn).toBeUndefined();
+  await expectUnprepared(web);
 });
 
 test("setCapabilityRequest clears a prepared request", async () => {
   const web = await client().create();
   await web.prepareSignIn();
   web.setCapabilityRequest({ manifests: [], resources: [] } as any);
-  expect((web as any).preparedSignIn).toBeUndefined();
+  await expectUnprepared(web);
 });
 
 test("sign-out invalidates the prepared authorization generation", async () => {

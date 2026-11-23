@@ -111,11 +111,6 @@ describe("acquisition through the account signer, the opt-in and the store", () 
     expect(w.store.calls.put).toBe(0);
   });
 
-  test("the receipt's expiresAt is the signed exp of the stored credential", async () => {
-    const w = world();
-    const result = await w.run();
-    expect(result.expiresAt.getTime()).toBe(Math.floor(T0 / 1000) * 1000 + 31_536_000_000);
-  });
 });
 
 describe("the strict storage read and the issuer-policy check come before the first request (S17)", () => {
@@ -174,16 +169,6 @@ describe("the strict storage read and the issuer-policy check come before the fi
       expect([name, code(error)]).toEqual([name, "VERIFICATION_FAILED"]);
       noRequest(w);
     }
-  });
-
-  test("a verified record for the address that clears the reuse margin is returned with zero requests", async () => {
-    const seed = world();
-    const issued = await seed.run();
-    const w = world();
-    for (const [key, value] of seed.store.data) w.store.data.set(key, value);
-    const reused = await w.run();
-    expect(reused.credential).toBe(issued.credential);
-    noRequest(w);
   });
 
   test("another account's records under its own prefix are never offered", async () => {

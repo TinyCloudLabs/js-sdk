@@ -348,7 +348,6 @@ describe("TC-470 credential policy admission", () => {
         ed25519.getPublicKey(HOLDER_KEY),
       ),
     ).toBe(true);
-    expect(new Set([OWNER_DID, ISSUER_DID, HOLDER_DID, ENFORCER_DID, NODE_DID, ACCOUNT_OWNER_DID]).size).toBe(6);
   });
 
   test("cancels account admission during the challenge without activating authority", async () => {

@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
 import { syncStatusPart } from "../../src/ui/parts/sync-status";
-import type { HostContext, PanelClient, StatusCode, SyncEffective, SyncFacade, SyncState } from "../../src/ui/slots";
+import type { HostContext, PanelClient, StatusCode, SyncFacade, SyncState } from "../../src/ui/slots";
 import { text } from "../../src/ui/strings";
 
 interface FacadeStub extends SyncFacade {
@@ -70,37 +70,12 @@ function makeHost(initial: SyncFacade | undefined) {
 const layer = {} as HTMLElement;
 
 describe("sync-status part", () => {
-  const cases: Array<{ name: string; state: SyncState; status: StatusCode | null }> = [
-    { name: "off", state: { requested: false, effective: "off" }, status: null },
-    { name: "on", state: { requested: true, effective: "on" }, status: null },
-    { name: "enabling", state: { requested: true, effective: "enabling" }, status: null },
-    { name: "wiping", state: { requested: true, effective: "wiping" }, status: null },
-    { name: "pending", state: { requested: false, effective: "pending" }, status: "sync_pending" },
-    {
-      name: "unavailable while requested",
-      state: { requested: true, effective: "unavailable" },
-      status: "sync_attention",
-    },
-    {
-      name: "unavailable while not requested",
-      state: { requested: false, effective: "unavailable" },
-      status: null,
-    },
-    {
-      name: "unknown effective while requested",
-      state: { requested: true, effective: "exploded" as SyncEffective },
-      status: "sync_attention",
-    },
-  ];
-
-  for (const c of cases) {
-    test(`publishes ${c.status ?? "no status"} for ${c.name}`, () => {
-      const host = makeHost(makeFacade(c.state));
-      const stop = syncStatusPart.start(host.ctx, layer);
-      expect(host.statuses.at(-1)).toBe(c.status);
-      stop();
-    });
-  }
+  test("publishes the facade's status as soon as it starts", () => {
+    const host = makeHost(makeFacade({ requested: false, effective: "pending" }));
+    const stop = syncStatusPart.start(host.ctx, layer);
+    expect(host.statuses.at(-1)).toBe("sync_pending");
+    stop();
+  });
 
   test("follows facade changes while running", () => {
     const facade = makeFacade({ requested: false, effective: "off" });

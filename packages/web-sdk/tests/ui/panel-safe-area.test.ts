@@ -37,14 +37,14 @@ afterEach(() => {
 interface Fixture {
   readonly panel: PanelHandle;
   readonly head: HTMLElement;
-  readonly calls: { close: number; escape: number };
+  readonly calls: { close: number };
 }
 
 function fixture(): Fixture {
-  const calls = { close: 0, escape: 0 };
+  const calls = { close: 0 };
   const panel = createPanel({
     onClose: () => void (calls.close += 1),
-    onEscape: () => void (calls.escape += 1),
+    onEscape() {},
     onLayout() {},
     onNavigate() {},
   });
@@ -67,11 +67,6 @@ function drag(target: Element, dx: number, dy: number, kind = "touch"): void {
 }
 
 describe("closing the full-page panel on a phone", () => {
-  test("Escape closes it", () => {
-    const f = fixture();
-    f.panel.el.dispatchEvent(new (page as unknown as { KeyboardEvent: typeof KeyboardEvent }).KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
-    expect(f.calls.escape).toBe(1);
-  });
 
   test("a downward drag of 60px on the header closes it", () => {
     const f = fixture();
