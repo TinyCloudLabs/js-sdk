@@ -56,7 +56,7 @@ import { runProbeChild, type ProbeRequest } from "../lib/probe-child.js";
 import { runCommand, type CommandOutcome } from "../lib/run-command.js";
 import { safeInline } from "../output/safe-text.js";
 import { abortableSleep, DEFAULT_WAIT_TIMEOUT, parseWaitTimeout, runSecretsWait } from "../lib/secrets-wait.js";
-import { secretKeyResource, secretKeyResourceForVaultPath, isOverlongStoredScope, unreadableSecretNote } from "../lib/secret-keys.js";
+import { isBotHistoryScope, secretKeyResource, secretKeyResourceForVaultPath, isOverlongStoredScope, unreadableSecretNote } from "../lib/secret-keys.js";
 import { canonicalNetworkUrn } from "../lib/owner-did.js";
 import { migrateSecrets } from "@tinycloud/sdk-services/secrets/migrate";
 import { resolveProfilePosture, type CLIContext, type ProfileConfig } from "../config/types.js";
@@ -236,7 +236,7 @@ function canonicalizeSecretScope(scope: string | undefined): string | undefined 
     );
   }
 
-  if (RESERVED_SECRET_SCOPES.has(canonical)) {
+  if (RESERVED_SECRET_SCOPES.has(canonical) || isBotHistoryScope(canonical)) {
     throw new CLIError(
       "INVALID_SECRET_SCOPE",
       `Secret scope ${JSON.stringify(scope)} is reserved; omit scope for global secrets.`,
@@ -1704,6 +1704,8 @@ export function registerSecretsCommand(
         const ctx = await ProfileManager.resolveContext(globalOpts);
         const node = await ensureSecretsNode(ctx, options, openKeyAcquisition);
         const scopeOptions = resolveSecretScope(options);
+        // Refuse TinyChat's reserved bot-history scope before anything is asked or listed.
+        resolveSecretListPrefix(scopeOptions);
         const spaceUri = await resolveSecretSpace(options.space, ctx.profile);
         const secrets = secretsServiceForSpace(node, spaceUri);
         const result = await runSecretOperation({
@@ -1936,6 +1938,8 @@ export function registerSecretsCommand(
         const ctx = await ProfileManager.resolveContext(globalOpts);
         const node = await ensureSecretsNode(ctx, options, openKeyAcquisition);
         const scopeOptions = resolveSecretScope(options);
+        // Refuse TinyChat's reserved bot-history scope before anything is asked or deleted.
+        resolveSecretListPrefix(scopeOptions);
         const spaceUri = await resolveSecretSpace(options.space, ctx.profile);
         const secrets = secretsServiceForSpace(node, spaceUri);
         const result = await runSecretOperation({

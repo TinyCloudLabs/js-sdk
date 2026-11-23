@@ -1,5 +1,13 @@
-import { MAX_SECRET_SCOPE_LENGTH, parseSecretCatalogKey, SECRET_SCOPE_RE, secretKeyPath } from "@tinycloud/sdk-services";
+import { BOT_HISTORY_KEY_PATH, MAX_SECRET_SCOPE_LENGTH, parseSecretCatalogKey, SECRET_SCOPE_RE, secretKeyPath } from "@tinycloud/sdk-services";
 import { formatKeyResource } from "@tinycloud/sdk-services/encryption/resource";
+
+/**
+ * Whether `scope` (canonical) is TinyChat's bot-history scope: its key and its data are reserved and no secrets
+ * command lists, deletes or migrates them. Derived from the SDK's key path, never a copied string.
+ */
+export function isBotHistoryScope(scope: string): boolean {
+  return BOT_HISTORY_KEY_PATH.startsWith(`secrets/scoped/${scope}/`);
+}
 
 const VAULT_PREFIX = "vault/secrets/";
 

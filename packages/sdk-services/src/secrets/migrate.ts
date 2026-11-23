@@ -6,7 +6,7 @@
 import { ErrorCodes, err, type Result } from "../types";
 import type { VaultResealResult } from "../vault/types";
 import type { ISecretsService, SecretsError } from "./ISecretsService";
-import { canonicalizeSecretScope, resolveSecretPath, SECRET_NAME_RE, type ResolvedSecretPath } from "./paths";
+import { BOT_HISTORY_KEY_PATH, canonicalizeSecretScope, resolveSecretPath, SECRET_NAME_RE, type ResolvedSecretPath } from "./paths";
 
 export type SecretMigrateSkipReason = Extract<VaultResealResult, { status: "skipped" }>["reason"];
 
@@ -66,8 +66,9 @@ export async function migrateSecrets(
 
   const catalog = await secrets.listAll();
   if (!catalog.ok) return catalog;
+  // TinyChat's bot-history key and its data live under a reserved scope: migrate neither counts nor touches them.
   const selected = catalog.data.filter((entry) =>
-    (names === undefined || names.has(entry.name)) && (scope === undefined || entry.scope === scope));
+    !isBotHistoryEntry(entry) && (names === undefined || names.has(entry.name)) && (scope === undefined || entry.scope === scope));
 
   const dryRun = options.dryRun === true;
   const report: SecretMigrateReport = { dryRun, total: selected.length, moved: 0, already: 0, staysOnNetwork: 0, skipped: {} };
@@ -109,4 +110,9 @@ export async function migrateSecrets(
 
 function invalid(message: string): Result<never, SecretsError> {
   return err({ code: ErrorCodes.INVALID_INPUT, service: "secrets", message });
+}
+
+/** An entry under the scope of the reserved bot-history key (derived from the key's own path, never a copied string). */
+function isBotHistoryEntry(entry: { scope?: string }): boolean {
+  return entry.scope !== undefined && BOT_HISTORY_KEY_PATH.startsWith(`secrets/scoped/${entry.scope}/`);
 }
