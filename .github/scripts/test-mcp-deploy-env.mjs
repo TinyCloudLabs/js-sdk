@@ -33,6 +33,7 @@ const fixture = {
   TC_MCP_INTROSPECTION_CLIENT_ID: "client id #= unchanged",
   TC_MCP_INTROSPECTION_CLIENT_SECRET: `${"b".repeat(24)}'${"c".repeat(18)} # \"`,
   TC_MCP_NATIVE_SERVICE_CREDENTIAL: `${"d".repeat(20)}'${"e".repeat(18)} `,
+  BETTERSTACK_SOURCE_TOKEN: "t".repeat(24),
   CERTBOT_EMAIL: "ops@tinycloud.xyz",
 };
 
@@ -47,9 +48,15 @@ const written = run("bash", ["-c", writerScript], env);
 if (written.status !== 0) fail("The complete MCP deploy environment file writer is not implemented.");
 const envFile = written.stdout.trim().split("\n").at(-1);
 if (!envFile || !envFile.startsWith(envDir)) fail("The complete deploy environment file was not created under RUNNER_TEMP.");
+const omitted = run("bash", ["-c", writerScript], { ...env, BETTERSTACK_SOURCE_TOKEN: "" });
+if (omitted.status !== 0) fail("A missing optional log shipping token blocked the deploy environment file.");
+const omittedFile = omitted.stdout.trim().split("\n").at(-1);
+if ((await readFile(omittedFile, "utf8")).includes("BETTERSTACK_SOURCE_TOKEN")) fail("A missing log shipping token was written to the environment file.");
+await rm(omittedFile, { force: true });
 let mergeAllowedEnvKeys;
+let missingRequiredEnvKeys;
 try {
-  ({ mergeAllowedEnvKeys } = await import("./mcp-sync-allowed-envs.mjs"));
+  ({ mergeAllowedEnvKeys, missingRequiredEnvKeys } = await import("./mcp-sync-allowed-envs.mjs"));
 } catch {
   fail("The MCP allowed_envs synchronization helper is not implemented.");
 }
@@ -59,6 +66,11 @@ const nextAllowed = mergeAllowedEnvKeys(currentAllowed, deployKeys);
 const expectedAllowed = [...new Set([...currentAllowed, ...deployKeys])];
 if (JSON.stringify(nextAllowed) !== JSON.stringify(expectedAllowed)) {
   fail("Allowed-env merge did not preserve existing names and add each deploy key once.");
+}
+const withoutToken = Object.keys(fixture).filter((key) => key !== "BETTERSTACK_SOURCE_TOKEN");
+if (missingRequiredEnvKeys(withoutToken).length !== 0) fail("The allowlist sync helper required the optional log shipping token.");
+if (missingRequiredEnvKeys(withoutToken.filter((key) => key !== "CERTBOT_EMAIL")).join(",") !== "CERTBOT_EMAIL") {
+  fail("The allowlist sync helper did not report a missing required key.");
 }
 const withheldKey = "test-value-must-not-be-logged";
 const missingSyncConfig = run("node", [join(root, ".github/scripts/mcp-sync-allowed-envs.mjs")], {

@@ -8,11 +8,19 @@ const deployEnvKeys = [
   "TC_MCP_INTROSPECTION_CLIENT_ID",
   "TC_MCP_INTROSPECTION_CLIENT_SECRET",
   "TC_MCP_NATIVE_SERVICE_CREDENTIAL",
+  "BETTERSTACK_SOURCE_TOKEN",
   "CERTBOT_EMAIL",
 ];
 
+// Left out of the environment file when it has no value, so a missing one never blocks a deploy or a rollback.
+const optionalEnvKeys = ["BETTERSTACK_SOURCE_TOKEN"];
+
 export function mergeAllowedEnvKeys(currentAllowed, deployKeys) {
   return [...new Set([...currentAllowed, ...deployKeys])];
+}
+
+export function missingRequiredEnvKeys(envKeys) {
+  return missingKeys(envKeys, deployEnvKeys.filter((key) => !optionalEnvKeys.includes(key)));
 }
 
 function missingKeys(allowed, required) {
@@ -44,7 +52,7 @@ async function syncAllowedEnvs() {
   } = await import("@phala/cloud");
   const envs = parseEnvVars(await readFile(envFile, "utf8"));
   const envKeys = envs.map(({ key }) => key);
-  const missingRequired = missingKeys(envKeys, deployEnvKeys);
+  const missingRequired = missingRequiredEnvKeys(envKeys);
   const unexpected = envKeys.filter((key) => !deployEnvKeys.includes(key));
   if (missingRequired.length > 0 || unexpected.length > 0 || envs.some(({ value }) => value.length === 0)) {
     const details = [
