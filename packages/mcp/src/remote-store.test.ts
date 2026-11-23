@@ -2,13 +2,13 @@ import "../../operations/test-support/test-bootstrap.mjs";
 import { afterEach, expect, spyOn, test } from "bun:test";
 import { access, mkdtemp, readFile, readdir, rm, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import { TinyCloudNode } from "@tinycloud/node-sdk";
 import { invokeOperation } from "@tinycloud/operations";
 import { RenewalRenewerChangedError } from "@tinycloud/sdk-core/delegations/renewal";
 
-import { BOOTSTRAP_LEASE_SECONDS, RemoteTenantStore, type ConnectStatus } from "./remote-store.js";
+import { BOOTSTRAP_LEASE_SECONDS, RemoteTenantStore, TENANT_IDLE_MS, type ConnectStatus } from "./remote-store.js";
 import { resetMcpRegistryFixture } from "./test-support/registry-fixture.mjs";
 import {
   LINKS_API_ORIGIN,
@@ -944,6 +944,59 @@ test("a wallet outside the link's accounts cannot become the owner of a first ap
   const profile = JSON.parse(await readFile(join(tenantRoot, ".tinycloud/profiles/agent/profile.json"), "utf8")) as Record<string, unknown>;
   expect(profile.ownerDid).toBeUndefined();
   expect(await exists(join(tenantRoot, ".tinycloud/profiles/agent/session.json"))).toBe(false);
+});
+
+test("a tenant with no call for 30 days loses its key and authority; a recent call keeps a tenant across a restart", async () => {
+  const hermetic = await createHermeticNode();
+  const store = await testStore(hermetic.host);
+  const requester = hermetic.ownerDid;
+  const subjects = ["openkey-user-idle", "openkey-user-called", "openkey-user-marked"];
+  const sessionDids = new Map<string, string>();
+  for (const subject of subjects) {
+    const connect = await store.connectStatus(subject, [requester]);
+    const bootstrap = await openKeyDelegation({
+      tenantStateRoot: store.tenantStateRoot(subject), privateKey: hermetic.ownerPrivateKey, space: "account",
+      abilities: BOOTSTRAP_ABILITIES,
+    });
+    await activateOnNode(hermetic.host, bootstrap);
+    expect(await deliver(store, subject, [requester], stateOf(connect.approvalUrl!), bootstrap))
+      .toEqual({ status: "stored" });
+    sessionDids.set(subject, connect.sessionDid);
+  }
+  // A scoped approval left open on the idle tenant goes with it.
+  const idleRoot = store.tenantStateRoot("openkey-user-idle");
+  const authority = await invokeOperation(
+    "tinycloud.kv.get", 1, { profile: "agent", stateRoot: idleRoot },
+    { space: "applications", key: "agents/demo/profile", representation: "json" },
+  );
+  const { approval } = await store.decorateAuthorityResult("openkey-user-idle", [requester], authority) as {
+    approval: { url: string };
+  };
+  await store.approvalLink(stateOf(approval.url));
+  expect(await readdir(join(idleRoot, ".tinycloud/profiles/agent/pending"))).not.toHaveLength(0);
+  const stateDir = dirname(dirname(store.tenantStateRoot(subjects[0]!)));
+  await store.close();
+
+  // Every key and session was written over 30 days ago; only "marked" called within them.
+  const old = new Date(Date.now() - TENANT_IDLE_MS - 60_000);
+  for (const subject of subjects) {
+    const files = [".tinycloud/profiles/agent/key.json", ".tinycloud/profiles/agent/session.json"];
+    if (subject !== "openkey-user-marked") files.push(".tinycloud/last-call");
+    for (const file of files) await utimes(join(store.tenantStateRoot(subject), file), old, old);
+  }
+  const restarted = await testStore(hermetic.host, stateDir);
+  expect(await restarted.connectStatus("openkey-user-called", [requester])).toMatchObject({ connected: true });
+  expect(await restarted.sweepIdleTenants()).toBe(1);
+
+  expect(await exists(restarted.tenantStateRoot("openkey-user-idle"))).toBe(false);
+  for (const subject of ["openkey-user-called", "openkey-user-marked"]) {
+    expect(await restarted.connectStatus(subject, [requester]))
+      .toEqual({ connected: true, sessionDid: sessionDids.get(subject)! });
+  }
+  const reconnect = await restarted.connectStatus("openkey-user-idle", [requester]);
+  expect(reconnect).toMatchObject({ connected: false, approvalUrl: expect.any(String) });
+  expect(reconnect.sessionDid).not.toBe(sessionDids.get("openkey-user-idle")!);
+  expect(await restarted.sweepIdleTenants()).toBe(0);
 });
 
 /**
