@@ -11,7 +11,7 @@ import { Watcher } from '../dist/watch.js';
 const oldCid = 'old-inbound';
 const newCid = 'installed-successor';
 const laterCid = 'next-installed-successor';
-const refuse = () => Object.assign(new Error('hook ticket refused'), { status: 401 });
+const refuse = (cid) => Object.assign(new Error('hook ticket refused'), { status: 401, meta: { invocationProofCid: cid } });
 
 test('old hook refusal cannot latch a successor, and installation rebinds hooks and sync immediately', { timeout: 10_000 }, async (t) => {
   const start = Date.parse('2026-11-23T12:00:00Z');
@@ -45,7 +45,7 @@ test('old hook refusal cannot latch a successor, and installation rebinds hooks 
           sync.get(cid).resolve();
           if (cid === newCid) {
             await oldSyncReply.promise;
-            throw refuse();
+            throw refuse(cid);
           }
         }
         return kv.list();
@@ -60,7 +60,7 @@ test('old hook refusal cannot latch a successor, and installation rebinds hooks 
       stream.signal = signal;
       stream.open.resolve();
       await stream.reply.promise;
-      throw refuse();
+      throw refuse(peer.inbound.cid);
     } }),
     onAuthorityRefusal: async (source, ...rest) => {
       await recordAuthorityRefusal(source, ...rest);

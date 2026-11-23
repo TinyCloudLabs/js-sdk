@@ -1,8 +1,8 @@
-import { isAuthorizationRefusal } from './errors.js';
+import { isAuthorizationRefusal, isInvocationTimeRefusal } from './errors.js';
 import { defer } from './defer.js';
 import { decodeTime, ulid } from 'ulid';
 import type { HookSubscription } from '@tinycloud/node-sdk';
-import { errInfo, CourierError } from './errors.js';
+import { errInfo, CourierError, refusedInvocationCid } from './errors.js';
 import { k, PREFIX, stateKeys, type StateKeys } from './keys.js';
 import type { StoredPeer } from './profile.js';
 import { isRecord, messageView, oneLine, taskView } from './a2a.js';
@@ -693,6 +693,7 @@ export class Watcher {
     }
     const entry: { again: boolean; via: Via; listPaused: boolean; successor?: StoredPeer } = { again: false, via, listPaused: !pausedListed };
     this.syncing.set(peer.handle, entry);
+    let retriedRefusal = false;
     try {
       do {
         if (entry.successor) {
@@ -706,6 +707,7 @@ export class Watcher {
         this.dirtyPeers.delete(peer.handle);
         try {
           await this.syncPeer(peer, entry.via, listPaused, renew);
+          if (retriedRefusal) await this.recheckUnavailable(peer.handle);
         } catch (error) {
           if (entry.successor) continue; // An in-flight read against the old binding cannot affect the new one.
           if (!isAuthorizationRefusal(error)) {
@@ -713,9 +715,23 @@ export class Watcher {
             this.deps.log('sync-error', { peer: peer.handle, ...errInfo(error) });
             continue;
           }
+          const refused = refusedInvocationCid(error);
+          const latest = this.deps.loadPeers().find(candidate => candidate.handle === peer.handle);
+          if (!latest?.inbound) return;
+          if (refused !== latest.inbound.cid) {
+            if (!retriedRefusal) {
+              retriedRefusal = true;
+              if (latest.inbound.cid !== peer.inbound?.cid) this.inboundRenewed(latest);
+              else entry.again = true; // No proof verdict (e.g. expired signature): sign again.
+              continue;
+            }
+            this.dirtyPeers.add(peer.handle);
+            this.deps.log('sync-error', { peer: peer.handle, ...errInfo(error) });
+            return;
+          }
           let renewed: StoredPeer | undefined;
           try {
-            renewed = await this.afterRefusal(peer, renew);
+            if (!retriedRefusal) renewed = await this.afterRefusal(peer, renew);
           } catch (failure) {
             // Neither renewed nor refused for certain: retried by the next cycle, nothing recorded.
             this.dirtyPeers.add(peer.handle);
@@ -724,9 +740,17 @@ export class Watcher {
           }
           if (!renewed) {
             if (this.syncing.get(peer.handle)?.successor) continue;
-            await this.deps.onAuthorityRefusal?.(`peer:${peer.handle}`, peer.inbound?.cid);
+            await this.deps.onAuthorityRefusal?.(`peer:${peer.handle}`, refused);
+            const installed = this.deps.loadPeers().find(candidate => candidate.handle === peer.handle);
+            if (installed?.inbound && installed.inbound.cid !== refused && !retriedRefusal) {
+              retriedRefusal = true;
+              this.inboundRenewed(installed);
+              continue;
+            }
+            if (installed) this.dirtyPeers.add(peer.handle);
             return;
           }
+          retriedRefusal = true;
           peer = renewed;
           entry.again = true;
         }
@@ -759,6 +783,14 @@ export class Watcher {
     }
     const current = this.deps.loadPeers().find(candidate => candidate.handle === peer.handle);
     return current?.inbound && current.inbound.cid !== refused ? current : undefined;
+  }
+
+  private async recheckUnavailable(handle?: string): Promise<void> {
+    for (const peer of this.deps.loadPeers()) {
+      if (peer.interim?.unavailableAt && (handle === undefined || handle === peer.handle)) {
+        await this.deps.checkAuthority?.(peer.handle);
+      }
+    }
   }
 
   /**
@@ -868,6 +900,7 @@ export class Watcher {
     try {
       outcomes = await readJsonMany<unknown>(peerKv, selectedItems.map(item => item.key));
     } catch (error) {
+      if (isAuthorizationRefusal(error)) throw error;
       this.dirtyPeers.add(peer.handle);
       log('sync-error', { peer: peer.handle, messages: selectedItems.length, ...errInfo(error) });
       outcomes = new Map();
@@ -891,6 +924,7 @@ export class Watcher {
         const view = messageView(value);
         delivered.push({ threadId: selected.threadId, messageId: selected.messageId, intent: view.intent, notice: view.notice });
       } catch (error) {
+        if (isAuthorizationRefusal(error)) throw error;
         // Not delivered, so no receipt: this message is retried on the next sync; the others go ahead.
         this.dirtyPeers.add(peer.handle);
         log('sync-error', { peer: peer.handle, messageId: selected.messageId, ...errInfo(error) });
@@ -1565,10 +1599,18 @@ export class Watcher {
    * This agent's pause markers are the truth. A marker that disappeared means the human resumed: the budget starts
    * over and what arrived meanwhile wakes the agent once. Serialised, so overlapping calls never apply a stale listing.
    */
-  syncPaused(): Promise<void> {
-    return this.exclusive(async () => {
+  async syncPaused(): Promise<void> {
+    let recoveredTimeRefusal = false;
+    await this.exclusive(async () => {
       try {
-        const keys = await listAll(this.deps.selfKv, this.keys.pausedPrefix);
+        const list = () => listAll(this.deps.selfKv, this.keys.pausedPrefix);
+        let keys: string[];
+        try { keys = await list(); }
+        catch (error) {
+          if (!isInvocationTimeRefusal(error)) throw error;
+          keys = await list();
+          recoveredTimeRefusal = true;
+        }
         const listed = new Set<string>();
         for (const key of keys) {
           const match = /\/paused\/([^/]+)\/([^/]+)\.json$/.exec(key);
@@ -1608,6 +1650,10 @@ export class Watcher {
         this.deps.log('sync-error', { source: 'paused', ...errInfo(error) });
       }
     });
+    if (recoveredTimeRefusal) {
+      try { await this.recheckUnavailable(); }
+      catch (error) { this.deps.log('sync-error', { source: 'paused', ...errInfo(error) }); }
+    }
   }
 
   /** State that only matters for a day or an hour is dropped, so it cannot grow without bound. */
@@ -1948,7 +1994,7 @@ export class Watcher {
         }
       }
     } catch (error) {
-      if (isAuthorizationRefusal(error)) await this.deps.onAuthorityRefusal?.('self');
+      if (isAuthorizationRefusal(error) && !isInvocationTimeRefusal(error)) await this.deps.onAuthorityRefusal?.('self');
       throw error;
     } finally {
       this.reconcileHooks = undefined;
@@ -1977,6 +2023,7 @@ export class Watcher {
   ): Promise<void> {
     let failures = 0;
     let opened = false;
+    let retriedRefusal = false;
     while (!signal.aborted) {
       try {
         this.deps.log('hook-subscribe', { source: id.split(':').slice(0, 2).join(':'), ttlSeconds: this.opts.ticketSeconds });
@@ -1993,6 +2040,7 @@ export class Watcher {
           if (signal.aborted) return;
           failures = 0;
           stream.proven = true;
+          retriedRefusal = false;
           this.deps.log('hook-event', { source: id.split(':').slice(0, 2).join(':'), path: event.path ?? null });
           onEvent(event);
         }
@@ -2005,9 +2053,16 @@ export class Watcher {
         if (signal.aborted) return;
         this.hookStreams.delete(id);
         if (isAuthorizationRefusal(error)) {
-          await this.deps.onAuthorityRefusal?.(id);
-          if (!signal.aborted) onRefused?.();
-          return;
+          const refused = refusedInvocationCid(error);
+          if (!isInvocationTimeRefusal(error) && (!onRefused || refused !== undefined)) {
+            await this.deps.onAuthorityRefusal?.(id, refused);
+            if (!signal.aborted) onRefused?.();
+            if (!onRefused || signal.aborted) return;
+          }
+          if (!retriedRefusal) { retriedRefusal = true; continue; }
+          onEvent();
+          await sleep(5_000, signal);
+          continue;
         }
         failures++;
         this.deps.log('hook-error', { source: id.split(':').slice(0, 2).join(':'), ...errInfo(error) });

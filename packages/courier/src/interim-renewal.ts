@@ -3,7 +3,7 @@ import type { AccountDelegationRecord, PermissionEntry, PortableDelegation, Tiny
 import { canonicalizeRecapCaveats, parseCanonicalRecapResource, parseSignedCompactUcanAttenuation } from '@tinycloud/sdk-core';
 import { canonicalJson } from './canonical.js';
 import { bareDid, CLOCK_SKEW_MS } from './authority.js';
-import { CourierError } from './errors.js';
+import { CourierError, retryInvocationTime } from './errors.js';
 import { cmd } from './program.js';
 import { k, peerReadPermissions } from './keys.js';
 import type { Profile, ProfileSave, StoredPeer } from './profile.js';
@@ -315,11 +315,12 @@ export async function maintainOutbound(node: TinyCloudNode, profile: Profile, pe
   state.lastAttemptAt = new Date(now).toISOString();
   save();
   const key = k.peerDelegation(peer.handle, peer.sessionId);
-  let before = await getJson<{ cid?: string; delegation?: string }>(node.kv, key);
+  const readMarker = () => getJson<{ cid?: string; delegation?: string }>(node.kv, key);
+  let before = await retryInvocationTime(readMarker);
   if (!before) {
     // Existing pairings may have only a node-issued prior record. Establish a CAS marker, never a new grant.
-    await putCreate(node.kv, key, { v: 0, cid: tip.cid, issuedAt: tip.issuedAt?.toISOString() });
-    before = await getJson<{ cid?: string; delegation?: string }>(node.kv, key);
+    await retryInvocationTime(() => putCreate(node.kv, key, { v: 0, cid: tip.cid, issuedAt: tip.issuedAt?.toISOString() }));
+    before = await retryInvocationTime(readMarker);
   }
   const publishedCid = before?.value.delegation ? deserializeDelegation(before.value.delegation).cid : before?.value.cid;
   if (!before?.etag || publishedCid !== tip.cid) return { state: 'unavailable' };
@@ -346,7 +347,8 @@ export async function maintainOutbound(node: TinyCloudNode, profile: Profile, pe
     if ('state' in rechecked) throw new CourierError('renewal-unavailable', "Courier couldn't safely renew access, so your current access is unchanged. Try again later.");
     liveEnd(tip.expiresAt, Date.now());
     parentOf(node, profile, Date.now());
-    await putMatch(node.kv, key, { v: 0, delegation: record.delegation, issuedAt: record.issuedAt }, before.etag);
+    const etag = before.etag;
+    await retryInvocationTime(() => putMatch(node.kv, key, { v: 0, delegation: record.delegation, issuedAt: record.issuedAt }, etag));
     if (overlong) { state.shortenedCid = tip.cid; save(); }
     return { state: 'renewed', delegation: next };
   } catch (error) {
