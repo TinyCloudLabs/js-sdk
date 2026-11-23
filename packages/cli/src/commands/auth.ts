@@ -2895,7 +2895,7 @@ async function refreshPreparedOpenKeySession(params: {
     .then((gate) => gate !== undefined && gate.principalHash !== null, () => true);
   try {
     if (namedKeys !== undefined) process.stderr.write(KEYS_APPROVAL_NOTE(namedKeys.prefix));
-    const { warnings } = await node.signInWithOpenKey(async (prepared) => {
+    const signIn = await node.signInWithOpenKey(async (prepared) => {
       preparedDid = prepared.verificationMethod;
       handoff = await startPreparedOpenKeyHandoff({
         prepared, openKeyHost: resolveOpenKeyHost(profile),
@@ -2906,6 +2906,7 @@ async function refreshPreparedOpenKeySession(params: {
         return result;
       });
     }, preparedSignInOptions(expiry));
+    const warnings = signIn?.warnings;
     const active = node.restorableSession;
     if (!active || !preparedDid || node.sessionDid !== preparedDid || active.verificationMethod !== preparedDid) {
       throw new CLIError("OPENKEY_SESSION_MISMATCH", "OpenKey signed a different SDK session key; no profile or session was saved.", ExitCode.PERMISSION_DENIED);

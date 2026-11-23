@@ -1463,7 +1463,7 @@ export class TinyCloudWeb {
     this.restoredNetworkWork = undefined;
     this._sessionRestoreStatus = "logging-in";
     const was = node.spaceId;
-    let result: SignInResult;
+    let result: SignInResult | void;
     try {
       if (continuation?.handle) {
         continuation.node = node;

@@ -3512,7 +3512,7 @@ export class TinyCloudNode {
    *
    * @param options - Optional per-call SIWE overrides for this sign-in only
    */
-  async signIn(options?: SignInOptions): Promise<SignInResult> {
+  async signIn(options?: SignInOptions): Promise<SignInResult | void> {
     if (!this.signer || !this.tc) {
       throw new Error(
         "Cannot signIn() in session-only mode. Provide a privateKey in config to create your own space."
@@ -3529,7 +3529,7 @@ export class TinyCloudNode {
   async signInWithOpenKey(
     authorizeFn: Parameters<NodeUserAuthorization["signInWithOpenKey"]>[0],
     options?: Parameters<NodeUserAuthorization["signInWithOpenKey"]>[1],
-  ): Promise<SignInResult> {
+  ): Promise<SignInResult | void> {
     if (!this.signer || !this.tc || !this.auth) {
       throw new Error("Cannot signInWithOpenKey() in session-only mode. Provide a signer in config.");
     }
@@ -3561,7 +3561,7 @@ export class TinyCloudNode {
   signInWithPreparedOpenKey(
     pending: PreparedOpenKeyAuthorization,
     authorizeFn: Parameters<NodeUserAuthorization["signInWithOpenKey"]>[0],
-  ): Promise<SignInResult> {
+  ): Promise<SignInResult | void> {
     if (!this.signer || !this.tc || !this.auth || this.signOutInFlight) {
       throw new Error("Prepared OpenKey sign-in is unavailable");
     }
@@ -3583,7 +3583,7 @@ export class TinyCloudNode {
     }, pending.identity);
   }
 
-  private async signInWith(performSignIn: () => Promise<SignInResult>, identity?: PreparedOpenKeyAuthorization["identity"]): Promise<SignInResult> {
+  private async signInWith(performSignIn: () => Promise<SignInResult | void>, identity?: PreparedOpenKeyAuthorization["identity"]): Promise<SignInResult | void> {
     // Refuse a caveated manifest before any signer, registry or host call.
     refuseCaveated(this.auth?.manifestsForCaveatRefusal);
     // Read synchronously: a sign-out called after this sign-in started wins,
@@ -3603,7 +3603,7 @@ export class TinyCloudNode {
     }
   }
 
-  private async establishSignIn(epoch: number, performSignIn: () => Promise<SignInResult>, identity?: PreparedOpenKeyAuthorization["identity"]): Promise<SignInResult> {
+  private async establishSignIn(epoch: number, performSignIn: () => Promise<SignInResult | void>, identity?: PreparedOpenKeyAuthorization["identity"]): Promise<SignInResult | void> {
     if (!this.signer || !this.tc) {
       throw new Error("Not signed in. Call signIn() first.");
     }
@@ -3667,7 +3667,7 @@ export class TinyCloudNode {
     const previousReplicaStamp = this.replicaSessionStamp;
     this.replicaRestoreGate = undefined;
     this.replicaSessionStamp = undefined;
-    let result: SignInResult;
+    let result: SignInResult | void;
     try {
       result = await performSignIn();
     } catch (error) {
@@ -3791,7 +3791,8 @@ export class TinyCloudNode {
     }
 
     this.notificationHandler.success("Successfully signed in");
-    return result.warnings === undefined ? {} : { warnings: result.warnings };
+    const warnings = result?.warnings;
+    if (warnings !== undefined) return { warnings };
   }
 
   /**
