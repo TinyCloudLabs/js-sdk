@@ -1,5 +1,16 @@
 # @tinycloudlabs/web-sdk
 
+## 3.14.0-beta.19
+
+### Patch Changes
+
+- 71da2dd: Users can sign in to TinyCloud Explorer at `https://explorer.tinycloud.xyz` even if the owner has no location registry record. OpenKey handles account setup. Other origins do not gain this access.
+
+  Details: TC-3862
+  - @tinycloud/sdk-core@3.14.0-beta.19
+  - @tinycloud/node-sdk@3.14.0-beta.19
+  - @tinycloud/replica@0.4.7-beta.5
+
 ## 3.14.0-beta.18
 
 ### Patch Changes

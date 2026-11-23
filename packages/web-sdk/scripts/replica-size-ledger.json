@@ -3770,5 +3770,35 @@
       "ceiling": { "index.mjs": 1539880, "index.cjs": 1471461 }
     },
     "reason": "Both backends measured 1539830/1470750 gzip bytes at the pinned source before the TC-3862 merge-forward. The ceiling delta is relative to the TC-3862 row, not to that run's base. The Web root bundles SDK Services' invocation-time versus proof-refusal classification. Details: TC-3522"
+  },
+  "tc3522InvocationRefusalKvWorker": {
+    "label": "retain invocation-refusal attribution in the kv-storage worker (TC-3522)",
+    "ruling": "Naomi ACBX 2026-11-23: admit only the exact worker gzip bytes reproduced by SQLite and PostgreSQL, with zero headroom. Root, optional and gated ceilings are unchanged.",
+    "base": "71da2dd0fb6961f0bc342f7cfac43c084e91aa5d",
+    "sourceCommits": ["d2b8696ae792eaddea6fd8662ff451e4d307473e"],
+    "canonicalCI": {
+      "run": "45209040504",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45209040504/job/137812870821",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45209040504/job/137812870234"
+      ]
+    },
+    "worker": { "delta": 146, "ceiling": 781337 },
+    "reason": "The SDK Services KV refusal path ships in the hashed kv-storage worker. Both canonical jobs measured 781337 gzip -9 bytes, 146 above the TC-3947 ceiling of 781191."
+  },
+  "tc3522InvocationRefusalReplicaWorker": {
+    "label": "retain invocation-refusal attribution in the replica worker (TC-3522)",
+    "ruling": "Naomi ACBX 2026-11-23: admit only the exact worker gzip bytes reproduced by SQLite and PostgreSQL, with zero headroom. Root, optional and gated ceilings are unchanged.",
+    "base": "71da2dd0fb6961f0bc342f7cfac43c084e91aa5d",
+    "sourceCommits": ["d2b8696ae792eaddea6fd8662ff451e4d307473e"],
+    "canonicalCI": {
+      "run": "45209040504",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45209040504/job/137812870821",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45209040504/job/137812870234"
+      ]
+    },
+    "replicaWorker": { "delta": 156, "ceiling": 775076 },
+    "reason": "The SDK Services KV refusal path ships in replica.worker.js. Both canonical jobs measured 775076 gzip -9 bytes, 156 above the TC-3947 ceiling of 774920."
   }
 }

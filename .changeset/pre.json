@@ -58,6 +58,7 @@
     "tc-3802-per-secret-keys",
     "tc-3802-scoped-get-empty-caveats",
     "tc-3823-bot-history-key",
+    "tc-3862-explorer-first-party",
     "tc-3947-replica-revoke-json",
     "tc-3969-signed-secret-key-coverage",
     "tc-3971-secrets-owner-template",
