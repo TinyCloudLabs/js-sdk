@@ -39,7 +39,8 @@ import { join, resolve } from "node:path";
 // TC-2931: canonical run 43430771640 measures 780,903 B (+161); exact named admission, no headroom. Details: TC-2931
 // TC-3443: canonical run 45067208416 measures 780,957 B (+54); the ledger's tc3443SessionRetireRoot row records it as worker; no headroom. Details: TC-3443
 // TC-3947: canonical run 45102787771 measures 781,191 B (+234); the ledger's tc3947ReplicaRevokeRoot row records it as worker; no headroom. Details: TC-3947
-export const MAX_WORKER_GZIP_BYTES = 781_191;
+// TC-3522: canonical SQLite/Postgres run 45209040504 measures 781,337 B (+146); no headroom.
+export const MAX_WORKER_GZIP_BYTES = 781_337;
 // TC-1827 follow-up: `replica.worker.js` (the @tinycloud/replica/browser worker) is unhashed and had no ceiling. It
 // measured 770,093 in GitHub run 39949887460 (head f2e2f9fc, merge base dc615834); requested by Naomi, 2026-10-23; the
 // ledger's tc1827ReplicaWorkerRatchet row records it. Zero additional headroom.
@@ -59,7 +60,8 @@ export const MAX_WORKER_GZIP_BYTES = 781_191;
 // TC-2931: the same canonical run measures 774,561 B (+150); exact named admission, no headroom. Details: TC-2931
 // TC-3443: the same canonical run measures 774,682 B (+121); the ledger's tc3443SessionRetireRoot row records it as replicaWorker; no headroom. Details: TC-3443
 // TC-3947: the same canonical run measures 774,920 B (+238); the ledger's tc3947ReplicaRevokeRoot row records it as replicaWorker; no headroom. Details: TC-3947
-export const MAX_REPLICA_WORKER_GZIP_BYTES = 774_920;
+// TC-3522: the same canonical jobs measure 775,076 B (+156); no headroom.
+export const MAX_REPLICA_WORKER_GZIP_BYTES = 775_076;
 const canonicalName = /^kv-storage\.worker\.([0-9a-f]{64})\.js$/;
 const replicaWorkerName = "replica.worker.js";
 

@@ -11,6 +11,7 @@ import type {
 } from "../types";
 import { ErrorCodes, err, ok, serviceError } from "../types";
 import { authRequiredError, wrapError } from "../errors";
+import { classifyInvocationRefusal, invocationRefusalMeta, type InvocationRefusal } from "../invocationRefusal";
 import type { IHooksService } from "./IHooksService";
 import type {
   HookEvent,
@@ -493,11 +494,12 @@ export class HooksService extends BaseService implements IHooksService {
       }
       request = this.createRequestSignal(signal, 0);
       const host = this.host;
+      const headers = serviceHeadersToRecord(this.createInvokeHeaders(plan.subscriptions));
       const minted = await awaitOwned(request!.signal, () =>
         context.fetch(`${host}/hooks/tickets`, {
           method: "POST",
           headers: {
-            ...serviceHeadersToRecord(this.createInvokeHeaders(plan.subscriptions)),
+            ...headers,
             "content-type": "application/json",
           },
           body: JSON.stringify({
@@ -510,8 +512,10 @@ export class HooksService extends BaseService implements IHooksService {
       if (!owns()) return { kind: "stopped" };
       if (!minted.ok) {
         const status = minted.status;
+        const signed = Object.entries(headers).find(([name]) => name.toLowerCase() === "authorization")?.[1];
+        const refusal = classifyInvocationRefusal(status, signed);
         const error = await awaitOwned(request!.signal, () =>
-          responseError("hooks", "failed to mint hook ticket", minted),
+          responseError("hooks", "failed to mint hook ticket", minted, refusal),
         );
         if (!owns()) return { kind: "stopped" };
         return { kind: "refused", terminal: isTerminalMintRefusal(status), error };
@@ -1022,6 +1026,7 @@ async function responseError(
   service: string,
   message: string,
   response: FetchResponse,
+  refusal?: InvocationRefusal,
 ): Promise<ReturnType<typeof wrapError>> {
   let detail = response.statusText;
   try {
@@ -1038,7 +1043,8 @@ async function responseError(
     response.status === 408 || response.status === 504 ? ErrorCodes.TIMEOUT : ErrorCodes.NETWORK_ERROR,
     `${message}: ${response.status} ${detail}`,
     service,
-    { meta: { status: response.status, statusText: response.statusText } },
+    { meta: { status: response.status, statusText: response.statusText,
+      ...(response.status === 401 || response.status === 403 ? invocationRefusalMeta(refusal, detail) : undefined) } },
   );
 }
 

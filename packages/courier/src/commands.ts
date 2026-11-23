@@ -14,7 +14,7 @@ import { CourierError, CourierPending, errInfo } from './errors.js';
 import { AGENT_GRANT, AGENT_GRANT_EXPIRY, COURIER_SPACE, DEFAULT_HOST, EXT, k, peerReadPermissions, PREFIX } from './keys.js';
 import {
   loadProfile, saveProfile, withProfileTransaction, assertNotPaired, getPeer, profileDir, profileExists, loadKey, saveKey,
-  type AgentKey, type Profile, type StoredPeer,
+  type AgentKey, type Profile, type ProfileSave, type StoredPeer,
 } from './profile.js';
 import { revokePeer } from './revoke.js';
 import { courierNode, peerKv, currentInbound, assertInboundLive, renewalBinding } from './node.js';
@@ -513,7 +513,7 @@ async function renewOutbound(active: Ctx, peer: StoredPeer, force: boolean, arti
   });
 }
 
-async function issueOutbound(active: Ctx, peer: StoredPeer, force: boolean, save: () => void, artifact: boolean): Promise<PortableDelegation | undefined> {
+async function issueOutbound(active: Ctx, peer: StoredPeer, force: boolean, save: ProfileSave, artifact: boolean): Promise<PortableDelegation | undefined> {
   const result = await maintainOutbound(active.node, active.profile, peer, save, { force, manual: true, extendOnly: artifact });
   if (result.reason === 'overlong') {
     fail('renew-throttled', `Access for ${oneLine(peer.handle)} already runs longer than the peer accepts${peerLimitNote(peer) ? ` (${peerLimitNote(peer)})` : ''}. A shorter grant is published automatically on the next renewal tick. Nothing was exported.`);

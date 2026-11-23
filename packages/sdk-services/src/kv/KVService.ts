@@ -28,6 +28,7 @@ import {
   isRequestTimeoutError,
   nodeRetryError,
 } from "../errors";
+import { invocationRefusalMeta, refusedInvocations } from "../invocationRefusal";
 import { IKVService } from "./IKVService";
 import { PrefixedKVService, IPrefixedKVService } from "./PrefixedKVService";
 import {
@@ -820,10 +821,12 @@ export class KVService extends BaseService implements IKVService {
     const detail = errorText.trim().length > 0
       ? errorText
       : response.statusText || "authorization failed";
+    const invocationMeta = invocationRefusalMeta(refusedInvocations.get(response), errorText);
     return err(authUnauthorizedError("kv", `${context}: ${response.status} - ${detail}`, {
       status: response.status,
       ...extraMeta,
       ...capability,
+      ...invocationMeta,
     }));
   }
 

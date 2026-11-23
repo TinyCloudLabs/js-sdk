@@ -506,6 +506,9 @@ export type Ledger = {
   tc3823BotHistoryKeyRoot?: LogoutRatchet;
   tc3802SecretKeyCapRoot?: LogoutRatchet;
   tc3862ExplorerOriginRoot?: LogoutRatchet;
+  tc3522InvocationRefusalRoot?: LogoutRatchet;
+  tc3522InvocationRefusalKvWorker?: WorkerRatchet;
+  tc3522InvocationRefusalReplicaWorker?: Omit<WorkerRatchet, "worker"> & { replicaWorker: { delta: number; ceiling: number } };
   tc2773LazyRestoreReplicaWorker?: Omit<WorkerRatchet, "worker"> & { replicaWorker: { delta: number; ceiling: number } };
 };
 
@@ -1166,6 +1169,9 @@ export function ancestryPins(root: Ledger, hasGatedOnly: boolean): Array<{ row: 
   if (root.tc3823BotHistoryKeyRoot !== undefined) pins.push({ row: "tc3823BotHistoryKeyRoot", pin: root.tc3823BotHistoryKeyRoot.sourceCommits.at(-1)! });
   if (root.tc3802SecretKeyCapRoot !== undefined) pins.push({ row: "tc3802SecretKeyCapRoot", pin: root.tc3802SecretKeyCapRoot.sourceCommits.at(-1)! });
   if (root.tc3862ExplorerOriginRoot !== undefined) pins.push({ row: "tc3862ExplorerOriginRoot", pin: root.tc3862ExplorerOriginRoot.sourceCommits.at(-1)! });
+  if (root.tc3522InvocationRefusalRoot !== undefined) pins.push({ row: "tc3522InvocationRefusalRoot", pin: root.tc3522InvocationRefusalRoot.sourceCommits.at(-1)! });
+  if (root.tc3522InvocationRefusalKvWorker !== undefined) pins.push({ row: "tc3522InvocationRefusalKvWorker", pin: root.tc3522InvocationRefusalKvWorker.sourceCommits.at(-1)! });
+  if (root.tc3522InvocationRefusalReplicaWorker !== undefined) pins.push({ row: "tc3522InvocationRefusalReplicaWorker", pin: root.tc3522InvocationRefusalReplicaWorker.sourceCommits.at(-1)! });
   if (hasGatedOnly) pins.push({ row: "gatedOnlyRatchet", pin: approvedGatedOnlyRatchet.sourceCommit });
   return pins;
 }
@@ -1296,6 +1302,7 @@ export function rootCeilings(root: Ledger): Array<{ row: string; ceiling: GzipSi
     ["tc3823BotHistoryKeyRoot", root.tc3823BotHistoryKeyRoot?.root.ceiling],
     ["tc3802SecretKeyCapRoot", root.tc3802SecretKeyCapRoot?.root.ceiling],
     ["tc3862ExplorerOriginRoot", root.tc3862ExplorerOriginRoot?.root.ceiling],
+    ["tc3522InvocationRefusalRoot", root.tc3522InvocationRefusalRoot?.root.ceiling],
   ];
   return rows.flatMap(([row, ceiling]) => ceiling === undefined ? [] : [{ row, ceiling }]);
 }
@@ -4110,6 +4117,53 @@ export const approvedTc3862ExplorerOriginRoot: LogoutRatchet = {
   "reason": "The Web SDK bundles the shared first-party allowlist, which recognizes the exact Explorer origin even when the owner has no location record. OpenKey handles account bootstrap. Details: TC-3862"
 };
 
+/** The TC-3522 root-only allowance for locally attributed invocation refusals. */
+export const approvedTc3522InvocationRefusalRoot: LogoutRatchet = {
+  "label": "retain signed proof attribution for invocation refusals (TC-3522)",
+  "ruling": "Naomi 2026-11-23 15:39:44Z: set the absolute index.mjs ceiling to 1539880 (1539830 measured in both canonical jobs plus 50 bytes); carry the TC-3862 index.cjs ceiling and leave every optional and worker ceiling unchanged.",
+  "base": "089087a0797e2f77661f98a9a7bfb5bd8b145f8c",
+  "sourceCommits": ["45cbb18e7b9c762063a4c23aac199e458df95a1d"],
+  "canonicalCI": {
+    "run": "45204181222",
+    "jobs": [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45204181222/job/137795503048",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45204181222/job/137795503716"
+    ]
+  },
+  "root": {
+    "delta": { "index.mjs": 358, "index.cjs": 0 },
+    "ceiling": { "index.mjs": 1539880, "index.cjs": 1471461 }
+  },
+  "reason": "Both backends measured 1539830/1470750 gzip bytes at the pinned source before the TC-3862 merge-forward. The ceiling delta is relative to the TC-3862 row, not to that run's base. The Web root bundles SDK Services' invocation-time versus proof-refusal classification. Details: TC-3522"
+};
+
+const tc3522InvocationRefusalWorkerEvidence = {
+  "ruling": "Naomi ACBX 2026-11-23: admit only the exact worker gzip bytes reproduced by SQLite and PostgreSQL, with zero headroom. Root, optional and gated ceilings are unchanged.",
+  "base": "71da2dd0fb6961f0bc342f7cfac43c084e91aa5d",
+  "sourceCommits": ["d2b8696ae792eaddea6fd8662ff451e4d307473e"],
+  "canonicalCI": {
+    "run": "45209040504",
+    "jobs": [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45209040504/job/137812870821",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45209040504/job/137812870234"
+    ]
+  }
+};
+
+export const approvedTc3522InvocationRefusalKvWorker: WorkerRatchet = {
+  "label": "retain invocation-refusal attribution in the kv-storage worker (TC-3522)",
+  ...tc3522InvocationRefusalWorkerEvidence,
+  "worker": { "delta": 146, "ceiling": 781337 },
+  "reason": "The SDK Services KV refusal path ships in the hashed kv-storage worker. Both canonical jobs measured 781337 gzip -9 bytes, 146 above the TC-3947 ceiling of 781191."
+};
+
+export const approvedTc3522InvocationRefusalReplicaWorker: NonNullable<Ledger["tc3522InvocationRefusalReplicaWorker"]> = {
+  "label": "retain invocation-refusal attribution in the replica worker (TC-3522)",
+  ...tc3522InvocationRefusalWorkerEvidence,
+  "replicaWorker": { "delta": 156, "ceiling": 775076 },
+  "reason": "The SDK Services KV refusal path ships in replica.worker.js. Both canonical jobs measured 775076 gzip -9 bytes, 156 above the TC-3947 ceiling of 774920."
+};
+
 export const approvedLedgerRows: Record<string, unknown> = {
   phase2Ratchet: approvedPhase2,
   fixRequiredRatchet: approvedFixRequiredRatchet,
@@ -4237,6 +4291,9 @@ export const approvedLedgerRows: Record<string, unknown> = {
   tc3823BotHistoryKeyRoot: approvedTc3823BotHistoryKeyRoot,
   tc3802SecretKeyCapRoot: approvedTc3802SecretKeyCapRoot,
   tc3862ExplorerOriginRoot: approvedTc3862ExplorerOriginRoot,
+  tc3522InvocationRefusalRoot: approvedTc3522InvocationRefusalRoot,
+  tc3522InvocationRefusalKvWorker: approvedTc3522InvocationRefusalKvWorker,
+  tc3522InvocationRefusalReplicaWorker: approvedTc3522InvocationRefusalReplicaWorker,
 };
 
 /** Only a git merge-base ledger may retain the pre-correction toolchain. */
@@ -4830,6 +4887,18 @@ export function validateLedger(value: Ledger, historicalBase = false): void {
       (!value.tc3802SecretKeyCapRoot ||
         JSON.stringify(value.tc3862ExplorerOriginRoot) !== JSON.stringify(approvedTc3862ExplorerOriginRoot))) {
     throw new Error("Only the exact TC-3862 root admission is approved.");
+  }
+  if (value.tc3522InvocationRefusalRoot !== undefined &&
+      (!value.tc3862ExplorerOriginRoot ||
+        JSON.stringify(value.tc3522InvocationRefusalRoot) !== JSON.stringify(approvedTc3522InvocationRefusalRoot))) {
+    throw new Error("Only the exact TC-3522 invocation-refusal root admission is approved.");
+  }
+  if (value.tc3522InvocationRefusalKvWorker !== undefined || value.tc3522InvocationRefusalReplicaWorker !== undefined) {
+    if (!value.tc3947ReplicaRevokeRoot ||
+        JSON.stringify(value.tc3522InvocationRefusalKvWorker) !== JSON.stringify(approvedTc3522InvocationRefusalKvWorker) ||
+        JSON.stringify(value.tc3522InvocationRefusalReplicaWorker) !== JSON.stringify(approvedTc3522InvocationRefusalReplicaWorker)) {
+      throw new Error("Only the exact paired TC-3522 worker admissions are approved.");
+    }
   }
 }
 
@@ -5914,5 +5983,23 @@ export function validateTc3862ExplorerOriginRootTransition(base?: LogoutRatchet,
   if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc3862ExplorerOriginRoot) ||
       base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
     throw new Error("The TC-3862 root admission may be introduced once and cannot change later.");
+  }
+}
+
+/** The exact TC-3522 invocation-refusal root admission is introduced once and immutable. */
+export function validateTc3522InvocationRefusalRootTransition(base?: LogoutRatchet, current?: LogoutRatchet): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc3522InvocationRefusalRoot) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The TC-3522 invocation-refusal root admission may be introduced once and cannot change later.");
+  }
+}
+
+/** The paired TC-3522 worker-only admission is introduced once and immutable. */
+export function validateTc3522InvocationRefusalWorkerTransition(base: Ledger, current: Ledger): void {
+  for (const row of ["tc3522InvocationRefusalKvWorker", "tc3522InvocationRefusalReplicaWorker"] as const) {
+    if (current[row] !== undefined && JSON.stringify(current[row]) !== JSON.stringify(approvedLedgerRows[row]) ||
+        base[row] !== undefined && JSON.stringify(current[row]) !== JSON.stringify(base[row])) {
+      throw new Error("The TC-3522 worker admissions may be introduced once and cannot change later.");
+    }
   }
 }
