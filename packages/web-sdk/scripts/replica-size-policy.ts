@@ -500,6 +500,7 @@ export type Ledger = {
   tc3443AppIdLineBreakRoot?: LogoutRatchet;
   tc3549KeptApprovalsRoot?: LogoutRatchet;
   tc3617HostedMcpLeaseRoot?: LogoutRatchet;
+  tc3947ReplicaRevokeRoot?: LogoutRatchet & { worker: { delta: number; ceiling: number }; replicaWorker: { delta: number; ceiling: number } };
   tc2773LazyRestoreReplicaWorker?: Omit<WorkerRatchet, "worker"> & { replicaWorker: { delta: number; ceiling: number } };
 };
 
@@ -1154,6 +1155,7 @@ export function ancestryPins(root: Ledger, hasGatedOnly: boolean): Array<{ row: 
   if (root.tc3443AppIdLineBreakRoot !== undefined) pins.push({ row: "tc3443AppIdLineBreakRoot", pin: root.tc3443AppIdLineBreakRoot.sourceCommits.at(-1)! });
   if (root.tc3549KeptApprovalsRoot !== undefined) pins.push({ row: "tc3549KeptApprovalsRoot", pin: root.tc3549KeptApprovalsRoot.sourceCommits.at(-1)! });
   if (root.tc3617HostedMcpLeaseRoot !== undefined) pins.push({ row: "tc3617HostedMcpLeaseRoot", pin: root.tc3617HostedMcpLeaseRoot.sourceCommits.at(-1)! });
+  if (root.tc3947ReplicaRevokeRoot !== undefined) pins.push({ row: "tc3947ReplicaRevokeRoot", pin: root.tc3947ReplicaRevokeRoot.sourceCommits.at(-1)! });
   if (hasGatedOnly) pins.push({ row: "gatedOnlyRatchet", pin: approvedGatedOnlyRatchet.sourceCommit });
   return pins;
 }
@@ -1278,6 +1280,7 @@ export function rootCeilings(root: Ledger): Array<{ row: string; ceiling: GzipSi
     ["tc3443AppIdLineBreakRoot", root.tc3443AppIdLineBreakRoot?.root.ceiling],
     ["tc3549KeptApprovalsRoot", root.tc3549KeptApprovalsRoot?.root.ceiling],
     ["tc3617HostedMcpLeaseRoot", root.tc3617HostedMcpLeaseRoot?.root.ceiling],
+    ["tc3947ReplicaRevokeRoot", root.tc3947ReplicaRevokeRoot?.root.ceiling],
   ];
   return rows.flatMap(([row, ceiling]) => ceiling === undefined ? [] : [{ row, ceiling }]);
 }
@@ -3972,6 +3975,28 @@ export const approvedTc3617HostedMcpLeaseRoot: LogoutRatchet = {
   "reason": "TinyCloudNode.getRenewalEffectiveExpiry refuses a session lease issued to a renewer the node no longer advertises with the coded RenewalRenewerChangedError, so the owner is asked again; node-sdk is bundled into the web-sdk root. Canonical Node 22/Bun 1.3.14 CI on #1122 (cea5dad7, master 27908364) measured index.mjs 1535484 and index.cjs 1466903 gzip -9 bytes: +59 and +16 over the tc3549KeptApprovalsRoot ceilings 1535425 and 1466887. No other ceiling moves. Details: TC-3617"
 };
 
+/** The exact TC-3947 revoked-grant JSON refusal root allowance from canonical CI. */
+export const approvedTc3947ReplicaRevokeRoot: NonNullable<Ledger["tc3947ReplicaRevokeRoot"]> = {
+  "label": "a revoked grant in the node's JSON refusal is read as a revocation (TC-3947)",
+  "ruling": "size-ruling: TC-3947 (2026-11-23) row tc3947ReplicaRevokeRoot index.mjs 1535546 (+62), index.cjs 1466953 (+50) gzip bytes over the tc3617HostedMcpLeaseRoot ceilings, kv-storage worker 781191 (+234) and replica worker 774920 (+238) gzip bytes over the tc3443SessionRetireRoot ceilings, CI's canonical figures. Details: TC-3947",
+  "base": "3ad8bb80e3b3b1f2342f4663cfe72f0ecd881093",
+  "sourceCommits": ["d79271d35eefa9471209446e506284b3ecbb704e"],
+  "canonicalCI": {
+    "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45102787771",
+    "jobs": [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45102787771/job/137457227215",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45102787771/job/137457227567"
+    ]
+  },
+  "root": {
+    "delta": { "index.mjs": 62, "index.cjs": 50 },
+    "ceiling": { "index.mjs": 1535546, "index.cjs": 1466953 }
+  },
+  "worker": { "delta": 234, "ceiling": 781191 },
+  "replicaWorker": { "delta": 238, "ceiling": 774920 },
+  "reason": "KVService.changes and the replica transport read the node's JSON revocation refusal ({\"code\", \"error\"}, nodes 1.25.17 and later) as a revocation before matching the revocation text; sdk-services is bundled into the web-sdk root and, with the replica transport, into the replica and kv-storage workers. Canonical Node 22/Bun 1.3.14 CI on #1138 (d79271d3, master 3ad8bb80) measured index.mjs 1535546 and index.cjs 1466953 gzip -9 bytes: +62 and +50 over the tc3617HostedMcpLeaseRoot ceilings 1535484 and 1466903; kv-storage worker 781191 and replica worker 774920: +234 and +238 over the tc3443SessionRetireRoot ceilings 780957 and 774682. No other ceiling moves. Details: TC-3947"
+};
+
 export const approvedLedgerRows: Record<string, unknown> = {
   phase2Ratchet: approvedPhase2,
   fixRequiredRatchet: approvedFixRequiredRatchet,
@@ -4093,6 +4118,7 @@ export const approvedLedgerRows: Record<string, unknown> = {
   tc3443AppIdLineBreakRoot: approvedTc3443AppIdLineBreakRoot,
   tc3549KeptApprovalsRoot: approvedTc3549KeptApprovalsRoot,
   tc3617HostedMcpLeaseRoot: approvedTc3617HostedMcpLeaseRoot,
+  tc3947ReplicaRevokeRoot: approvedTc3947ReplicaRevokeRoot,
 };
 
 /** Only a git merge-base ledger may retain the pre-correction toolchain. */
@@ -4656,6 +4682,11 @@ export function validateLedger(value: Ledger, historicalBase = false): void {
       (!value.tc3549KeptApprovalsRoot ||
         JSON.stringify(value.tc3617HostedMcpLeaseRoot) !== JSON.stringify(approvedTc3617HostedMcpLeaseRoot))) {
     throw new Error("Only the exact TC-3617 root admission is approved.");
+  }
+  if (value.tc3947ReplicaRevokeRoot !== undefined &&
+      (!value.tc3617HostedMcpLeaseRoot ||
+        JSON.stringify(value.tc3947ReplicaRevokeRoot) !== JSON.stringify(approvedTc3947ReplicaRevokeRoot))) {
+    throw new Error("Only the exact TC-3947 root admission is approved.");
   }
 }
 
@@ -5701,5 +5732,13 @@ export function validateTc3617HostedMcpLeaseRootTransition(base?: LogoutRatchet,
   if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc3617HostedMcpLeaseRoot) ||
       base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
     throw new Error("The TC-3617 root admission may be introduced once and cannot change later.");
+  }
+}
+
+/** The exact TC-3947 per-secret keys root admission is introduced once and immutable. */
+export function validateTc3947ReplicaRevokeRootTransition(base?: LogoutRatchet, current?: LogoutRatchet): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc3947ReplicaRevokeRoot) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The TC-3947 root admission may be introduced once and cannot change later.");
   }
 }

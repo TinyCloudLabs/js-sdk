@@ -31,14 +31,14 @@ test("TC-3443 records the exact canonical CI root and worker bytes of #1118 with
   for (const format of ["index.mjs", "index.cjs"] as const) {
     expect(row.root.ceiling[format] - predecessor.root.ceiling[format]).toBe(row.root.delta[format]);
     expect(row.root.delta[format]).toBeLessThanOrEqual(1100);
-    expect(rootCeilingFor({ ...ledger, tc3443PortFolderRoot: undefined, tc3704OpenKeyPromptRoot: undefined, tc3731ManifestOwnerRoot: undefined, tc3443AppIdLineBreakRoot: undefined, tc3549KeptApprovalsRoot: undefined, tc3617HostedMcpLeaseRoot: undefined }, format)).toEqual({ row: "tc3443SessionRetireRoot", ceiling: row.root.ceiling[format] });
+    expect(rootCeilingFor({ ...ledger, tc3443PortFolderRoot: undefined, tc3704OpenKeyPromptRoot: undefined, tc3731ManifestOwnerRoot: undefined, tc3443AppIdLineBreakRoot: undefined, tc3549KeptApprovalsRoot: undefined, tc3617HostedMcpLeaseRoot: undefined, tc3947ReplicaRevokeRoot: undefined }, format)).toEqual({ row: "tc3443SessionRetireRoot", ceiling: row.root.ceiling[format] });
   }
   expect(row.worker.ceiling - ledger.tc2931BootstrapScope.worker.ceiling).toBe(row.worker.delta);
   expect(row.replicaWorker.ceiling - ledger.tc2931BootstrapScope.replicaWorker.ceiling).toBe(row.replicaWorker.delta);
   expect(row.worker.delta).toBeLessThanOrEqual(250);
   expect(row.replicaWorker.delta).toBeLessThanOrEqual(250);
-  expect(MAX_WORKER_GZIP_BYTES).toBe(row.worker.ceiling);
-  expect(MAX_REPLICA_WORKER_GZIP_BYTES).toBe(row.replicaWorker.ceiling);
+  expect(MAX_WORKER_GZIP_BYTES).toBe(ledger.tc3947ReplicaRevokeRoot.worker.ceiling);
+  expect(MAX_REPLICA_WORKER_GZIP_BYTES).toBe(ledger.tc3947ReplicaRevokeRoot.replicaWorker.ceiling);
 
   expect(ancestryPins(ledger, false)).toContainEqual({
     row: "tc3443SessionRetireRoot",

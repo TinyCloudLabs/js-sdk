@@ -1710,6 +1710,54 @@ describe("KVService.changes (tinycloud.kv/sync)", () => {
     expect(result.error.meta?.status).toBe(401);
   });
 
+  // The body tinycloud-node 1.26.21 sends for a sync under a revoked grant (captured from its replica e2e run).
+  const NODE_1_26_21_REVOKED = '{"code":"delegation_revoked","error":"delegation-revoked: bafkr4ickkbibo6v3oujyddbwidfffh375ot3ki5genrif2jcsa4pyiglmq"}';
+
+  test.each([
+    [NODE_1_26_21_REVOKED, ErrorCodes.AUTH_DELEGATION_REVOKED],
+    [
+      '{"code":"ancestor_revoked","error":"delegation-ancestor-revoked: ancestor=bafyroot invoked=bafyleaf"}',
+      ErrorCodes.AUTH_DELEGATION_ANCESTOR_REVOKED,
+    ],
+    [
+      '{"code":"parent_revoked","error":"delegation-ancestor-revoked: ancestor=bafyroot invoked=bafyleaf"}',
+      ErrorCodes.AUTH_DELEGATION_ANCESTOR_REVOKED,
+    ],
+  ])("maps the node's JSON revocation body %s to a typed revocation code", async (body, code) => {
+    const service = new KVService({});
+    service.initialize(createContext(async () => response(false, 401, body)));
+
+    const result = await service.changes({ prefix: "notes/" });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error.code).toBe(code);
+    expect(result.error.meta?.status).toBe(401);
+    expect(authorizationVerdictOf(result.error)).toBe("unauthenticated");
+  });
+
+  test.each([
+    // A revocation text under a code that is not a revocation code.
+    ['{"code":"unauthorized","error":"delegation-revoked: bafyleaf"}', "notes/"],
+    // The revocation code over text that is not the node's whole revocation error.
+    ['{"code":"delegation_revoked","error":"delegation-revoked: bafyleaf (while reading notes/x)"}', "notes/"],
+    ['{"code":"delegation_revoked","error":"Unauthorized Action: s/kv/notes/delegation-revoked: bafyleaf / tinycloud.kv/sync"}', "notes/"],
+    ['{"code":"delegation_revoked"}', "notes/"],
+    ['{"code":"delegation_revoked","error":{"text":"delegation-revoked: bafyleaf"}}', "notes/"],
+    // A body that is not the envelope: the error field alone, or an array.
+    ['{"error":"delegation-revoked: bafyleaf"}', "notes/"],
+    ['[{"code":"delegation_revoked","error":"delegation-revoked: bafyleaf"}]', "notes/"],
+    ['{"code":"delegation_revoked","error":"delegation-revoked: bafyleaf"', "notes/"],
+  ])("maps a 401 whose JSON body is not the revocation envelope (%s) to AUTH_UNAUTHORIZED", async (body, prefix) => {
+    const service = new KVService({});
+    service.initialize(createContext(async () => response(false, 401, body)));
+
+    const result = await service.changes({ prefix });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error.code).toBe(ErrorCodes.AUTH_UNAUTHORIZED);
+    expect(result.error.meta?.status).toBe(401);
+  });
+
   test("a missing sync grant stays AUTH_UNAUTHORIZED", async () => {
     const service = new KVService({});
     service.initialize(createContext(async () =>
