@@ -7841,7 +7841,7 @@ export class TinyCloudNode {
       secrets = new NodeSecretsService({
         getService: () => this.getBaseSecrets(resolvedSpace),
         space: resolvedSpace,
-        getManifest: () => this.manifest,
+        getManifest: () => this.manifest === undefined ? undefined : this.capabilityRequest?.manifests,
         hasPermissions: (permissions) => this.hasRuntimePermissions(permissions),
         grantPermissions: (additional) => this.grantRuntimePermissions(additional),
         uncoveredEntries: (permissions) =>
