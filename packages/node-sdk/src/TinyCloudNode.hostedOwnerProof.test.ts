@@ -245,7 +245,7 @@ describe("a restored session of a hosted owner with no registry record", () => {
     const { later, failure } = await restored({});
     expect(later.filter((request) => request.url.endsWith("/delegate"))).toEqual([]);
     expect(later.filter((request) => request.url.startsWith(HOSTILE))).toEqual([]);
-    expect(later.filter((request) => request.url.endsWith("/invoke") && request.headers["x-tinycloud-limit"] === "1").length).toBeGreaterThanOrEqual(1);
+    expect(later.filter((request) => request.url.endsWith("/invoke") && request.headers["x-tinycloud-limit"] === "1")).toHaveLength(1);
     expect(failure).toBeUndefined();
   });
 

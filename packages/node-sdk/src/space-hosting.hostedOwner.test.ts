@@ -82,8 +82,30 @@ describe("readHostedOwnerSpace", () => {
     expect((await run(() => new Response("No such key", { status }))).outcome).toBe("refused");
   });
 
-  test("a 5xx, a network error and a redirect are unreachable, never refused or positive", async () => {
+  test("a 5xx and a network error are unreachable, never refused or positive", async () => {
     expect((await run(() => new Response("", { status: 503 }))).outcome).toBe("unreachable");
     expect((await run(() => { throw new TypeError("network"); })).outcome).toBe("unreachable");
+  });
+
+  test("a real redirect is not followed: unreachable, and the target is never asked", async () => {
+    const target: string[] = [];
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch(request) {
+        const url = new URL(request.url);
+        if (url.pathname === "/elsewhere") { target.push(url.pathname); return new Response("[]", { status: 200 }); }
+        return new Response(null, { status: 307, headers: { location: `http://127.0.0.1:${server.port}/elsewhere` } });
+      },
+    });
+    try {
+      const outcome = await readHostedOwnerSpace({
+        spaceId: apps, host: `http://127.0.0.1:${server.port}`, read, fetch: globalThis.fetch.bind(globalThis), sign: () => ({ authorization: "invocation" }),
+      });
+      expect(outcome).toBe("unreachable");
+      expect(target).toEqual([]);
+    } finally {
+      server.stop(true);
+    }
   });
 });
