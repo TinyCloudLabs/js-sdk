@@ -50,9 +50,10 @@ afterEach(async () => {
 
 test("keeps hosted delegates isolated by OAuth subject", async () => {
   const store = await testStore();
-  const first = await store.connectStatus("openkey-user-a");
-  const second = await store.connectStatus("openkey-user-b");
-  const repeated = await store.connectStatus("openkey-user-a");
+  const requester = await ownerDid(REQUESTER_KEY);
+  const first = await store.connectStatus("openkey-user-a", [requester]);
+  const second = await store.connectStatus("openkey-user-b", [requester]);
+  const repeated = await store.connectStatus("openkey-user-a", [requester]);
 
   expect(first.connected).toBe(false);
   expect(second.connected).toBe(false);
@@ -178,7 +179,7 @@ test("first operations and expired sessions receive account-bound reconnect link
 
 test("approval requests send OpenKey only the public delegate key", async () => {
   const store = await testStore();
-  const status = await store.connectStatus("openkey-user-a");
+  const status = await store.connectStatus("openkey-user-a", [await ownerDid(REQUESTER_KEY)]);
   const link = await store.approvalLink(stateOf(status.approvalUrl!));
   const { request } = await openkey.requestFor(link);
   const jwk = JSON.parse(await readFile(
@@ -845,6 +846,105 @@ test("at most 64 links are polled in the background; the next call collects the 
   }));
   expect(await openkey.delivery(id, () => store.validateTenant(last.subject, [requester]))).toEqual({ status: "stored" });
 }, 60_000);
+
+test("one tenant's links hold at most four background polls, so other tenants' links are polled", async () => {
+  const store = await testStore();
+  const requester = await ownerDid(REQUESTER_KEY);
+  const greedy = "openkey-user-greedy";
+  const links: Array<{ link: string; id: string }> = [];
+  for (let index = 0; index < 6; index++) {
+    const decorated = await store.decorateAuthorityResult(greedy, [requester], {
+      status: "authority_required",
+      operation: "tinycloud.kv.get",
+      request: {
+        requestId: `request-${index}`,
+        requested: [{ service: "tinycloud.kv", space: "applications", path: `agents/demo-${index}`, actions: ["tinycloud.kv/get"] }],
+      },
+    }) as { approval: { url: string } };
+    const link = await store.approvalLink(stateOf(decorated.approval.url));
+    links.push({ link, id: (await openkey.requestFor(link)).id });
+  }
+  const other = await store.connectStatus("openkey-user-other", [requester]);
+  const otherLink = await store.approvalLink(stateOf(other.approvalUrl!));
+  const otherId = (await openkey.requestFor(otherLink)).id;
+  const asked = (id: string) => openkey.calls.some((call) => call.path === `/api/approval-requests/${id}/result`);
+  for (let waited = 0; !(asked(otherId) && links.slice(0, 4).every(({ id }) => asked(id))) && waited < 10_000; waited += 100) {
+    await Bun.sleep(100);
+  }
+  expect(asked(otherId)).toBe(true);
+  expect(links.slice(0, 4).every(({ id }) => asked(id))).toBe(true);
+  expect(links.slice(4).some(({ id }) => asked(id))).toBe(false);
+}, 30_000);
+
+test("an approval link needs the account that requested it, and a stored link without one stores nothing", async () => {
+  const store = await testStore();
+  const requester = await ownerDid(REQUESTER_KEY);
+  await expect(store.connectStatus("openkey-user-a", [])).rejects.toThrow("needs the account that requested it");
+
+  const status = await store.connectStatus("openkey-user-b", [requester]);
+  const state = stateOf(status.approvalUrl!);
+  const pendingDirectory = join(store.tenantStateRoot("openkey-user-b"), ".tinycloud/profiles/agent/pending");
+  const [pendingName] = await readdir(pendingDirectory);
+  const pendingPath = join(pendingDirectory, pendingName!);
+  const pending = JSON.parse(await readFile(pendingPath, "utf8")) as Record<string, unknown>;
+  await writeFile(pendingPath, JSON.stringify({ ...pending, ownerDids: [] }));
+  const signed = await openKeyDelegation({
+    tenantStateRoot: store.tenantStateRoot("openkey-user-b"), privateKey: REQUESTER_KEY, space: "account",
+    abilities: BOOTSTRAP_ABILITIES,
+  });
+  expect(await deliver(store, "openkey-user-b", [requester], state, signed)).toMatchObject(OWNER_MISMATCH);
+  expect(await exists(join(store.tenantStateRoot("openkey-user-b"), ".tinycloud/profiles/agent/session.json"))).toBe(false);
+});
+
+test("the OpenKey API origin must use https", async () => {
+  const config = {
+    stateDir: "/var/empty",
+    stateSecret: "test-secret-that-is-at-least-thirty-two-bytes",
+    publicUrl: new URL("https://mcp.test/mcp"),
+    nodeHost: "https://node.tinycloud.test",
+    approvalTtlSeconds: 300,
+    delegationExpiry: "1h",
+  };
+  expect(() => new RemoteTenantStore({ ...config, openkeyHost: "https://openkey.test", openkeyApiHost: "http://api.openkey.test" }))
+    .toThrow("The OpenKey API origin must use https.");
+  expect(() => new RemoteTenantStore({ ...config, openkeyHost: "http://openkey.test" }))
+    .toThrow("The OpenKey API origin must use https.");
+  expect(() => new RemoteTenantStore({ ...config, openkeyHost: "https://openkey.test", openkeyApiHost: "https://api.openkey.test" }))
+    .not.toThrow();
+});
+
+test("createPending refuses an empty owner list for every kind of approval link", async () => {
+  const store = await testStore();
+  await expect(store.decorateAuthorityResult("openkey-user-a", [], {
+    status: "authority_required",
+    operation: "tinycloud.kv.get",
+    request: {
+      requestId: "request-empty-owners",
+      requested: [{ service: "tinycloud.kv", space: "applications", path: "agents/demo", actions: ["tinycloud.kv/get"] }],
+    },
+  })).rejects.toThrow("needs the account that requested it");
+  await expect(store.decorateAuthorityResult("openkey-user-a", [], {
+    status: "error",
+    operation: "tinycloud.kv.get",
+    error: { code: "SESSION_NOT_FOUND" },
+  })).rejects.toThrow("needs the account that requested it");
+  expect(await readdir(join(store.tenantStateRoot("openkey-user-a"), ".tinycloud/profiles/agent/pending")).catch(() => []))
+    .toEqual([]);
+});
+
+test("a wallet outside the link's accounts cannot become the owner of a first approval", async () => {
+  const store = await testStore();
+  const requester = await ownerDid(REQUESTER_KEY);
+  const status = await store.connectStatus("openkey-user-a", [requester]);
+  const tenantRoot = store.tenantStateRoot("openkey-user-a");
+  const foreign = await openKeyDelegation({
+    tenantStateRoot: tenantRoot, privateKey: OTHER_OWNER_KEY, space: "account", abilities: BOOTSTRAP_ABILITIES,
+  });
+  expect(await deliver(store, "openkey-user-a", [requester], stateOf(status.approvalUrl!), foreign)).toMatchObject(OWNER_MISMATCH);
+  const profile = JSON.parse(await readFile(join(tenantRoot, ".tinycloud/profiles/agent/profile.json"), "utf8")) as Record<string, unknown>;
+  expect(profile.ownerDid).toBeUndefined();
+  expect(await exists(join(tenantRoot, ".tinycloud/profiles/agent/session.json"))).toBe(false);
+});
 
 /**
  * Open a `/connect` link's OpenKey request, approve it with `delegation`, and
