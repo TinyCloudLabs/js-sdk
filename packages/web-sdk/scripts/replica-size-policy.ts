@@ -4199,29 +4199,29 @@ export const approvedTc3810ReaderRoot: LogoutRatchet = {
 
 export const approvedTc3975NamedKeyWarningRoot: LogoutRatchet = {
   "label": "report named-key omissions during sign-in (TC-3975)",
-  "ruling": "Naomi 2026-11-23 22:50:03Z: root-only allowance of up to +167 B ESM and +152 B CJS gzip for js-sdk #1144.",
+  "ruling": "Naomi 2026-11-23 22:50:03Z: root-only allowance of up to +167 B ESM and +152 B CJS gzip for js-sdk #1144. Naomi 2026-11-23 23:26:47Z re-grant: exactly +149 B ESM and +193 B CJS over the TC-3810 ceilings, minifier drift after the master merge, source unchanged.",
   "base": "c70e31715dbc62741625dfe2dfc6f30cece6deed",
   "sourceCommits": [
     "e11cfa271a872df5e9fed3f978e0d3f3ecb82b67"
   ],
   "canonicalCI": {
-    "run": "45177867274",
+    "run": "45285882988",
     "jobs": [
-      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45177867274/job/137703708459",
-      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45177867274/job/137703708160"
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45285882988/job/138081954243",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45285882988/job/138081954136"
     ]
   },
   "root": {
     "delta": {
-      "index.mjs": 167,
-      "index.cjs": 152
+      "index.mjs": 149,
+      "index.cjs": 193
     },
     "ceiling": {
-      "index.mjs": 1540182,
-      "index.cjs": 1471015
+      "index.mjs": 1540164,
+      "index.cjs": 1471056
     }
   },
-  "reason": "Both canonical jobs (SQLite and Postgres, run 45177867274, head e11cfa27) measured 1539683/1471605 gzip bytes, 167/152 over the then-newest TC-3802 ceilings of 1539516/1471453. The ceilings here carry that delta over the TC-3810 ceilings. The bytes are the Web SDK root's sign-in warning for secret key resources omitted when the node lacks encryption-named-keys-v1. Details: TC-3975"
+  "reason": "Both canonical jobs (SQLite and Postgres, run 45285882988, head 7a6d21ed8 after the master merge) measured 1540164/1471056 gzip bytes, 149/193 over the TC-3810 ceilings of 1540015/1470863. Run 45177867274 at e11cfa27 before the merge measured 167/152 over the then-newest TC-3802 ceilings; the difference is minifier drift, source unchanged. The bytes are the Web SDK root's sign-in warning for secret key resources omitted when the node lacks encryption-named-keys-v1. Details: TC-3975"
 };
 
 export const approvedLedgerRows: Record<string, unknown> = {
