@@ -319,6 +319,8 @@ jobs:
         timeout-minutes: 10
         env:
           TC_REPLICA_E2E_NODE_BIN: ${{ runner.temp }}/tinycloud
+          TINYCLOUD_ENCRYPTION_NETWORK__NAMED_KEYS_V1: "true"
+          TINYCLOUD_ENCRYPTION_NETWORK__DELETION_LEDGER_PATH: ${{ runner.temp }}/replica-secrets-deletions.jsonl
         run: |
           set -o pipefail
           bash "$GITHUB_WORKSPACE/.github/scripts/run-private-tests.sh" bun test packages/cli/test/replica-secrets.e2e.test.ts 2>&1 | tee "$RUNNER_TEMP/replica-secrets.log"

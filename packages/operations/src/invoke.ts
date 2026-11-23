@@ -1035,7 +1035,7 @@ function isExactLocalSecretsGetPlan(
 }
 
 async function resolveAllowedRuntimeHints(
-  definition: OperationDefinition<any, any>,
+  definition: Exclude<PreparedInvocation, { status: "error" }>["definition"],
   context: RuntimeOperationContext,
   input: unknown,
   required: readonly CapabilityRequirement[],
