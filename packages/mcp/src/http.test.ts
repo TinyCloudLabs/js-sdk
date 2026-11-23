@@ -615,7 +615,7 @@ test("approval GET refusals log reason codes and pathnames without approval stat
   const app = await testApp(stateDir);
   const store = siblingStore(stateDir);
   const stateFor = async (subject: string, ttlStore = store) =>
-    new URL((await ttlStore.connectStatus(subject)).approvalUrl!).searchParams.get("state")!;
+    new URL((await ttlStore.connectStatus(subject, [await ownerDid(REQUESTER_KEY)])).approvalUrl!).searchParams.get("state")!;
   const valid = await stateFor("approval-get-valid");
   const expired = await stateFor("approval-get-expired", siblingStore(stateDir, 0));
   const used = await stateFor("approval-get-used");
@@ -735,7 +735,7 @@ test("an approval link OpenKey cannot open says so and opens on a later visit", 
   const openkey = fakeOpenKey();
   const stateDir = await mkdtemp(join(tmpdir(), "tinycloud-hosted-http-"));
   const app = await testApp(stateDir);
-  const status = await siblingStore(stateDir).connectStatus("openkey-user-a");
+  const status = await siblingStore(stateDir).connectStatus("openkey-user-a", [await ownerDid(REQUESTER_KEY)]);
   const state = encodeURIComponent(new URL(status.approvalUrl!).searchParams.get("state")!);
   openkey.linksStatus = 503;
   const page = await app.fetch(request(`/connect?state=${state}`, { headers: { accept: "text/html" } }));
@@ -757,7 +757,7 @@ test("pre-collection refusals log a distinct detail behind one uniform response"
   const app = await testApp(stateDir);
   const store = siblingStore(stateDir);
   const stateFor = async (subject: string, ttlStore = store) =>
-    new URL((await ttlStore.connectStatus(subject)).approvalUrl!).searchParams.get("state")!;
+    new URL((await ttlStore.connectStatus(subject, [await ownerDid(REQUESTER_KEY)])).approvalUrl!).searchParams.get("state")!;
   const valid = await stateFor("openkey-user-a");
   const expired = await stateFor("openkey-user-expired", siblingStore(stateDir, 0));
   const used = await stateFor("openkey-user-used");

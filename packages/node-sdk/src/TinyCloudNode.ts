@@ -921,6 +921,8 @@ export interface TinyCloudNodeConfig {
   host?: string;
   /** Build a developer request log (sanitized, in-memory, bounded). Off by default. */
   requestLog?: boolean;
+  /** Observe successful signed data invocations without exposing credentials or response bodies. */
+  onAcceptedInvocation?: () => void;
   /** TinyCloud location registry URL. Default: https://registry.tinycloud.xyz. */
   tinycloudRegistryUrl?: string | null;
   /** Host hints for genuine no-entry onboarding. Never used for registered or unavailable owners. */
@@ -2402,6 +2404,7 @@ export class TinyCloudNode {
           if (response.status === 403 || response.status === 503) {
             this.throwRegistryRefusal(response.status, await response.clone().text());
           }
+          this.reportAcceptedInvocation(url, init, response);
           return response;
         } catch (error) {
           if (routingFailure(error)) throw error;
@@ -2493,8 +2496,15 @@ export class TinyCloudNode {
       const signal = init?.signal ? AbortSignal.any([init.signal, graph.signal]) : graph.signal;
       const response = await globalThis.fetch(url, { ...init, signal });
       graph.assertActive();
+      this.reportAcceptedInvocation(url, init, response);
       return response;
     };
+  }
+
+  private reportAcceptedInvocation(url: string, init: Parameters<FetchFunction>[1], response: Response): void {
+    const observe = this.config.onAcceptedInvocation;
+    if (observe === undefined || !response.ok || init?.method !== "POST") return;
+    if (new URL(url).pathname === "/invoke" && new Headers(init.headers).has("Authorization")) observe();
   }
 
   /** A resource-specific transport bound to the current service graph. */

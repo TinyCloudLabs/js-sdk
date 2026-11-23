@@ -94,10 +94,12 @@ export function createInvocationRuntime(
 export function createInvocationRuntime(
   target: InvocationTarget,
   requirement: OperationRuntimeRequirement,
+  onAcceptedInvocation?: () => void,
 ): Promise<InvocationRuntimeResolution>;
 export async function createInvocationRuntime(
   target: InvocationTarget,
   requirement: OperationRuntimeRequirement = "authenticated",
+  onAcceptedInvocation?: () => void,
 ): Promise<InvocationRuntimeResolution> {
   const resolved = await resolveInvocationProfile(target);
   if (!resolved.ok) {
@@ -171,6 +173,7 @@ export async function createInvocationRuntime(
       registryCacheStore: createProfileRegistryCacheStore(profileName),
       registrySequenceStore: createProfileRegistrySequenceStore(profileName),
       onRegistryFallback: (_message, reason) => collectRegistryFallbackWarning(warnings, reason),
+      onAcceptedInvocation,
       ...(tinycloudRegistryUrl === undefined ? {} : { tinycloudRegistryUrl }),
       ...(privateKey === undefined ? {} : { privateKey, ...nodeSdk.ownerFullAccess() }),
       sessionExpirationMs: OWNER_SESSION_EXPIRY_MS,

@@ -56,7 +56,7 @@ export interface McpStartupSelection {
   /** Check node authority only when an operation needs the account. */
   readonly beforeOperation?: () => Promise<void>;
   /** Hosted transports may attach a browser approval URL to canonical results. */
-  readonly transformOperationResult?: (result: unknown, invocation: McpOperationInvocation) => Promise<unknown>;
+  readonly transformOperationResult?: (result: unknown, invocation: McpOperationInvocation, acceptedNodeInvocation: boolean) => Promise<unknown>;
   /** Repeat each tool's title as `annotations.title`, for a directory that takes the listing name from there. */
   readonly annotationTitles?: boolean;
 }
@@ -476,7 +476,7 @@ export function registerTinyCloudTools(
       },
       async (input: unknown): Promise<McpToolResult> => {
         const startedAt = performance.now();
-        const metrics = { replayedGrants: 0 };
+        const metrics = { replayedGrants: 0, acceptedNodeInvocation: selection.transformOperationResult === undefined ? undefined : false };
         let code = "INTERNAL_ERROR";
         try {
           let projected: unknown = offersCatalogApps
@@ -497,7 +497,7 @@ export function registerTinyCloudTools(
                 operationId: binding.operationId,
                 operationVersion: binding.operationVersion,
                 input,
-              });
+              }, metrics.acceptedNodeInvocation === true);
           }
           const response = toMcpToolResult(projected, bindings, {
             surface: selection.surface === "local" ? "local" : "hosted",
