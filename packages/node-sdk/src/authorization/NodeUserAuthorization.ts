@@ -197,8 +197,6 @@ export interface HostedOwnerProof {
   delegationCid?: string;
   /** `pending` until the signed read answers 2xx. */
   status: "pending" | "proven";
-  /** The `/delegate` request has been sent (whether or not it answered): a sign-out then retires the session at the node. */
-  delegateSent?: boolean;
 }
 
 type JsonValue =
@@ -1960,28 +1958,25 @@ export class NodeUserAuthorization implements IUserAuthorization {
    */
   private async activateForHostedOwnerProof(proof: HostedOwnerProof, session: TinyCloudSession): Promise<void> {
     this.sessionHosts.add(proof.host);
-    // Recorded before the request leaves: from here a sign-out retires this session at the node.
-    const sent: HostedOwnerProof = { ...proof, delegateSent: true };
-    this._pendingHostedOwnerProof = sent;
     let activated: SpaceHostResult;
     try {
       activated = await activateSessionWithHost(proof.host, session.delegationHeader);
     } catch (error) {
-      this.failHostedOwnerProof(sent);
+      this.failHostedOwnerProof(proof);
       throw new NodeNotRespondingError([proof.host], error);
     }
     if (!activated.success && activated.status >= 500) {
-      this.failHostedOwnerProof(sent);
+      this.failHostedOwnerProof(proof);
       throw Object.assign(new Error(`Failed to activate session: ${describeHostFailure(activated)}`), { cause: activated });
     }
     this.recordActivationSkippedSpaces(activated, session.spaceId);
     const hostsPrimary = activated.success && (activated.activated ?? []).some((space) => pkhSpaceIdentity(space) === pkhSpaceIdentity(proof.spaceId));
     if (!hostsPrimary) {
-      this.failHostedOwnerProof(sent);
+      this.failHostedOwnerProof(proof);
       throw new AccountSetupRequiredError();
     }
-    if (this._pendingHostedOwnerProof !== sent) throw new Error("Sign-in was replaced before the hosted-space check finished.");
-    this._pendingHostedOwnerProof = { ...sent, delegationCid: session.delegationCid };
+    if (this._pendingHostedOwnerProof !== proof) throw new Error("Sign-in was replaced before the hosted-space check finished.");
+    this._pendingHostedOwnerProof = { ...proof, delegationCid: session.delegationCid };
   }
 
   /**
