@@ -188,6 +188,15 @@ async function cleanup(node: TinyCloudNode, peer: InterimPeer, cid: string, save
   return true;
 }
 
+/** Node v1.26.22's listing uses signed ancestor expiry, not the stamped end. */
+function confirmSignedLiveSibling(node: TinyCloudNode, record: AccountDelegationRecord, parent: { cid: string; end: number }, now: number): Promise<boolean> | undefined {
+  const end = record.expiresAt?.getTime();
+  if (record.status !== 'expired' || end === undefined || !(now < end && end <= parent.end)
+    || record.parents.length !== 1 || record.parents[0] !== parent.cid) return undefined;
+  return node.getDelegationStatus(record.cid).then(status =>
+    status.ok && status.data.status === 'active' && status.data.effective_expiry === end / 1000);
+}
+
 /** Network queries run unlocked; the caller persists each local change with a locked merge. */
 async function checkSiblings(node: TinyCloudNode, profile: Profile, peer: InterimPeer, save: ProfileSave, now: number): Promise<{ tip: AccountDelegationRecord; records: AccountDelegationRecord[] } | InterimResult> {
   const parent = parentOf(node, profile, now);
@@ -207,22 +216,21 @@ async function checkSiblings(node: TinyCloudNode, profile: Profile, peer: Interi
     const ancestor = bad.find(item => item.record?.status === 'ancestor_revoked')?.record;
     if (ancestor) { state.ownerRevoked = true; state.ownerRevokedCid = ancestor.revokedAncestorCid ?? ancestor.parents[0]; }
     save();
-    for (const record of siblings) if (record.status === 'active' && record.expiresAt && record.expiresAt.getTime() > now) {
+    for (const record of siblings) {
+      if (!record.expiresAt || record.expiresAt.getTime() <= now) continue;
+      if (record.status !== 'active') {
+        const confirmation = confirmSignedLiveSibling(node, record, parent, now);
+        if (!confirmation || !(await confirmation)) continue;
+      }
       await cleanup(node, peer, record.cid, save);
     }
     return { state: state.ownerRevoked ? 'owner-revoked' : 'revoked' };
   }
-  // Node v1.26.22's issued listing uses the ancestor's signed expiry, not
-  // its stamped effective end. Resolve only this disagreement by exact CID.
   let confirmedActive: Set<string> | undefined;
   for (const record of siblings) {
-    const end = record.expiresAt?.getTime();
-    if (record.status !== 'expired' || end === undefined || !(now < end && end <= parent.end)
-      || record.parents.length !== 1 || record.parents[0] !== parent.cid) continue;
-    const status = await node.getDelegationStatus(record.cid);
-    if (!status.ok || status.data.status !== 'active' || status.data.effective_expiry !== end / 1000) {
-      return { state: 'unavailable' };
-    }
+    const confirmation = confirmSignedLiveSibling(node, record, parent, now);
+    if (!confirmation) continue;
+    if (!(await confirmation)) return { state: 'unavailable' };
     (confirmedActive ??= new Set()).add(record.cid);
   }
   const active = (record: AccountDelegationRecord): boolean => record.status === 'active' || confirmedActive?.has(record.cid) === true;

@@ -16,4 +16,6 @@ Watchers retry a rejected invocation once if it was signed before a suspend or c
 
 After the original owner deadline, Courier confirms a still-signed-live successor by its exact delegation CID when the node's issued listing does not account for renewal. Missing or revoked authority still fails closed.
 
+After a sibling grant is revoked, Courier also confirms and revokes any live successor that the issued listing incorrectly reports as expired.
+
 Details: TC-3522
