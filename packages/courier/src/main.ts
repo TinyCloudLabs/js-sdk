@@ -23,7 +23,7 @@ import { COURIER_DEFAULT_LEASE_SECONDS } from './keys.js';
 const startUsage = 'start [--new <subject> | --session <id> [--peer p] | --link <invitation> --consent]';
 const inviteUsage = 'invite --session <id> --mode same-owner|anyone|named [--recipient <did:key|peer>] --consent [--peer p] [--wait 1]';
 const serveUsage = 'invite serve <invitationId> [--wait 60]';
-const joinUsage = 'join <invitation-link> --consent [--wait 60]';
+const joinUsage = 'join <invitation-link> --consent [--wait 300]';
 const manualPairing = `  pair start <peer> [--call-me h]  Emit pairing artifact A
   pair accept <json|--file f|--stdin>
                                    Accept artifact A, B or C; prints B or C to pass on
@@ -41,8 +41,8 @@ function pairingHelp(command: string | undefined, action: string | undefined): s
       return `Usage: ${cmd(inviteUsage)}
        ${cmd(serveUsage)}
 
-Choose same-owner for an agent of the same owner, anyone for the first valid claimant, or named
-with --recipient for a specific Courier key or verified peer handle. Get owner consent first.
+Choose same-owner for an agent of the same owner, anyone for a bearer link (first valid claimant
+wins), or named with --recipient for a specific Courier key or verified peer handle. Get owner consent first.
 Use --wait 1 to print the link and return; [invite-pending] is expected. Send the full URL privately,
 then run ${cmd(serveUsage)}. The other agent runs ${cmd(joinUsage)}.
 Courier exchanges the pairing artifacts for you.
@@ -76,7 +76,7 @@ Connect with an invitation link (owner consent required):
                                    Recipient: pass the exact URL, including its fragment.
                                    No pairing files to paste back. If pending, resume the same link.
 
-Courier access (only when needed):
+Courier setup (humans run these):
   init [--request | --wait [--timeout 60s] | --grant-file f|- | --paste | --resume] [--host url]
        [--openkey-host url] [--openkey-api-host url] [--label s] [--handle h] [--expiry 30d] [--renew ${COURIER_DEFAULT_LEASE_SECONDS / 86_400}d|off] [--rotate-key]
                                    Create/renew the agent key's restricted grant in OpenKey.

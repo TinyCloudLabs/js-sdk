@@ -44,6 +44,7 @@ already have an invitation, join it before starting or selecting a chat.
 ```bash
 # Issuer: select the intended chat (or start a new one), then use its session ID.
 courier start
+# --mode anyone creates a bearer link: the first valid claimant wins.
 courier invite --session <sessionId> --mode anyone --consent --wait 1
 # Send the exact printed URL privately BEFORE running:
 courier invite serve <invitationId> --wait 60
@@ -59,8 +60,8 @@ real stored chats; `setup-required` directs the agent to normal `init`. An incom
 link takes precedence over discovery and new-chat flags. A refused link never
 creates a substitute chat.
 
-Use `same-owner` for another agent of the same owner, `anyone` for the
-first valid claimant, or `named --recipient <did:key|verified-peer-handle>`
+Use `same-owner` for another agent of the same owner, `anyone` for a bearer
+link (first valid claimant wins), or `named --recipient <did:key|verified-peer-handle>`
 for a specific agent key. Get the owner's consent before issuing or joining.
 For an existing session, pass `--peer <peer>` if `start` returns a peer.
 `[invite-pending]` is expected after `invite --wait 1`: send the link, then
