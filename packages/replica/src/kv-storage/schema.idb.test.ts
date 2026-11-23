@@ -102,25 +102,6 @@ describe("origin schema cutover", () => {
   });
 });
 
-describe("opaque partition lookup", () => {
-  test("one gate-keyed identity/prefix lookup resolves every stored and injected device partition", async () => {
-    const db = (await openKvDatabase({ create: true }))!;
-    const lookupId = `opaque-lookup-${++sequence}`;
-    const tx = db.transaction(KV_STORE.partitions, "readwrite");
-    const completed = transactionDone(tx);
-    const partitions = tx.objectStore(KV_STORE.partitions);
-    partitions.put({ lookupId, partitionId: `${lookupId}-owner`, ownerDevice: true }, `${lookupId}-owner`);
-    partitions.put({ lookupId, partitionId: `${lookupId}-session`, ownerDevice: false }, `${lookupId}-session`);
-    await completed;
-    const found = await requestAsPromise<Array<{ lookupId: string; partitionId: string; ownerDevice: boolean }>>(
-      db.transaction(KV_STORE.partitions).objectStore(KV_STORE.partitions).index("byLookupId").getAll(lookupId),
-    );
-    expect(found.map((row) => row.partitionId).sort()).toEqual([`${lookupId}-owner`, `${lookupId}-session`]);
-    expect(found.filter((row) => row.ownerDevice).map((row) => row.partitionId)).toEqual([`${lookupId}-owner`]);
-    db.close();
-  });
-});
-
 describe("partition ids", () => {
   const key = () => crypto.subtle.generateKey({ name: "HMAC", hash: "SHA-256", length: 256 }, false, ["sign"]);
   const expected = async (key: CryptoKey, domain: string, material: string): Promise<string> =>

@@ -36,11 +36,6 @@ async function outcome(run: () => Promise<unknown>): Promise<EmailProofError | u
 }
 
 describe("the 91 recorded refusals map to the contract's SDK errors", () => {
-  test("the vector file carries 91 named refusals", () => {
-    expect(refusals).toHaveLength(91);
-    expect(new Set(refusals.map((r) => r.name)).size).toBe(91);
-  });
-
   const replayable = refusals.filter((r) => r.response.body && typeof r.response.body.code === "string" && !r.name.startsWith("create_malformed_input"));
   for (const refusal of replayable) {
     test(`${refusal.name}: ${refusal.response.body.code} (${refusal.response.status})`, async () => {

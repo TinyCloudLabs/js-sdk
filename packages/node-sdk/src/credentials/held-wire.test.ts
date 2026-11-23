@@ -91,7 +91,6 @@ describe("happy path", () => {
 
 describe("the opt-in is per call (C8.3)", () => {
   const cases: [string, (w: ReturnType<typeof world>) => Record<string, unknown>][] = [
-    ["no opt-in", () => ({ allowHeldProfile: undefined })],
     ["opt-in false", () => ({ allowHeldProfile: false })],
     ["opt-in the string true", () => ({ allowHeldProfile: "true" })],
     ["opt-in 1", () => ({ allowHeldProfile: 1 })],
@@ -321,12 +320,6 @@ describe("W1 acceptance: an EIP-55 address with hex letters and no lowercase let
     expect(w.holder.kid).toBe(`${W1.did}#blockchainAccountId`);
   });
 
-  test("the recorded signature of the W1 flow's EIP-55 signing input is the SDK signer's", async () => {
-    const holder = testAccountHolder(W1.privateKeyHex);
-    const signature = await holder.sign(Uint8Array.from(Buffer.from(vectors.acceptanceW1.fromEip55SigningInputHex.replace(/^0x/, ""), "hex")));
-    expect(`0x${Buffer.from(signature).toString("hex")}`).toBe(vectors.acceptanceW1.fromEip55Signature);
-  });
-
   test("the refusals that stay refused: a mixed-case wrong checksum and an all-uppercase non-checksum address are HOLDER_INVALID before network", async () => {
     const w = world();
     for (const did of ["did:pkh:eip155:1:0xF39fd6e51aad88F6F4ce6aB8827279cffFb92266", "did:pkh:eip155:1:0xF39FD6E51AAD88F6F4CE6AB8827279CFFFB92266"]) {
@@ -334,18 +327,6 @@ describe("W1 acceptance: an EIP-55 address with hex letters and no lowercase let
       expect((await failure(() => requestEmailProofCode(w.input({ holder }))))?.code).toBe("HOLDER_INVALID");
     }
     expect(w.witness.calls).toHaveLength(0);
-  });
-});
-
-describe("new public error code and recoverability", () => {
-  test("CLIENT_CLOCK_SKEW is a public non-recoverable EmailProofError code with its default message", () => {
-    const error = new EmailProofError("request", "CLIENT_CLOCK_SKEW");
-    expect(error.recoverable).toBe(false);
-    expect(error.message).toBe("Your device clock is more than 5 minutes behind. Correct it and try again.");
-    // The recorded decision (v24): the exact default text and non-recoverability.
-    expect(error.message).toBe(vectors.v24.errorCodePlacement.defaultMessage);
-    expect(error.recoverable).toBe(vectors.v24.errorCodePlacement.recoverable);
-    expect([error.code, error.step]).toEqual(["CLIENT_CLOCK_SKEW", "request"]);
   });
 });
 

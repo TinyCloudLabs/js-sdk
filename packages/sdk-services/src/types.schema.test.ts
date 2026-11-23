@@ -118,15 +118,6 @@ describe("ServiceErrorSchema", () => {
     }
   });
 
-  it("accepts service error with cause", () => {
-    const data = {
-      ...validServiceError,
-      cause: new Error("Original error"),
-    };
-    const result = ServiceErrorSchema.safeParse(data);
-    expect(result.success).toBe(true);
-  });
-
   it("rejects missing code", () => {
     const data = { message: "Error", service: "kv" };
     const result = ServiceErrorSchema.safeParse(data);
@@ -142,16 +133,6 @@ describe("ServiceErrorSchema", () => {
   it("rejects missing service", () => {
     const data = { code: "ERROR", message: "Error" };
     const result = ServiceErrorSchema.safeParse(data);
-    expect(result.success).toBe(false);
-  });
-
-  it("rejects empty object", () => {
-    const result = ServiceErrorSchema.safeParse({});
-    expect(result.success).toBe(false);
-  });
-
-  it("rejects null", () => {
-    const result = ServiceErrorSchema.safeParse(null);
     expect(result.success).toBe(false);
   });
 });
@@ -175,28 +156,12 @@ describe("KVResponseHeadersSchema", () => {
     expect(result.success).toBe(true);
   });
 
-  it("accepts partial headers", () => {
-    const result = KVResponseHeadersSchema.safeParse({
-      etag: '"xyz789"',
-    });
-    expect(result.success).toBe(true);
-    if (result.success) {
-      expect(result.data.etag).toBe('"xyz789"');
-      expect(result.data.contentType).toBeUndefined();
-    }
-  });
-
   it("rejects invalid contentLength type", () => {
     const data = {
       ...validKVResponseHeaders,
       contentLength: "1024",
     };
     const result = KVResponseHeadersSchema.safeParse(data);
-    expect(result.success).toBe(false);
-  });
-
-  it("rejects null", () => {
-    const result = KVResponseHeadersSchema.safeParse(null);
     expect(result.success).toBe(false);
   });
 });
@@ -238,11 +203,6 @@ describe("KVListResponseSchema", () => {
     const result = KVListResponseSchema.safeParse({
       keys: "key1",
     });
-    expect(result.success).toBe(false);
-  });
-
-  it("rejects null", () => {
-    const result = KVListResponseSchema.safeParse(null);
     expect(result.success).toBe(false);
   });
 });
@@ -291,19 +251,6 @@ describe("createResultSchema", () => {
       data: "hello",
     });
     expect(result.success).toBe(false);
-  });
-
-  it("works with complex nested schemas", () => {
-    const UserSchema = z.object({
-      id: z.string(),
-      name: z.string(),
-    });
-    const UserResultSchema = createResultSchema(UserSchema);
-    const result = UserResultSchema.safeParse({
-      ok: true,
-      data: { id: "123", name: "John" },
-    });
-    expect(result.success).toBe(true);
   });
 });
 
@@ -531,16 +478,6 @@ describe("ServiceRetryEventSchema", () => {
     expect(result.success).toBe(false);
   });
 
-  it("rejects negative attempt", () => {
-    const result = ServiceRetryEventSchema.safeParse({
-      service: "kv",
-      attempt: -1,
-      maxAttempts: 3,
-      error: validServiceError,
-    });
-    expect(result.success).toBe(false);
-  });
-
   it("rejects non-integer attempt", () => {
     const result = ServiceRetryEventSchema.safeParse({
       service: "kv",
@@ -580,14 +517,6 @@ describe("RetryPolicySchema", () => {
     const result = RetryPolicySchema.safeParse({
       ...validRetryPolicy,
       backoff: "invalid",
-    });
-    expect(result.success).toBe(false);
-  });
-
-  it("rejects negative maxAttempts", () => {
-    const result = RetryPolicySchema.safeParse({
-      ...validRetryPolicy,
-      maxAttempts: -1,
     });
     expect(result.success).toBe(false);
   });

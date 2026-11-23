@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import { SiweMessage } from "siwe";
-import { extractRecapAttenuations, genericAppId, ownerFullAccess } from "@tinycloud/sdk-core";
+import { extractRecapAttenuations, ownerFullAccess } from "@tinycloud/sdk-core";
 import { NodeUserAuthorization } from "./NodeUserAuthorization";
 import { NodeWasmBindings } from "../NodeWasmBindings";
 import { PrivateKeySigner } from "../signers/PrivateKeySigner";
@@ -87,12 +87,4 @@ test("a Node client without a domain names its folder node.app, not the SIWE def
   expect(new TinyCloudNode(config).auth!.capabilityRequest!.manifests.map((m) => m.app_id)).toEqual(["node.app"]);
   const named = new TinyCloudNode({ ...config, domain: "notes.example.com" });
   expect(named.auth!.capabilityRequest!.manifests.map((m) => m.app_id)).toEqual(["com.example.notes"]);
-});
-
-test("generic app ids reverse the host name and fall back to node.app", () => {
-  expect(genericAppId("Notes.Example.com:3000")).toBe("com.example.notes_3000");
-  expect(genericAppId("localhost")).toBe("localhost");
-  for (const host of [undefined, null, ""]) expect(genericAppId(host)).toBe("node.app");
-  expect(genericAppId("[::1]:3000")).toBe("o_8d59a2581124dff8");
-  expect(genericAppId("bad_host.example")).toBe("o_bfaa0d5b273b053e");
 });

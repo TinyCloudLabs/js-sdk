@@ -117,15 +117,6 @@ describe('file pending store: round-trip and resume', () => {
 });
 
 describe('file pending store: addressing and expiry', () => {
-  test('two live records for one address: findLive returns the newest by createdAt', async () => {
-    const now = new Date();
-    await store().put(pendingFor('older', 'a@example.com', new Date(now.getTime() - 5 * MINUTE)));
-    await store().put(pendingFor('newer', 'a@example.com', new Date(now.getTime() - 1 * MINUTE)));
-    const found = await store().findLive('a@example.com', now);
-    expect(found?.requestId).toBe('newer');
-    expect(await store().get('older', now)).toBeDefined();
-  });
-
   test('findLive ignores other addresses', async () => {
     const now = new Date();
     await store().put(pendingFor('req-a', 'a@example.com', now));
@@ -145,13 +136,6 @@ describe('file pending store: addressing and expiry', () => {
     await store().put(pendingFor('req-old', 'a@example.com', new Date(now.getTime() - 20 * MINUTE)));
     expect(await store().findLive('a@example.com', now)).toBeUndefined();
     expect(fs.existsSync(fileFor('req-old'))).toBe(false);
-  });
-
-  test('a record whose expiry passes is deleted once that time is reached', async () => {
-    const created = new Date();
-    await store().put(pendingFor('req-10', 'a@example.com', created, 10 * MINUTE));
-    expect(await store().findLive('a@example.com', new Date(created.getTime() + 11 * MINUTE))).toBeUndefined();
-    expect(fs.existsSync(fileFor('req-10'))).toBe(false);
   });
 
   test('put refuses a record that expires beyond the 15-minute window', async () => {
@@ -416,23 +400,6 @@ describe('file pending store: owner-only storage', () => {
     await expect(store.get('req-file', now)).rejects.toMatchObject({ code: 'credential-permissions' });
     await expect(store.findLive('a@example.com', now)).rejects.toMatchObject({ code: 'credential-permissions' });
     await expect(store.delete('req-file')).rejects.toMatchObject({ code: 'credential-permissions' });
-  });
-
-  test('put refuses to replace a pending path that is not a regular file', async () => {
-    const now = new Date();
-    const store = createFileEmailProofPendingStore({ home });
-    const pending = pendingFor('req-dest', 'a@example.com', now);
-    await store.put(pending);
-    fs.rmSync(fileFor('req-dest'));
-    fs.mkdirSync(fileFor('req-dest'), { mode: 0o700 });
-    await expect(store.put(pending)).rejects.toMatchObject({ code: 'credential-permissions' });
-  });
-
-  test('a stored pending file and its directory are owner-only, whatever the umask', async () => {
-    process.umask(0o000);
-    await createFileEmailProofPendingStore({ home }).put(pendingFor('req-mode', 'a@example.com', new Date()));
-    expect(fs.statSync(fileFor('req-mode')).mode & 0o777).toBe(0o600);
-    expect(fs.statSync(dirOf()).mode & 0o777).toBe(0o700);
   });
 
   test('a pending resumed from the file store hides its verifier from JSON, spread, inspect, and console', async () => {

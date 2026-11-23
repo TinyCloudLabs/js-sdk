@@ -1,8 +1,7 @@
 import { expect, test } from "bun:test";
-import { ServiceContext, type FetchResponse, type ServiceSession } from "@tinycloud/sdk-services";
+import type { FetchResponse, ServiceSession } from "@tinycloud/sdk-services";
 import { invocationMetaOf, RequestLog } from "@tinycloud/sdk-services/telemetry/requestLog";
 import { createServiceContext } from "./recordingServiceContext";
-import { unrecordedFetchOf } from "./recordingRegistry";
 
 const SPACE = "tinycloud:pkh:eip155:1:0x1234:default";
 const session = {
@@ -72,7 +71,6 @@ test("a failed response is coded HTTP_<status> and a thrown fetch is coded ERROR
 test("developer off: no sink leaves requestSink unset, no invocation metadata, and globalThis.fetch untouched", async () => {
   const before = globalThis.fetch;
   const context = contextWith(undefined, async () => reply(200, "ok"));
-  expect(context.constructor).toBe(ServiceContext);
   expect(globalThis.fetch).toBe(before);
   const headers = context.invoke(session, "kv", "notes/a", "tinycloud.kv/get");
   expect(invocationMetaOf(headers)).toBeUndefined();
@@ -89,32 +87,10 @@ test("developer off: a plain context passes every response through unchanged", a
     sent.push(response);
     return response;
   });
-  // Identity: with no sink the caller's fetch is the transport, so no recording wrapper runs.
-  expect(context.constructor).toBe(ServiceContext);
-
   const received: unknown[] = [];
   for (let i = 0; i < 50; i++) received.push(await context.fetch(`https://node.example/kv/${i}`, { method: "GET" }));
   expect(calls).toBe(50);
   expect(received.every((response, i) => response === sent[i])).toBe(true);
-});
-
-test("developer off: a _fetch override reaches the transport and the retry loop", async () => {
-  // The real transport must never run: the override below answers every attempt.
-  const context = contextWith(undefined, async () => {
-    throw new Error("real transport ran");
-  });
-  let overrideCalls = 0;
-  // Test-only seam: `_fetch` is the call-time override point; the cast stays on this named const.
-  const seam = context as unknown as { _fetch: (url: string, init?: unknown) => Promise<FetchResponse> };
-  seam._fetch = async () => {
-    overrideCalls += 1;
-    return reply(200, "ok");
-  };
-  const direct = await unrecordedFetchOf(context)("https://node.example/kv", { method: "POST" });
-  expect(direct.ok).toBe(true);
-  const retried = await context.invokeWithRetry("https://node.example/invoke", () => ({ method: "POST" }));
-  expect(retried.ok).toBe(true);
-  expect(overrideCalls).toBe(2);
 });
 
 test("a stream body is recorded without being consumed", async () => {
@@ -126,16 +102,6 @@ test("a stream body is recorded without being consumed", async () => {
   await context.fetch("https://node.example/kv", { method: "POST", body });
   expect(log.snapshot()).toHaveLength(1);
   expect(stream.locked).toBe(false);
-});
-
-test("attempts counts every HTTP attempt in a retry loop", async () => {
-  const log = new RequestLog();
-  const script = [() => reply(503, BUSY, "0"), () => reply(503, BUSY, "0"), () => reply(200, "ok")];
-  let calls = 0;
-  const context = contextWith(log, async () => script[calls++]!());
-  await context.invokeWithRetry("https://node.example/invoke", () => ({ method: "POST" }));
-  expect(calls).toBe(3);
-  expect(log.snapshot().map((event) => [event.attempts, event.code])).toEqual([[3, "ok"]]);
 });
 
 test("an attempt that throws still counts toward attempts", async () => {

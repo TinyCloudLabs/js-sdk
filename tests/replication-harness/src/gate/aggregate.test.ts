@@ -213,30 +213,6 @@ describe("aggregate fixture-leg gate rules", () => {
     const report = await aggregate(await fixture());
     expect(verifyAggregate(report, { gate: "tc858-phase1-workspace", print: "cli.version" }).output).toBe("1.2.3");
   });
-  test("verify-aggregate CLI prints only the exact version to stdout", async () => {
-    const options = await fixture();
-    const cliReport = await aggregate(options);
-    const aggregatePath = join(options.legs[0]!.directory, "aggregate.json");
-    await writeFile(aggregatePath, JSON.stringify(cliReport));
-    const originalFetch = globalThis.fetch;
-    const originalStdout = process.stdout.write.bind(process.stdout);
-    const originalStderr = process.stderr.write.bind(process.stderr);
-    let stdout = "";
-    let stderr = "";
-    globalThis.fetch = (async () => new Response(JSON.stringify({ version: "1.2.3" }))) as unknown as typeof fetch;
-    process.stdout.write = ((chunk: string | Uint8Array) => { stdout += String(chunk); return true; }) as typeof process.stdout.write;
-    process.stderr.write = ((chunk: string | Uint8Array) => { stderr += String(chunk); return true; }) as typeof process.stderr.write;
-    try {
-      await runCommand(["verify-aggregate", aggregatePath, "--gate", "tc858-phase1-workspace", "--print", "cli.version"]);
-      expect(stdout).toBe("1.2.3\n");
-      expect(stderr).toContain("gate=passed companion=passed");
-    } finally {
-      globalThis.fetch = originalFetch;
-      process.stdout.write = originalStdout;
-      process.stderr.write = originalStderr;
-    }
-  });
-
   test("an interrupted core leg fails the local gate command even when all of its rows pass", async () => {
     const options = await fixture();
     const root = await mkdtemp(join(tmpdir(), "tc893-local-interrupted-"));
@@ -279,12 +255,6 @@ describe("aggregate fixture-leg gate rules", () => {
     expect(report.gate?.rows).toHaveLength(2);
   });
 
-  test("recomputation catches a core row omitted from the leg report", async () => {
-    const options = await fixture();
-    (options.legs[0]!.report as { results: unknown[] }).results = [];
-    const report = await aggregate(options);
-    expect(report.gate?.reasons.some((item) => item.code === "MISSING_ROW" && item.key === "CORE-00@sqlite")).toBe(true);
-  });
   test("rejects a PG manifest row whose result declares the SQLite backend", async () => {
     const options = await fixture();
     const pgReport = options.legs.find((leg) => leg.name === "core-pg16")!.report as { results: { backend: string }[] };

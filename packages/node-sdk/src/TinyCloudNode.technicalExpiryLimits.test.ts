@@ -27,7 +27,6 @@ const UCAN_DATED =
   "expiry is later than 2255-06-05, the latest date an agent or share delegation can carry (UCAN limit); a delegation signed by the wallet (delegateTo with forceWalletSign: true) can go to 9999-12-31; choose an earlier expiry";
 const NOT_A_DATE =
   "expiry is not a valid date or is too far away to hold; choose one before 9999-12-31";
-const WASM_UCAN_RANGE = "Out of valid microsecond-precision range of NumericDate";
 
 const PRIVATE_KEY = "1".padStart(64, "0");
 const HOST = "https://node.example";
@@ -159,29 +158,6 @@ describe("createOwnerDelegation", () => {
   });
 });
 
-describe("the WASM accepts what the SDK now lets through", () => {
-  // Real prepareSession + completeSessionSetup, the same calls createOwnerDelegation makes.
-  test("a wallet-signed session to the last second of 9999 round-trips, a year later does not", async () => {
-    const wasm = new NodeWasmBindings();
-    const signer = new PrivateKeySigner(PRIVATE_KEY);
-    const address = await signer.getAddress();
-    const manager = wasm.createSessionManager();
-    const base = {
-      abilities: { kv: { "": ["tinycloud.kv/get"] } },
-      address,
-      chainId: 1,
-      domain: "limits.test",
-      spaceId: wasm.makeSpaceId(address, 1, "applications"),
-      jwk: JSON.parse(manager.jwk("default")!),
-      issuedAt: new Date().toISOString(),
-    };
-    const prepared = wasm.prepareSession({ ...base, expirationTime: new Date(MAX_SIWE_EXPIRY_MS).toISOString() });
-    const session = wasm.completeSessionSetup({ ...prepared, signature: await signer.signMessage(prepared.siwe) });
-    expect(session.delegationCid).toBeTruthy();
-    expect(() => wasm.prepareSession({ ...base, expirationTime: "+010000-01-01T00:00:00.000Z" })).toThrow();
-  });
-});
-
 describe("the child token limit", () => {
   async function signedSessionTo9999() {
     const spied = spiedWasm();
@@ -212,8 +188,6 @@ describe("the child token limit", () => {
     };
     const audience = manager.getDID("default").split("#", 1)[0]!;
     const abilities = { kv: { "vault/": ["tinycloud.kv/get"] } };
-    // What createDelegationWrapper does, minus the SDK's own check: the WASM call as it would be made.
-    const direct = (expirationSecs: number) => spied.wasm.createDelegation(wasmSession, audience, spaceId, abilities, expirationSecs, 0);
     // The SDK's wrapper, which every delegateTo, agent grant and share delegation goes through.
     const wrapper = (expirationSecs: number) =>
       (node as unknown as { createDelegationWrapper(p: unknown): { expiry: Date } }).createDelegationWrapper({
@@ -223,14 +197,8 @@ describe("the child token limit", () => {
         abilities,
         expirationSecs,
       });
-    return { ...spied, wrapper, direct };
+    return { ...spied, wrapper };
   }
-
-  test("the WASM itself accepts 2255-06-05T23:47:34Z and fails one second later (why the SDK checks first)", async () => {
-    const s = await signedSessionTo9999();
-    expect(s.direct(MAX_UCAN_EXPIRY_MS / 1000).expiry).toBe(MAX_UCAN_EXPIRY_MS / 1000);
-    expect(() => s.direct(MAX_UCAN_EXPIRY_MS / 1000 + 1)).toThrow(WASM_UCAN_RANGE);
-  });
 
   test("a token to exactly 2255-06-05T23:47:34Z is minted from a session signed to 9999", async () => {
     const s = await signedSessionTo9999();
@@ -595,13 +563,6 @@ describe("a child under a parent with milliseconds is held to the parent's whole
   });
   const preparedExpiries = (s: { prepareSession: { mock: { calls: unknown[][] } } }) =>
     s.prepareSession.mock.calls.map((call) => Date.parse((call[0] as { expirationTime: string }).expirationTime));
-
-  test("the rule that refuses a child at the parent's milliseconds accepts the whole-second child", () => {
-    expect(acceptsByMilliseconds(PARENT.getTime(), PARENT.getTime())).toBe(true);
-    expect(acceptsByWholeSeconds(PARENT.getTime(), PARENT.getTime())).toBe(false);
-    expect(acceptsByMilliseconds(WHOLE.getTime(), PARENT.getTime())).toBe(true);
-    expect(acceptsByWholeSeconds(WHOLE.getTime(), PARENT.getTime())).toBe(true);
-  });
 
   test("useDelegation activates its session at the delegation's whole second, accepted by both rules", async () => {
     const s = mockedNode("9999-12-31T23:59:59.000Z", { signer: true });

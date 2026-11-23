@@ -32,6 +32,7 @@ describe("G1 junit precondition", () => {
     expect(() => validateJunitPrecondition(missingPg, subject)).toThrow(/node-sdk-real-node-pg16/);
     const skippedRealNode = evidence();
     skippedRealNode.suites.find((suite) => suite.name === "node-sdk-real-node-sqlite")!.skipped = 1;
+    expect(() => validateJunitPrecondition(skippedRealNode, subject)).toThrow(/node-sdk-real-node-sqlite.*zero skips/);
   });
 
   test("rejects another PR's evidence even when its tested SHA is internally consistent", () => {

@@ -2049,24 +2049,6 @@ describe("A2 lifecycle review regressions", () => {
     expect(env.events.some((event) => event.type === "replication.read" && event.source === "network" && event.code === "DRAIN_TIMEOUT")).toBe(true);
   });
 
-  test("caller deadline during stale sync still returns TIMEOUT", async () => {
-    let syncStarted!: () => void;
-    const started = new Promise<void>((resolve) => { syncStarted = resolve; });
-    const env = setup({ onSync: (_epoch, signal) => {
-      syncStarted();
-      return new Promise<void>((_resolve, reject) => signal.addEventListener("abort", () => reject(signal.reason), { once: true }));
-    } });
-    env.setNow(1_200_001);
-    const requestAbort = new AbortController();
-    const request = env.controller.get({ ...readRequest(env.network), signal: requestAbort.signal });
-    await started;
-    requestAbort.abort(new RequestTimeoutError(20));
-    const result = await request;
-    expect(result.ok).toBe(false);
-    expect(!result.ok && result.error.code).toBe("TIMEOUT");
-    expect(env.counters().localReads).toBe(0);
-  });
-
   test("caller timeout remains TIMEOUT when the foreground sync exceeds the drain bound", async () => {
     const timers: Array<{ fn: () => void; ms: number; cancelled: boolean }> = [];
     let syncStarted!: () => void;

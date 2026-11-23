@@ -208,7 +208,6 @@ test("signIn clears the memo so the next session re-confirms hosting", async () 
     await (node as any).ensureOwnedSpaceHostedById(ACCOUNT_SPACE);
     expect(calls()).toBe(1);
   });
-  expect((node as any).confirmedHostedSpaceIds.has(ACCOUNT_SPACE)).toBe(true);
 
   // Drive the real signIn() with its network layers stubbed out.
   const tc = (node as any).tc;
@@ -232,14 +231,13 @@ test("signIn clears the memo so the next session re-confirms hosting", async () 
     await node.signIn();
   });
 
-  // The pre-signIn confirmation is gone; only what THIS session confirmed
-  // remains.
-  expect((node as any).confirmedHostedSpaceIds.has(ACCOUNT_SPACE)).toBe(false);
-  expect((node as any).confirmedHostedSpaceIds.has(SECRETS_SPACE)).toBe(true);
-
-  // The new session therefore re-submits /delegate for the account space.
+  // The pre-signIn confirmation is gone: the new session re-submits /delegate
+  // for the account space, while the `secrets` space THIS session confirmed
+  // needs no new submission.
   await withDelegateFetch({}, async (calls) => {
     await (node as any).ensureOwnedSpaceHostedById(ACCOUNT_SPACE);
+    expect(calls()).toBe(1);
+    await (node as any).ensureOwnedSpaceHostedById(SECRETS_SPACE);
     expect(calls()).toBe(1);
   });
 });

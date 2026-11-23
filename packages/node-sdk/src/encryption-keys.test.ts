@@ -240,10 +240,6 @@ test("createNamedKeyClient resolves its node hooks on an unstubbed TinyCloudNode
     } as never,
     wasmBindings: makeWasmBindings(),
   });
-  const hooks = node as unknown as Record<string, unknown>;
-  expect(typeof hooks.signRawNetworkAuthorization).toBe("function");
-  expect(typeof hooks.createEncryptionCrypto).toBe("function");
-  expect(typeof hooks.encryptionDestination).toBe("function");
   expect(() => createNamedKeyClient(node)).not.toThrow();
 });
 

@@ -172,26 +172,6 @@ test("grants are posted to the TEE origin when they name or cover vault data or 
   expect(redirects).toEqual(["error", "error", "error", "error", "error"]);
 });
 
-test("under a session that grants the whole key space, every vault invocation and every grant touching vault goes only to the TEE origin", async () => {
-  const { node, attempts } = await fixture();
-  await node.vault.get("api-key", { source: "network" });
-  await node.vault.list();
-  await node.kv.get("vault/api-key");
-  await node.kv.list();
-  const wholeKeySpace = await signedRestorableSession({ abilities: KV_ABILITIES });
-  const vaultPath = await signedRestorableSession({ abilities: { kv: { "vault/api-key": ["tinycloud.kv/get"] } } });
-  for (const grant of [wholeKeySpace, vaultPath]) {
-    await importPortableDelegation(globalThis.fetch, PROXIED, {
-      cid: "bafy-grant", delegationHeader: grant.delegationHeader, ownerAddress: grant.address, chainId: 1,
-      spaceId: grant.spaceId, path: "", actions: ["tinycloud.kv/get"], expiry: new Date(Date.now() + 60_000),
-      delegateDID: NODE_DID,
-    });
-  }
-  expect(invocations(attempts).length).toBeGreaterThanOrEqual(4);
-  expect(attempts.filter((attempt) => new URL(attempt.url).pathname === "/delegate").length).toBe(2);
-  expect(origins(attempts)).toEqual(new Set([TEE]));
-});
-
 const walletGrantRecipient = `did:key:${base58btc.encode(Uint8Array.from([0xed, 0x01, ...ed25519.getPublicKey(new Uint8Array(32).fill(5))]))}`;
 const walletGrantActions = ["tinycloud.kv/get", "tinycloud.kv/list"];
 

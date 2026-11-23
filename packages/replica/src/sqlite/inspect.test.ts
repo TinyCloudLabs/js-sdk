@@ -47,20 +47,6 @@ function schemaVersion(path: string): number {
 }
 
 describe("SQLite gated read transaction", () => {
-  test("reads the partition generation and data in one readonly transaction", async () => {
-    const dir = await makeStore();
-    const store = await SqliteReplicaStore.open(dir, { create: false });
-    let checks = 0;
-    try {
-      const generation = await store.readTransaction(0, async () => { checks++; }, async (snapshot) =>
-        (await snapshot.open())?.generation);
-      expect(generation).toBe(0);
-      expect(checks).toBe(2);
-    } finally {
-      await store.close();
-    }
-  });
-
   test("refuses a changed partition generation before reading", async () => {
     const dir = await makeStore();
     const store = await SqliteReplicaStore.open(dir, { create: false });

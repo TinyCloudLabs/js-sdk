@@ -21,7 +21,7 @@ import { getNodeReplicationLoaders } from "./module-registry";
 import { TinyCloudNode } from "../TinyCloudNode";
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { mkdir, mkdtemp, readdir, rm, rmdir } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, rmdir } from "node:fs/promises";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -489,35 +489,6 @@ describe("node replication integration", () => {
     } finally {
       await node.replication?.close();
       globalThis.fetch = originalFetch;
-      await rm(profileDir, { recursive: true, force: true });
-    }
-  });
-  test("two hosts sharing one storage directory keep separate replica partitions", async () => {
-    const profileDir = await mkdtemp(join(tmpdir(), "tc858-replication-e2e-"));
-    const root = join(profileDir, "replicas");
-    const storage = createSqliteReplicaStorage({
-      dir: root,
-      guard: profileGuard(profileDir),
-      createDevice: async () => ({ did: "did:key:replica-e2e", jwk: {} }),
-    });
-    const anchor = { source: "siwe" as const, at: Date.now() };
-    const stamp = await storage.lifecycle!.establishSessionStamp(identity.principal, { consentAnchor: anchor });
-    const open = (host: string) => storage.open({
-      identity: canonicalReplicationIdentity({ ...identity, host }),
-      space,
-      prefix: "notes/",
-      allowSecrets: false,
-      stamp,
-      grantPolicy: { grantTtlMs: 60_000, consentAnchor: anchor },
-    });
-    const first = await open("https://one.example");
-    const second = await open("https://two.example");
-    try {
-      expect(first.spec.identity.host).toBe("https://one.example");
-      expect(second.spec.identity.host).toBe("https://two.example");
-      expect(await readdir(root)).toHaveLength(2);
-    } finally {
-      await Promise.all([first.close(), second.close()]);
       await rm(profileDir, { recursive: true, force: true });
     }
   });

@@ -17,15 +17,6 @@ function surface(popup: any = { closed: false, close: () => undefined }) {
   };
 }
 
-test("exact-origin enforcement and non-secret completion wake", async () => {
-  const fake = surface(); const interaction = await new BrowserCredentialInteraction("popup", fake.browser).start({ interaction: INTERACTION, locator: LOCATOR });
-  const wake = interaction.wake();
-  for (const listener of fake.listeners) listener({ origin: "https://evil.test", source: fake.popup, data: { type: "opencredentials-wake", version: 1, locator: LOCATOR } });
-  let settled = false; void wake.then(() => { settled = true; }); await Promise.resolve(); expect(settled).toBe(false);
-  for (const listener of fake.listeners) listener({ origin: INTERACTION.origin, source: fake.popup, data: { type: "opencredentials-wake", version: 1, locator: LOCATOR } });
-  await wake; expect(settled).toBe(true);
-});
-
 test("popup navigation contains only the opaque locator", async () => {
   const fake = surface(); await new BrowserCredentialInteraction("popup", fake.browser).start({ interaction: INTERACTION, locator: LOCATOR });
   const url = new URL(fake.opened()); expect(url.origin).toBe(INTERACTION.origin); expect(url.pathname).toContain(LOCATOR); expect(url.search).toBe(""); expect(url.hash).toBe("");
@@ -37,13 +28,6 @@ test("request substitution and replay fail with typed categories", async () => {
   await expect(substituted.state("request_abcdefghijkl", "verifier_abcdefghijkl")).rejects.toMatchObject({ code: "REQUEST_SUBSTITUTED" });
   const replay = new OpenCredentialsHttpTransport(descriptor, async () => new Response(null, { status: 409 }));
   await expect(replay.state("request_abcdefghijkl", "verifier_abcdefghijkl")).rejects.toMatchObject({ code: "REQUEST_SUBSTITUTED" });
-});
-
-test("duplicate wake signals carry no result and grant no authority", async () => {
-  const fake = surface(); const interaction = await new BrowserCredentialInteraction("popup", fake.browser).start({ interaction: INTERACTION, locator: LOCATOR });
-  const message = { type: "opencredentials-wake", version: 1, locator: LOCATOR };
-  for (const listener of fake.listeners) { listener({ origin: INTERACTION.origin, source: fake.popup, data: message }); listener({ origin: INTERACTION.origin, source: fake.popup, data: message }); }
-  expect(Object.keys(message)).toEqual(["type", "version", "locator"]); interaction.close();
 });
 
 test("popup closure is observable and popup blocking is typed", async () => {

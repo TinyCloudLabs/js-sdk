@@ -13,7 +13,6 @@ import { ErrorCodes } from "../types";
 import { authorizationVerdictOf, validatedCapabilityOf } from "../errors";
 import { KVService } from "./KVService";
 import {
-  DEFAULT_SIGNED_READ_URL_EXPIRY_MS,
   KVAction,
   type KVChangesOptions,
   type KVChangesResponse,
@@ -1065,7 +1064,7 @@ describe("KVService.createSignedReadUrl", () => {
     expect(result.ok).toBe(true);
     expect(JSON.parse(requestInit?.body as string)).toMatchObject({
       path: "audio/conv-1/recording",
-      ttl_seconds: Math.ceil(DEFAULT_SIGNED_READ_URL_EXPIRY_MS / 1000),
+      ttl_seconds: 300,
     });
   });
 

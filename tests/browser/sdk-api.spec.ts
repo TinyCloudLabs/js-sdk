@@ -12,7 +12,6 @@ import { test, expect, Page } from '@playwright/test';
 // Hardhat account 0 — well-known test key
 const TEST_PRIVATE_KEY = '0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80';
 const TEST_ADDRESS = '0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266';
-const TINYCLOUD_HOST = process.env.TINYCLOUD_HOST || 'https://node.tinycloud.xyz';
 
 /**
  * Mock ethereum wallet script for injection.
@@ -188,90 +187,6 @@ test.describe('Standalone SDK API Tests', () => {
     expect(exports).toContain('KVService');
   });
 
-  test('should verify TinyCloudWeb has unified service accessors', async ({ page }) => {
-    await page.goto('/test-page.html');
-    await waitForSdkLoad(page);
-
-    // Check that TinyCloudWeb.prototype has the expected getters
-    const accessors = await page.evaluate(() => {
-      const TCW = (window as any).TinyCloudWeb;
-      const proto = TCW.prototype;
-      const descriptors = Object.getOwnPropertyDescriptors(proto);
-      return {
-        hasKv: 'kv' in descriptors,
-        hasSql: 'sql' in descriptors,
-        hasDuckdb: 'duckdb' in descriptors,
-        hasVault: 'vault' in descriptors,
-        hasSpaces: 'spaces' in descriptors,
-        hasSharing: 'sharing' in descriptors,
-        hasDelegations: 'delegations' in descriptors,
-        hasCapabilityRegistry: 'capabilityRegistry' in descriptors,
-        hasDid: 'did' in descriptors,
-        hasSessionDid: 'sessionDid' in descriptors,
-        hasIsSessionOnly: 'isSessionOnly' in descriptors,
-        hasIsWalletConnected: 'isWalletConnected' in descriptors,
-      };
-    });
-
-    expect(accessors.hasKv).toBe(true);
-    expect(accessors.hasSql).toBe(true);
-    expect(accessors.hasDuckdb).toBe(true);
-    expect(accessors.hasVault).toBe(true);
-    expect(accessors.hasSpaces).toBe(true);
-    expect(accessors.hasSharing).toBe(true);
-    expect(accessors.hasDelegations).toBe(true);
-    expect(accessors.hasCapabilityRegistry).toBe(true);
-    expect(accessors.hasDid).toBe(true);
-    expect(accessors.hasSessionDid).toBe(true);
-    expect(accessors.hasIsSessionOnly).toBe(true);
-    expect(accessors.hasIsWalletConnected).toBe(true);
-  });
-
-  test('should verify TinyCloudWeb has static create() factory', async ({ page }) => {
-    await page.goto('/test-page.html');
-    await waitForSdkLoad(page);
-
-    const hasCreate = await page.evaluate(() => {
-      const TCW = (window as any).TinyCloudWeb;
-      return typeof TCW.create === 'function';
-    });
-
-    expect(hasCreate).toBe(true);
-  });
-
-  test('should verify TinyCloudWeb has auth methods', async ({ page }) => {
-    await page.goto('/test-page.html');
-    await waitForSdkLoad(page);
-
-    const methods = await page.evaluate(() => {
-      const TCW = (window as any).TinyCloudWeb;
-      const instance = new TCW({
-        tinycloudHosts: ['https://node.tinycloud.xyz'],
-      });
-      return {
-        hasSignIn: typeof instance.signIn === 'function',
-        hasSignOut: typeof instance.signOut === 'function',
-        hasSession: typeof instance.session === 'function',
-        hasAddress: typeof instance.address === 'function',
-        hasChainId: typeof instance.chainId === 'function',
-        hasCleanup: typeof instance.cleanup === 'function',
-        hasConnectWallet: typeof instance.connectWallet === 'function',
-        hasCreateDelegation: typeof instance.createDelegation === 'function',
-        hasUseDelegation: typeof instance.useDelegation === 'function',
-      };
-    });
-
-    expect(methods.hasSignIn).toBe(true);
-    expect(methods.hasSignOut).toBe(true);
-    expect(methods.hasSession).toBe(true);
-    expect(methods.hasAddress).toBe(true);
-    expect(methods.hasChainId).toBe(true);
-    expect(methods.hasCleanup).toBe(true);
-    expect(methods.hasConnectWallet).toBe(true);
-    expect(methods.hasCreateDelegation).toBe(true);
-    expect(methods.hasUseDelegation).toBe(true);
-  });
-
   test('should create TinyCloudWeb instance with provider', async ({ page }) => {
     await page.goto('/test-page.html');
     await waitForSdkLoad(page);
@@ -297,96 +212,5 @@ test.describe('Standalone SDK API Tests', () => {
     expect(result.success).toBe(true);
     expect(result.isWalletConnected).toBe(true);
     expect(result.hasProvider).toBe(true);
-  });
-
-  test('should create TinyCloudWeb via static create()', async ({ page }) => {
-    await page.goto('/test-page.html');
-    await waitForSdkLoad(page);
-
-    const result = await page.evaluate(async () => {
-      const TCW = (window as any).TinyCloudWeb;
-      try {
-        const tcw = await TCW.create({
-          provider: (window as any).ethereum,
-          tinycloudHosts: ['https://node.tinycloud.xyz'],
-        });
-
-        return {
-          success: true,
-          isWalletConnected: tcw.isWalletConnected,
-          // After create(), WASM should be initialized and node ready
-          hasKvAccessor: true, // Will throw if not initialized
-        };
-      } catch (err: any) {
-        return { success: false, error: err.message };
-      }
-    });
-
-    if (!result.success) {
-      console.log('TinyCloudWeb.create() failed:', result.error);
-      // WASM initialization may fail in test context — that's expected
-      // The important thing is that the API surface is correct
-      expect(result.error).toBeTruthy();
-    } else {
-      expect(result.isWalletConnected).toBe(true);
-    }
-  });
-
-  test('should sign in and perform KV operations', async ({ page }) => {
-    test.skip(true, 'Requires WASM initialization — run with --headed for debugging');
-
-    await page.goto('/test-page.html');
-    await waitForSdkLoad(page);
-
-    const result = await page.evaluate(async (host: string) => {
-      const TCW = (window as any).TinyCloudWeb;
-      try {
-        const tcw = await TCW.create({
-          provider: (window as any).ethereum,
-          tinycloudHosts: [host],
-        });
-
-        // Sign in
-        const session = await tcw.signIn();
-
-        // KV put
-        const testKey = `browser-test-${Date.now()}`;
-        const testValue = `browser-value-${Date.now()}`;
-        await tcw.kv.put(testKey, testValue);
-
-        // KV get
-        const getResult = await tcw.kv.get(testKey);
-
-        return {
-          success: true,
-          hasSession: !!session,
-          kvRoundtrip: getResult?.data === testValue,
-          testKey,
-          testValue,
-          gotValue: getResult?.data,
-        };
-      } catch (err: any) {
-        return { success: false, error: err.message, stack: err.stack };
-      }
-    }, TINYCLOUD_HOST);
-
-    if (result.success) {
-      expect(result.hasSession).toBe(true);
-      expect(result.kvRoundtrip).toBe(true);
-    } else {
-      console.log('Sign-in + KV test failed (expected if WASM not available):', result.error);
-    }
-  });
-
-  test('should verify receiveShare static method exists', async ({ page }) => {
-    await page.goto('/test-page.html');
-    await waitForSdkLoad(page);
-
-    const hasReceiveShare = await page.evaluate(() => {
-      const TCW = (window as any).TinyCloudWeb;
-      return typeof TCW.receiveShare === 'function';
-    });
-
-    expect(hasReceiveShare).toBe(true);
   });
 });

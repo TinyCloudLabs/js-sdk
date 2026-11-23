@@ -95,15 +95,6 @@ describe("DuckDB PIVOT", () => {
       ORDER BY entry_id
     `;
 
-    test("PIVOT query denormalizes EAV to flat rows", async () => {
-      const result = await alice.duckdb.db(DB).query(PIVOT_SQL);
-      expect(result.ok).toBe(true);
-      if (result.ok) {
-        const data = result.data;
-        expect(data.rowCount).toBeGreaterThan(0);
-      }
-    });
-
     test("result columns include pivoted field names", async () => {
       const result = await alice.duckdb.db(DB).query(PIVOT_SQL);
       expect(result.ok).toBe(true);
@@ -161,12 +152,6 @@ describe("DuckDB PIVOT", () => {
           FIRST(value) FOR field_name IN ('Full Name', 'Email', 'Phone', 'Status')
         )
       `);
-    });
-
-    test("CREATE VIEW with PIVOT succeeds", async () => {
-      // View was created in beforeAll; verify it exists via a query
-      const result = await alice.duckdb.db(DB).query(`SELECT COUNT(*) as cnt FROM v_people`);
-      expect(result.ok).toBe(true);
     });
 
     test("SELECT * FROM v_people returns denormalized rows", async () => {

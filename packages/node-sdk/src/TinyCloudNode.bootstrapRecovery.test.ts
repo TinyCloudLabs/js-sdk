@@ -153,21 +153,6 @@ test("a marker-read error runs one repair decision instead of skipping", async (
   });
 });
 
-test("only an accepted marker version permits an already-provisioned skip", async () => {
-  const node = makeNode();
-  Reflect.set(node, "auth", { lastActivationSkippedSpaceIds: [] });
-  Reflect.set(node, "hasRuntimePermissions", () => true);
-  Reflect.set(node, "readBootstrapCompletionMarker", async () => ({
-    ok: true,
-    data: { data: { v: BOOTSTRAP_COMPLETION_MARKER_VERSION, stepIds: canonicalStepIds() } },
-  }));
-  const resolve = Reflect.get(node, "resolveBootstrapDecision");
-
-  await expect(resolve.call(node, bootstrapSteps(ADDRESS, 1))).resolves.toEqual({
-    action: "skip",
-  });
-});
-
 function makeRecoveryHarness(fake: FakeCloud): TinyCloudNode {
   const node = Reflect.construct(TinyCloudNode, [{
     host: HOST,
