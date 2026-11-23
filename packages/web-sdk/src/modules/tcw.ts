@@ -127,6 +127,7 @@ import type { NotificationConfig } from "../notifications/types";
 import type { PortableDelegation, DelegatedAccess, SpaceHosting } from "@tinycloud/node-sdk/core";
 import { CredentialsService } from "../credentials";
 import { ShareReceiverService, type ShareReceiverServiceOptions } from "../share";
+import type { OpenKeySetupClient } from "../handle-account-setup-required";
 
 declare global {
   interface Window {
@@ -1549,6 +1550,56 @@ export class TinyCloudWeb {
           }
           return undefined;
         },
+      });
+    } catch (error) {
+      onError?.(error);
+      return "unavailable";
+    }
+  }
+
+  /**
+   * TC-3657: handle an `AccountSetupRequiredError` thrown by a third-party sign-in by asking
+   * OpenKey to publish the owner's registry location record in one tap, then retrying the sign-in.
+   *
+   * Called by the outside app's error handler when a sign-in fails with `AccountSetupRequiredError`.
+   * The SDK consults a 24h per-owner-per-outside-app throttle in `localStorage` (Naomi 14:32:33Z),
+   * invokes OpenKey's `authorizeTinyCloudSetup`, and retries sign-in if OpenKey published or
+   * reported the record already existed. The widget origin, node DID + origin, and signing all
+   * live inside OpenKey; nothing in this call forwards an app-supplied node or origin (Bobbie C1/C3).
+   *
+   * Returns one of: `"published"` | `"already-current"` | `"declined"` | `"throttled"` | `"no-openkey"` | `"unavailable"`.
+   * Never throws; the caller branches on the outcome.
+   */
+  async handleAccountSetupRequired(options: {
+    error: { readonly setupUrl: string };
+    requestingApp?: { name?: string; manifest?: unknown };
+    retrySignIn?: () => Promise<void>;
+  }): Promise<"published" | "already-current" | "declined" | "throttled" | "no-openkey" | "unavailable"> {
+    const node = this._node;
+    const session = node?.session;
+    if (!node || !session || !session.address) return "unavailable";
+    const subject = node.did;
+    if (!subject.startsWith("did:pkh:")) return "unavailable";
+    const openkey = this.config.openkey;
+    const onError = this.config.onRegistryPublishError;
+    try {
+      // Dynamic import keeps TC-3657 off the TC-858 root chunk (same reason as TC-3547's
+      // registry-publish module). The outside-app error path is cold code; importing here
+      // only pulls the helper when a host actually calls this method.
+      const { handleAccountSetupRequired } = await import("../handle-account-setup-required");
+      const forwardedRequest: { name?: string; manifest?: unknown } = {};
+      if (options.requestingApp?.name !== undefined) forwardedRequest.name = options.requestingApp.name;
+      if (options.requestingApp?.manifest !== undefined) forwardedRequest.manifest = options.requestingApp.manifest;
+      return await handleAccountSetupRequired({
+        error: options.error,
+        subject,
+        node,
+        openkey: openkey?.client as OpenKeySetupClient | undefined,
+        // Bobbie N1 (14:53:16Z): no `mode` forwarded. The helper always opens the setup popup
+        // regardless of the host's configured openkey.mode (which could be "iframe").
+        ...(Object.keys(forwardedRequest).length > 0 ? { requestingApp: forwardedRequest } : {}),
+        ...(onError ? { onError } : {}),
+        ...(options.retrySignIn ? { retrySignIn: options.retrySignIn } : {}),
       });
     } catch (error) {
       onError?.(error);
