@@ -75,8 +75,7 @@ export async function admitDeviceRenewal(input: {
     const replaySignal = callSignal();
     if (!replaySignal) return finite("renewal_admission_expired");
     const registered = await activateSessionWithHost(nodeOrigin, original.delegationHeader, replaySignal);
-    if (replaySignal.aborted || !registered.success ||
-        (registered.commitEventCid !== undefined && registered.commitEventCid !== original.delegationCid)) {
+    if (replaySignal.aborted || !registered.success || registered.commitEventCid !== original.delegationCid) {
       return finite("renewal_admission_failed");
     }
     const signal = callSignal();

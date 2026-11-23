@@ -10,6 +10,7 @@ import type { ApprovalRenewal } from "@tinycloud/share-envelope/links";
 import { SiweMessage } from "siwe";
 import { encodeDagCbor } from "../../../sdk-core/src/delegations/cacao.js";
 import { ProfileManager } from "../config/profiles.js";
+import type { ProfileConfig } from "../config/types.js";
 import { loginWithDeviceAuthorization } from "./device-auth.js";
 import { generateKey, keyToDID } from "./local-key.js";
 
@@ -77,7 +78,7 @@ type Fixture = {
   ask?: false;
   result?: "legacy" | "declined" | "wallet" | "grafted" | "over-ask" | "no-extension" | "shifted-issued-at" | "invalid-base";
   clock?: "missing" | "late" | "late-in-transit" | "future-issuance";
-  node?: "refuse-original" | "wrong-original-cid" | "refuse-lease" | "wrong-identity";
+  node?: "refuse-original" | "missing-original-cid" | "wrong-original-cid" | "refuse-lease" | "wrong-identity";
   loseCommit?: boolean;
   cliFlags?: string[];
   omitManifest?: boolean;
@@ -94,6 +95,7 @@ async function run(fixture: Fixture = {}) {
   let pollProof: unknown;
   let ackProof: unknown;
   let atAck: object | null | undefined;
+  let concurrentProfile: ProfileConfig | undefined;
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: (request) => withTinyCloudStateRoot(home, async () => {
     const url = new URL(request.url);
     switch (url.pathname) {
@@ -124,12 +126,16 @@ async function run(fixture: Fixture = {}) {
         if (authorization === grant.delegationHeader.Authorization) {
           events.push("original");
           if (fixture.node === "refuse-original") return new Response(null, { status: 409 });
+          if (fixture.node === "missing-original-cid") return Response.json({ activated: [] });
           return Response.json({ cid: fixture.node === "wrong-original-cid" ? renewal.receipt.leaseCid : grant.delegationCid, activated: [] });
         }
         if (authorization !== renewal.receipt.leaseAuthorization) return new Response("Unexpected proof", { status: 400 });
         events.push("lease");
-        if (fixture.loseCommit) await ProfileManager.setProfile(profileName, { name: profileName, did: keyToDID(key), host: url.origin,
-          spaceName: "default", chainId: 1, createdAt: "2026-01-01T00:00:00.000Z" });
+        if (fixture.loseCommit) {
+          concurrentProfile = { name: profileName, did: keyToDID(key), host: url.origin,
+            spaceName: "default", chainId: 1, createdAt: "2026-01-01T00:00:00.000Z" };
+          await ProfileManager.setProfile(profileName, concurrentProfile);
+        }
         if (fixture.node === "refuse-lease") return new Response(null, { status: 409 });
         return Response.json({ cid: renewal.receipt.leaseCid, activated: [] });
       }
@@ -154,7 +160,8 @@ async function run(fixture: Fixture = {}) {
         ...(fixture.ask === false ? {} : { renewalLeaseSeconds: leaseSeconds }), replaceSession: fixture.loseCommit,
         wait: async () => {}, emitInstructions: () => {} };
       const login = cli ? {} : await loginWithDeviceAuthorization(input).then((value) => ({ value, error: undefined }), (error: unknown) => ({ error, value: undefined }));
-      return { ...login, cli, grant, renewal, start, events, pollProof, ackProof, atAck, previous, saved: await ProfileManager.getSession(profileName) };
+      return { ...login, cli, grant, renewal, start, events, pollProof, ackProof, atAck, previous, saved: await ProfileManager.getSession(profileName),
+        concurrentProfile, savedProfile: await ProfileManager.getProfile(profileName) };
     });
   } finally {
     server.stop(true);
@@ -288,3 +295,32 @@ test("device login with --renew still requires an explicit manifest before conta
   expect(JSON.parse(result.cli!.stderr)).toMatchObject({ error: { code: "MANIFEST_REQUIRED" } });
   expect(result.events).toEqual([]);
 });
+
+test("a successful original registration without a CID cannot admit the lease", async () => {
+  const result = await run({ node: "missing-original-cid" });
+  expect(result.value?.result.renewal === null).toBe(true);
+  expect(result.value?.result.renewalReason).toBe("renewal_admission_failed");
+  expect(result.events).toEqual(["start", "poll", "original", "ack"]);
+  expect(result.atAck).toMatchObject({ delegationCid: result.grant.delegationCid, expiresAt: result.grant.expiresAt });
+  expect(result.atAck).not.toHaveProperty("renewal");
+});
+
+test("the device login CAS error identifies only a successfully admitted lease", async () => {
+  for (const node of [undefined, "refuse-lease"] as const) {
+    const result = await run({ loseCommit: true, node, cliFlags: ["--renew", "30d", "--replace-session"] });
+    expect(result.cli?.code).toBe(1);
+    const stderr = result.cli!.stderr;
+    const { error } = JSON.parse(stderr.slice(stderr.lastIndexOf("\n{") + 1));
+    expect(error.code).toBe("PROFILE_CHANGED_DURING_LOGIN");
+    expect(Object.keys(error).sort()).toEqual(["code", "message"]);
+    expect(error.message).toContain("changed while this login was in progress");
+    expect(stderr.match(/\bbafkr4[a-z2-7]+\b/g) ?? []).toEqual(node ? [] : [result.renewal.receipt.leaseCid]);
+    expect(stderr.includes(result.renewal.receipt.leaseAuthorization)).toBe(false);
+    expect(stderr.includes(result.grant.delegationHeader.Authorization)).toBe(false);
+    expect(stderr.includes(result.grant.signature)).toBe(false);
+    expect(result.cli!.stdout).toBe("");
+    expect(result.events).toEqual(["start", "poll", "original", "identity", "lease"]);
+    expect(result.saved).toEqual(result.previous);
+    expect(result.savedProfile).toEqual(result.concurrentProfile);
+  }
+}, 15_000);

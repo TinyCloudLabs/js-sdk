@@ -696,14 +696,23 @@ export async function loginWithDeviceAuthorization(input: Omit<DeviceAuthorizati
   }, result.primary);
   // A device session never carries named-key authority.
   delete profile.namedKeys;
-  await commitLogin(input.profileName, snapshot, {
-    key,
-    session: result.session,
-    profile,
-    durable: true,
-    // The signed permissions, with their caveats; `approved` is the action summary.
-    approved: { scope: result.session.permissions, ownerDid: result.ownerDid, replaceSession: input.replaceSession === true },
-  });
+  try {
+    await commitLogin(input.profileName, snapshot, {
+      key,
+      session: result.session,
+      profile,
+      durable: true,
+      // The signed permissions, with their caveats; `approved` is the action summary.
+      approved: { scope: result.session.permissions, ownerDid: result.ownerDid, replaceSession: input.replaceSession === true },
+    });
+  } catch (error) {
+    if (result.renewal && error instanceof CLIError && error.code === "PROFILE_CHANGED_DURING_LOGIN") {
+      throw new CLIError(error.code,
+        `${error.message} The node admitted renewal lease ${result.renewal.receipt.leaseCid}; you can stop it under Renewing permissions in OpenKey Settings.`,
+        error.exitCode);
+    }
+    throw error;
+  }
   await acknowledge?.();
   warnIfNotPrimaryKey(result.ownerDid, result.primary);
   announceFirstOwner(input.profileName, expectedOwner, result.ownerDid);
