@@ -313,10 +313,23 @@ call is answered with 500 `server_error`.
 The account owner can see the hosted MCP's delegation, and revoke it, on the
 account site at https://account.tinycloud.xyz/delegations.
 
-Standalone defaults are `TC_MCP_DELEGATION_EXPIRY=1h` and
-`TC_MCP_APPROVAL_TTL_SECONDS=300`. Production `docker-compose.phala.yml`
-explicitly overrides these to `30d` and `900`; the container command above
-does not inherit the compose settings.
+`TC_MCP_BOOTSTRAP_DELEGATION_EXPIRY` (default `30d`) is the longest lifetime
+the signed, server-bound connection request asks for. The owner chooses the
+actual lifetime on OpenKey's approval screen, and it may be shorter. The
+request is signed as standing access and offers a renewal lease of up to 90
+days. It reads only the account's `spaces/` and `applications/` listings and
+nothing that reaches secrets or decryption, so OpenKey shows the renewal box
+ticked; the owner can untick it, and without it the grant ends at its signed
+end and is approved again. Scoped task approvals ask for
+`TC_MCP_DELEGATION_EXPIRY` (default `1h`) with no purpose and never offer
+renewal. A pending approval that was opened with a longer scoped lifetime, or
+with a connection ask that no longer matches (another lease, or no standing
+purpose), is not served or reused again; the next visit makes a new request.
+A scoped one is also never collected. Standalone default for
+`TC_MCP_APPROVAL_TTL_SECONDS` is `300`.
+Production `docker-compose.phala.yml` sets `TC_MCP_DELEGATION_EXPIRY=1h`,
+`TC_MCP_BOOTSTRAP_DELEGATION_EXPIRY=30d` and `TC_MCP_APPROVAL_TTL_SECONDS=900`;
+the container command above does not inherit the compose settings.
 
 Use one service replica with the filesystem store. Multi-replica deployments
 require a shared transactional state provider, which this release does not

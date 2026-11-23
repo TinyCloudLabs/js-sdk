@@ -84,6 +84,8 @@ export async function createOpenKeyRequest(
     readonly grantLifetimeSeconds: number;
     /** Ask the owner for a renewal lease of this many seconds; absent asks for none. */
     readonly leaseLifetimeSeconds?: number;
+    /** Sign the request as standing access, which OpenKey offers its renewal box ticked; absent signs none (a task). */
+    readonly purpose?: "standing";
     readonly expiresAt: Date;
   },
 ): Promise<OpenKeyRequestState> {
@@ -100,6 +102,7 @@ export async function createOpenKeyRequest(
     reason: input.reason,
     grantLifetimeSeconds: input.grantLifetimeSeconds,
     resultEncryptionPublicJwk: relay.publicJwk,
+    ...(input.purpose === undefined ? {} : { purpose: input.purpose }),
     ...(input.leaseLifetimeSeconds === undefined
       ? {}
       : { renewal: { version: 1, leaseLifetimeSeconds: input.leaseLifetimeSeconds } }),

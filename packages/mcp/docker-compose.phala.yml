@@ -11,7 +11,8 @@ services:
       - TC_MCP_INTROSPECTION_URL=https://api.openkey.so/api/oauth/resource/introspect
       - TC_MCP_INTROSPECTION_CLIENT_ID=${TC_MCP_INTROSPECTION_CLIENT_ID}
       - TC_MCP_INTROSPECTION_CLIENT_SECRET=${TC_MCP_INTROSPECTION_CLIENT_SECRET}
-      - TC_MCP_DELEGATION_EXPIRY=30d
+      - TC_MCP_DELEGATION_EXPIRY=1h
+      - TC_MCP_BOOTSTRAP_DELEGATION_EXPIRY=30d
       - TC_MCP_APPROVAL_TTL_SECONDS=900
       - TC_MCP_OAUTH_METADATA_URL=https://api.openkey.so/.well-known/oauth-authorization-server/api/auth
       - TC_OPENKEY_HOST=https://openkey.so

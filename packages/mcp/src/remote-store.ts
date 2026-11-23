@@ -74,6 +74,8 @@ const PROCESSING_STALE_MS = 120_000;
  * grant ends at its signed end and is approved again.
  */
 export const BOOTSTRAP_LEASE_SECONDS = 90 * 86_400;
+/** How long the signed connection grant lasts unless configured otherwise. Scoped task grants use `delegationExpiry`. */
+export const DEFAULT_BOOTSTRAP_GRANT_EXPIRY = "30d";
 /** Idle tenants become eligible before seven days to leave time for the sweep and retries. */
 export const TENANT_IDLE_MS = 6 * 86_400_000;
 /** First sweep after startup, then on an hourly cadence without overlapping passes. */
@@ -121,7 +123,10 @@ export interface RemoteStoreConfig {
   /** Links API origin that stores signed approval requests. */
   readonly linksApiOrigin?: string;
   readonly approvalTtlSeconds: number;
+  /** Lifetime of a scoped (task) grant. It asks for no renewal. */
   readonly delegationExpiry: string;
+  /** Lifetime of the signed connection (bootstrap) grant, which may carry an approved renewal lease. Defaults to 30 days. */
+  readonly bootstrapDelegationExpiry?: string;
   /** Shared secret used only by the Exo native client, never logged. */
   readonly nativeServiceCredential?: string;
 }
@@ -330,7 +335,8 @@ export class RemoteTenantStore {
   #sweeping?: Promise<number>;
   #closed = false;
   readonly #endpoints: OpenKeyEndpoints;
-  readonly #grantLifetimeSeconds: number;
+  readonly #taskGrantLifetimeSeconds: number;
+  readonly #bootstrapGrantLifetimeSeconds: number;
   #nativeIdentity?: Promise<{ did: string; jwk: Record<string, unknown> }>;
   readonly #nativeGrantQueues = new Map<string, Promise<void>>();
 
@@ -349,7 +355,8 @@ export class RemoteTenantStore {
       openkeyApiOrigin,
       linksApiOrigin: new URL(config.linksApiOrigin ?? DEFAULT_LINKS_API_ORIGIN).origin,
     };
-    this.#grantLifetimeSeconds = lifetimeSeconds(config.delegationExpiry);
+    this.#taskGrantLifetimeSeconds = lifetimeSeconds(config.delegationExpiry);
+    this.#bootstrapGrantLifetimeSeconds = lifetimeSeconds(config.bootstrapDelegationExpiry ?? DEFAULT_BOOTSTRAP_GRANT_EXPIRY);
     this.#scheduleSweep(IDLE_SWEEP_DELAY_MS);
   }
 
@@ -820,15 +827,23 @@ export class RemoteTenantStore {
     if (await fileModifiedAt(this.#retiringPath(stateRoot)) !== undefined) {
       throw new ApprovalRequestError("state_not_pending", "Approval state is invalid or already used.");
     }
-    if (pending.openkey !== undefined && this.#currentRequest(pending.openkey)) {
+    if (pending.openkey !== undefined && this.#currentRequest(pending.openkey) &&
+      this.#askCurrent(pending.kind, pending.openkey)) {
       if (Date.parse(pending.openkey.expiresAt) <= Date.now()) {
         throw new ApprovalRequestError("state_expired", "Approval state has expired.");
       }
       this.#startCollectionPoll(stateRoot, pending.nonce);
       return pending.openkey.link;
     }
-    // A request made against other OpenKey origins is never opened or collected; this visit asks again.
-    if (pending.openkey !== undefined) writeDiagnostic("approval dropped: reason=openkey_origin_changed");
+    if (pending.openkey !== undefined) {
+      // Typed reasons only; a request made against other origins, or asking for more than this server now grants,
+      // is never opened or collected on this visit, and this visit asks again.
+      writeDiagnostic(!this.#currentRequest(pending.openkey)
+        ? "approval dropped: reason=openkey_origin_changed"
+        : !this.#withinGrantCeiling(pending.kind, pending.openkey)
+          ? "approval dropped: reason=grant_lifetime_over_ceiling"
+          : "approval dropped: reason=request_ask_changed");
+    }
     const tenant = await this.#readTenant(pending.tenantId);
     const [marker, exposures] = await Promise.all([
       fileModifiedAt(this.#callMarkerPath(stateRoot)),
@@ -848,8 +863,8 @@ export class RemoteTenantStore {
         nodeHost: this.#config.nodeHost,
         permissions: pending.permissions,
         reason: approvalReason(pending),
-        grantLifetimeSeconds: this.#grantLifetimeSeconds,
-        ...(pending.kind === "bootstrap" ? { leaseLifetimeSeconds: BOOTSTRAP_LEASE_SECONDS } : {}),
+        grantLifetimeSeconds: pending.kind === "bootstrap" ? this.#bootstrapGrantLifetimeSeconds : this.#taskGrantLifetimeSeconds,
+        ...(pending.kind === "bootstrap" ? { leaseLifetimeSeconds: BOOTSTRAP_LEASE_SECONDS, purpose: "standing" as const } : {}),
         expiresAt: new Date(Math.min(Date.parse(pending.expiresAt), lastPossibleEnd)),
       });
     } catch (error) {
@@ -966,6 +981,12 @@ export class RemoteTenantStore {
       writeDiagnostic("approval dropped: reason=openkey_origin_changed");
       await rm(path, { force: true });
       return "done";
+    }
+    // A scoped request that asks for more than the configured task lifetime is never collected, so its result is
+    // never admitted or stored. The file stays until it expires; the owner's next visit asks again.
+    if (!this.#withinGrantCeiling(pending.kind, openkey)) {
+      writeDiagnostic("approval held: reason=grant_lifetime_over_ceiling");
+      return "idle";
     }
     if (Date.now() >= collectionDeadline(openkey)) {
       await rm(path, { force: true });
@@ -1318,6 +1339,25 @@ export class RemoteTenantStore {
     return openkey.apiOrigin === this.#endpoints.openkeyApiOrigin &&
       URL.canParse(openkey.link) && URL.canParse(this.#endpoints.openkeyOrigin) &&
       new URL(openkey.link).origin === new URL(this.#endpoints.openkeyOrigin).origin;
+  }
+
+  /**
+   * Whether a request asks for no more than this server grants. A scoped request is held to the task lifetime, so
+   * one opened under an older, longer setting never stores a longer scoped grant. A shorter ask is always allowed.
+   */
+  #withinGrantCeiling(kind: PendingApproval["kind"], openkey: OpenKeyRequestState): boolean {
+    return kind === "bootstrap" || openkey.request.grantLifetimeSeconds <= this.#taskGrantLifetimeSeconds;
+  }
+
+  /**
+   * Whether a stored request is the ask this server makes now, so a link is served or reused only for it. A
+   * connection request signs a standing purpose and the current lease; a scoped one signs neither.
+   */
+  #askCurrent(kind: PendingApproval["kind"], openkey: OpenKeyRequestState): boolean {
+    const { renewal, purpose } = openkey.request;
+    return kind === "bootstrap"
+      ? renewal?.version === 1 && renewal.leaseLifetimeSeconds === BOOTSTRAP_LEASE_SECONDS && purpose === "standing"
+      : renewal === undefined && purpose === undefined && this.#withinGrantCeiling(kind, openkey);
   }
 
   async #storeBootstrap(
@@ -1755,10 +1795,7 @@ export class RemoteTenantStore {
     const reusable = await reusablePending(
       this.#pendingDirectory(tenant.stateRoot),
       { tenantId, approvalEpoch: tenant.approvalEpoch, kind, requestId, permissions, ownerDids },
-      (openkey) => this.#currentRequest(openkey) &&
-        (kind === "bootstrap"
-          ? openkey.request.renewal?.version === 1 && openkey.request.renewal.leaseLifetimeSeconds === BOOTSTRAP_LEASE_SECONDS
-          : openkey.request.renewal === undefined),
+      (openkey) => this.#currentRequest(openkey) && this.#askCurrent(kind, openkey),
     );
     if (reusable !== undefined) return reusable;
     const nonce = randomBytes(24).toString("base64url");
