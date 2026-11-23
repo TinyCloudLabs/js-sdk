@@ -79,7 +79,7 @@ Guards:
 - If the push fails, nothing is published. Dispatch the job again.
 - If an earlier stable run pushed but did not finish publishing, the next dispatch finishes that release from its commit and graduates nothing new. Beta runs refuse to run until then.
 
-Break-glass only: `.github/workflows/raw-publish.yml` (manual dispatch, optional dist-tag override and dry run) publishes each package at its current version and skips versions npm already has. It does not run the pre-mode, changeset versioning, or GitHub release steps, so afterwards check `.changeset/pre.json` and create the GitHub release by hand.
+There is no manual publish workflow. `raw-publish.yml` and `manual-release.yml` were removed (TC-4123): they published from any ref, to `latest` by default, and ignored the release gate. Publish only through `changesets.yml`; to finish an interrupted stable release, dispatch it again as above.
 
 ### How releases push
 
