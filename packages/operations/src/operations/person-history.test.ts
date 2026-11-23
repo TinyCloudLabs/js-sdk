@@ -24,6 +24,7 @@ function fixture() {
   const bodies = new Map<string, string>();
   const opened: Array<Uint8Array | Error> = [];
   const bodyReads: string[] = [];
+  let decrypted = 0;
   const db = (name: string) => {
     const sqlite = new Database(":memory:");
     databases.set(`${inbox}${name}`, sqlite);
@@ -49,6 +50,7 @@ function fixture() {
       },
       keys: {
         async decrypt() {
+          decrypted++;
           const next = opened.shift();
           if (next === undefined || next instanceof Error) throw next ?? new Error("Unexpected decryption");
           return next;
@@ -102,7 +104,7 @@ function fixture() {
   cards.set(`${contacts}ada-quill-deadbeef`, {
     v: 1, at: "2026-11-23T12:00:00Z", by: "owner", data: { name: "Ada Quíll", added: "2026-11-23" },
   });
-  return { context, cards, bodies, bodyReads, opened, mail, state: databases.get(`${inbox}state`)!, main, other, stamp,
+  return { context, cards, bodies, bodyReads, opened, decrypts: () => decrypted, mail, state: databases.get(`${inbox}state`)!, main, other, stamp,
     close() { for (const database of databases.values()) database.close(); } };
 }
 
@@ -125,6 +127,9 @@ test("uses exact case-insensitive mail addresses and never reads plaintext Conta
   const data = fixture();
   try {
     data.cards.set(`${contacts}wrong-owner-deadbeef`, { v: 1, data: { name: "Wrong Person", private: { emails: ["ada@example.test"] } } });
+    const sealedKey = `${contacts}sealed-deadbeef`;
+    const header = JSON.stringify(["tinycloud.app.seal/v1", owner.replace("tinycloud:", "did:"), `${owner}:applications`, sealedKey]);
+    data.cards.set(sealedKey, { v: 1, data: { name: "Sealed Person", sealed: JSON.stringify({ v: 2, keyPath: appKey, networkId: network, aad: Buffer.from(header).toString("base64") }) } });
     const result = await operation().execute(data.context, { person: "aDa@Example.TEST", includePreviews: false });
     expect(result).toMatchObject({ status: "ok", output: {
       contacts: [], coverage: { contactsDetails: "unavailable" }, counts: { mailMessages: 2 },
@@ -132,6 +137,7 @@ test("uses exact case-insensitive mail addresses and never reads plaintext Conta
     } });
     const none = await operation().execute(data.context, { person: "ada+missing@example.test", includePreviews: false });
     expect(none).toMatchObject({ status: "ok", output: { conversations: [], lastContactAt: null } });
+    expect(data.decrypts()).toBe(0);
   } finally { data.close(); }
 });
 
@@ -158,6 +164,36 @@ test("opens only a granted, record-bound sealed contact and uses its exact alias
     expect(await operation().execute(withKey, input)).toMatchObject({ status: "ok", output: {
       contacts: [], coverage: { contactsDetails: "unavailable" },
     } });
+  } finally { data.close(); }
+});
+
+test("decrypts only with the exact Contacts app-key grant, and a refused decrypt leaves details unavailable", async () => {
+  const data = fixture();
+  try {
+    const key = `${contacts}ada-quill-deadbeef`;
+    const header = JSON.stringify(["tinycloud.app.seal/v1", owner.replace("tinycloud:", "did:"), `${owner}:applications`, key]);
+    data.cards.set(key, { v: 1, data: { name: "Ada", sealed: JSON.stringify({ v: 2, keyPath: appKey, networkId: network, aad: Buffer.from(header).toString("base64") }) } });
+    const granted = (...paths: string[]): RuntimeOperationContext => ({
+      ...data.context,
+      runtime: { ...data.context.runtime, granted: paths.map((path) => ({ service: "tinycloud.encryption", path, actions: ["tinycloud.encryption/decrypt"] })) },
+    });
+    const input = { person: "ada@example.test", includePreviews: false };
+    const opened = new TextEncoder().encode(`${header}\n${JSON.stringify({ emails: ["ada@example.test"] })}`);
+    // A bare-network or sibling-key decrypt grant says nothing about this key.
+    data.opened.push(opened);
+    for (const path of [network, `${network}/apps`, `${network}/${appKey}x`, `${network}/apps/xyz.tinycloud.share/other/seal-v1`]) {
+      expect(await operation().execute(granted(path), input)).toMatchObject({ status: "ok", output: { contacts: [], coverage: { contactsDetails: "unavailable" } } });
+    }
+    expect(data.decrypts()).toBe(0);
+    expect(await operation().execute(granted(network, `${network}/${appKey}`), input)).toMatchObject({
+      status: "ok", output: { contacts: [{ id: key }], coverage: { contactsDetails: "available" } },
+    });
+    expect(data.decrypts()).toBe(1);
+    data.opened.push(Object.assign(new Error("403 Forbidden"), { status: 403 }));
+    expect(await operation().execute(granted(`${network}/${appKey}`), input)).toMatchObject({
+      status: "ok", output: { contacts: [], coverage: { contactsDetails: "unavailable" } },
+    });
+    expect(data.decrypts()).toBe(2);
   } finally { data.close(); }
 });
 
@@ -225,6 +261,30 @@ test("keyset paging preserves global counts and stable tie order without fetchin
   } finally { data.close(); }
 });
 
+test("previews strip hostile markup in linear time from at most 64 KB of a sender-controlled body", async () => {
+  const data = fixture();
+  try {
+    const key = `${media}gmail/bodies/${"d".repeat(64)}`;
+    data.other.run("UPDATE mail SET html_kv_key = ? WHERE source_mail_id = '102'", [key]);
+    const preview = async () => {
+      const started = performance.now();
+      const result = await operation().execute(data.context, { person: "ada@example.test" });
+      const elapsed = performance.now() - started;
+      if (result.status !== "ok") throw new Error("No result");
+      return { elapsed, text: result.output.conversations[0]?.preview };
+    };
+    data.bodies.set(key, "<style>p{color:red}</style><p>Hello&nbsp;<b>Ada</b> &amp; team</p><!-- hidden --><script>alert(1)</script>Thanks");
+    expect((await preview()).text).toBe("Hello Ada & team Thanks");
+    for (const flood of ["<", "<a", "<script>", "<!--", "<style x"]) {
+      data.bodies.set(key, flood.repeat(Math.ceil(1_000_000 / flood.length)));
+      const { elapsed } = await preview();
+      expect(elapsed).toBeLessThan(200);
+    }
+    data.bodies.set(key, `${"x".repeat(64 * 1024)}<p>beyond the preview window</p>`);
+    expect((await preview()).text).toBe("x".repeat(240));
+  } finally { data.close(); }
+});
+
 test("requires only the two owner-bound roots without previews, and refuses an owner mismatch", async () => {
   const data = fixture();
   try {
@@ -237,11 +297,11 @@ test("requires only the two owner-bound roots without previews, and refuses an o
     expect(await definition.authority(reader, { person: "Ada", includePreviews: false })).toEqual([
       { service: "tinycloud.kv", space: `${owner}:applications`, path: contacts, actions: ["tinycloud.kv/list", "tinycloud.kv/get"] },
     ]);
-    expect(definition.authority(reader, { person: "Ada" })).rejects.toThrow(media);
+    await expect(definition.authority(reader, { person: "Ada" })).rejects.toThrow(media);
     const foreignReader = {
       ...reader, runtime: { ...reader.runtime, granted: [{ ...reader.runtime.granted[0]!, space: `${foreign}:messages` }] },
     };
-    expect(definition.authority(foreignReader, { person: "Ada", includePreviews: false })).rejects.toThrow(inbox);
+    await expect(definition.authority(foreignReader, { person: "Ada", includePreviews: false })).rejects.toThrow(inbox);
     expect(await definition.execute({ ...data.context, summary: { ...data.context.summary, ownerDid: foreign.replace("tinycloud:", "did:") } }, { person: "Ada" }))
       .toMatchObject({ status: "error", error: { code: "READ_CONTEXT_MISMATCH" } });
   } finally { data.close(); }

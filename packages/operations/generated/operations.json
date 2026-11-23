@@ -24697,6 +24697,10 @@
           },
           "needsDisambiguation": {
             "type": "boolean"
+          },
+          "notice": {
+            "type": "string",
+            "minLength": 1
           }
         },
         "required": [
@@ -24706,7 +24710,8 @@
           "conversations",
           "nextCursor",
           "coverage",
-          "needsDisambiguation"
+          "needsDisambiguation",
+          "notice"
         ],
         "additionalProperties": false,
         "$schema": "http://json-schema.org/draft-07/schema#"
@@ -25953,6 +25958,10 @@
               },
               "needsDisambiguation": {
                 "type": "boolean"
+              },
+              "notice": {
+                "type": "string",
+                "minLength": 1
               }
             },
             "required": [
@@ -25962,7 +25971,8 @@
               "conversations",
               "nextCursor",
               "coverage",
-              "needsDisambiguation"
+              "needsDisambiguation",
+              "notice"
             ],
             "additionalProperties": false,
             "$schema": "http://json-schema.org/draft-07/schema#"
