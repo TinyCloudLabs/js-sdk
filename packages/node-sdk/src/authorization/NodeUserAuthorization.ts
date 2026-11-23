@@ -43,6 +43,7 @@ import {
   parseSpaceUri,
   NodeNotFoundError,
   RegistryUnavailableError,
+  DEFAULT_TINYCLOUD_FALLBACK_HOST,
   AccountSetupRequiredError,
   discoverLocalTinyCloudNode,
   exactHttpOrigin,
@@ -179,6 +180,24 @@ function describeHostFailure(result: SpaceHostResult): string {
  * no authorized read has answered yet (or the last one could not), never "hosted".
  */
 export type SpaceHosting = "hosted" | "not-hosted" | "unknown";
+
+/**
+ * What lets an owner with no registry record sign in on a hosted space (TC-4082). It is held in memory only, for one
+ * session and one owner, and never written to a registry, a cache or the session store.
+ */
+export interface HostedOwnerProof {
+  /** Lowercase signer address. */
+  owner: string;
+  chainId: number;
+  /** Always the literal default node; no configured host is consulted. */
+  host: string;
+  /** The owner's own `applications` space: the only space the proof covers. */
+  spaceId: string;
+  /** The session delegation the node accepted; the proof covers that session only. */
+  delegationCid?: string;
+  /** `pending` until the signed read answers 2xx. */
+  status: "pending" | "proven";
+}
 
 type JsonValue =
   | null
@@ -391,6 +410,11 @@ export interface NodeUserAuthorizationConfig {
   /** @internal Refuse new-account setup before requesting a signature. */
   requireExistingAccount?: boolean;
   /**
+   * @internal The signer is known not to host spaces by itself (a wallet, a local key or an external key), so a
+   * confirmed hosted space can stand for an existing account (TC-4082). Default off: managed or unknown signers refuse.
+   */
+  allowHostedOwnerProof?: boolean;
+  /**
    * Replication sign-in augmentation (TC-858 §4.1): prefixes whose reads a
    * local replica may serve. For each prefix the session request gains one
    * `kv` entry `{get, sync}` on the primary space — but only where an
@@ -505,6 +529,9 @@ export class NodeUserAuthorization implements IUserAuthorization {
   private readonly includeAccountRegistryPermissions: boolean;
   private readonly includeImplicitCapabilitiesRead: boolean;
   private readonly requireExistingAccount: boolean;
+  private readonly allowHostedOwnerProof: boolean;
+  private _hostedOwnerProof?: HostedOwnerProof;
+  private _hostedOwnerProofFailed = false;
 
   private sessionManager: ISessionManager;
   private activeSessionKeyId = "default";
@@ -585,6 +612,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
       config.includeAccountRegistryPermissions ?? true;
     this.includeImplicitCapabilitiesRead = config.includeImplicitCapabilitiesRead !== false;
     this.requireExistingAccount = config.requireExistingAccount === true;
+    this.allowHostedOwnerProof = config.allowHostedOwnerProof === true;
     this.replication =
       config.replication?.enabled === true ? config.replication : undefined;
     this.establishReplicaStamp = config.establishReplicaStamp;
@@ -815,6 +843,8 @@ export class NodeUserAuthorization implements IUserAuthorization {
     this._lastActivationSkippedSpaceIds = [];
     this._lastActivationActivatedSpaceIds = [];
     this._spaceHosting = "unknown";
+    this._hostedOwnerProof = undefined;
+    this._hostedOwnerProofFailed = false;
     if (!session) {
       this._session = undefined;
       this._tinyCloudSession = undefined;
@@ -844,11 +874,105 @@ export class NodeUserAuthorization implements IUserAuthorization {
     await this.resolveTinyCloudHostsForSignIn(this._address, this._chainId, this._tinyCloudSession?.spaceId, assertCurrent);
   }
 
-  private async resolveTinyCloudHostsForSignIn(address: string, chainId: number, restoredSpaceId?: string, assertCurrent?: () => void): Promise<void> {
+  /**
+   * The owner of a not-yet-registered account (TC-4082): the pinned default node, after the explicit sign-in and one
+   * `/delegate`, and a single read the request already holds. `pending` until that read answers, `proven` after.
+   */
+  get hostedOwnerProof(): Readonly<HostedOwnerProof> | undefined {
+    return this._hostedOwnerProof;
+  }
+
+  /** True once a proof was refused or could not be checked: the session is to be discarded locally, with no write to a node. */
+  get hostedOwnerProofFailed(): boolean {
+    return this._hostedOwnerProofFailed;
+  }
+
+  /** The read answered positively: from now on routing to the proven space uses the pinned host. */
+  markHostedOwnerProven(): void {
+    if (this._hostedOwnerProof) this._hostedOwnerProof = { ...this._hostedOwnerProof, status: "proven" };
+  }
+
+  /** The proof was refused or could not be read. Nothing it started may be used. */
+  failHostedOwnerProof(): void {
+    this._hostedOwnerProof = undefined;
+    this._hostedOwnerProofFailed = true;
+  }
+
+  /**
+   * A restored session whose owner the registry just authoritatively said has no record: the one pinned host and the
+   * session's own primary `applications` space, which a read may now confirm. Undefined for anything else.
+   */
+  restoredHostedOwnerCandidate(): { host: string; spaceId: string } | undefined {
+    const session = this._tinyCloudSession;
+    const verdict = this.registryVerdict;
+    if (!this.allowHostedOwnerProof || !this.requireExistingAccount || this._hostedOwnerProof || !session ||
+      verdict?.status !== "unregistered" || verdict.offline) return undefined;
+    // Only the session's own primary space: owned by the session's address, on its chain. No other space is read.
+    const owned = /^tinycloud:pkh:eip155:(\d+):(0x[0-9a-fA-F]{40}):[^/]+$/.exec(session.spaceId);
+    if (!owned || Number(owned[1]) !== session.chainId || owned[2]!.toLowerCase() !== session.address.toLowerCase()) return undefined;
+    const spaceId = session.spaceId;
+    return { host: DEFAULT_TINYCLOUD_FALLBACK_HOST, spaceId };
+  }
+
+  /** A read has just confirmed the candidate: the proof now stands for this restored session only. */
+  adoptRestoredHostedOwnerProof(candidate: { host: string; spaceId: string }): void {
+    const session = this._tinyCloudSession;
+    if (!session) return;
+    this._hostedOwnerProof = {
+      owner: session.address.toLowerCase(), chainId: session.chainId, host: candidate.host, spaceId: candidate.spaceId,
+      delegationCid: session.delegationCid, status: "proven",
+    };
+  }
+
+  /**
+   * Before anything is signed: whether an owner the registry authoritatively says has no record may go on, and where.
+   * Only the pinned default node, only for a request that is exactly the owner's own `applications` space with a read
+   * it already holds and no way to host or create anything. Anything else keeps the refusal.
+   */
+  private async beginHostedOwnerProof(address: string, chainId: number): Promise<ResourceDestination | undefined> {
+    this._hostedOwnerProof = undefined;
+    const verdict = this.registryVerdict;
+    if (!this.allowHostedOwnerProof || !this.requireExistingAccount || verdict?.status !== "unregistered" || verdict.offline) return undefined;
+    const plan = this.resolveSignInCapabilities(address, chainId);
+    const spaceId = makePkhSpaceId(address, chainId, "applications");
+    const { assessHostedOwnerRecap, hostedOwnerPlanOperations } = await import("../space-hosting.js");
+    if (pkhSpaceIdentity(plan.spaceId) !== pkhSpaceIdentity(spaceId) ||
+      assessHostedOwnerRecap(hostedOwnerPlanOperations(plan), spaceId) === undefined) return undefined;
+    this._hostedOwnerProof = { owner: address.toLowerCase(), chainId, host: DEFAULT_TINYCLOUD_FALLBACK_HOST, spaceId, status: "pending" };
+    return { url: DEFAULT_TINYCLOUD_FALLBACK_HOST };
+  }
+
+  /** The pinned node for a resource the proof covers: the proven space itself, to read or write, never to host. */
+  private provenDestinations(resource: string, access: ResourceAccess): ResourceDestination[] | undefined {
+    const proof = this._hostedOwnerProof;
+    if (proof?.status !== "proven" || (access !== "read" && access !== "write")) return undefined;
+    if (proof.delegationCid !== this._tinyCloudSession?.delegationCid) return undefined;
+    const inSpace = pkhSpaceIdentity(resource) === pkhSpaceIdentity(proof.spaceId) ||
+      pkhSpaceIdentity(resource).startsWith(`${pkhSpaceIdentity(proof.spaceId)}/`);
+    return inSpace ? [{ url: proof.host }] : undefined;
+  }
+
+  private async resolveTinyCloudHostsForSignIn(
+    address: string,
+    chainId: number,
+    restoredSpaceId?: string,
+    assertCurrent?: () => void,
+    mayProveHostedOwner = false,
+  ): Promise<void> {
     assertCurrent?.();
     const spaceId = restoredSpaceId ?? this.resolveSignInCapabilities(address, chainId).spaceId;
-    const destinations = await this.resolveResourceDestinations(spaceId, "read");
-    if (this.requireExistingAccount && this.registryVerdict?.status === "unregistered") {
+    let destinations: ResourceDestination[];
+    try {
+      destinations = await this.resolveResourceDestinations(spaceId, "read");
+      if (mayProveHostedOwner) this._hostedOwnerProof = undefined;
+    } catch (error) {
+      const pinned = mayProveHostedOwner && error instanceof AccountSetupRequiredError
+        ? await this.beginHostedOwnerProof(address, chainId)
+        : undefined;
+      if (!pinned) throw error;
+      destinations = [pinned];
+    }
+    if (this.requireExistingAccount && this.registryVerdict?.status === "unregistered" && this._hostedOwnerProof === undefined) {
       throw new AccountSetupRequiredError();
     }
     for (const destination of destinations) {
@@ -882,7 +1006,11 @@ export class NodeUserAuthorization implements IUserAuthorization {
         });
         this.registryVerdict = resolved.verdict;
         if (resolved.verdict.status === "unregistered") {
-          if (this.requireExistingAccount) throw new AccountSetupRequiredError();
+          if (this.requireExistingAccount) {
+            const proven = this.provenDestinations(resource, access);
+            if (proven) return proven;
+            throw new AccountSetupRequiredError();
+          }
           if (noEntryHosts.length === 0 && (this.autoDiscoverLocalNode ?? true)) {
             const local = await discoverLocalTinyCloudNode({
               localNodeUrl: this.localNodeUrl,
@@ -926,7 +1054,8 @@ export class NodeUserAuthorization implements IUserAuthorization {
   /** @internal Gates optional setup only; every actual operation still resolves its route afresh. */
   allowsAutomaticSetup(resource: string): boolean {
     const verdict = this.registryVerdict;
-    if (verdict === undefined || verdict.status === "unregistered") return true;
+    if (verdict === undefined) return true;
+    if (verdict.status === "unregistered") return !this.requireExistingAccount;
     if (verdict.status !== "registered") return false;
     // A v1-only owner on the default node (TC-3168) gets 3.11's setup there; no other record-less verdict does.
     if (verdict.record === undefined) return verdict.legacy === "v1-default-node";
@@ -1752,6 +1881,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
     if (!this._tinyCloudSession) {
       throw new Error("Must be signed in to ensure space exists");
     }
+    if (this._hostedOwnerProof?.status === "pending") return this.activateForHostedOwnerProof(this._hostedOwnerProof, this._tinyCloudSession);
 
     const primarySpaceId = this._tinyCloudSession.spaceId;
     const primary = await this.resolveResourceDestinations(primarySpaceId, "read");
@@ -1796,6 +1926,33 @@ export class NodeUserAuthorization implements IUserAuthorization {
   }
 
   /**
+   * The only write a hosted-owner proof makes (TC-4082): one `/delegate` of the session delegation to the pinned node.
+   * It is not retried and nothing else is sent. The node must report the exact primary space as activated; anything
+   * else, including a skipped space, is a refusal.
+   */
+  private async activateForHostedOwnerProof(proof: HostedOwnerProof, session: TinyCloudSession): Promise<void> {
+    this.sessionHosts.add(proof.host);
+    let activated: SpaceHostResult;
+    try {
+      activated = await activateSessionWithHost(proof.host, session.delegationHeader);
+    } catch (error) {
+      this.failHostedOwnerProof();
+      throw new NodeNotRespondingError([proof.host], error);
+    }
+    if (!activated.success && activated.status >= 500) {
+      this.failHostedOwnerProof();
+      throw Object.assign(new Error(`Failed to activate session: ${describeHostFailure(activated)}`), { cause: activated });
+    }
+    this.recordActivationSkippedSpaces(activated, session.spaceId);
+    const hostsPrimary = activated.success && (activated.activated ?? []).some((space) => pkhSpaceIdentity(space) === pkhSpaceIdentity(proof.spaceId));
+    if (!hostsPrimary) {
+      this.failHostedOwnerProof();
+      throw new AccountSetupRequiredError();
+    }
+    this._hostedOwnerProof = { ...proof, delegationCid: session.delegationCid };
+  }
+
+  /**
    * The create step of {@link ensureSpaceExists}: given the node's answer for
    * the primary space, host it through the space creation handler when it is
    * `not-hosted`. Any other answer, and a missing handler, change nothing. The
@@ -1807,6 +1964,8 @@ export class NodeUserAuthorization implements IUserAuthorization {
   async ensurePrimarySpaceHosted(hosting: SpaceHosting, signal?: AbortSignal): Promise<void> {
     const session = this._tinyCloudSession;
     if (hosting !== "not-hosted") return;
+    // A hosted-owner proof never creates a space: the account is not set up, and nothing here may set it up.
+    if (this._hostedOwnerProof) return;
     if (!session) throw new Error("Must be signed in to host the primary space");
     // Determine the effective space creation handler:
     // 1. Explicit spaceCreationHandler takes precedence
@@ -2035,7 +2194,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
     this._address = address;
     this._chainId = chainId;
 
-    await this.resolveTinyCloudHostsForSignIn(address, chainId);
+    await this.resolveTinyCloudHostsForSignIn(address, chainId, undefined, undefined, true);
     this.assertSignInCurrent(generation);
     await this.refreshNamedKeyFeatureForSignIn(address, chainId);
     this.assertSignInCurrent(generation);
@@ -2246,7 +2405,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
     refuseCaveated(this.getCapabilityRequest()?.manifests);
     const address = canonicalizeAddress(identity?.address ?? await this.signer.getAddress());
     const chainId = identity?.chainId ?? await this.signer.getChainId();
-    if (this.requireExistingAccount) await this.resolveTinyCloudHostsForSignIn(address, chainId);
+    if (this.requireExistingAccount) await this.resolveTinyCloudHostsForSignIn(address, chainId, undefined, undefined, true);
     await this.refreshNamedKeyFeatureForSignIn(address, chainId);
 
     // Create a session key
@@ -2349,7 +2508,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
     this.bindManifestOwner(address, chainId);
     this.assertSignInCurrent(generation);
 
-    await this.resolveTinyCloudHostsForSignIn(address, chainId);
+    await this.resolveTinyCloudHostsForSignIn(address, chainId, undefined, undefined, true);
     this.assertSignInCurrent(generation);
 
     // Create client session (web-core compatible)
@@ -2524,7 +2683,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
     const signingAddress = canonicalizeAddress(identity?.address ?? await this.signer.getAddress());
     const signingChainId = identity?.chainId ?? await this.signer.getChainId();
     this.assertSignInCurrent(generation);
-    await this.resolveTinyCloudHostsForSignIn(signingAddress, signingChainId);
+    await this.resolveTinyCloudHostsForSignIn(signingAddress, signingChainId, undefined, undefined, true);
     this.assertSignInCurrent(generation);
 
     // 1. Prepare — this creates a SIWE bound to a fresh session key.
