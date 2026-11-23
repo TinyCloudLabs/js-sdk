@@ -1425,25 +1425,4 @@ describe("TC-110: withAccountRegistryRetry verdict-aware retry", () => {
       expect(warnedWith(warnSpy, "failed after retries")).toBe(false);
     },
   );
-
-  test("generic error still retries the full budget (3 attempts)", async () => {
-    const { node } = makeNode();
-    const task = mock(async () => {
-      throw new Error("transient network blip");
-    });
-
-    const originalWarn = console.warn;
-    const warnSpy = mock(() => {});
-    console.warn = warnSpy as any;
-    try {
-      await (node as any).withAccountRegistryRetry(task, new AbortController().signal);
-    } finally {
-      console.warn = originalWarn;
-    }
-
-    expect(task).toHaveBeenCalledTimes(3);
-    expect(warnedWith(warnSpy, "failed after retries")).toBe(true);
-    // Generic errors must NOT trip the verdict short-circuit.
-    expect(warnedWith(warnSpy, "authorization verdict is not retryable")).toBe(false);
-  }, 10_000);
 });

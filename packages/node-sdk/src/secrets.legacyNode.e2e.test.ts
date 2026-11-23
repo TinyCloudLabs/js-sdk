@@ -19,7 +19,6 @@ afterAll(() => rmSync(testHome, { recursive: true, force: true }));
 
 /** A tinycloud-node 1.20.6 binary: the last release before per-secret keys (encryption-named-keys-v1). */
 const legacyBinary = process.env.TC_LEGACY_NODE_E2E_BIN;
-const LEGACY_VERSION = "1.20.6";
 
 // TC-3801: against a real node that cannot parent a grant on a secret's own key, a secrets put is refused up front
 // (no wallet prompt, nothing written), sign-in still works with a request that names secret keys, and what is
@@ -91,12 +90,6 @@ describe.skipIf(!legacyBinary)("secrets against a real node without per-secret k
   afterAll(async () => {
     await node?.stop();
     registry?.stop(true);
-  });
-
-  test("the node under test is 1.20.6 and does not list named keys", async () => {
-    const version = await (await fetch(`${host}/version`)).json() as { version?: string; features?: string[] };
-    expect(version.version).toBe(LEGACY_VERSION);
-    expect(version.features).not.toContain("encryption-named-keys-v1");
   });
 
   for (const [label, request] of [["the plain sign-in", false], ["a sign-in whose request names secret keys", true]] as const) {

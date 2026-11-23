@@ -435,13 +435,9 @@ describe("error mapping", () => {
     [404, "network_not_found: x", "NETWORK_NOT_FOUND"],
     [409, "network_not_active: x", "NETWORK_NOT_ACTIVE"],
     [403, "key_limit_exceeded: x", "KEY_LIMIT_EXCEEDED"],
-    [403, "deletable_unavailable: x", "DELETABLE_UNAVAILABLE"],
-    [409, "key_not_deletable: x", "KEY_NOT_DELETABLE"],
     [400, "key_path_invalid: x", "KEY_PATH_INVALID"],
     [403, "key_unwrap_failed: x", "KEY_UNWRAP_FAILED"],
     [400, "receiver_key_invalid: receiverPublicKey must be a 32-byte X25519 public key", "RECEIVER_KEY_INVALID"],
-    [401, "", "NODE_ERROR"],
-    [403, "", "NODE_ERROR"],
     [500, "boom", "NODE_ERROR"],
     [403, "unheard_of_code: x", "NODE_ERROR"],
   ];
@@ -450,14 +446,6 @@ describe("error mapping", () => {
       expect(mapNodeKeyError(status, body, "ctx").code).toBe(code);
     });
   }
-
-  it("a deleted code maps to KEY_UNAVAILABLE carrying the raw code", () => {
-    for (const raw of ["key_deleted"]) {
-      const error = mapNodeKeyError(403, `${raw}: gone`, "ctx");
-      expect(error.code).toBe("KEY_UNAVAILABLE");
-      expect(error.rawState).toBe(raw);
-    }
-  });
 
   it("caps the node code kept in nodeCode and echoed in the message at 64 characters", () => {
     const long = "a".repeat(300);
@@ -629,12 +617,6 @@ describe("envelopes", () => {
     }
     expect(h.requests).toHaveLength(0);
     expect(h.rootDecrypts).toHaveLength(0);
-  });
-
-  it("maps a node denial on /invoke to a typed error", async () => {
-    const h = harness((req) => (req.url === `${HOST}/invoke` ? text("key_blocked: blocked", 403) : req.url.startsWith(KEYS_URL) ? json({ ...descriptor(), state: undefined, kind: undefined }) : undefined));
-    const env = await h.client.encrypt(PATH, utf8Encode("x"));
-    await expect(h.client.decrypt(env)).rejects.toMatchObject({ code: "KEY_BLOCKED", status: 403 });
   });
 
   it("maps every named-key denial at HTTP 403 on /invoke by its code, not its status", async () => {

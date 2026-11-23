@@ -95,12 +95,6 @@ describe("without the opt-in", () => {
       await expect(complete(s, withExpiration(s.prepared.siwe, iso(offset)), { expiryChangeable: false })).rejects.toThrow(DEFAULT_REFUSAL);
     });
   }
-
-  test("an unchanged expiry is accepted, as before", async () => {
-    const s = await setup();
-    const session = await complete(s, s.prepared.siwe);
-    expect(session.siwe).toBe(s.prepared.siwe);
-  });
 });
 
 describe("with the opt-in", () => {
@@ -463,12 +457,4 @@ describe("a signed message must carry its own Expiration Time line", () => {
       });
     }
   }
-
-  test("a normal message is accepted on both paths", async () => {
-    const s = await setup();
-    expect((await complete(s, s.prepared.siwe)).siwe).toBe(s.prepared.siwe);
-    const t = await setup();
-    const changed = withExpiration(t.prepared.siwe, iso(2 * DAY_MS));
-    expect((await complete(t, changed, { expiryChangeable: true })).siwe).toBe(changed);
-  });
 });

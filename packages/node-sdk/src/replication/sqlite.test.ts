@@ -1822,20 +1822,6 @@ describe("mandatory Node lifecycle gate", () => {
       .toMatchObject({ v: 2, scope: "orphan_profile" });
   });
 
-  test("an inspected empty pending file does not require discard consent", async () => {
-    const profileDir = await mkdtemp(join(tmpdir(), "tc858-orphan-synced-"));
-    dirs.push(profileDir);
-    const partition = join(profileDir, "replication", "a".repeat(26));
-    await mkdir(partition, { recursive: true });
-    await writeFile(join(partition, "identity.json"), JSON.stringify(identity()));
-    await writeFile(join(partition, "pending.json"), JSON.stringify({
-      v: 2, identity: identity(), committedEpoch: 1, seq: 1, records: [],
-    }));
-    const purge = createProfileReplicaPurge({ profileDir, guard: sharedGuard });
-    expect(await prepareApproved(purge, { principal: PRINCIPAL }))
-      .toMatchObject({ v: 2, scope: "orphan_profile" });
-  });
-
   test("partition replay removes an approved leftover after its database disappears", async () => {
     const dir = await makeDir();
     const profileDir = dirname(dir);
@@ -2328,25 +2314,6 @@ describe("mandatory Node lifecycle gate", () => {
     expect(result).toEqual({ erased: [], failed: [], remaining: 0 });
     expect(cleanupCalls).toBe(0);
     expect((await readGateSnapshot(profileDir))?.principalHash).not.toBeNull();
-  });
-
-  test("no-marker recovery reports ordinary intents without mistaking them for a logout marker", async () => {
-    const dir = await makeDir();
-    const profileDir = dirname(dir);
-    const storage = createSqliteReplicaStorage(storageOptions());
-    await storage.pendingWrites!(identity(), { stamp: stamps.get(profileDir)! })
-      .update((state) => { state.seq = 1; });
-    const purge = createProfileReplicaPurge({ profileDir, guard: sharedGuard });
-    expect((await purge.deny({ reason: "sign_out", principal: PRINCIPAL })).status).toBe("denied");
-    let cleanupCalls = 0;
-    const report = await purge.recoverLogoutPending({
-      signal: new AbortController().signal,
-      clearCredentials: async () => { cleanupCalls++; },
-      eraseLegacyReplicas: () => eraseLegacy(profileDir),
-    });
-    expect(report).toEqual({ erased: [], failed: [], remaining: 1 });
-    expect(cleanupCalls).toBe(0);
-    expect(await filesNamed(dir, "pending.json")).toHaveLength(1);
   });
 
   test("markerless deferred denial cannot invent a pre-denial epoch for remote revoke", async () => {

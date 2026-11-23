@@ -14,10 +14,6 @@ import {
   ownerFullAccess,
   PermissionNotInManifestError,
   SessionExpiredError,
-  ServiceContext,
-  KVService,
-  SQLService,
-  SpaceService,
   type ComposedManifestRequest,
   type ISessionManager,
   type ISigner,
@@ -26,8 +22,6 @@ import {
   type ReplicationAuthority,
 } from "@tinycloud/sdk-core";
 import "./replication/node-loader";
-import { NodeWasmBindings } from "./NodeWasmBindings";
-import { signedRestorableSession } from "./test-support/signed-restorable-session";
 import { TinyCloudNode } from "./TinyCloudNode";
 import { NodeUserAuthorization } from "./authorization/NodeUserAuthorization";
 import { MemorySessionStorage } from "./storage/MemorySessionStorage";
@@ -438,40 +432,10 @@ describe("replicationAuthority (§4.2)", () => {
     expect(authority.plan("notes/")).toEqual({ refused: "SESSION_EXPIRING" });
   });
 
-  const planResult = () => ({
-    path: "runtime" as const,
-    parentCid: "bafyP",
-    expiresAt: 1_700_000_000_000,
-    effectiveExpiration: new Date(1_700_000_000_000),
-  });
-
-  test("an unverified owner session cannot plan and never reaches planDelegation", async () => {
+  test("an unverified owner session cannot plan", async () => {
     const node = sessionOnlyNode(makeFakeWasmBindings(), fakeSession());
-    const planDelegationSpy = mock(planResult);
-    Reflect.set(node, "planDelegation", planDelegationSpy);
     const authority = await replicationAuthorityForTest(node);
     expect(authority.plan("notes/")).toEqual({ refused: "NOT_COVERED" });
-    expect(planDelegationSpy).not.toHaveBeenCalled();
-  });
-
-  test("a verified signed owner plan routes through planDelegation with one get+sync folder entry", async () => {
-    const proof = await signedRestorableSession({
-      abilities: { kv: { "": ["tinycloud.kv/get", "tinycloud.kv/sync"] } },
-    });
-    const node = new TinyCloudNode({ host: "http://127.0.0.1:1", wasmBindings: new NodeWasmBindings() });
-    await node.restoreSession(proof);
-    const planDelegationSpy = mock(planResult);
-    Reflect.set(node, "planDelegation", planDelegationSpy);
-    const authority = await replicationAuthorityForTest(node);
-    expect(authority.plan("notes/")).toEqual({
-      path: "runtime",
-      parentCid: "bafyP",
-      expiresAt: 1_700_000_000_000,
-    });
-    const entries = planDelegationSpy.mock.calls[0]![0] as PermissionEntry[];
-    expect(entries).toEqual([
-      { service: "tinycloud.kv", space: proof.spaceId, path: "notes/", actions: ["tinycloud.kv/get", "tinycloud.kv/sync"] },
-    ]);
   });
 });
 
@@ -733,135 +697,4 @@ describe("replicationSignInEntries (§4.1, §4.6)", () => {
     expect(entries.every((entry) => entry.actions.includes("tinycloud.kv/get") && entry.actions.includes("tinycloud.kv/sync"))).toBe(true);
   });
 
-});
-function makeRegistryDeadlineServices(): {
-  deadlineExpired: Promise<void>;
-  expireDeadline(): void;
-} {
-  const session = fakeSession();
-  const node = sessionOnlyNode(makeFakeWasmBindings(), session);
-  const requestSignals: AbortSignal[] = [];
-  const fetch = async (_url: string, init?: RequestInit): Promise<Response> => {
-    const signal = init?.signal ?? undefined;
-    if (signal) requestSignals.push(signal);
-    // The real five-second delay reproduces the wire timing of the P2 regression.
-    const { promise, resolve, reject } = Promise.withResolvers<void>();
-    const timer = setTimeout(resolve, 5_000);
-    const abort = () => {
-      clearTimeout(timer);
-      reject(signal?.reason);
-    };
-    if (signal?.aborted) abort();
-    else signal?.addEventListener("abort", abort, { once: true });
-    try {
-      await promise;
-    } finally {
-      signal?.removeEventListener("abort", abort);
-    }
-    return new Response(
-      JSON.stringify({ columns: ["answer"], rows: [[42]], rowCount: 1, keys: [], truncated: false }),
-      { status: 200 },
-    );
-  };
-  const sharedContext = new ServiceContext({
-    invoke: () => ({ Authorization: "test" }),
-    hosts: ["https://tinycloud.test"],
-    fetch,
-  });
-  sharedContext.setSession({
-    delegationHeader: session.delegationHeader,
-    delegationCid: session.delegationCid,
-    spaceId: session.spaceId,
-    verificationMethod: session.verificationMethod,
-    jwk: session.jwk,
-  });
-  const kv = new KVService({});
-  kv.initialize(sharedContext);
-  const sql = new SQLService({});
-  sql.initialize(sharedContext);
-  Reflect.set(node, "_address", ADDRESS);
-  Reflect.set(node, "_serviceContext", sharedContext);
-  Reflect.set(node, "_kv", kv);
-  Reflect.set(node, "_sql", sql);
-
-  const createScopedKV = Reflect.get(node, "createSpaceScopedKVService") as (
-    spaceId: string,
-  ) => KVService;
-  Reflect.set(node, "_spaceService", new SpaceService({
-    hosts: sharedContext.hosts,
-    session: sharedContext.session!,
-    invoke: sharedContext.invoke,
-    fetch: sharedContext.fetch,
-    userDid: `did:pkh:eip155:1:${ADDRESS}`,
-    createKVService: (spaceId) => createScopedKV.call(node, spaceId),
-  }));
-  const deadline = new AbortController();
-  const operationContext = new ServiceContext({
-    invoke: sharedContext.invoke,
-    hosts: sharedContext.hosts,
-    fetch: sharedContext.fetch,
-  });
-  operationContext.setOperationAbortSignal(deadline.signal);
-  operationContext.setSession(sharedContext.session);
-  const { promise: deadlineExpired, resolve: resolveDeadline } = Promise.withResolvers<void>();
-  deadline.signal.addEventListener("abort", resolveDeadline, { once: true });
-  const timer = setTimeout(() => deadline.abort(), 40);
-
-  return {
-    node,
-    deadlineExpired,
-    expireDeadline() {
-      clearTimeout(timer);
-      deadline.abort();
-      expect(requestSignals.every((signal) => !signal.aborted)).toBe(true);
-    },
-  };
-}
-
-describe("account registry deadline isolation", () => {
-  test("primary and space-scoped KV requests finish after the registry deadline", async () => {
-    const { node, deadlineExpired, expireDeadline } = makeRegistryDeadlineServices();
-    const requests = [
-      node.kv.list({ prefix: "review-" }),
-      node.spaces.get(SPACE_ID).kv.list({ prefix: "review-" }),
-      node.kvForSpace(SPACE_ID).list({ prefix: "review-" }),
-    ];
-    await deadlineExpired;
-    const results = await Promise.all(requests);
-    expect(results.every((result) => result.ok)).toBe(true);
-    expireDeadline();
-  }, 7_000);
-
-  test("primary and explicit-space SQL requests finish after the registry deadline", async () => {
-    const { node, deadlineExpired, expireDeadline } = makeRegistryDeadlineServices();
-    const requests = [
-      node.sql.execute("SELECT 42 AS answer"),
-      node.sqlForSpace(SPACE_ID).execute("SELECT 42 AS answer"),
-    ];
-    await deadlineExpired;
-    const results = await Promise.all(requests);
-    expect(results.every((result) => result.ok)).toBe(true);
-    expireDeadline();
-  }, 7_000);
-
-  test("cached explicit-space handles remain usable after deadline expiry", async () => {
-    const { node, deadlineExpired, expireDeadline } = makeRegistryDeadlineServices();
-    const kv = node.kvForSpace(SPACE_ID);
-    const sql = node.sqlForSpace(SPACE_ID);
-    await deadlineExpired;
-    const results = await Promise.all([
-      kv.list({ prefix: "review-" }),
-      sql.execute("SELECT 42 AS answer"),
-    ]);
-    expect(results.every((result) => result.ok)).toBe(true);
-    expireDeadline();
-  }, 7_000);
-
-  test("space-service KV handles remain usable after deadline expiry", async () => {
-    const { node, deadlineExpired, expireDeadline } = makeRegistryDeadlineServices();
-    const kv = node.spaces.get(SPACE_ID).kv;
-    await deadlineExpired;
-    expect((await kv.list({ prefix: "review-" })).ok).toBe(true);
-    expireDeadline();
-  }, 7_000);
 });

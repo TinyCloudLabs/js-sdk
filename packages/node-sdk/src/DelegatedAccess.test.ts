@@ -89,10 +89,11 @@ describe("DelegatedAccess request sink", () => {
   test("a fetch through the delegated context is recorded by the lifetime's request sink", async () => {
     const requestSink = new RequestLog();
     const fetch = (async () => ({ ok: true, status: 200, statusText: "OK", headers: { get: () => null }, body: null })) as any;
-    const lifetime = { fetch, track: (context: ServiceContext) => context, requestSink } as any;
-    const access = new DelegatedAccess(makeSession(), makeDelegation(), "https://node.test", invoke, undefined, undefined, lifetime);
-    const context: unknown = Reflect.get(access, "_serviceContext");
-    if (!(context instanceof ServiceContext)) throw new Error("DelegatedAccess did not create a ServiceContext");
+    const tracked: ServiceContext[] = [];
+    const lifetime = { fetch, track: (context: ServiceContext) => (tracked.push(context), context), requestSink } as any;
+    new DelegatedAccess(makeSession(), makeDelegation(), "https://node.test", invoke, undefined, undefined, lifetime);
+    const [context] = tracked;
+    if (!(context instanceof ServiceContext)) throw new Error("DelegatedAccess did not hand its ServiceContext to the lifetime");
 
     await context.fetch("https://node.test/kv/x", { method: "GET" });
 

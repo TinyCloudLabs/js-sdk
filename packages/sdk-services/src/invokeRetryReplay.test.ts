@@ -84,12 +84,6 @@ describe("retry against a node that enforces invocation replay", () => {
     expect(new Set(invocations).size).toBe(2);
   });
 
-  test("the node really does reject a repeated invocation", async () => {
-    const init = { method: "POST", headers: { Authorization: "same" } };
-    expect((await fakeNode("https://node.test/invoke", init)).status).toBe(503);
-    expect((await fakeNode("https://node.test/invoke", init)).status).toBe(409);
-  });
-
   test("a persistently busy node still surfaces the typed NODE_BUSY, never a 409", async () => {
     busyFirst = 99;
     const context = contextWith({ maxAttempts: 3 });

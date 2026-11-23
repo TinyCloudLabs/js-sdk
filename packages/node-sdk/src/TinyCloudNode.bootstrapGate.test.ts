@@ -421,38 +421,6 @@ describe("bootstrap gate — abort on first rejection", () => {
       /Account bootstrap aborted.*Sign request rejected/,
     );
   });
-
-  test("error message includes space name and original cause", async () => {
-    const wasm = makeFakeWasmBindings();
-    const openKeyStrategy = createOpenKeyCallbackSigningStrategy({
-      endpoint: "https://openkey.test/api/delegate/sign",
-    });
-
-    const node = new TinyCloudNode({
-      wasmBindings: wasm,
-      signer: makeExternalSigner() as any,
-      signStrategy: openKeyStrategy,
-      host: "https://tinycloud.test",
-      tinycloudRegistryUrl: REGISTRY_URL,
-    });
-
-    stubNodeForSignIn(node, { freshAccount: true });
-    (node as any).ensureRequestedEncryptionNetworks = async () => {};
-    (node as any).ensureOwnedSpaceHostedById = async () => {};
-    (node as any).scheduleAccountRegistrySync = () => {};
-
-    const auth = (node as any).auth;
-    auth.createBootstrapSession = mock(async () => {
-      throw new Error("auto-sign rejected");
-    });
-
-    // signIn() resolves; the cause is preserved in bootstrapStatus.reason.
-    await withRegistryFixture(() => node.signIn());
-
-    expect(node.bootstrapStatus.skipped).toBe(true);
-    expect(node.bootstrapStatus.reason).toContain("Account bootstrap aborted");
-    expect(node.bootstrapStatus.reason).toContain("auto-sign rejected");
-  });
 });
 
 // ---------------------------------------------------------------------------

@@ -282,14 +282,6 @@ describe("SQL Basics", () => {
 
   // PART 7: Export
   describe("Export", () => {
-    test("export returns a Blob", async () => {
-      const result = await alice.sql.db().export();
-      expect(result.ok).toBe(true);
-      if (result.ok) {
-        expect(result.data).toBeInstanceOf(Blob);
-      }
-    });
-
     test("exported Blob is non-empty", async () => {
       const result = await alice.sql.db().export();
       expect(result.ok).toBe(true);

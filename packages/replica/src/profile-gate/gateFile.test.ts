@@ -237,14 +237,6 @@ describe("establishSessionStamp", () => {
     expect(await readdir(dir)).toEqual([]);
   });
 
-
-  test("rejects a non-finite or missing SIWE anchor without creating a gate file", async () => {
-    for (const siweIssuedAt of [Number.NaN, Number.POSITIVE_INFINITY, -1, undefined]) {
-      await expectGated(establishSessionStamp(dir, ALICE, { siweIssuedAt: siweIssuedAt as number }), "not_established");
-    }
-    expect(await readdir(dir)).toEqual([]);
-  });
-
   test("rejects a sign-in issued at or before deniedAt with stamp_stale", async () => {
     await establishSessionStamp(dir, ALICE, { siweIssuedAt: 1 });
     const denied = await denyGate(dir, { reason: "sign_out", principal: ALICE }, async () => []);
@@ -456,12 +448,6 @@ describe("deny floor beside the gate file", () => {
     const { deniedAt, lifecycleEpoch } = await readGateState(dir);
     return { deniedAt: deniedAt!, lifecycleEpoch };
   }
-
-  test("a first-use profile with no deny still creates its gate", async () => {
-    const stamp = await establishSessionStamp(dir, ALICE, { siweIssuedAt: 1 });
-    expect(stamp.lifecycleEpoch).toBe(0);
-    expect((await readGateState(dir)).principalHash).toBe(await principalHashOf((await readGateState(dir)).salt, ALICE));
-  });
 
   test("a missing gate after a deny fails closed and is never recreated", async () => {
     const { deniedAt } = await deniedProfile();

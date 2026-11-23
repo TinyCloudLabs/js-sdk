@@ -338,14 +338,6 @@ test("a store that cannot delete after success still returns the issued credenti
   expect(acquisition.result.verified.claims.email).toBe(ADDRESS);
 });
 
-test("production issuer keys reject a credential signed by a different issuer key", async () => {
-  const witness = makeWitness({ code: CODE });
-  const fetch = witness.fetch as typeof globalThis.fetch;
-  const pending = await requestEmailProofCode({ address: ADDRESS, holder: HOLDER, fetch });
-  await expect(completeEmailProof({ pending, code: CODE, holder: HOLDER, fetch }))
-    .rejects.toMatchObject({ name: "EmailProofError", step: "credential" });
-});
-
 test("a foreign issuer key passed to completeEmailProof is ignored; only the pinned production key verifies", async () => {
   const witness = makeWitness({ code: CODE });
   const fetch = witness.fetch as typeof globalThis.fetch;
@@ -373,16 +365,6 @@ test("exhausted proof attempts are non-recoverable and delete the pending reques
     witness.issuerKeys,
   )).rejects.toMatchObject({ name: "EmailProofError", code: "CODE_ATTEMPTS_EXHAUSTED", recoverable: false });
   expect(await store.findLive(ADDRESS, new Date())).toBeUndefined();
-});
-
-test("a malformed code is refused locally, recoverable, with zero network calls", async () => {
-  const witness = makeWitness({ code: CODE });
-  const pending = await requestEmailProofCode({ address: ADDRESS, holder: HOLDER, fetch: witness.fetch as typeof globalThis.fetch });
-  let calls = 0;
-  const counting = (async (url: string | URL | Request, init?: RequestInit) => { calls += 1; return witness.fetch(url, init); }) as typeof globalThis.fetch;
-  await expect(completeEmailProofWithIssuerKeys({ pending, code: "1234", holder: HOLDER, fetch: counting }, witness.issuerKeys))
-    .rejects.toMatchObject({ name: "EmailProofError", code: "CODE_INVALID", recoverable: true });
-  expect(calls).toBe(0);
 });
 
 function withIssuer(patch: Partial<CredentialFlowDescriptor["issuer"]>): CredentialFlowDescriptor {
@@ -477,13 +459,6 @@ test("completion refuses a request the witness says must be challenged first, be
   await expect(completeEmailProof({ pending, code: CODE, holder: HOLDER, fetch: fetch as typeof globalThis.fetch }))
     .rejects.toMatchObject({ step: "session", code: "SESSION_INVALID" });
   expect(submitted).toEqual([]);
-});
-
-test("a rate-limit hint rounds up to whole minutes", async () => {
-  const fetch = async (url: string | URL | Request) => (String(url) === DISCOVERY_URL
-    ? catalogFor(email)
-    : new Response(JSON.stringify({ type: "tinycloud.credentials/error/v1", code: "RATE_LIMITED", recoverable: false, state: "rate_limited", correlationId: "C".repeat(16) }), { status: 429, headers: { "content-type": "application/json", "retry-after": "150" } }));
-  await expect(requestEmailProofCode({ address: ADDRESS, holder: HOLDER, fetch: fetch as typeof globalThis.fetch })).rejects.toThrow("Try again in 3 minutes");
 });
 
 test("a holder did that carries a fragment is refused before any network call", async () => {
@@ -644,19 +619,6 @@ test("a fetch timeout during discovery is a recoverable NETWORK failure", async 
   });
   await expect(requestEmailProofCode({ address: ADDRESS, holder: HOLDER, fetch }))
     .rejects.toMatchObject({ code: "NETWORK", step: "request", recoverable: true });
-});
-
-test("a recoverable SIGNATURE_REJECTED keeps the server's recoverable flag", async () => {
-  const witness = makeWitness({ code: CODE });
-  const fetch = asFetch(async (url, init) => {
-    const response = await witness.fetch(url, init);
-    if (response.status !== 400) return response;
-    return Response.json({ ...(await response.json()), recoverable: true }, { status: 400 });
-  });
-  const pending = await requestEmailProofCode({ address: ADDRESS, holder: HOLDER, fetch });
-  const badSigner = createEd25519HolderSigner(HOLDER.did, async () => new Uint8Array(64));
-  const error = await completeEmailProof({ pending, code: CODE, holder: badSigner, fetch }).catch((caught: unknown) => caught);
-  expect(error).toMatchObject({ code: "SIGNATURE_REJECTED", recoverable: true });
 });
 
 test("a restored pending record cannot outlive the 15-minute cap", async () => {

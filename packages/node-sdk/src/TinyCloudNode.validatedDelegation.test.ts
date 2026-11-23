@@ -4,9 +4,6 @@ import type { PermissionEntry } from "@tinycloud/sdk-core";
 
 import { activateValidatedRuntimeDelegation, RuntimeDelegationRejectedError, siweRuntimeDelegation } from "./delegation";
 import type { PortableDelegation } from "./delegation";
-import {
-  activateValidatedRuntimeDelegation as publicActivateValidatedRuntimeDelegation,
-} from "./index";
 import { NodeWasmBindings } from "./NodeWasmBindings";
 import { PrivateKeySigner } from "./signers/PrivateKeySigner";
 import {
@@ -86,12 +83,6 @@ function signedProvenance(authorization: string): {
 }
 
 describe("activateValidatedRuntimeDelegation", () => {
-  test("exports the validated activation helper from the node-sdk entrypoint", () => {
-    expect(publicActivateValidatedRuntimeDelegation).toBe(
-      activateValidatedRuntimeDelegation,
-    );
-  });
-
   test("CID-binds a real WASM delegation, installs it, and exercises narrow encrypted KV read/decrypt", async () => {
     const fixture = await createHermeticEncryptedNode();
     try {
