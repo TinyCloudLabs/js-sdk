@@ -17,6 +17,11 @@ on:
       - "packages/cli/src/auth/approval-*"
       - "packages/cli/src/commands/auth.ts"
       - "packages/cli/src/auth/scoped-login.ts"
+      - "packages/sdk-services/src/secrets/**"
+      - "packages/sdk-services/src/encryption/**"
+      - "packages/sdk-services/src/vault/**"
+      - "packages/cli/src/commands/secrets*"
+      - "tests/cli/secrets/secrets-legacy-node.e2e.test.ts"
       - ".github/workflows/node-replication-e2e.yml"
   push:
     branches: [master]
@@ -27,8 +32,11 @@ permissions:
   packages: read
 
 env:
-  # tinycloud-node v1.20.6 pinned by digest, with the TC-899 fix (see replica-e2e.yml).
-  TINYCLOUD_NODE_IMAGE: ghcr.io/tinycloudlabs/tinycloud-node:1.20.6@sha256:41667d3d133aaa12290a2f3a744afacd838988327552d159c60f04466e66f86f
+  # tinycloud-node 1.26.21, the first release with per-secret keys (encryption-named-keys-v1), pinned by digest (TC-3801).
+  TINYCLOUD_NODE_IMAGE: ghcr.io/tinycloudlabs/tinycloud-node:1.26.21@sha256:fc9fd4efa884be75d05fe61dd55ffa6559a48df824647ce8c10739c7553afc26
+  # tinycloud-node v1.20.6, the last release without per-secret keys (encryption-named-keys-v1), pinned by digest.
+  # Only the legacy-node-e2e job runs it: secrets against a node that cannot parent a grant on a secret's own key (TC-3801).
+  TINYCLOUD_LEGACY_NODE_IMAGE: ghcr.io/tinycloudlabs/tinycloud-node:1.20.6@sha256:41667d3d133aaa12290a2f3a744afacd838988327552d159c60f04466e66f86f
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
@@ -154,6 +162,147 @@ jobs:
         env:
           TC_REPLICATION_E2E_NODE_BIN: ${{ runner.temp }}/tinycloud
         run: bash "$GITHUB_WORKSPACE/.github/scripts/run-private-tests.sh" bun test --max-concurrency=1 packages/cli/src/commands/agent-grant.timeout.e2e.test.ts
+
+      - name: Save Rust/Cargo cache
+        if: github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/')
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-${{ runner.os }}-stable-${{ github.workflow }}-${{ github.job }}-${{ hashFiles('Cargo.lock') }}
+
+  legacy-node-e2e:
+    name: Node SDK on a node without named keys
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.x
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+      - name: Cache Bun packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - name: Restore Rust/Cargo cache
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-${{ runner.os }}-stable-${{ github.workflow }}-${{ github.job }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            cargo-${{ runner.os }}-stable-${{ github.workflow }}-${{ github.job }}-
+
+      - name: Install wasm-pack
+        uses: ./.github/actions/install-wasm-pack
+
+      - name: Install locked dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Build the SDK and the CLI
+        run: |
+          bun run --cwd packages/sdk-rs build:wasm:node
+          bun run --cwd packages/sdk-rs/packages/node build
+          bun run --cwd packages/sdk-rs build:wasm:web
+          bun run --cwd packages/sdk-rs/packages/web build
+          bun run --cwd packages/bootstrap build
+          bun run --cwd packages/sdk-services build
+          bun run --cwd packages/share-envelope build
+          bun run --cwd packages/share-sdk build
+          bun run --cwd packages/sdk-core build
+          bun run --cwd packages/node-sdk build
+          bun run --cwd packages/replica build
+          bun run --cwd packages/operations build
+          bun run --cwd packages/courier build
+          bun run --cwd packages/cli build
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract the 1.20.6 TinyCloud node
+        run: |
+          docker pull "$TINYCLOUD_LEGACY_NODE_IMAGE"
+          container="$(docker create "$TINYCLOUD_LEGACY_NODE_IMAGE")"
+          docker cp "$container:/tinycloud" "$RUNNER_TEMP/tinycloud-legacy"
+          docker rm "$container"
+          chmod +x "$RUNNER_TEMP/tinycloud-legacy"
+
+      # The binary has no --version flag, so start it on loopback and read /version, as run-cli-node-suite.sh does.
+      # A wrong or missing binary fails here instead of passing the suites below by accident.
+      - name: Check the node is 1.20.6 and lacks named keys
+        run: |
+          set -euo pipefail
+          bin="$RUNNER_TEMP/tinycloud-legacy"
+          [ -x "$bin" ] || { echo "::error::$bin is not executable"; exit 1; }
+          dir="$(mktemp -d "$RUNNER_TEMP/legacy-check.XXXXXX")"
+          port="$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')"
+          secret="$(head -c 48 /dev/urandom | base64 -w0 | tr '+/' '-_' | tr -d '=')"
+          (
+            cd "$dir"
+            exec env TINYCLOUD_STORAGE__DATADIR="$dir/data" \
+              TINYCLOUD_ADDRESS=127.0.0.1 TINYCLOUD_PORT="$port" ROCKET_ADDRESS=127.0.0.1 ROCKET_PORT="$port" \
+              TINYCLOUD_KEYS__TYPE=Static TINYCLOUD_KEYS__SECRET="$secret" \
+              "$bin" >"$dir/node.log" 2>&1
+          ) &
+          pid=$!
+          trap 'kill "$pid" 2>/dev/null || true; wait "$pid" 2>/dev/null || true' EXIT
+          version=""
+          for _ in $(seq 1 30); do
+            version="$(curl -sf "http://127.0.0.1:$port/version" || true)"
+            [ -n "$version" ] && break
+            kill -0 "$pid" 2>/dev/null || { echo "::error::the node exited early"; cat "$dir/node.log"; exit 1; }
+            sleep 1
+          done
+          echo "$version"
+          [ "$(echo "$version" | jq -r .version)" = "1.20.6" ] || { echo "::error::the node is not 1.20.6"; exit 1; }
+          if echo "$version" | jq -e '.features | index("encryption-named-keys-v1")' >/dev/null; then
+            echo "::error::the node lists encryption-named-keys-v1"; exit 1
+          fi
+
+      # The suite skips itself when the variable is unset, so the step fails on any skip or when nothing passed.
+      - name: Run node-sdk secrets e2e against the 1.20.6 node
+        timeout-minutes: 10
+        env:
+          TC_LEGACY_NODE_E2E_BIN: ${{ runner.temp }}/tinycloud-legacy
+        run: |
+          set -o pipefail
+          bash "$GITHUB_WORKSPACE/.github/scripts/run-private-tests.sh" bun test --max-concurrency=1 packages/node-sdk/src/secrets.legacyNode.e2e.test.ts 2>&1 | tee "$RUNNER_TEMP/legacy-node-sdk.log"
+          if grep -Eq '^ *[1-9][0-9]* skip' "$RUNNER_TEMP/legacy-node-sdk.log" || ! grep -Eq '^ *[1-9][0-9]* pass' "$RUNNER_TEMP/legacy-node-sdk.log"; then
+            echo "::error title=legacy-node secrets e2e::tests were skipped or none passed"
+            exit 1
+          fi
+
+      - name: tc secrets against the 1.20.6 node
+        timeout-minutes: 10
+        env:
+          TC_SECRETS_NAMED_KEY_WRITES: "1"
+        run: .github/scripts/run-cli-node-suite.sh "$RUNNER_TEMP/tinycloud-legacy" tests/cli/secrets/secrets-legacy-node.e2e.test.ts
+
+      - name: Stop any tests/cli node still running
+        if: always()
+        run: |
+          for pidfile in "$RUNNER_TEMP"/cli-node-suites/*.pid; do
+            [ -f "$pidfile" ] || continue
+            kill "$(cat "$pidfile")" 2>/dev/null || true
+          done
 
       - name: Save Rust/Cargo cache
         if: github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/')

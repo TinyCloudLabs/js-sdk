@@ -17,8 +17,8 @@
 
 import ms from "ms";
 import { ACCOUNT_MANIFEST_PERMISSIONS } from "@tinycloud/bootstrap";
-import { resolveSecretPath, SECRET_NAME_RE, parseNetworkId } from "@tinycloud/sdk-services";
-import { parseEncryptionResource } from "@tinycloud/sdk-services/encryption/resource";
+import { resolveSecretPath, SECRET_NAME_RE, parseNetworkId, parseSecretCatalogKey } from "@tinycloud/sdk-services";
+import { formatKeyResource, parseEncryptionResource } from "@tinycloud/sdk-services/encryption/resource";
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -561,7 +561,8 @@ export function expandPermissionEntry(entry: PermissionEntry): PermissionEntry[]
  * Expand a `tinycloud.encryption` manifest entry.
  *
  * - `path` MUST be a networkId URN (`urn:tinycloud:encryption:...`),
- *   except the default network's `share/` decrypt prefix.
+ *   except the default network's `share/` decrypt prefix and the exact
+ *   per-secret keys (see {@link expandSecretKeyPermissionEntry}).
  *   The manifest prefix is always skipped — network ids are top-level
  *   owner-scoped resources, not space-scoped paths.
  * - `actions` must be `decrypt`, `network.create`, or `network.revoke`
@@ -585,8 +586,9 @@ function expandEncryptionPermissionEntry(
     );
   }
   const sharePrefix = entry.path.endsWith("/share/");
-  if (entry.path.includes("/") && !sharePrefix) {
-    throw new ManifestValidationError("named keys go in manifest.keys");
+  const slash = entry.path.indexOf("/");
+  if (slash !== -1 && !sharePrefix) {
+    return [expandSecretKeyPermissionEntry(entry, entry.path.slice(0, slash), entry.path.slice(slash + 1))];
   }
   try {
     const network = parseNetworkId(sharePrefix ? entry.path.slice(0, -"/share/".length) : entry.path);
@@ -654,6 +656,73 @@ function expandEncryptionPermissionEntry(
   ];
 }
 
+/** The lower-cased secret name a key path ends in (secret names are at most 64 characters). */
+const SECRET_KEY_NAME_SEGMENT = /^[a-z][a-z0-9_]{0,63}$/;
+
+/**
+ * Whether `keyPath` is the key of exactly one secret: `secrets/<lower NAME>`
+ * or `secrets/scoped/<scope>/<lower NAME>`, the secret's catalog key with its
+ * name lower-cased.
+ */
+function isSecretKeyPath(keyPath: string): boolean {
+  const segments = keyPath.split("/");
+  const name = segments[segments.length - 1]!;
+  if (segments.length < 2 || segments[0] !== "secrets" || !SECRET_KEY_NAME_SEGMENT.test(name)) return false;
+  return parseSecretCatalogKey([...segments.slice(1, -1), name.toUpperCase()].join("/")) !== undefined;
+}
+
+/**
+ * Expand an exact per-secret key entry: decrypt and/or key.create on one
+ * secret's key on the owner's `default` network. Every other named key or
+ * prefix, including any `secrets/` prefix, is refused. The resource is
+ * emitted with the owner in EIP-55 form, the only spelling the node accepts
+ * for a key id.
+ */
+function expandSecretKeyPermissionEntry(
+  entry: PermissionEntry,
+  networkUrn: string,
+  keyPath: string,
+): PermissionEntry {
+  if (!isSecretKeyPath(keyPath)) {
+    if (keyPath === "secrets" || keyPath.startsWith("secrets/")) {
+      throw new ManifestValidationError(
+        "secret keys must be exact: secrets/<name> or secrets/scoped/<scope>/<name>, with the name in lower case",
+      );
+    }
+    throw new ManifestValidationError("named keys go in manifest.keys");
+  }
+  let resource: string;
+  try {
+    const network = parseEncryptionResource(networkUrn);
+    if (network.kind !== "network" || network.network !== "default") throw new Error("not the default network");
+    resource = formatKeyResource(network.networkId, keyPath);
+  } catch {
+    throw new ManifestValidationError("secret key entries require the owner's default network");
+  }
+  const actions: string[] = [];
+  for (const action of entry.actions) {
+    const full = action.startsWith("tinycloud.encryption/") ? action : `tinycloud.encryption/${action}`;
+    if (full !== "tinycloud.encryption/decrypt" && full !== "tinycloud.encryption/key.create") {
+      throw new ManifestValidationError(
+        `unknown secret key action ${JSON.stringify(action)}; expected decrypt or key.create`,
+      );
+    }
+    if (!actions.includes(full)) actions.push(full);
+  }
+  if (actions.length === 0) {
+    throw new ManifestValidationError("secret key entries need decrypt or key.create");
+  }
+  return {
+    service: ENCRYPTION_PERMISSION_SERVICE,
+    space: ENCRYPTION_MANIFEST_SPACE,
+    path: resource,
+    actions,
+    skipPrefix: true,
+    ...(entry.expiry !== undefined ? { expiry: entry.expiry } : {}),
+    ...(entry.description !== undefined ? { description: entry.description } : {}),
+  };
+}
+
 /**
  * Expand a list of permission entries using {@link expandPermissionEntry}.
  */
@@ -681,6 +750,13 @@ export function expandDelegationPermissionEntries(
     if (resource.kind !== "key" || !Array.isArray(entry.actions) || entry.actions.length === 0 ||
       entry.actions.some((action) => action !== "decrypt" && action !== "tinycloud.encryption/decrypt")) {
       throw new ManifestValidationError("named-key delegation requires an exact key and decrypt only");
+    }
+    // Under `secrets`, only one secret's own key: never the bare `secrets` key,
+    // which screens read as every secret (TC-3801).
+    if ((resource.path === "secrets" || resource.path.startsWith("secrets/")) && !isSecretKeyPath(resource.path)) {
+      throw new ManifestValidationError(
+        "secret keys must be exact: secrets/<name> or secrets/scoped/<scope>/<name>, with the name in lower case",
+      );
     }
     return [{
       ...entry,

@@ -81,10 +81,16 @@ export function evaluateAuthority(
  * together: a verified SIWE ReCap reports one entry per signed action, so
  * `get` and `list` on one path arrive as two grants.
  */
+export interface OperationAuthorityAlternative {
+  readonly replaces: PermissionEntry;
+  readonly satisfiedBy: PermissionEntry;
+}
+
 export function evaluateOperationAuthority(
   granted: readonly PermissionEntry[],
   required: readonly PermissionEntry[],
   resolveSpace?: OperationSpaceResolver,
+  alternatives?: readonly OperationAuthorityAlternative[],
 ): AuthorityEvaluation {
   const canonicalGranted = canonicalizeOperationCapabilities(granted, resolveSpace);
   const canonicalRequired = canonicalizeOperationCapabilities(required, resolveSpace);
@@ -95,7 +101,25 @@ export function evaluateOperationAuthority(
       candidate.service === requested.service &&
       operationSpacesEqual(candidate.space, requested.space)
     );
-    if (!isCapabilitySubset([requested], sameScope).subset) missing.push(requested);
+    if (isCapabilitySubset([requested], sameScope).subset) continue;
+    const requestedId = JSON.stringify(requested);
+    const satisfiedByAlternative = alternatives !== undefined && alternatives.some((alternative) => {
+      const [canonicalReplaces] = canonicalizeOperationCapabilities([alternative.replaces], resolveSpace);
+      if (canonicalReplaces === undefined || JSON.stringify(canonicalReplaces) !== requestedId) {
+        return false;
+      }
+      const [canonicalAlt] = canonicalizeOperationCapabilities([alternative.satisfiedBy], resolveSpace);
+      if (canonicalAlt === undefined) return false;
+      // Exact-path, exact-space, uncaveated match only: never a prefix, wildcard, or other key.
+      return canonicalGranted.some((candidate) =>
+        candidate.service === canonicalAlt.service &&
+        operationSpacesEqual(candidate.space, canonicalAlt.space) &&
+        candidate.path === canonicalAlt.path &&
+        candidate.caveats === undefined &&
+        canonicalAlt.actions.every((action) => candidate.actions.includes(action))
+      );
+    });
+    if (!satisfiedByAlternative) missing.push(requested);
   }
 
   return {
@@ -161,8 +185,11 @@ function canonicalizeOperationResource(permission: PermissionEntry): PermissionE
   // service marker, not an owned data-space; an explicit full space stays bound.
   const rawMarker = permission.space === "encryption"
     && permission.path.startsWith("urn:tinycloud:encryption:");
+  // Bare network URNs normalize PKH address casing; named-key and prefix URNs
+  // (`<networkId>/<path>`) require canonical EIP-55 owners (parseEncryptionResource)
+  // and must not be lowercased here.
   const match = permission.path.match(
-    /^(urn:tinycloud:encryption:did:pkh:eip155:\d+:)(0x[0-9a-fA-F]{40})(:.*)$/,
+    /^(urn:tinycloud:encryption:did:pkh:eip155:\d+:)(0x[0-9a-fA-F]{40})(:[^/]+)$/,
   );
   if (!match && !rawMarker) return permission;
   const canonical = {

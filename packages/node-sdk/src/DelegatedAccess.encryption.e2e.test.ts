@@ -1,14 +1,13 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import type { InlineEncryptedEnvelope } from "@tinycloud/sdk-services";
+import { secretReadPermissions, type InlineEncryptedEnvelope } from "@tinycloud/sdk-services";
 import type { DelegatedAccess } from "./DelegatedAccess";
 import { deserializeDelegation, serializeDelegation, type PortableDelegation } from "./delegation";
 import { NodeWasmBindings } from "./NodeWasmBindings";
 import "./nodeDefaults";
 import "./replication/node-loader";
 import { TinyCloudNode } from "./TinyCloudNode";
-import { ownerFullAccess } from "@tinycloud/sdk-core";
 import { startLocalNode, type LocalNode } from "./test-support/local-node";
 import { startUnregisteredLocationRegistry, type UnregisteredLocationRegistry } from "./test-support/unregistered-location-registry";
 
@@ -62,9 +61,12 @@ describe.skipIf(!nodeBinary)(
       return { delegation, access: await recipient.useDelegation(delegation) };
     }
 
+    // Decrypt on the secret's own key (TC-3284), derived from the KV path. A
+    // child can't hold the `secrets/` key prefix (TC-2140), so the
+    // all-secrets grant names API_KEY's key: the one secret those tests read.
     const secretsEntries = (path = "vault/secrets/") => [
       { service: "tinycloud.kv", space: secretsSpace, path, actions: ["get"] },
-      { service: "tinycloud.encryption", path: networkId, actions: ["decrypt"] },
+      secretReadPermissions(networkId, path.slice("vault/secrets/".length) || "API_KEY")[1],
     ];
 
     const decrypt = (access: DelegatedAccess) =>
@@ -75,14 +77,33 @@ describe.skipIf(!nodeBinary)(
       node = await startLocalNode(nodeBinary!, "/var/tmp/delegated-encryption-node-");
       host = node.host;
 
+      // Delegating a secret's own key needs it in the owner's signed session,
+      // asked for explicitly as Secret Manager does (TC-3284): the plain
+      // defaults plus the `secrets/` keys. Imported in place: the TC-3801
+      // test ruling confines this edit to the sign-in lines.
+      const privateKey = randomBytes(32).toString("hex");
+      const { PrivateKeySigner } = await import("./signers/PrivateKeySigner");
+      const { composeManifestRequest } = await import("@tinycloud/sdk-core");
+      const ownerNetwork = `urn:tinycloud:encryption:did:pkh:eip155:1:${await new PrivateKeySigner(privateKey).getAddress()}:default`;
+      const capabilityRequest = composeManifestRequest([{
+        app_id: "delegated-encryption.test", name: "Delegated encryption e2e", prefix: "", space: "default", defaults: "all",
+        permissions: [
+          { service: "tinycloud.kv", space: "secrets", path: "vault/secrets/", actions: ["get", "put", "del", "list", "metadata"] },
+          { service: "tinycloud.kv", space: "applications", path: "vault/secrets/", actions: ["get", "put", "del", "list", "metadata"] },
+        ],
+      }]);
+      capabilityRequest.resources.push(
+        { service: "tinycloud.encryption", space: "encryption", path: ownerNetwork, actions: ["tinycloud.encryption/decrypt"], skipPrefix: true },
+        { service: "tinycloud.encryption", space: "encryption", path: `${ownerNetwork}/secrets/`, actions: ["tinycloud.encryption/decrypt", "tinycloud.encryption/key.create"], skipPrefix: true },
+      );
       owner = new TinyCloudNode({
         host,
         tinycloudRegistryUrl: registry.url.origin,
-        privateKey: randomBytes(32).toString("hex"),
+        privateKey,
         wasmBindings: new NodeWasmBindings(),
         domain: "delegated-encryption.test",
         autoCreateSpace: true,
-        ...ownerFullAccess(),
+        capabilityRequest,
       });
       await owner.signIn();
       await owner.waitForAccountRegistrySync();
@@ -95,7 +116,7 @@ describe.skipIf(!nodeBinary)(
         [secretsSpace, "OTHER_KEY", "other-value"],
         [primarySpace, "PRIMARY_KEY", "primary-space-value"],
       ] as const) {
-        const put = await owner.secretsForSpace(space).put(name, value);
+        const put = await owner.secretsForSpace(space).put(name, value, { namedKey: true });
         expect(put.ok, JSON.stringify(put.ok ? undefined : put.error)).toBe(true);
       }
       const encrypted = await owner.encryption.encryptToNetwork(networkId, plaintext);
@@ -108,18 +129,35 @@ describe.skipIf(!nodeBinary)(
       registry?.stop(true);
     });
 
-    test("a session-only child decrypts and reads a secret with only the delegation", async () => {
+    test("a session-only child decrypts a secret on its own key with only the delegation, and is refused a raw network decrypt", async () => {
       const recipient = sessionOnlyChild();
       expect(recipient.isSessionOnly).toBe(true);
       const { access } = await grant(recipient, secretsEntries());
 
+      // The stored record is sealed to API_KEY's own key, never to the network.
+      const record = await access.kv.get<unknown>("vault/secrets/API_KEY");
+      if (!record.ok) throw new Error(JSON.stringify(record.error));
+      const raw = record.data.data;
+      const stored = (typeof raw === "string" ? JSON.parse(raw) : raw) as Record<string, unknown>;
+      expect({ v: stored.v, keyPath: stored.keyPath, networkId: stored.networkId }).toEqual({
+        v: 2,
+        keyPath: "secrets/api_key",
+        networkId,
+      });
+
+      // Opening it is one decrypt on exactly that key, under the delegation.
       expect(await access.readSecret({ name: "API_KEY" })).toEqual({
         status: "ok",
         value: "secrets-space-value",
       });
+
+      // The delegation names one secret's key, not the network: the node
+      // refuses a raw network decrypt.
       const decrypted = await decrypt(access);
-      expect(decrypted.ok, JSON.stringify(decrypted.ok ? undefined : decrypted.error)).toBe(true);
-      expect(decrypted.ok && new TextDecoder().decode(decrypted.data)).toBe("delegated plaintext");
+      expect(decrypted.ok ? undefined : decrypted.error).toMatchObject({
+        code: "DECRYPT_DENIED",
+        permissionHint: { service: "tinycloud.encryption", path: networkId, actions: ["tinycloud.encryption/decrypt"] },
+      });
       // The child never became signed in: nothing outside the access gained authority.
       expect(recipient.isSessionOnly).toBe(true);
       expect(recipient.restorableSession).toBeUndefined();
@@ -139,8 +177,6 @@ describe.skipIf(!nodeBinary)(
       const receipt = await owner.revokeDelegation(delegation.cid);
       expect(receipt.ok, JSON.stringify(receipt.ok ? undefined : receipt.error)).toBe(true);
 
-      const decrypted = await decrypt(access);
-      expect(decrypted.ok).toBe(false);
       expect((await access.readSecret({ name: "API_KEY" })).status).not.toBe("ok");
     }, 120_000);
 
@@ -173,12 +209,91 @@ describe.skipIf(!nodeBinary)(
       expect(record.ok ? undefined : record.error.code).toBe("AUTH_UNAUTHORIZED");
     }, 120_000);
 
-    // Per-secret DECRYPT scoping needs secrets sealed to per-secret named keys
-    // and a delegation naming that key (TC-3284, js-sdk #1050, node feature
-    // `encryption-named-keys-v1`). Today every secret is sealed to the network
-    // root key, so a network decrypt grant opens any envelope the holder can
-    // read; the record's KV grant (above) is what scopes a delegation to one secret.
-    test.todo("a named-key grant for secret A decrypts A and is refused on B (needs #1050)");
+    test("a named-key grant for secret A decrypts A and is refused on B", async () => {
+      const { access } = await grant(sessionOnlyChild(), [
+        { service: "tinycloud.kv", space: secretsSpace, path: "vault/secrets/", actions: ["get"] },
+        secretReadPermissions(networkId, "API_KEY")[1],
+      ]);
+      expect(await access.readSecret({ name: "API_KEY" })).toEqual({ status: "ok", value: "secrets-space-value" });
+      // B's record is readable under the KV grant; its key is not.
+      expect(await access.readSecret({ name: "OTHER_KEY" })).toEqual({
+        status: "permission_required",
+        hint: {
+          service: "tinycloud.encryption",
+          path: `${networkId}/secrets/other_key`,
+          actions: ["tinycloud.encryption/decrypt"],
+        },
+      });
+    }, 120_000);
+
+    test("an exact-key grant refuses a network-sealed secret without a network decrypt; the wallet owner reads both", async () => {
+      // A record an older client sealed to the network key. `getBaseVault` is
+      // private; only a vault write without a key path can make one now.
+      const ownerVaults = owner as unknown as {
+        getBaseVault(space: string): { put(key: string, value: unknown): Promise<{ ok: boolean }> };
+      };
+      const legacy = await ownerVaults.getBaseVault(secretsSpace).put("secrets/LEGACY_KEY", {
+        value: "legacy-value", createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:00:00.000Z",
+      });
+      expect(legacy.ok).toBe(true);
+      const { access } = await grant(sessionOnlyChild(), [
+        { service: "tinycloud.kv", space: secretsSpace, path: "vault/secrets/LEGACY_KEY", actions: ["get"] },
+        secretReadPermissions(networkId, "LEGACY_KEY")[1],
+      ]);
+      expect(await access.readSecret({ name: "LEGACY_KEY" })).toEqual({ status: "legacy_envelope" });
+
+      // The wallet owner's get asks for API_KEY's own key; the network one opens LEGACY_KEY.
+      for (const [name, value] of [["API_KEY", "secrets-space-value"], ["LEGACY_KEY", "legacy-value"]] as const) {
+        expect(await owner.secretsForSpace(secretsSpace).get(name)).toEqual({ ok: true, data: value });
+      }
+    }, 120_000);
+
+    test("an owner without a secret's own key: reads ask for exactly that key, and only an opted-in get signs", async () => {
+      const hint = { service: "tinycloud.encryption", path: `${networkId}/secrets/other_key`, actions: ["tinycloud.encryption/decrypt"] };
+      const signer = (owner as unknown as { signer: NonNullable<ConstructorParameters<typeof TinyCloudNode>[0]["signer"]> }).signer;
+      // The same wallet signed in with the owner defaults: the network decrypt only, never a
+      // secrets/ key (that comes only from an explicit capability request).
+      const { ownerFullAccess } = await import("@tinycloud/sdk-core");
+      const plain = new TinyCloudNode({
+        host,
+        tinycloudRegistryUrl: registry.url.origin,
+        signer,
+        wasmBindings: new NodeWasmBindings(),
+        domain: "delegated-encryption.test",
+        ...ownerFullAccess(),
+      });
+      await plain.signIn();
+      expect(await plain.readSecret({ space: secretsSpace, name: "OTHER_KEY" })).toEqual({ status: "permission_required", hint });
+
+      // A background get (no opt-in) never signs: DECRYPT_DENIED naming the key, from the wallet node too.
+      const signMessage = signer.signMessage;
+      let signatures = 0;
+      signer.signMessage = (message) => {
+        signatures++;
+        return signMessage.call(signer, message);
+      };
+      try {
+        const background = await plain.secretsForSpace(secretsSpace).get("OTHER_KEY");
+        expect(background.ok ? undefined : background.error).toMatchObject({ code: "DECRYPT_DENIED", key: "secrets/OTHER_KEY", permissionHint: hint });
+        expect(signatures).toBe(0);
+
+        // The same session restored without a signer cannot ask for more.
+        const restored = sessionOnlyChild();
+        await restored.restoreSession({ ...plain.restorableSession!, tinycloudHosts: [host] });
+        expect(restored.isSessionOnly).toBe(true);
+        const denied = await restored.secretsForSpace(secretsSpace).get("OTHER_KEY", { requestPermission: true });
+        expect(denied.ok ? undefined : denied.error).toMatchObject({ code: "DECRYPT_DENIED", key: "secrets/OTHER_KEY", permissionHint: hint });
+        const put = await restored.secretsForSpace(secretsSpace).put("OTHER_KEY", "overwritten", { namedKey: true });
+        expect(put.ok ? undefined : put.error.code).toBe("PERMISSION_DENIED");
+        expect(signatures).toBe(0);
+
+        // An opted-in get asks the wallet for the key and reads it; the value was never overwritten.
+        expect(await plain.secretsForSpace(secretsSpace).get("OTHER_KEY", { requestPermission: true })).toEqual({ ok: true, data: "other-value" });
+        expect(signatures).toBeGreaterThan(0);
+      } finally {
+        signer.signMessage = signMessage;
+      }
+    }, 120_000);
 
     test("each access decrypts only with its own delegation", async () => {
       const recipient = sessionOnlyChild();
@@ -206,9 +321,82 @@ describe.skipIf(!nodeBinary)(
       // A real wait: the node checks expiry against its own wall clock, in
       // whole seconds, which fake timers in this process cannot move.
       await Bun.sleep(access.delegation.expiry.getTime() - Date.now() + 2_000);
-      const decrypted = await decrypt(access);
-      expect(decrypted.ok).toBe(false);
       expect((await access.readSecret({ name: "API_KEY" })).status).not.toBe("ok");
+    }, 120_000);
+
+    // Non-secret data still opens on the network itself (TC-3801): a delegation
+    // naming the network decrypts, and stops at revoke and at expiry. It also
+    // carries the secrets kv get the owner holds, as the pre-TC-3801 grant did:
+    // this node refuses to revoke an encryption-only delegation (403
+    // Unauthorized Revoker). The kv get reads only ciphertext.
+    const networkDecrypt = () => [
+      secretsEntries()[0]!,
+      { service: "tinycloud.encryption", path: networkId, actions: ["tinycloud.encryption/decrypt"] },
+    ];
+    const expectDecrypts = async (access: DelegatedAccess) => {
+      const opened = await decrypt(access);
+      if (!opened.ok) throw new Error(JSON.stringify(opened.error));
+      expect(new TextDecoder().decode(opened.data)).toBe("delegated plaintext");
+    };
+
+    test("a network decrypt delegation opens non-secret network data, and stops once revoked", async () => {
+      const { delegation, access } = await grant(sessionOnlyChild(), networkDecrypt());
+      await expectDecrypts(access);
+
+      const receipt = await owner.revokeDelegation(delegation.cid);
+      expect(receipt.ok, JSON.stringify(receipt.ok ? undefined : receipt.error)).toBe(true);
+
+      expect((await decrypt(access)).ok).toBe(false);
+    }, 120_000);
+
+    test("a network decrypt delegation stops decrypting once it expires", async () => {
+      const { access } = await grant(sessionOnlyChild(), networkDecrypt(), 5_000);
+      await expectDecrypts(access);
+
+      // A real wait, as above: the node checks expiry on its own clock.
+      await Bun.sleep(access.delegation.expiry.getTime() - Date.now() + 2_000);
+      expect((await decrypt(access)).ok).toBe(false);
+    }, 120_000);
+
+    // Naomi 13:35:53Z: the 64-byte cap is inclusive. A 64-byte name in a
+    // 64-byte scope is sealed to and read from its own key on the real node;
+    // 65 is refused before anything is asked, written or read through the root.
+    test("a 64-byte name in a 64-byte scope writes and reads on its own key; 65 is refused with nothing written", async () => {
+      const name = `A${"B".repeat(63)}`;
+      const scope = "s".repeat(64);
+      const secrets = owner.secretsForSpace(secretsSpace);
+
+      const put = await secrets.put(name, "longest-value", { scope, namedKey: true });
+      expect(put.ok, JSON.stringify(put.ok ? undefined : put.error)).toBe(true);
+      const record = await owner.kvForSpace(secretsSpace).get<unknown>(`vault/secrets/scoped/${scope}/${name}`);
+      if (!record.ok) throw new Error(JSON.stringify(record.error));
+      const raw = record.data.data;
+      const stored = (typeof raw === "string" ? JSON.parse(raw) : raw) as Record<string, unknown>;
+      expect({ v: stored.v, keyPath: stored.keyPath }).toEqual({ v: 2, keyPath: `secrets/scoped/${scope}/${name.toLowerCase()}` });
+      expect(await secrets.get(name, { scope, requestPermission: true })).toEqual({ ok: true, data: "longest-value" });
+
+      // Naomi 14:56:25Z (TC-3801): a put of a name over 64 is refused with Monica's words; the gets, the scope row and
+      // "nothing written" are unchanged.
+      const tooLongPut = `This secret wasn't saved: its name is ${name.length + 1} characters, and names can be at most 64. Choose a shorter name.`;
+      const refusals = [
+        [`${name}C`, {}, `Secret name "${name}C" is longer than 64 characters.`, tooLongPut],
+        [name, { scope: `${scope}s` }, `Secret scope "${scope}s" is longer than 64 characters.`, `Secret scope "${scope}s" is longer than 64 characters.`],
+      ] as const;
+      for (const [refusedName, options, message, putMessage] of refusals) {
+        const put = await secrets.put(refusedName, "x", options);
+        expect(put.ok ? undefined : { code: put.error.code, message: put.error.message })
+          .toEqual({ code: "INVALID_INPUT", message: putMessage });
+        for (const result of [
+          await secrets.get(refusedName, { ...options, requestPermission: true }),
+          await secrets.get(refusedName, options),
+        ]) {
+          expect(result.ok ? undefined : { code: result.error.code, message: result.error.message })
+            .toEqual({ code: "INVALID_INPUT", message });
+        }
+      }
+      const listed = await secrets.vault.list({ prefix: "secrets/", removePrefix: true, source: "network" });
+      if (!listed.ok) throw new Error(JSON.stringify(listed.error));
+      expect(listed.data.filter((key) => key.endsWith(`${name}C`) || key.includes(`${scope}s/`))).toEqual([]);
     }, 120_000);
   },
 );

@@ -38,6 +38,8 @@ const HOST = "https://node.test";
 const NODE = "did:key:z6MkNodeUnderTest";
 const PATH = "secrets/software-factory";
 const KEY_URN = formatKeyResource(NETWORK_ID, PATH);
+/** A path outside the seeded first segments (`apps`, `secrets`): a deterministic key. */
+const DETERMINISTIC_PATH = "agents/software-factory";
 const KEY_PUB = new Uint8Array(32).fill(7);
 const ROOT_PUB = new Uint8Array(32).fill(3);
 
@@ -208,7 +210,7 @@ describe("key targets", () => {
 
 describe("admin routes", () => {
   const cases = [
-    { name: "create", call: (c: NamedKeyClient) => c.createKey(PATH), route: "keys", can: KEY_CREATE_ABILITY, body: '{"deletable":false,"keyPath":"secrets/software-factory"}' },
+    { name: "create", call: (c: NamedKeyClient) => c.createKey(PATH), route: "keys", can: KEY_CREATE_ABILITY, body: '{"deletable":true,"keyPath":"secrets/software-factory"}' },
     { name: "block", call: (c: NamedKeyClient) => c.blockKey(PATH), route: "key-actions/block", can: KEY_BLOCK_ABILITY, body: '{"keyPath":"secrets/software-factory"}' },
     { name: "unblock", call: (c: NamedKeyClient) => c.unblockKey(PATH), route: "key-actions/unblock", can: KEY_UNBLOCK_ABILITY, body: '{"keyPath":"secrets/software-factory"}' },
   ] as const;
@@ -238,9 +240,9 @@ describe("admin routes", () => {
     });
   }
 
-  it("never sends deletable: true outside apps/ or a delete route", async () => {
-    const h = harness(() => json(descriptor()));
-    await h.client.createKey(PATH);
+  it("never sends deletable: true outside apps/ and secrets/, or a delete route", async () => {
+    const h = harness(() => json(descriptor({ keyPath: DETERMINISTIC_PATH })));
+    await h.client.createKey(DETERMINISTIC_PATH);
     const all = keyRequests(h.requests).map((r) => `${r.url} ${r.body ?? ""}`).join("\n");
     expect(all).not.toContain("true");
     expect(all).not.toContain("delete");
@@ -364,9 +366,9 @@ describe("ensureKey", () => {
     };
   };
 
-  it("404 -> create -> active deterministic", async () => {
+  it("404 -> create -> active deletable (a secret's key is seeded)", async () => {
     const h = harness(
-      route([() => text("key_not_found: x", 404), () => json(descriptor())]),
+      route([() => text("key_not_found: x", 404), () => json(descriptor({ kind: "deletable" }))]),
     );
     const d = await h.client.ensureKey(PATH);
     expect(d.state).toBe("active");
@@ -379,7 +381,7 @@ describe("ensureKey", () => {
   });
 
   it("active key found directly: no create", async () => {
-    const h = harness(route([() => json(descriptor())]));
+    const h = harness(route([() => json(descriptor({ kind: "deletable" }))]));
     await h.client.ensureKey(PATH);
     expect(keyRequests(h.requests).map((r) => r.method)).toEqual(["GET"]);
   });
@@ -389,7 +391,7 @@ describe("ensureKey", () => {
       route([
         () => text("key_not_found: x", 404),
         () => text("key_exists: path exists", 409),
-        () => json(descriptor()),
+        () => json(descriptor({ kind: "deletable" })),
       ]),
     );
     expect((await h.client.ensureKey(PATH)).state).toBe("active");
@@ -723,7 +725,7 @@ describe("/info caching", () => {
 
   it("does not cache a feature-off answer: the retry re-reads and sees an upgraded node", async () => {
     let features = ["sql"];
-    const h = harness(() => json(descriptor()), {
+    const h = harness(() => json(descriptor({ kind: "deletable" })), {
       info: () => json({ nodeId: NODE, features }),
     });
     await expect(h.client.ensureKey(PATH)).rejects.toMatchObject({ code: "NAMED_KEYS_UNSUPPORTED" });
@@ -840,11 +842,13 @@ describe("error messages never carry raw untrusted text", () => {
 describe("create body `deletable` (node 1.22.0 contract)", () => {
   const APP_PATH = "apps/tinychat/session";
 
-  it("sends deletable: true exactly under apps/ and never a shreddable field", async () => {
+  it("sends deletable: true exactly under apps/ and secrets/ and never a shreddable field", async () => {
     for (const [path, expected] of [
       [APP_PATH, '{"deletable":true,"keyPath":"apps/tinychat/session"}'],
-      [PATH, '{"deletable":false,"keyPath":"secrets/software-factory"}'],
+      [PATH, '{"deletable":true,"keyPath":"secrets/software-factory"}'],
+      [DETERMINISTIC_PATH, '{"deletable":false,"keyPath":"agents/software-factory"}'],
       ["apps-x/y", '{"deletable":false,"keyPath":"apps-x/y"}'],
+      ["secrets-x/y", '{"deletable":false,"keyPath":"secrets-x/y"}'],
     ] as const) {
       const h = harness(() => json(descriptor({ keyPath: path })));
       await h.client.createKey(path);
@@ -924,15 +928,18 @@ describe("create body `deletable` (node 1.22.0 contract)", () => {
     expect(keyRequests(h.requests).every((r) => r.method === "GET")).toBe(true);
   });
 
-  it("ensureKey expects kind deletable under apps/ and deterministic elsewhere", async () => {
+  it("ensureKey expects kind deletable under apps/ and secrets/, and deterministic elsewhere", async () => {
     const ok = harness(() => json(descriptor({ keyPath: APP_PATH, kind: "deletable" })));
     await expect(ok.client.ensureKey(APP_PATH)).resolves.toMatchObject({ kind: "deletable", keyPath: APP_PATH });
 
     const wrongApp = harness(() => json(descriptor({ keyPath: APP_PATH, kind: "deterministic" })));
     await expect(wrongApp.client.ensureKey(APP_PATH)).rejects.toMatchObject({ code: "KEY_KIND_MISMATCH", kind: "deterministic" });
 
-    const wrongSecret = harness(() => json(descriptor({ kind: "deletable" })));
-    await expect(wrongSecret.client.ensureKey(PATH)).rejects.toMatchObject({ code: "KEY_KIND_MISMATCH", kind: "deletable" });
+    const wrongSecret = harness(() => json(descriptor({ kind: "deterministic" })));
+    await expect(wrongSecret.client.ensureKey(PATH)).rejects.toMatchObject({ code: "KEY_KIND_MISMATCH", kind: "deterministic" });
+
+    const wrongOther = harness(() => json(descriptor({ keyPath: DETERMINISTIC_PATH, kind: "deletable" })));
+    await expect(wrongOther.client.ensureKey(DETERMINISTIC_PATH)).rejects.toMatchObject({ code: "KEY_KIND_MISMATCH", kind: "deletable" });
   });
 });
 

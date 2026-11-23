@@ -306,6 +306,8 @@ jobs:
         if: ${{ steps.relevance.outputs.relevant == 'true' && matrix.database == 'sqlite' }}
         env:
           TC_REPLICA_E2E_NODE_BIN: ${{ runner.temp }}/tinycloud
+          TINYCLOUD_ENCRYPTION_NETWORK__NAMED_KEYS_V1: "true"
+          TINYCLOUD_ENCRYPTION_NETWORK__DELETION_LEDGER_PATH: ${{ runner.temp }}/secrets-wait-deletions.jsonl
         run: bash "$GITHUB_WORKSPACE/.github/scripts/run-private-tests.sh" bun test packages/cli/test/secrets-wait.e2e.test.ts
 
       # The suite skips itself when the node binary variable is unset, so the
@@ -317,6 +319,8 @@ jobs:
         timeout-minutes: 10
         env:
           TC_REPLICA_E2E_NODE_BIN: ${{ runner.temp }}/tinycloud
+          TINYCLOUD_ENCRYPTION_NETWORK__NAMED_KEYS_V1: "true"
+          TINYCLOUD_ENCRYPTION_NETWORK__DELETION_LEDGER_PATH: ${{ runner.temp }}/replica-secrets-deletions.jsonl
         run: |
           set -o pipefail
           bash "$GITHUB_WORKSPACE/.github/scripts/run-private-tests.sh" bun test packages/cli/test/replica-secrets.e2e.test.ts 2>&1 | tee "$RUNNER_TEMP/replica-secrets.log"
@@ -354,6 +358,10 @@ jobs:
       - name: tests/cli secrets e2e against the node (TC-1902)
         if: ${{ !cancelled() && steps.relevance.outputs.relevant == 'true' && matrix.database == 'sqlite' }}
         timeout-minutes: 10
+        env:
+          TINYCLOUD_ENCRYPTION_NETWORK__NAMED_KEYS_V1: "true"
+          TINYCLOUD_ENCRYPTION_NETWORK__DELETION_LEDGER_PATH: ${{ runner.temp }}/secrets-e2e-deletions.jsonl
+          TC_SECRETS_NAMED_KEY_WRITES: "1"
         run: .github/scripts/run-cli-node-suite.sh "$RUNNER_TEMP/tinycloud" tests/cli/secrets/secrets-e2e.test.ts
 
       - name: Stop any tests/cli node still running

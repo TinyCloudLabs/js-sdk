@@ -88,6 +88,7 @@ import {
   PartialNodeWriteError,
   routingFailure,
   isVaultResourceUri,
+  parseSecretKeyPath,
   type ResourceAccess,
   type ResourceDestination,
 } from "@tinycloud/sdk-services";
@@ -165,6 +166,8 @@ const DECRYPT_ACTION = ENCRYPTION.DECRYPT;
 
 const NETWORK_CREATE_ACTION = ENCRYPTION.NETWORK_CREATE;
 
+const KEY_CREATE_ACTION = "tinycloud.encryption/key.create";
+
 /** `<status> - <server text>` for a failed host activation. */
 function describeHostFailure(result: SpaceHostResult): string {
   const text = result.error?.trim();
@@ -228,6 +231,9 @@ function didPrincipalMatches(actual: string, expected: string): boolean {
     return actual === expected;
   }
 }
+
+/** Requests this class composed from manifests: the `secrets/` prefix never comes from one (TC-3284). */
+const MANIFEST_COMPOSED = new WeakSet<ComposedManifestRequest>();
 
 function addRawAbility(
   rawAbilities: Record<string, string[]>,
@@ -518,6 +524,8 @@ export class NodeUserAuthorization implements IUserAuthorization {
   private _chainId?: number;
   private _nodeFeatures: string[] = [];
   private _nodeFeaturesKnown = false;
+  /** The host whose `/info` this sign-in already read before it built the request; the read after the session is then skipped. */
+  private _signInNodeInfoHost: string | undefined;
   /**
    * `nodeId` from the `GET /info` performed during sign-in/restore, tagged with
    * the host it came from. Callers that need the node DID (encryption-network
@@ -958,6 +966,14 @@ export class NodeUserAuthorization implements IUserAuthorization {
     return this._nodeFeaturesKnown;
   }
 
+  /** The read after the session, unless this sign-in already read the same host's `/info` before building its request. */
+  private async refreshNodeInfoUnlessReadForSignIn(): Promise<void> {
+    const readHost = this._signInNodeInfoHost;
+    this._signInNodeInfoHost = undefined;
+    if (readHost !== undefined && readHost === this.primaryTinyCloudHost) return;
+    await this.refreshNodeInfo();
+  }
+
   async refreshNodeInfo(): Promise<void> {
     const infoHost = this.primaryTinyCloudHost;
     const nodeInfo = await checkNodeInfo(infoHost, this.wasm.protocolVersion());
@@ -1061,6 +1077,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
         includeImplicitCapabilitiesRead: this.includeImplicitCapabilitiesRead,
       }
     );
+    MANIFEST_COMPOSED.add(this._capabilityRequest);
     this._capabilityRequestOwner = usesOwner ? ownerDid : undefined;
     return this._capabilityRequest;
   }
@@ -1108,13 +1125,17 @@ export class NodeUserAuthorization implements IUserAuthorization {
 
   private async refreshNamedKeyFeatureForSignIn(address: string, chainId: number): Promise<void> {
     this.bindManifestOwner(address, chainId);
+    this._signInNodeInfoHost = undefined;
     const request = this.getCapabilityRequest();
     const siweDomain = this.siweConfig?.domain ?? this.domain;
     const hasNamedKeys = request?.manifests.some((manifest) =>
-      manifest.keys?.length && appKeyHostBinding(siweDomain, manifest.keys_app_id ?? manifest.app_id));
+      manifest.keys?.length && appKeyHostBinding(siweDomain, manifest.keys_app_id ?? manifest.app_id))
+      || request?.resources.some((entry) =>
+        entry.service === ENCRYPTION_PERMISSION_SERVICE && entry.path.includes("/secrets/"));
     if (hasNamedKeys) {
       await this.resolveTinyCloudHostsForSignIn(address, chainId);
       await this.refreshNodeInfo();
+      this._signInNodeInfoHost = this.primaryTinyCloudHost;
     }
   }
 
@@ -1411,12 +1432,26 @@ export class NodeUserAuthorization implements IUserAuthorization {
       const parsed = entry.path.includes("/")
         ? parseEncryptionResource(entry.path)
         : { ...parseNetworkId(entry.path), kind: "network" as const };
-      const sharePrefix = parsed.kind === "prefix" && parsed.network === "default" &&
-        parsed.prefix === "share" && entry.actions.length > 0 &&
-        entry.actions.every((action) => action === DECRYPT_ACTION) &&
-        didPrincipalMatches(parsed.ownerDid, currentDid);
-      if (parsed.kind !== "network" && !sharePrefix) {
+      const ownDefault = parsed.kind !== "network" && parsed.network === "default" &&
+        entry.actions.length > 0 && didPrincipalMatches(parsed.ownerDid, currentDid);
+      const sharePrefix = ownDefault && parsed.kind === "prefix" && parsed.prefix === "share" &&
+        entry.actions.every((action) => action === DECRYPT_ACTION);
+      // The owner's secrets' own keys (TC-3284): an exact key as secretKeyPath
+      // derives it, or the whole `secrets/` prefix from an explicit
+      // capabilityRequest only; decrypt and key.create, nothing else.
+      const ownSecrets = ownDefault && entry.space === "encryption" &&
+        entry.actions.every((action) => action === DECRYPT_ACTION || action === KEY_CREATE_ACTION) &&
+        (parsed.kind === "key"
+          ? parseSecretKeyPath(parsed.path) !== undefined
+          : parsed.prefix === "secrets" && !MANIFEST_COMPOSED.has(request));
+      if (parsed.kind !== "network" && !sharePrefix && !ownSecrets) {
         throw new ManifestValidationError("named keys go in manifest.keys");
+      }
+      // A node that does not list named keys cannot parent a grant on a secret's
+      // own key: the whole sign-in would be refused. Drop only those entries; the
+      // rest of the request, the network decrypt included, is signed as asked.
+      if (ownSecrets && this._nodeFeaturesKnown && !this._nodeFeatures.includes("encryption-named-keys-v1")) {
+        return false;
       }
       for (const action of entry.actions) {
         addRawAbility(rawAbilities, entry.path, action);
@@ -2115,7 +2150,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
     this._chainId = chainId;
 
     // Verify SDK-node protocol compatibility and discover supported features.
-    await this.refreshNodeInfo();
+    await this.refreshNodeInfoUnlessReadForSignIn();
     this.assertSignInCurrent(generation);
 
     // Call extension hooks
@@ -2370,7 +2405,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
     this._chainId = chainId;
 
     // Verify SDK-node protocol compatibility and discover supported features.
-    await this.refreshNodeInfo();
+    await this.refreshNodeInfoUnlessReadForSignIn();
     this.assertSignInCurrent(generation);
 
     // Call extension hooks

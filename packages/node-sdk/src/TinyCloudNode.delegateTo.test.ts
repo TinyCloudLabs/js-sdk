@@ -973,4 +973,70 @@ describe("TinyCloudNode.delegateTo terminal grants and recipient kind", () => {
     await expect(node.delegateTo(recipient, [named(key)], { forceWalletSign: true })).rejects.toBeInstanceOf(ManifestValidationError);
     expect(wasm.createDelegation).not.toHaveBeenCalled();
   });
+
+  describe("secret-key grant lifetime (TC-3801 N1)", () => {
+    const recipient = "did:key:z6MkRecipientSessionKey";
+    const owner = pkhDid("0x5aaeb6053f3e94c9b9a09f33669435e7ef1beaed", 1);
+    const network = `urn:tinycloud:encryption:${owner}:default`;
+    const secretKey = formatKeyResource(network, "secrets/api_key");
+    const HOUR = 60 * 60_000;
+    const DAY = 24 * HOUR;
+
+    /** A 60-day session holding `secrets/` decrypt, the network root and kv; WASM signs the expiry it is given. */
+    function longSession() {
+      const { node, wasm } = makeNode(recipient, [
+        { service: "encryption", space: "encryption", path: formatPrefixResource(network, "secrets"), actions: ["tinycloud.encryption/decrypt"] },
+        { service: "encryption", space: "encryption", path: network, actions: ["tinycloud.encryption/decrypt"] },
+        { service: "kv", space: "default", path: "/", actions: ["tinycloud.kv/get"] },
+      ]);
+      (node as any).auth.tinyCloudSession.siwe = buildSiwe(new Date(Date.now() + 60 * DAY).toISOString());
+      const sign = (wasm.createDelegation as any).getMockImplementation();
+      (wasm.createDelegation as any).mockImplementation((...args: any[]) => ({ ...sign(...args), expiry: args[4] }));
+      return node;
+    }
+
+    async function lifetimeMs(entry: PermissionEntry, expiry?: string) {
+      const before = Date.now();
+      const { delegation } = await longSession().delegateTo(recipient, [entry], expiry === undefined ? undefined : { expiry });
+      return { ms: delegation.expiry.getTime() - before, before };
+    }
+
+    const secret: PermissionEntry = { service: "tinycloud.encryption", path: secretKey, actions: ["decrypt"] };
+    const near = (ms: number, want: number) => expect(Math.abs(ms - want)).toBeLessThan(5_000);
+
+    test("defaults to 1 h", async () => {
+      near((await lifetimeMs(secret)).ms, HOUR);
+    });
+
+    test("keeps an asked-for 7 d", async () => {
+      near((await lifetimeMs(secret, "7d")).ms, 7 * DAY);
+    });
+
+    test("caps an asked-for 30 d at 7 d, and the returned delegation says so", async () => {
+      const { ms, before } = await lifetimeMs(secret, "30d");
+      near(ms, 7 * DAY);
+      expect(ms + before).toBeLessThanOrEqual(Date.now() + 7 * DAY);
+    });
+
+    test("leaves kv and network-root grants on the 7 d default, and an asked-for 30 d on 30 d", async () => {
+      const kv: PermissionEntry = { service: "tinycloud.kv", space: "default", path: "items/", actions: ["get"] };
+      const root: PermissionEntry = { service: "tinycloud.encryption", path: network, actions: ["decrypt"] };
+      for (const entry of [kv, root]) {
+        near((await lifetimeMs(entry)).ms, 7 * DAY);
+        near((await lifetimeMs(entry, "30d")).ms, 30 * DAY);
+      }
+    });
+
+    test("planDelegation predicts the expiry delegateTo signs", async () => {
+      for (const [expiry, want] of [[undefined, HOUR], ["7d", 7 * DAY], ["30d", 7 * DAY]] as const) {
+        const node = longSession();
+        const before = Date.now();
+        const plan = node.planDelegation([secret], expiry === undefined ? undefined : { expiry });
+        if (!("effectiveExpiration" in plan)) throw new Error(`refused: ${JSON.stringify(plan)}`);
+        near(plan.effectiveExpiration.getTime() - before, want);
+        const { delegation } = await node.delegateTo(recipient, [secret], expiry === undefined ? undefined : { expiry });
+        near(delegation.expiry.getTime(), plan.effectiveExpiration.getTime());
+      }
+    });
+  });
 });

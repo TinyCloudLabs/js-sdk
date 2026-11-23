@@ -25,7 +25,7 @@ import type {
 } from "@tinycloud/sdk-core";
 import type { PartialNodeWriteError, ResourceNotRoutedError } from "@tinycloud/sdk-services";
 import type { SiweMessage } from "siwe";
-import type { resolveExpiryMs, wholeSecondExpiry } from "./delegateToHelpers";
+import type { isSecretKeyEntry, resolveExpiryMs, secretKeyGrantExpiryMs, wholeSecondExpiry } from "./delegateToHelpers";
 import type { MissingSpacesError, PortableDelegation } from "./delegation";
 import type { RuntimePermissionGrantOptions } from "./TinyCloudNode";
 
@@ -45,6 +45,8 @@ export interface RuntimeGrantPorts<Operation> {
     verifySignature: typeof verifyEip191MessageSignature;
     expiryMs: typeof resolveExpiryMs;
     wholeSecond: typeof wholeSecondExpiry;
+    isSecretKey: typeof isSecretKeyEntry;
+    secretKeyExpiryMs: typeof secretKeyGrantExpiryMs;
     assertExpiry: typeof assertExpiryWithinTechnicalLimit;
     describeFailure(result: SpaceHostResult): string;
     MissingSpaces: typeof MissingSpacesError;
@@ -136,7 +138,9 @@ export async function issueRuntimeGrants<Operation>(
   }
 
   const now = new Date();
-  const requestedExpiryMs = lib.expiryMs(options?.expiry);
+  const requestedExpiryMs = expanded.some(lib.isSecretKey)
+    ? lib.secretKeyExpiryMs(options?.expiry)
+    : lib.expiryMs(options?.expiry);
   let expiresAt = new Date(now.getTime() + requestedExpiryMs);
   if (sessionExpiry !== undefined && sessionExpiry < expiresAt) {
     // At the session's expiry, to the whole second: the node compares a child's expiry with its parent's.

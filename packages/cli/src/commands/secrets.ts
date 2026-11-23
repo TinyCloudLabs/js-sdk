@@ -8,7 +8,7 @@ import {
   type PortableDelegation,
   type TinyCloudNode,
 } from "@tinycloud/node-sdk";
-import { appSecretScope, SECRET_TYPES } from "@tinycloud/sdk-core";
+import { appSecretScope, SECRET_TYPES, secretNameTooLongRefusal } from "@tinycloud/sdk-core";
 import { invokeOperation } from "@tinycloud/operations";
 import { isLocalOwnerProfile, liveStoredLease, ownerSessionLacksProof } from "@tinycloud/operations/profile";
 import {
@@ -1746,6 +1746,10 @@ export function registerSecretsCommand(
     .action(async (name: string, value: string | undefined, options, cmd) => {
       try {
         const secretType = parseSecretTypeOption(options.type);
+        // A name that only fails on length gets the SDK's words, before any sign-in or prompt. A name that fails the
+        // pattern keeps the pattern message from `resolveSecretPath`.
+        const tooLong = SECRET_NAME_RE.test(name.trim()) ? secretNameTooLongRefusal(name) : undefined;
+        if (tooLong) throw new CLIError("INVALID_SECRET_NAME", tooLong.error.message, ExitCode.USAGE_ERROR);
         const globalOpts = cmd.optsWithGlobals();
         const ctx = await ProfileManager.resolveContext(globalOpts);
         const node = await ensureSecretsNode(ctx, options);
@@ -1773,9 +1777,10 @@ export function registerSecretsCommand(
 
         const scopeOptions = resolveSecretScope(options);
         assertSecretValueMatchesType(secretType, secretValue);
-        const putOptions = secretType === undefined
+        const namedKey = process.env.TC_SECRETS_NAMED_KEY_WRITES === "1";
+        const putOptions = secretType === undefined && !namedKey
           ? scopeOptions
-          : { ...scopeOptions, type: secretType };
+          : { ...scopeOptions, ...(secretType === undefined ? {} : { type: secretType }), ...(namedKey ? { namedKey: true } : {}) };
         const result = await runSecretOperation({
           ctx,
           node,

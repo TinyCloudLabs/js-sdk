@@ -263,7 +263,9 @@ import { DelegatedAccess, type DelegatedEncryptionFactory } from "./DelegatedAcc
 import { WasmKeyProvider } from "./keys/WasmKeyProvider";
 import {
   legacyParamsToPermissionEntries,
+  isSecretKeyEntry,
   resolveExpiryMs,
+  secretKeyGrantExpiryMs,
   extractSiweExpiration,
   wholeSecondExpiry,
 } from "./delegateToHelpers";
@@ -280,6 +282,8 @@ const DEFAULT_HOST = "https://node.tinycloud.xyz";
 const DEFAULT_ENCRYPTION_NETWORK_NAME = "default";
 const NETWORK_CREATE_ACTION = ENCRYPTION.NETWORK_CREATE;
 const DECRYPT_ACTION = ENCRYPTION.DECRYPT;
+/** An encryption URN's owner part; its address is the only case-insensitive piece. */
+const ENCRYPTION_URN_OWNER = /^urn:tinycloud:encryption:did:pkh:eip155:\d+:0x[0-9a-fA-F]{40}(?=:)/;
 export const BOOTSTRAP_COMPLETION_MARKER_KEY = "system/bootstrap/complete";
 export const BOOTSTRAP_COMPLETION_MARKER_VERSION = 1;
 export const ACCEPTED_MARKER_VERSIONS: readonly number[] = [BOOTSTRAP_COMPLETION_MARKER_VERSION];
@@ -317,7 +321,9 @@ export type SecretReadResult =
   | { status: "read_failed" }
   | { status: "corrupt_envelope" }
   | { status: "decrypt_failed" }
-  | { status: "invalid_payload" };
+  | { status: "invalid_payload" }
+  /** The secret is still sealed to the network key and this reader has no network decrypt (TC-3284). */
+  | { status: "legacy_envelope" };
 
 /**
  * Full actions the session key's root delegation grants over a space. Used for
@@ -1082,7 +1088,11 @@ function resolveNotBeforeSecs(notBefore: Date | undefined, expiration: Date, now
  * `forceWalletSign`, whose wallet path activates as part of signing.
  */
 export interface DelegateToOptions {
-  /** Override expiry. ms-format string ("7d", "1h") or raw milliseconds. */
+  /**
+   * Override expiry. ms-format string ("7d", "1h") or raw milliseconds. Default 7 d (`EXPIRY.SESSION_MS`). When any entry is
+   * an encryption grant on a secret's key (or keys under `secrets`), the default is 1 h and an expiry over 7 d is capped to
+   * 7 d (TC-3801); the returned `delegation.expiry` is the expiry signed.
+   */
   expiry?: string | number;
   /**
    * Sign the delegation with this not-before (`nbf`), to the whole second, so a delegation can be backdated to cover an
@@ -1143,7 +1153,11 @@ export interface RuntimePermissionCheckOptions {
  * Options for runtime permission escalation.
  */
 export interface RuntimePermissionGrantOptions {
-  /** Override expiry. ms-format string ("7d", "1h") or raw milliseconds. */
+  /**
+   * Override expiry. ms-format string ("7d", "1h") or raw milliseconds. A grant
+   * that includes a secret's own key defaults to 1 h and is capped at 7 d.
+   * Every grant ends by the session's expiry.
+   */
   expiry?: string | number;
   /**
    * Signs the prepared SIWE and returns the EIP-191 signature, in place of the connected signer's `signMessage`.
@@ -1619,6 +1633,8 @@ export class TinyCloudNode {
    */
   private _restoredTcSession?: TinyCloudSession;
   private _restoredNodeFeatures?: string[];
+  /** `/info` read by {@link namedKeysSupported} for a restored session, which has no features of its own. */
+  private _namedKeysProbe?: Promise<boolean | undefined>;
   private _activeServiceSession?: ServiceSession;
   /** The sign-out in progress; signIn and restoreSession wait for it. */
   private signOutInFlight?: Promise<void>;
@@ -1957,6 +1973,28 @@ export class TinyCloudNode {
   private get replicationNodeFeatures(): readonly string[] | undefined {
     if (this.auth) return this.auth.nodeFeaturesKnown ? this.auth.nodeFeatures : undefined;
     return this._restoredNodeFeatures;
+  }
+
+  /**
+   * Whether the node lists `encryption-named-keys-v1`. A secrets `put` seals to the secret's own key,
+   * so on a node without it the put is refused before anything is asked or written.
+   *
+   * A sign-in knows the answer. A restored session (the CLI's) does not, so its host's `/info` is read
+   * once, with no credentials. `undefined` when the node cannot be asked: the put then fails closed (`NAMED_KEYS_CHECK_FAILED`,
+   * retryable), because a put on a node without named keys would ask the wallet to sign before the node refuses it.
+   */
+  async namedKeysSupported(): Promise<boolean | undefined> {
+    const known = this.replicationNodeFeatures;
+    if (known !== undefined) return known.includes("encryption-named-keys-v1");
+    const host = this.config.host;
+    if (host === undefined) return undefined;
+    const probe = this._namedKeysProbe ??= checkNodeInfo(host, this.wasmBindings.protocolVersion()).then(
+      (info) => info.features.includes("encryption-named-keys-v1"),
+      () => undefined,
+    );
+    const answer = await probe;
+    if (answer === undefined && this._namedKeysProbe === probe) this._namedKeysProbe = undefined;
+    return answer;
   }
 
   /** SIWE domain — uses config override or defaults to app.tinycloud.xyz */
@@ -3392,6 +3430,7 @@ export class TinyCloudNode {
     this.config.host = this.explicitHost ?? DEFAULT_HOST;
     this._chainId = 1;
     this._restoredNodeFeatures = undefined;
+    this._namedKeysProbe = undefined;
     this._serviceContext = undefined;
     this._kv = undefined;
     this._sql = undefined;
@@ -5589,6 +5628,7 @@ export class TinyCloudNode {
     this.hostedOwnedSpaceIds.clear();
     this.cancelOwnedSpaceHosts();
     this._restoredNodeFeatures = undefined;
+    this._namedKeysProbe = undefined;
     this.sessionHosts.reset(sessionData.activatedHosts);
     void this.sessionRetireModule();
     if (this.auth) {
@@ -6835,6 +6875,8 @@ export class TinyCloudNode {
     const chainId = nodeContext?.chainId ?? this._chainId;
     const host = nodeContext?.host ?? this.config.host!;
     const ownerDid = this.ownerDidFromSpaceId(spaceId) ?? did;
+    const session = nodeContext?.session;
+    let delegatedKeys: Promise<NamedKeyClient> | undefined;
     return new DataVaultService({
       spaceId,
       crypto: vaultCrypto,
@@ -6842,8 +6884,14 @@ export class TinyCloudNode {
         networkId: `urn:tinycloud:encryption:${ownerDid}:${DEFAULT_ENCRYPTION_NETWORK_NAME}`,
         service: encryptionService,
         decryptCapabilityProof: () => ({
-          proofs: [(nodeContext?.session ?? this.requireServiceSession()).delegationCid],
+          proofs: [(session ?? this.requireServiceSession()).delegationCid],
         }),
+        // Secrets' own keys (TC-3284). A delegated vault signs with exactly its
+        // delegation's session, never this node's or another installed grant.
+        namedKeys: () => session === undefined
+          ? (this._namedKeyClient ??= import("./encryption-keys.js").then(({ createNamedKeyClient }) => createNamedKeyClient(this)))
+          : (delegatedKeys ??= import("./encryption-keys.js").then(({ createNamedKeyClient }) =>
+            createNamedKeyClient(this, { binding: { graph: serviceGraph, session, exactSession: true } }))),
       },
       tc: {
         kv,
@@ -7798,8 +7846,10 @@ export class TinyCloudNode {
         grantPermissions: (additional) => this.grantRuntimePermissions(additional),
         uncoveredEntries: (permissions) =>
           permissions.filter((entry) => !this.hasRuntimePermissions([entry])),
-        canEscalate: () => this.signer !== undefined && this.tc !== undefined,
+        // `signer` is null on a session-only node, never undefined.
+        canEscalate: () => this.signer != null && this.tc !== undefined,
         getEncryptionNetworkId: () => this.getEncryptionNetworkIdForSpace(resolvedSpace),
+        namedKeysSupported: () => this.namedKeysSupported(),
         resolveSpace: (space) => space.startsWith("tinycloud:") ? space : this.ownedSpaceId(space),
         getUnlockSigner: () => this.signer ?? undefined,
       });
@@ -7811,7 +7861,9 @@ export class TinyCloudNode {
   /**
    * Read a secret from an explicit target space without requesting or
    * auto-signing authority. Active runtime delegations are selected by the
-   * normal KV and encryption invocation paths.
+   * normal KV and encryption invocation paths. A secret on its own key needs
+   * `decrypt` on that key (TC-3284); one still sealed to the network key is
+   * `legacy_envelope` unless the session or a grant decrypts with the network.
    */
   async readSecret(input: SecretReadInput): Promise<SecretReadResult> {
     const resolved = resolveSecretPath(input.name, { scope: input.scope });
@@ -7820,12 +7872,30 @@ export class TinyCloudNode {
       : this.ownedSpaceId(input.space);
     const result = await this.getBaseVault(targetSpace).readNetworkEncrypted<unknown>(
       resolved.vaultKey,
+      {
+        expectAad: true,
+        keyPath: resolved.keyPath,
+        namedKeyOnly: !this.decryptsWithNetwork(this.getEncryptionNetworkIdForSpace(targetSpace)),
+      },
     );
 
     // Not a static import on purpose: web-sdk's root size budget has no room for it, so bundlers ship it as its own file.
     // A file that fails to load is a failed read: readSecret never rejects after the read, and nothing here caches the failure.
     const loaded = await import("./secret-read.js").catch(() => undefined);
     return loaded ? loaded.secretReadResult(result, parsePermissionHint) : { status: "read_failed" };
+  }
+
+  /**
+   * Whether the signed session or any installed grant decrypts with this
+   * network's root key. Unlike `hasRuntimePermissions`, no signed session is
+   * needed: a delegate profile holds only its imported delegations.
+   */
+  private decryptsWithNetwork(networkId: string): boolean {
+    const session = this.currentTinyCloudSession();
+    const entry = { service: "tinycloud.encryption", path: networkId, actions: [DECRYPT_ACTION] };
+    if (session !== undefined && this.sessionCoversPermissionEntries(session, [entry])) return true;
+    if (!this.runtimePermissionGrants?.length) return false;
+    return this.findGrantForOperation({ resource: networkId, service: "encryption", path: networkId, action: DECRYPT_ACTION }) !== undefined;
   }
 
   private getBaseSecrets(spaceId: string): ISecretsService {
@@ -8343,6 +8413,8 @@ export class TinyCloudNode {
         parseSpaceUri,
         verifySignature: verifyEip191MessageSignature,
         expiryMs: resolveExpiryMs,
+        isSecretKey: isSecretKeyEntry,
+        secretKeyExpiryMs: secretKeyGrantExpiryMs,
         wholeSecond: wholeSecondExpiry,
         assertExpiry: assertExpiryWithinTechnicalLimit,
         describeFailure: describeHostFailure,
@@ -8791,11 +8863,15 @@ export class TinyCloudNode {
 
     // 4. Compute expiration. `options.expiry` overrides the default
     //    (DEFAULT_DELEGATION_EXPIRY_MS); ms-format ("7d") or a raw
-    //    millisecond count are both accepted. Cap at the session's own
-    //    expiry so we never emit a UCAN whose validity exceeds the parent
-    //    chain, which makes the default the longest the session allows.
+    //    millisecond count are both accepted. A grant on any secret's key
+    //    gets N1's lifetime instead: 1 h unless asked, capped at 7 d
+    //    (TC-3801). Cap at the session's own expiry so we never emit a UCAN
+    //    whose validity exceeds the parent chain, which makes the default
+    //    the longest the session allows.
     const now = new Date();
-    const expiryMs = resolveExpiryMs(options?.expiry);
+    const expiryMs = expandedEntries.some(isSecretKeyEntry)
+      ? secretKeyGrantExpiryMs(options?.expiry)
+      : resolveExpiryMs(options?.expiry);
     const expirationTime = new Date(now.getTime() + expiryMs);
     let effectiveExpiration = expirationTime;
     if (sessionExpiry !== undefined && sessionExpiry < expirationTime) {
@@ -9002,7 +9078,9 @@ export class TinyCloudNode {
       return { refused: "SESSION_EXPIRING", expiredAt: sessionExpiry };
     }
     const expandedEntries = this.expandPermissionEntries(entries);
-    const expiryMs = resolveExpiryMs(options?.expiry);
+    const expiryMs = expandedEntries.some(isSecretKeyEntry)
+      ? secretKeyGrantExpiryMs(options?.expiry)
+      : resolveExpiryMs(options?.expiry);
     const expirationTime = new Date(nowMs + expiryMs);
     const effectiveExpiration =
       sessionExpiry !== undefined && sessionExpiry < expirationTime
@@ -9576,12 +9654,23 @@ export class TinyCloudNode {
     );
     const missing = requested.filter((entry) => {
       const raw = this.isEncryptionPermissionEntry(entry) || this.isRawRevocationPermissionEntry(entry);
+      // A requested owner spelled in another case takes the signed spelling:
+      // key and prefix resources parse only with the canonical (EIP-55) owner.
       const comparable = raw && this.isEncryptionPermissionEntry(entry)
-        ? { ...entry, space: "encryption" }
+        ? { ...entry, space: "encryption", path: this.signedOwnerSpelling(entry.path, rawGranted) }
         : entry;
       return !isCapabilitySubset([comparable], raw ? rawGranted : spaceGranted).subset;
     });
     return { subset: missing.length === 0, missing };
+  }
+
+  private signedOwnerSpelling(path: string, granted: readonly PermissionEntry[]): string {
+    const owner = ENCRYPTION_URN_OWNER.exec(path)?.[0];
+    if (owner === undefined) return path;
+    const signed = granted
+      .map((entry) => ENCRYPTION_URN_OWNER.exec(entry.path)?.[0])
+      .find((candidate) => candidate !== undefined && candidate.toLowerCase() === owner.toLowerCase());
+    return signed === undefined ? path : `${signed}${path.slice(owner.length)}`;
   }
 
   private sessionCoversPermissionEntries(
@@ -9939,8 +10028,8 @@ export class TinyCloudNode {
     if (granted.resource !== undefined || requested.resource !== undefined) {
       return granted.resource !== undefined &&
         requested.resource !== undefined &&
-        granted.resource === requested.resource &&
-        this.pathContains(granted.path, requested.path);
+        this.normalizeEncryptionUrn(granted.resource) === this.normalizeEncryptionUrn(requested.resource) &&
+        this.pathContains(this.normalizeEncryptionUrn(granted.path), this.normalizeEncryptionUrn(requested.path));
     }
 
     return granted.spaceId !== undefined &&
@@ -9959,6 +10048,13 @@ export class TinyCloudNode {
   private normalizeSpaceAddress(space: string): string {
     const match = /^(tinycloud:pkh:eip155:\d+:)(0x[0-9a-fA-F]{40})(:.+)$/.exec(space);
     return match === null ? space : `${match[1]}${match[2]!.toLowerCase()}${match[3]}`;
+  }
+
+  // Encryption URNs (resource and path) embed their owner's DID; a space id's
+  // lowercase address and a signed recap's EIP-55 one name the same network or
+  // key. Only that address is compared without case sensitivity.
+  private normalizeEncryptionUrn(urn: string): string {
+    return urn.replace(ENCRYPTION_URN_OWNER, (owner) => owner.toLowerCase());
   }
 
   private actionContains(grantedAction: string, requestedAction: string): boolean {

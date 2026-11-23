@@ -4,8 +4,9 @@ import optionalLedger from "./replica-optional-size-ledger.json";
 import { approvedTc2931Optional, evaluateOptionalBudget, optionalFormats, optionalSourcePins, tc2931OptionalAllowance, validateOptionalEntryTransition, validateOptionalLedger, validateTc2931OptionalTransition, type OptionalLedger } from "./replica-optional-size-policy";
 import type { Ledger } from "./replica-size-policy";
 
-// This admission is tested in its own context: the later TC-3947 rows are removed.
+// This admission is tested in its own context: the later TC-3947 and TC-3801 rows are removed.
 const root = structuredClone(rootLedger) as Ledger;
+delete root.tc3801NamedKeysRoot;
 delete root.tc3947ReplicaRevokeRoot;
 const optional = structuredClone(optionalLedger) as OptionalLedger;
 delete optional.tc3947;

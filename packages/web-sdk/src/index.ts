@@ -363,6 +363,7 @@ export {
   type ParsedSecretCatalogKey,
   type SecretScopeOptions,
   type SecretPutOptions,
+  type SecretGetOptions,
 } from "@tinycloud/sdk-core";
 
 // Re-export encryption service types and helpers from sdk-core

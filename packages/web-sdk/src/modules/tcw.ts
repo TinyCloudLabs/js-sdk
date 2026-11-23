@@ -125,7 +125,7 @@ import {
   BrowserSessionStorage,
   type BrowserSessionLoadResult,
 } from "../adapters/BrowserSessionStorage";
-import { isElevatedResource, isPanelResourceSet, isRememberableResourceSet, rememberAskedGrants, rememberRuntimeGrants, reuseRuntimeGrants, serializeRuntimeGrantMutation, storedGrantAskers, type RuntimeGrantStore } from "./runtimeGrantPersistence";
+import { isElevatedResource, isPanelResourceSet, isRememberableResourceSet, isSecretKeyGrant, isSecretKeyResourceSet, rememberAskedGrants, rememberRuntimeGrants, reuseRuntimeGrants, serializeRuntimeGrantMutation, storedGrantAskers, type RuntimeGrantStore } from "./runtimeGrantPersistence";
 import { RPCProviders, ClientConfig, Extension as ExtensionType } from "../providers";
 import { resolveSpaceCreationHandler } from "../authorization/WebSpaceCreationHandler";
 import { resolveOpenKeySigningKey, type OpenKeyConnection } from "../openkey-signing-key";
@@ -827,7 +827,11 @@ export class TinyCloudWeb {
         getService: () => this.node.secretsForSpace(resolvedSpace),
         space: resolvedSpace,
         getManifest: () => this._manifest,
-        requestPermissions: (additional) => this.requestPermissions(additional),
+        requestPermissions: (additional, options) => options === undefined
+          ? this.requestPermissions(additional)
+          : this.requestPermissions(additional, options),
+        getEncryptionNetworkId: () => this.node.getEncryptionNetworkIdForSpace(resolvedSpace),
+        namedKeysSupported: () => this.node.namedKeysSupported(),
         resolveSpace: (space) => space.startsWith("tinycloud:") ? space : this.node.spaces.get(space).id,
         getUnlockSigner: () => this.walletSigner,
       });
@@ -1153,7 +1157,7 @@ export class TinyCloudWeb {
               host: node.hosts[0]!,
               authorize: (permissions) => {
                 const signed = permissions.map((entry) => ({ ...entry, space: entry.space ?? "" }));
-                if (!isPanelResourceSet(signed, owner) && !isRememberableResourceSet(signed, owner)) {
+                if (!isPanelResourceSet(signed, owner) && !isRememberableResourceSet(signed, owner) && !isSecretKeyResourceSet(signed, owner)) {
                   throw new RuntimeDelegationRejectedError("authority_invalid", "Stored grant is not one that is kept across a reload.");
                 }
                 return true;
@@ -1923,7 +1927,8 @@ export class TinyCloudWeb {
    *
    * An approved request that is not elevated (no decrypt or key creation, nothing in the secrets
    * space, no caveats) is kept with the session and active again after a page reload, with its own
-   * signed expiry. An elevated one is not kept across a reload.
+   * signed expiry. An elevated one is not kept across a reload, except a grant made only of exact keys of the owner's
+   * own secrets (decrypt and/or key creation, any number of keys), which is kept for its signed expiry.
    */
   requestPermissions(
     additional: PermissionEntry[],
@@ -1999,7 +2004,10 @@ export class TinyCloudWeb {
     };
   }
 
-  /** Records which app approved each grant, and stores the non-elevated ones when `keep`. */
+  /**
+   * Records which app approved each grant. A grant of one of the owner's secrets' own keys is always stored beside the
+   * session (TC-3284); the other non-elevated grants are stored when `keep`.
+   */
   private async keepGrants(
     node: TinyCloudNode,
     delegations: readonly PortableDelegation[],
@@ -2013,9 +2021,10 @@ export class TinyCloudWeb {
     }
     const address = node.address;
     const store = this.runtimeGrantStore();
-    if (!keep || store === undefined || address === undefined || this.signOutCount !== signOuts || this.signOutInFlight !== 0) return;
-    await rememberAskedGrants(store, address, delegations, asker,
-      () => this.signOutCount === signOuts && this.signOutInFlight === 0 && this._node === node);
+    if (store === undefined || address === undefined || this.signOutCount !== signOuts || this.signOutInFlight !== 0) return;
+    const isCurrent = () => this.signOutCount === signOuts && this.signOutInFlight === 0 && this._node === node;
+    await rememberRuntimeGrants(store, address, delegations.filter((grant) => isSecretKeyGrant(grant, address)), isCurrent);
+    if (keep) await rememberAskedGrants(store, address, delegations, asker, isCurrent);
   }
 
   /**

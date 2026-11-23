@@ -501,6 +501,7 @@ export type Ledger = {
   tc3549KeptApprovalsRoot?: LogoutRatchet;
   tc3617HostedMcpLeaseRoot?: LogoutRatchet;
   tc3947ReplicaRevokeRoot?: LogoutRatchet & { worker: { delta: number; ceiling: number }; replicaWorker: { delta: number; ceiling: number } };
+  tc3801NamedKeysRoot?: LogoutRatchet;
   tc2773LazyRestoreReplicaWorker?: Omit<WorkerRatchet, "worker"> & { replicaWorker: { delta: number; ceiling: number } };
 };
 
@@ -1156,6 +1157,7 @@ export function ancestryPins(root: Ledger, hasGatedOnly: boolean): Array<{ row: 
   if (root.tc3549KeptApprovalsRoot !== undefined) pins.push({ row: "tc3549KeptApprovalsRoot", pin: root.tc3549KeptApprovalsRoot.sourceCommits.at(-1)! });
   if (root.tc3617HostedMcpLeaseRoot !== undefined) pins.push({ row: "tc3617HostedMcpLeaseRoot", pin: root.tc3617HostedMcpLeaseRoot.sourceCommits.at(-1)! });
   if (root.tc3947ReplicaRevokeRoot !== undefined) pins.push({ row: "tc3947ReplicaRevokeRoot", pin: root.tc3947ReplicaRevokeRoot.sourceCommits.at(-1)! });
+  if (root.tc3801NamedKeysRoot !== undefined) pins.push({ row: "tc3801NamedKeysRoot", pin: root.tc3801NamedKeysRoot.sourceCommits.at(-1)! });
   if (hasGatedOnly) pins.push({ row: "gatedOnlyRatchet", pin: approvedGatedOnlyRatchet.sourceCommit });
   return pins;
 }
@@ -1281,6 +1283,7 @@ export function rootCeilings(root: Ledger): Array<{ row: string; ceiling: GzipSi
     ["tc3549KeptApprovalsRoot", root.tc3549KeptApprovalsRoot?.root.ceiling],
     ["tc3617HostedMcpLeaseRoot", root.tc3617HostedMcpLeaseRoot?.root.ceiling],
     ["tc3947ReplicaRevokeRoot", root.tc3947ReplicaRevokeRoot?.root.ceiling],
+    ["tc3801NamedKeysRoot", root.tc3801NamedKeysRoot?.root.ceiling],
   ];
   return rows.flatMap(([row, ceiling]) => ceiling === undefined ? [] : [{ row, ceiling }]);
 }
@@ -3997,6 +4000,26 @@ export const approvedTc3947ReplicaRevokeRoot: NonNullable<Ledger["tc3947ReplicaR
   "reason": "KVService.changes and the replica transport read the node's JSON revocation refusal ({\"code\", \"error\"}, nodes 1.25.17 and later) as a revocation before matching the revocation text; sdk-services is bundled into the web-sdk root and, with the replica transport, into the replica and kv-storage workers. Canonical Node 22/Bun 1.3.14 CI on #1138 (d79271d3, master 3ad8bb80) measured index.mjs 1535546 and index.cjs 1466953 gzip -9 bytes: +62 and +50 over the tc3617HostedMcpLeaseRoot ceilings 1535484 and 1466903; kv-storage worker 781191 and replica worker 774920: +234 and +238 over the tc3443SessionRetireRoot ceilings 780957 and 774682. No other ceiling moves. Details: TC-3947"
 };
 
+/** The exact TC-3801 per-secret keys root allowance from canonical CI. */
+export const approvedTc3801NamedKeysRoot: LogoutRatchet = {
+  "label": "opt-in per-secret keys (TC-3801)",
+  "ruling": "size-ruling: TC-3801 (2026-11-23) row tc3801NamedKeysRoot index.mjs 1539368 (+3822), index.cjs 1471344 (+4391) gzip bytes over the tc3947ReplicaRevokeRoot ceilings, CI's canonical figures, no lazy-load path, the row's own cap lifted by ruling. Details: TC-3801",
+  "base": "979145a429cbc0fb1c107da4e211dbabeb9afb81",
+  "sourceCommits": ["f9fd4d997b3b3d42093650e10b3c175c238d486d"],
+  "canonicalCI": {
+    "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45128664935",
+    "jobs": [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45128664935/job/137538818194",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45128664935/job/137538818578"
+    ]
+  },
+  "root": {
+    "delta": { "index.mjs": 3822, "index.cjs": 4391 },
+    "ceiling": { "index.mjs": 1539368, "index.cjs": 1471344 }
+  },
+  "reason": "Opted-in writes seal secrets to their own keys. sdk-services carries resealToKey, the key paths and the long-name catalogue; sdk-core carries the exact-key paths in the manifest and policy; node-sdk and web-sdk carry the read paths and writer opt-in. Canonical Node.js 22/Bun 1.3.14 CI on #1131 (f9fd4d99, master 979145a4) measured index.mjs 1539368 and index.cjs 1471344 gzip -9 bytes: +3822 and +4391 over the tc3947ReplicaRevokeRoot ceilings 1535546 and 1466953. No other ceiling moves. Details: TC-3801"
+};
+
 export const approvedLedgerRows: Record<string, unknown> = {
   phase2Ratchet: approvedPhase2,
   fixRequiredRatchet: approvedFixRequiredRatchet,
@@ -4119,6 +4142,7 @@ export const approvedLedgerRows: Record<string, unknown> = {
   tc3549KeptApprovalsRoot: approvedTc3549KeptApprovalsRoot,
   tc3617HostedMcpLeaseRoot: approvedTc3617HostedMcpLeaseRoot,
   tc3947ReplicaRevokeRoot: approvedTc3947ReplicaRevokeRoot,
+  tc3801NamedKeysRoot: approvedTc3801NamedKeysRoot,
 };
 
 /** Only a git merge-base ledger may retain the pre-correction toolchain. */
@@ -4687,6 +4711,11 @@ export function validateLedger(value: Ledger, historicalBase = false): void {
       (!value.tc3617HostedMcpLeaseRoot ||
         JSON.stringify(value.tc3947ReplicaRevokeRoot) !== JSON.stringify(approvedTc3947ReplicaRevokeRoot))) {
     throw new Error("Only the exact TC-3947 root admission is approved.");
+  }
+  if (value.tc3801NamedKeysRoot !== undefined &&
+      (!value.tc3947ReplicaRevokeRoot ||
+        JSON.stringify(value.tc3801NamedKeysRoot) !== JSON.stringify(approvedTc3801NamedKeysRoot))) {
+    throw new Error("Only the exact TC-3801 root admission is approved.");
   }
 }
 
@@ -5740,5 +5769,13 @@ export function validateTc3947ReplicaRevokeRootTransition(base?: LogoutRatchet, 
   if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc3947ReplicaRevokeRoot) ||
       base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
     throw new Error("The TC-3947 root admission may be introduced once and cannot change later.");
+  }
+}
+
+/** The exact TC-3801 per-secret keys root admission is introduced once and immutable. */
+export function validateTc3801NamedKeysRootTransition(base?: LogoutRatchet, current?: LogoutRatchet): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc3801NamedKeysRoot) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The TC-3801 root admission may be introduced once and cannot change later.");
   }
 }

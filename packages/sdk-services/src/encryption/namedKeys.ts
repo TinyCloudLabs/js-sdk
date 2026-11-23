@@ -16,8 +16,9 @@
  *   that key. v1 envelopes (no `keyPath`) go to the root-key path unchanged.
  *   A key and the root, or two keys, are never mixed in one invocation.
  * - `key.delete` is not offered. The create body carries `deletable`, which is
- *   `true` exactly when the path starts with `apps/`; the node refuses it with
- *   `deletable_unavailable` while app-key deletion is not enabled there.
+ *   `true` exactly for a seeded key: first segment `apps` or `secrets`
+ *   (TC-3284); the node refuses it with `deletable_unavailable` while key
+ *   deletion is not enabled there.
  */
 
 import {
@@ -226,7 +227,7 @@ export interface PublicKeyDescriptor {
 export interface KeyDescriptor extends PublicKeyDescriptor {
   /** Raw node state string (`active`, `blocked`, ...). */
   state: string;
-  /** `deterministic` outside `apps/`, `deletable` under it; kept as a string so unknown kinds surface. */
+  /** `deterministic`, or `deletable` (seeded) under `apps/` and `secrets/`; kept as a string so unknown kinds surface. */
   kind: string;
   createdAt?: string;
   updatedAt?: string;
@@ -289,6 +290,11 @@ export interface KeyEncryptOptions extends KeyCallOptions {
   keyWrapV2?: boolean;
   aad?: Uint8Array;
   metadata?: Record<string, string>;
+  /**
+   * Run {@link NamedKeyClient.ensureKey} first and seal to the public key of
+   * the descriptor it returns: authenticated, `state: "active"`, expected kind.
+   */
+  ensureKey?: boolean;
 }
 
 export type DecryptManyResult =
@@ -434,9 +440,12 @@ function assertEnsuredDescriptor(descriptor: KeyDescriptor, expectedKind: string
   return descriptor;
 }
 
-/** Keys under `apps/` are the deletable keys; everything else is deterministic. */
-function isAppKeyPath(path: string): boolean {
-  return path.startsWith("apps/");
+/**
+ * Seeded (deletable) keys: first segment `apps` or `secrets`, as the node's
+ * `KeyKind::for_path`. Everything else is deterministic.
+ */
+function isSeededKeyPath(path: string): boolean {
+  return /^(?:apps|secrets)(?:\/|$)/.test(path);
 }
 
 const REQUIRED_ENVELOPE_STRINGS = [
@@ -527,7 +536,7 @@ export class NamedKeyClient {
     return `${origin}/encryption/networks/${networkId}/keys/${path}`;
   }
 
-  /** Public GET: the key's public key. Derive-only (no 404) outside `apps/`; under `apps/` the node answers 404. */
+  /** Public GET: the key's public key. Derive-only (no 404) for a deterministic key; a seeded key answers 404. */
   async getPublicKey(path: string, options?: KeyCallOptions): Promise<PublicKeyDescriptor> {
     const networkId = this.networkFor(options);
     this.keyUrn(networkId, path);
@@ -604,7 +613,7 @@ export class NamedKeyClient {
     const networkId = this.networkFor(options);
     const keyResource = this.keyUrn(networkId, path);
     const body: Json =
-      route === "keys" ? { keyPath: path, deletable: isAppKeyPath(path) } : { keyPath: path };
+      route === "keys" ? { keyPath: path, deletable: isSeededKeyPath(path) } : { keyPath: path };
     const { url, nodeDid: targetNode } = await this.requireNode(networkId);
     const signed = await this.config.signInvocation({
       targetNode,
@@ -635,7 +644,7 @@ export class NamedKeyClient {
     return parseFullDescriptor(unwrapDescriptor(await response.json()), networkId, path);
   }
 
-  /** `key.create`: `deletable` is `true` exactly under `apps/`, else a deterministic key. */
+  /** `key.create`: `deletable` is `true` exactly for a seeded path, else a deterministic key. */
   createKey(path: string, options?: KeyCallOptions): Promise<KeyDescriptor> {
     return this.admin("keys", KEY_CREATE_ABILITY, path, options);
   }
@@ -652,7 +661,7 @@ export class NamedKeyClient {
    * Make sure a key exists and is usable: authenticated GET; on
    * `key_not_found` create it; on 409 `key_exists` read it again. Succeeds only
    * for `state: "active"` and the kind the path implies: `deletable` under
-   * `apps/`, `deterministic` elsewhere.
+   * a seeded path (`apps/`, `secrets/`), `deterministic` elsewhere.
    */
   async ensureKey(path: string, options?: KeyCallOptions): Promise<KeyDescriptor> {
     const describe = () =>
@@ -672,7 +681,7 @@ export class NamedKeyClient {
         }
       }
     }
-    return assertEnsuredDescriptor(descriptor, isAppKeyPath(path) ? "deletable" : "deterministic");
+    return assertEnsuredDescriptor(descriptor, isSeededKeyPath(path) ? "deletable" : "deterministic");
   }
 
   /** Encrypt to a named key: envelope v2, symmetric key wrapped to the key's public key. */
@@ -681,11 +690,13 @@ export class NamedKeyClient {
     plaintext: Uint8Array,
     options?: KeyEncryptOptions,
   ): Promise<NamedKeyEnvelope> {
-    // The node answers a public GET under `apps/` with 404 `key_not_found`, so
-    // an app key's public key is read through the authenticated describe.
-    const descriptor = isAppKeyPath(path)
-      ? await this.describePublic(path, options)
-      : await this.getPublicKey(path, options);
+    // The node answers a public GET for a seeded key with 404 `key_not_found`,
+    // so its public key is read through the authenticated describe.
+    const descriptor = options?.ensureKey
+      ? await this.ensureKey(path, options)
+      : isSeededKeyPath(path)
+        ? await this.describePublic(path, options)
+        : await this.getPublicKey(path, options);
     const { crypto } = this.config;
     const symmetricKey = crypto.randomBytes(32);
     const ciphertext = crypto.authEncrypt(symmetricKey, plaintext, options?.aad);
