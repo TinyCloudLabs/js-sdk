@@ -193,6 +193,15 @@ function resolveSecretScope(options: { scope?: string }): { scope?: string } | u
   return options.scope ? { scope: options.scope } : undefined;
 }
 
+/**
+ * Refuses TinyChat's reserved bot-history scope (and the other reserved scopes) before anything is signed in, asked,
+ * read, written or deleted: every list, put, delete and migrate starts here. Compares the canonical scope, so a case
+ * variant or a spaced spelling is the same scope.
+ */
+function refuseReservedSecretScope(options: { scope?: string }): void {
+  canonicalizeSecretScope(resolveSecretScope(options)?.scope);
+}
+
 async function resolveSecretSpace(
   input: string | undefined,
   profileName: string,
@@ -1700,12 +1709,11 @@ export function registerSecretsCommand(
     .option("--private-key <hex>", "Ethereum private key (or set TC_PRIVATE_KEY)")
     .action(async (options, cmd) => {
       try {
+        refuseReservedSecretScope(options);
         const globalOpts = cmd.optsWithGlobals();
         const ctx = await ProfileManager.resolveContext(globalOpts);
         const node = await ensureSecretsNode(ctx, options, openKeyAcquisition);
         const scopeOptions = resolveSecretScope(options);
-        // Refuse TinyChat's reserved bot-history scope before anything is asked or listed.
-        resolveSecretListPrefix(scopeOptions);
         const spaceUri = await resolveSecretSpace(options.space, ctx.profile);
         const secrets = secretsServiceForSpace(node, spaceUri);
         const result = await runSecretOperation({
@@ -1871,6 +1879,7 @@ export function registerSecretsCommand(
         // pattern keeps the pattern message from `resolveSecretPath`.
         const tooLong = SECRET_NAME_RE.test(name.trim()) ? secretNameTooLongRefusal(name) : undefined;
         if (tooLong) throw new CLIError("INVALID_SECRET_NAME", tooLong.error.message, ExitCode.USAGE_ERROR);
+        refuseReservedSecretScope(options);
         const globalOpts = cmd.optsWithGlobals();
         const ctx = await ProfileManager.resolveContext(globalOpts);
         const node = await ensureSecretsNode(ctx, options, openKeyAcquisition);
@@ -1934,12 +1943,11 @@ export function registerSecretsCommand(
     .option("--private-key <hex>", "Ethereum private key (or set TC_PRIVATE_KEY)")
     .action(async (name: string, options, cmd) => {
       try {
+        refuseReservedSecretScope(options);
         const globalOpts = cmd.optsWithGlobals();
         const ctx = await ProfileManager.resolveContext(globalOpts);
         const node = await ensureSecretsNode(ctx, options, openKeyAcquisition);
         const scopeOptions = resolveSecretScope(options);
-        // Refuse TinyChat's reserved bot-history scope before anything is asked or deleted.
-        resolveSecretListPrefix(scopeOptions);
         const spaceUri = await resolveSecretSpace(options.space, ctx.profile);
         const secrets = secretsServiceForSpace(node, spaceUri);
         const result = await runSecretOperation({
@@ -2027,6 +2035,7 @@ export function registerSecretsCommand(
     .option("--private-key <hex>", "Ethereum private key (or set TC_PRIVATE_KEY)")
     .action(async (names: string[], options, cmd) => {
       try {
+        refuseReservedSecretScope(options);
         const globalOpts = cmd.optsWithGlobals();
         const ctx = await ProfileManager.resolveContext(globalOpts);
         const node = await ensureSecretsNode(ctx, options);
