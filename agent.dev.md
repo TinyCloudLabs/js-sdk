@@ -142,6 +142,37 @@ Stable-release installs use the committed lockfile before selecting a release an
 Only a newly versioned release may refresh it: an unfrozen recovery install can rewrite workspace
 version metadata and make the immutable release checkout fail the clean-tree publishing guard.
 
+### Courier stable staging route
+
+`Courier stable staging` (`courier-stable-stage.yml`) is a dispatch-only route that stages approved stable
+packages under the npm dist-tag `staging` only, from sealed plans in
+`.github/scripts/courier-stable-stage-plans.json` (script: `.github/scripts/courier-stable-stage.mjs`). It leaves
+`changesets.yml` and pre mode alone and shares the `release` concurrency group. The only input is a plan id;
+the script rejects anything that is not a key of the policy file, so no dispatcher chooses code, branch, package,
+version or tag. A new plan is a reviewed JSON-only change.
+
+A plan names: `base` (the approved beta commit, e.g. `a0b24da8…`, not master), `sourceSha` (the reviewed source:
+the base itself, or a reviewed backport on it), `releaseSha` (the version-only commit: sole parent `sourceSha`,
+changes only the plan's package manifests and `bun.lock`), `expectedDelta` (the exact path list
+`base..releaseSha`), the packages with `from`/`stable` versions, and exact external `pins`. `releaseSha` and
+`expectedDelta` are `null` until sealed; a plan with `null` refuses to run (`courier-0.8.1` is closed this way
+until its release commit exists).
+
+Make the release commit locally and deterministically: in a clean checkout of `sourceSha`, run
+`PLAN=<id> node .github/scripts/courier-stable-stage.mjs prepare edit`, settle the lockfile with `bun install`
+(repeat until `bun.lock` is unchanged), then `… prepare commit` (fixed identity, dates and message, so the same
+tree always yields the same sha). A maintainer pushes it to a release ref (e.g. `release/stable-0.8.0`; no workflow
+triggers on such a ref) and seals the sha and delta in the plan through a reviewed PR. No workflow builds or
+pushes it.
+
+The build job (no secrets) checks the route head and release commit, checks out the release commit, installs
+with `--frozen-lockfile`, builds the plan's packages through turbo and packs. The stage job (the only one with
+`NPM_TOKEN`) re-verifies the tarballs against the plan at the route commit, fills the release commit's package
+directories with them, re-packs each to exactly the verified bytes, and publishes the directory with
+`--tag staging --ignore-scripts` in dependency order. Publishing from the release checkout makes npm record
+that commit as `gitHead`; the job fails if the registry's record differs. It never moves `latest`, never writes git
+tags or GitHub Releases, and pushes nothing. It runs only when dispatched on `master` at a commit master contains.
+
 ## Debugging
 
 - Confirm `TC_TEST_SERVER` points at the node instance you intend to test.

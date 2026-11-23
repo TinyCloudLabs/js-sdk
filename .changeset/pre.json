@@ -45,6 +45,7 @@
     "tc-3443-sign-out-retires-key",
     "tc-3443-validate-session-root",
     "tc-3485-courier-revoke-renewal-fence",
+    "tc-3522-courier-watch-renewal",
     "tc-3522-renewal-lease-ask",
     "tc-3549-keep-approvals-across-reload",
     "tc-3549-node-approval-filter",
@@ -57,11 +58,14 @@
     "tc-3801-secret-named-keys",
     "tc-3802-per-secret-keys",
     "tc-3802-scoped-get-empty-caveats",
+    "tc-3810-a1-recap-reader",
     "tc-3823-bot-history-key",
     "tc-3862-explorer-first-party",
     "tc-3947-replica-revoke-json",
     "tc-3969-signed-secret-key-coverage",
     "tc-3971-secrets-owner-template",
+    "tc-4024-renewal-history-generation",
+    "tc-4028-renewed-runtime-grant-expiry",
     "tinycloud-one-naming"
   ]
 }
