@@ -10,6 +10,8 @@ import type { Profile, StoredPeer } from './profile.js';
 import { getJson, putCreate, putMatch } from './store.js';
 
 const DAY = 86_400_000;
+// Leave time for scheduled issuance, the peer's marker poll, and clock skew.
+const AUTO_RENEW_HEADROOM_MS = 15 * 60_000;
 export const INTERIM_PERIOD_MS = 30 * DAY;
 /** What a Courier 0.5.x peer accepts; also the floor for any peer whose own lifetime is short or unreadable. */
 export const LEGACY_PEER_LIMIT_MS = 7 * DAY;
@@ -282,6 +284,11 @@ export async function maintainOutbound(node: TinyCloudNode, profile: Profile, pe
   const ledger = peer.outbound.find(entry => entry.cid === tip.cid);
   const started = (tip.notBefore ?? tip.issuedAt)?.getTime() ?? (ledger ? Date.parse(ledger.issuedAt) : undefined);
   if (started === undefined || !Number.isFinite(started) || started >= end) return { state: 'unavailable' };
+  const period = end - started;
+  const halfLife = period / 2;
+  // Use the actual child period, including a short parent clamp, rather than the requested lifetime.
+  // Keep the daily cooldown when it fits; otherwise leave at least half of a very short window.
+  const throttleMs = options.manual ? DAY : Math.min(DAY, period - Math.min(halfLife, AUTO_RENEW_HEADROOM_MS));
   const state = stateOf(peer);
   const now = Date.now();
   const limitMs = peerRenewalLimitMs(peer, now);
@@ -290,8 +297,8 @@ export async function maintainOutbound(node: TinyCloudNode, profile: Profile, pe
   // `extendOnly` (artifact export) never replaces a grant with a shorter one: the receiving `pair accept` refuses it as stale.
   const outlives = outlivesPeerLimit(peer, tip.cid, end, now);
   const overlong = !options.extendOnly && outlives;
-  if (!options.force && ((!options.manual && !overlong && now < started + (end - started) / 2)
-    || (lastAttempt !== undefined && now - lastAttempt < DAY))) return { state: 'live' };
+  if (!options.force && ((!options.manual && !overlong && now < started + halfLife)
+    || (lastAttempt !== undefined && now - lastAttempt < throttleMs))) return { state: 'live' };
   if (!overlong && Math.floor(Math.min(now + limitMs, parent.end) / 1000) * 1000 <= end) return { state: 'live', reason: options.extendOnly && outlives ? 'overlong' : 'no-extension' };
   state.lastAttemptAt = new Date(now).toISOString();
   save();
