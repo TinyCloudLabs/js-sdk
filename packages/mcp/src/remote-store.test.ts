@@ -913,6 +913,39 @@ test("the OpenKey API origin must use https", async () => {
     .not.toThrow();
 });
 
+test("createPending refuses an empty owner list for every kind of approval link", async () => {
+  const store = await testStore();
+  await expect(store.decorateAuthorityResult("openkey-user-a", [], {
+    status: "authority_required",
+    operation: "tinycloud.kv.get",
+    request: {
+      requestId: "request-empty-owners",
+      requested: [{ service: "tinycloud.kv", space: "applications", path: "agents/demo", actions: ["tinycloud.kv/get"] }],
+    },
+  })).rejects.toThrow("needs the account that requested it");
+  await expect(store.decorateAuthorityResult("openkey-user-a", [], {
+    status: "error",
+    operation: "tinycloud.kv.get",
+    error: { code: "SESSION_NOT_FOUND" },
+  })).rejects.toThrow("needs the account that requested it");
+  expect(await readdir(join(store.tenantStateRoot("openkey-user-a"), ".tinycloud/profiles/agent/pending")).catch(() => []))
+    .toEqual([]);
+});
+
+test("a wallet outside the link's accounts cannot become the owner of a first approval", async () => {
+  const store = await testStore();
+  const requester = await ownerDid(REQUESTER_KEY);
+  const status = await store.connectStatus("openkey-user-a", [requester]);
+  const tenantRoot = store.tenantStateRoot("openkey-user-a");
+  const foreign = await openKeyDelegation({
+    tenantStateRoot: tenantRoot, privateKey: OTHER_OWNER_KEY, space: "account", abilities: BOOTSTRAP_ABILITIES,
+  });
+  expect(await deliver(store, "openkey-user-a", [requester], stateOf(status.approvalUrl!), foreign)).toMatchObject(OWNER_MISMATCH);
+  const profile = JSON.parse(await readFile(join(tenantRoot, ".tinycloud/profiles/agent/profile.json"), "utf8")) as Record<string, unknown>;
+  expect(profile.ownerDid).toBeUndefined();
+  expect(await exists(join(tenantRoot, ".tinycloud/profiles/agent/session.json"))).toBe(false);
+});
+
 /**
  * Open a `/connect` link's OpenKey request, approve it with `delegation`, and
  * drive collection with the tenant's next call until the result is stored or refused.
