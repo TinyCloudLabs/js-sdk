@@ -1073,6 +1073,34 @@ const code = await main(["inbox", "--json"], { prog: "courier" }); // 0, 1 (erro
 `tinycloud courier`. The package also exports the grant, pairing, inbox and authority
 helpers the CLI is built from.
 
+### Headless pairing and messaging
+
+Services that host many owners' agents (TinyChat, TrustBot) use the headless API instead of a Courier home. Nothing in it reads or writes a profile, home directory or environment variable.
+
+```ts
+import {
+  acceptPairing, finalizePairing, listInbound, acknowledgeInbound, sendMessage, unpair, peerReference,
+  type HeadlessCourierContext,
+} from "@tinycloud/courier";
+
+const pending = await acceptPairing(ctx, artifactA);      // returns artifact B for the initiator
+const paired = await finalizePairing(ctx, pending, artifactC);
+const messages = await listInbound(ctx, paired);
+await acknowledgeInbound(ctx, paired, messages);          // after your own durable claim
+await sendMessage(ctx, paired, threadId, text, { inReplyTo, idempotencyKey });
+await unpair(ctx, paired);
+```
+
+`HeadlessCourierContext` names the owner, the agent's Courier DID, the pinned Node origin, an exclusively owned Node session restored from the agent's finite Courier grant, a `createReader()` factory for a fresh session with the same grant, and a `store` that serializes each owner scope and persists `CourierPeerRecord`s. Records hold signed delegations: keep them in the tenant's private store, never in a mailbox.
+
+- Only initiators that sign pairing completion are accepted (`courier-update-required` otherwise). Artifact C must carry a valid Ed25519 signature over B's 32-byte challenge from the Courier DID that A named; an unsigned or replayed C is refused.
+- A pending pairing expires after 15 minutes. Peer grants last up to 7 days; headless renewal is not part of this API yet.
+- `sendMessage` only answers a readable incoming message from that peer in the same thread, and never an `inform`. A retry with the same idempotency key returns the original message ID; changed text is refused.
+- `unpair` latches the peer off before any network call. If revocation or cleanup fails it throws (`revoke-failed`, `unpair-pending`) and keeps the record; call it again with the same reference.
+- If `acceptPairing` throws after it saved the record (for example, the Node never confirmed the grant), retries refuse with `pair-pending` instead of signing a second grant. Read the record for that handle from your store and call `unpair(ctx, peerReference(record))`, then accept again.
+
+Details: TC-4061
+
 ## Development
 
 ```bash
