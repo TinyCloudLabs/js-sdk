@@ -502,6 +502,7 @@ export type Ledger = {
   tc3617HostedMcpLeaseRoot?: LogoutRatchet;
   tc3947ReplicaRevokeRoot?: LogoutRatchet & { worker: { delta: number; ceiling: number }; replicaWorker: { delta: number; ceiling: number } };
   tc3801NamedKeysRoot?: LogoutRatchet;
+  tc3969SecretKeyCoverageRoot?: LogoutRatchet;
   tc2773LazyRestoreReplicaWorker?: Omit<WorkerRatchet, "worker"> & { replicaWorker: { delta: number; ceiling: number } };
 };
 
@@ -1158,6 +1159,7 @@ export function ancestryPins(root: Ledger, hasGatedOnly: boolean): Array<{ row: 
   if (root.tc3617HostedMcpLeaseRoot !== undefined) pins.push({ row: "tc3617HostedMcpLeaseRoot", pin: root.tc3617HostedMcpLeaseRoot.sourceCommits.at(-1)! });
   if (root.tc3947ReplicaRevokeRoot !== undefined) pins.push({ row: "tc3947ReplicaRevokeRoot", pin: root.tc3947ReplicaRevokeRoot.sourceCommits.at(-1)! });
   if (root.tc3801NamedKeysRoot !== undefined) pins.push({ row: "tc3801NamedKeysRoot", pin: root.tc3801NamedKeysRoot.sourceCommits.at(-1)! });
+  if (root.tc3969SecretKeyCoverageRoot !== undefined) pins.push({ row: "tc3969SecretKeyCoverageRoot", pin: root.tc3969SecretKeyCoverageRoot.sourceCommits.at(-1)! });
   if (hasGatedOnly) pins.push({ row: "gatedOnlyRatchet", pin: approvedGatedOnlyRatchet.sourceCommit });
   return pins;
 }
@@ -1284,6 +1286,7 @@ export function rootCeilings(root: Ledger): Array<{ row: string; ceiling: GzipSi
     ["tc3617HostedMcpLeaseRoot", root.tc3617HostedMcpLeaseRoot?.root.ceiling],
     ["tc3947ReplicaRevokeRoot", root.tc3947ReplicaRevokeRoot?.root.ceiling],
     ["tc3801NamedKeysRoot", root.tc3801NamedKeysRoot?.root.ceiling],
+    ["tc3969SecretKeyCoverageRoot", root.tc3969SecretKeyCoverageRoot?.root.ceiling],
   ];
   return rows.flatMap(([row, ceiling]) => ceiling === undefined ? [] : [{ row, ceiling }]);
 }
@@ -4020,6 +4023,25 @@ export const approvedTc3801NamedKeysRoot: LogoutRatchet = {
   "reason": "Opted-in writes seal secrets to their own keys. sdk-services carries resealToKey, the key paths and the long-name catalogue; sdk-core carries the exact-key paths in the manifest and policy; node-sdk and web-sdk carry the read paths and writer opt-in. Canonical Node.js 22/Bun 1.3.14 CI on #1131 (f9fd4d99, master 979145a4) measured index.mjs 1539368 and index.cjs 1471344 gzip -9 bytes: +3822 and +4391 over the tc3947ReplicaRevokeRoot ceilings 1535546 and 1466953. No other ceiling moves. Details: TC-3801"
 };
 
+export const approvedTc3969SecretKeyCoverageRoot: LogoutRatchet = {
+  "label": "signed secret-key permission checks (TC-3969, TC-3971)",
+  "ruling": "size-ruling: TC-3969/TC-3971 js-sdk #1143: replica-size-ledger.json gains a ratchet row over tc3801NamedKeysRoot with ceilings index.mjs 1539389 (+21) and index.cjs 1471374 (+30), canonicalCI run 45143940197; other buckets unchanged.",
+  "base": "bc48358291cd70d37566a85b6d50d62357ccdbb3",
+  "sourceCommits": ["c302d7ce91aa00fa0df1f0edb85e5296010fc23d"],
+  "canonicalCI": {
+    "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45143940197",
+    "jobs": [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45143940197/job/137588595331",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45143940197/job/137588595402"
+    ]
+  },
+  "root": {
+    "delta": { "index.mjs": 21, "index.cjs": 30 },
+    "ceiling": { "index.mjs": 1539389, "index.cjs": 1471374 }
+  },
+  "reason": "The Web SDK root includes the signed exact-key coverage check and uses the owner-bound manifest for secrets operations. Canonical Node.js 22/Bun 1.3.14 CI on #1143 (c302d7ce) measured 1539389 and 1471374 gzip -9 bytes over the TC-3801 ceilings of 1539368 and 1471344. Details: TC-3969"
+};
+
 export const approvedLedgerRows: Record<string, unknown> = {
   phase2Ratchet: approvedPhase2,
   fixRequiredRatchet: approvedFixRequiredRatchet,
@@ -4143,6 +4165,7 @@ export const approvedLedgerRows: Record<string, unknown> = {
   tc3617HostedMcpLeaseRoot: approvedTc3617HostedMcpLeaseRoot,
   tc3947ReplicaRevokeRoot: approvedTc3947ReplicaRevokeRoot,
   tc3801NamedKeysRoot: approvedTc3801NamedKeysRoot,
+  tc3969SecretKeyCoverageRoot: approvedTc3969SecretKeyCoverageRoot,
 };
 
 /** Only a git merge-base ledger may retain the pre-correction toolchain. */
@@ -4716,6 +4739,11 @@ export function validateLedger(value: Ledger, historicalBase = false): void {
       (!value.tc3947ReplicaRevokeRoot ||
         JSON.stringify(value.tc3801NamedKeysRoot) !== JSON.stringify(approvedTc3801NamedKeysRoot))) {
     throw new Error("Only the exact TC-3801 root admission is approved.");
+  }
+  if (value.tc3969SecretKeyCoverageRoot !== undefined &&
+      (!value.tc3801NamedKeysRoot ||
+        JSON.stringify(value.tc3969SecretKeyCoverageRoot) !== JSON.stringify(approvedTc3969SecretKeyCoverageRoot))) {
+    throw new Error("Only the exact TC-3969/TC-3971 root admission is approved.");
   }
 }
 
@@ -5777,5 +5805,12 @@ export function validateTc3801NamedKeysRootTransition(base?: LogoutRatchet, curr
   if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc3801NamedKeysRoot) ||
       base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
     throw new Error("The TC-3801 root admission may be introduced once and cannot change later.");
+  }
+}
+
+export function validateTc3969SecretKeyCoverageRootTransition(base?: LogoutRatchet, current?: LogoutRatchet): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc3969SecretKeyCoverageRoot) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The TC-3969/TC-3971 root admission may be introduced once and cannot change later.");
   }
 }
