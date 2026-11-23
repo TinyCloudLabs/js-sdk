@@ -161,7 +161,7 @@ test("a connection approval opened with another lease, or without a standing pur
   }
 });
 
-test("retiring an idle tenant removes its key, grants and approvals but keeps the owner's tc-apps.json byte for byte", async () => {
+test("retiring an idle tenant removes exactly its custody and leaves every other file, the owner's tc-apps.json included, untouched", async () => {
   const requester = await ownerDid(REQUESTER_KEY);
   const subject = "openkey-user-idle";
   // A loopback node that records the retirement, the way the node's POST /session/retire answers.
@@ -184,15 +184,32 @@ test("retiring an idle tenant removes its key, grants and approvals but keeps th
   const first = await store.connectStatus(subject, [requester]);
   const root = store.tenantStateRoot(subject);
   const profile = join(root, ".tinycloud/profiles/agent");
-  // The owner's timezone preference sits in the same profile directory as the delegate's custody.
+  // The owner's timezone preference, a file this server has never heard of, and a directory of the owner's sit beside the custody.
   const preference = `{\n  "timezone": "America/Los_Angeles",\n  "note": "kept exactly"\n}\n`;
+  const note = `{"written":"by something else","n":[1,2,3]}`;
+  const nested = "owner's notes\n";
   await writeFile(join(profile, "tc-apps.json"), preference);
+  await writeFile(join(profile, "owner-note.json"), note);
+  await writeFile(join(root, ".tinycloud/owner-note.json"), note);
+  await mkdir(join(profile, "notes"), { recursive: true });
+  await writeFile(join(profile, "notes/a.md"), nested);
+  const owned = [
+    [join(profile, "tc-apps.json"), preference],
+    [join(profile, "owner-note.json"), note],
+    [join(root, ".tinycloud/owner-note.json"), note],
+    [join(profile, "notes/a.md"), nested],
+  ] as const;
+  // Custody: the key, the profile, caches, a leftover atomic-write temporary of the session, grants, the call marker.
   await writeFile(join(root, ".tinycloud/native-grant.json"), "{}");
   await writeFile(join(profile, "registry-cache.json"), "{}");
-  await mkdir(join(profile, "extra"), { recursive: true });
-  await writeFile(join(profile, "extra/cache.json"), "{}");
+  await writeFile(join(profile, "session.json.123.abcdef.tmp"), "{}");
+  await writeFile(join(profile, "delegation-binding-migration.json"), "{}");
+  await mkdir(join(root, ".tinycloud/profile-locks/agent/0"), { recursive: true });
+  await writeFile(join(root, ".tinycloud/profile-locks/agent/0/owner.json"), "{}");
   await writeFile(join(root, ".tinycloud/last-call"), "");
-  const custody = ["key.json", "profile.json", "registry-cache.json", "extra"].map((name) => join(profile, name));
+  const custody = ["key.json", "profile.json", "registry-cache.json", "session.json.123.abcdef.tmp", "delegation-binding-migration.json"]
+    .map((name) => join(profile, name));
+  custody.push(join(root, ".tinycloud/profile-locks"));
   for (const path of [...custody, join(root, ".tinycloud/native-grant.json")]) expect(await exists(path)).toBe(true);
   expect(await readdir(join(profile, "pending"))).not.toHaveLength(0);
   await store.close();
@@ -205,18 +222,19 @@ test("retiring an idle tenant removes its key, grants and approvals but keeps th
   expect(await restarted.sweepIdleTenants()).toBe(1);
   expect(retirements).toHaveLength(1);
 
-  // Custody and key material are gone; the owner's preference is untouched.
+  // Custody and key material are gone; nothing else was touched, byte for byte.
   for (const path of [...custody, join(profile, "pending"), join(root, ".tinycloud/native-grant.json"), join(root, ".tinycloud/retiring")]) {
     expect(await exists(path), path).toBe(false);
   }
-  expect(await readFile(join(profile, "tc-apps.json"), "utf8")).toBe(preference);
-  expect((await readdir(profile)).sort()).toEqual(["tc-apps.json"]);
+  for (const [path, content] of owned) expect(await readFile(path, "utf8"), path).toBe(content);
+  expect((await readdir(profile)).sort()).toEqual(["notes", "owner-note.json", "tc-apps.json"]);
+  expect((await readdir(join(root, ".tinycloud"))).sort()).toEqual(["owner-note.json", "profiles"]);
 
-  // The next call starts a new delegate beside the same preference.
+  // The next call starts a new delegate beside the same files.
   const second = await restarted.connectStatus(subject, [requester]);
   expect(second).toMatchObject({ connected: false, approvalUrl: expect.any(String) });
   expect(second.sessionDid).not.toBe(first.sessionDid);
-  expect(await readFile(join(profile, "tc-apps.json"), "utf8")).toBe(preference);
+  for (const [path, content] of owned) expect(await readFile(path, "utf8"), path).toBe(content);
 });
 
 async function storeWith(

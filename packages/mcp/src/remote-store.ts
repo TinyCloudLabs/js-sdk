@@ -2,7 +2,7 @@ import { sameTinyCloudNode } from "@tinycloud/sdk-core";
 import { admitOwnerRenewalLease, RENEWAL_LEASE_ORIGINAL_EXPIRED, RENEWAL_RENEWER_CHANGED } from "@tinycloud/sdk-core/delegations/renewal";
 import { RENEWAL_ADMISSION_LEAD_MS, verifyOwnerRenewalLease } from "@tinycloud/sdk-core/delegations/renewal-receipt";
 import { createHmac, createPrivateKey, randomBytes, sign, timingSafeEqual } from "node:crypto";
-import { chmod, mkdir, readFile, readdir, rename, rm, stat, utimes, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, readdir, rename, rm, rmdir, stat, utimes, writeFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 
@@ -1335,20 +1335,24 @@ export class RemoteTenantStore {
   }
 
   /**
-   * Remove what this server holds for a retired tenant: its key, session, grants, markers and caches.
-   * Files the owner's tools keep in the profile directory (`OWNER_DATA_FILES`) are the owner's, not custody,
-   * and stay. The key and the retiring fence go last, so an interrupted removal can be retried.
+   * Remove the custody this server holds for a retired tenant, by name: the delegate key, session, grants, approvals,
+   * markers and caches (`CUSTODY_PROFILE_NAMES`, `CUSTODY_TINYCLOUD_FILE`). Every other file in the state directory
+   * is not ours to delete and stays, and so does any directory that still holds one. The key and the retiring fence
+   * go last, so an interrupted removal can be retried.
    */
   async #removeCustody(stateRoot: string): Promise<void> {
-    const profile = join(stateRoot, ".tinycloud", "profiles", PROFILE);
-    const keep = new Set(OWNER_DATA_FILES.map((name) => join(profile, name)));
-    const deferred = new Set([this.#keyPath(stateRoot), this.#retiringPath(stateRoot)]);
-    try {
-      await pruneExcept(stateRoot, keep, deferred);
-      for (const path of deferred) await rm(path, { force: true });
-      if (!await pruneExcept(stateRoot, keep, new Set())) await rm(stateRoot, { recursive: true, force: true });
-    } catch (error) {
-      if (!(isRecord(error) && error.code === "ENOENT")) throw error;
+    const tinycloud = join(stateRoot, ".tinycloud");
+    const profiles = join(tinycloud, "profiles");
+    const profile = join(profiles, PROFILE);
+    await removeNamed(profile, (name) => name === "pending" || (name !== "key.json" && CUSTODY_PROFILE_FILE.test(name)));
+    await removeNamed(tinycloud, (name) => name !== "retiring" && CUSTODY_TINYCLOUD_FILE.test(name));
+    await rm(this.#keyPath(stateRoot), { force: true });
+    await rm(this.#retiringPath(stateRoot), { force: true });
+    // Only what this server created and emptied: a directory that holds anything else stays.
+    for (const directory of [profile, profiles, tinycloud, stateRoot]) {
+      await rmdir(directory).catch((error: unknown) => {
+        if (!(isRecord(error) && (error.code === "ENOENT" || error.code === "ENOTEMPTY" || error.code === "EEXIST"))) throw error;
+      });
     }
   }
 
@@ -2079,24 +2083,32 @@ export class RemoteTenantStore {
   }
 }
 
-/** Owner-chosen preferences under a tenant's profile directory. Retirement keeps them. */
-const OWNER_DATA_FILES: readonly string[] = ["tc-apps.json"];
+/** Files under `.tinycloud/profiles/<profile>/` that are the delegate's key, authority or caches, with their atomic-write temporaries. */
+const CUSTODY_PROFILE_NAMES = [
+  "key.json", "profile.json", "delegation-binding-migration.json",
+  ...["session", "additional-delegations", "auth-requests", "registry-cache", "registry-sequences"]
+    .flatMap((store) => [`${store}.json`, `${store}.json.metadata.json`]),
+];
+const CUSTODY_PROFILE_FILE = namedFile(CUSTODY_PROFILE_NAMES);
+/** Entries directly under `.tinycloud/` that this server keeps for the tenant (`profile-locks` is the operations runtime's lock bookkeeping). The `retiring` fence is removed separately, last. */
+const CUSTODY_TINYCLOUD_FILE = namedFile(["native-grant.json", "last-call", "lease-exposures.json", "profile-locks"]);
 
-/** Delete everything under `directory` except `keep` and `deferred`; empty directories go. Whether anything stayed. */
-async function pruneExcept(directory: string, keep: ReadonlySet<string>, deferred: ReadonlySet<string>): Promise<boolean> {
-  let retained = false;
-  for (const entry of await readdir(directory, { withFileTypes: true })) {
-    const path = join(directory, entry.name);
-    if (keep.has(path) || deferred.has(path)) {
-      retained = true;
-    } else if (entry.isDirectory()) {
-      if (await pruneExcept(path, keep, deferred)) retained = true;
-      else await rm(path, { recursive: true, force: true });
-    } else {
-      await rm(path, { force: true });
-    }
+/** Matches exactly these names, and their `<name>.<suffix>.tmp` / `.<name>.<suffix>.tmp` temporaries. */
+function namedFile(names: readonly string[]): RegExp {
+  const escaped = names.map((name) => name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|");
+  return new RegExp(`^(?:${escaped})$|^\\.?(?:${escaped})\\.[^/]+\\.tmp$`);
+}
+
+/** Delete the entries of `directory` whose names `matches` accepts; nothing else. A missing directory is nothing to delete. */
+async function removeNamed(directory: string, matches: (name: string) => boolean): Promise<void> {
+  let names: string[];
+  try {
+    names = await readdir(directory);
+  } catch (error) {
+    if (isRecord(error) && error.code === "ENOENT") return;
+    throw error;
   }
-  return retained;
+  for (const name of names) if (matches(name)) await rm(join(directory, name), { recursive: true, force: true });
 }
 
 function retirementRoot(delegation: unknown): string {
