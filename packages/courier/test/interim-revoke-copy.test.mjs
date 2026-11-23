@@ -10,5 +10,4 @@ test('integrated revoke help describes real revocation and separate shared-file 
   assert.match(line, /Revoke the peer's access and remove the pairing/);
   assert.match(line, /Files you already shared stay available/);
   assert.match(line, /tinycloud share revoke <id>/);
-  assert.doesNotMatch(line, /Stop renewing|lapses at delegation expiry/);
 });

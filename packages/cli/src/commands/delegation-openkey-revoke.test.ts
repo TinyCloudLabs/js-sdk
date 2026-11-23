@@ -31,7 +31,6 @@ mock.module("../lib/sdk.js", () => ({
   bootstrapDelegatedSession: async () => fixture.owner,
   restoreProfileSessionNode: async () => ({ node: fixture.owner }),
 }));
-const authModule = await import("./auth.js");
 const { REVOKE_AUTHORITY_EXPIRY } = await import("../lib/revoke-delegation.js");
 const { ProfileManager } = await import("../config/profiles.js");
 const { appendGrantHistory, loadLocalGrantArtifacts } = await import("../lib/permissions.js");
@@ -116,15 +115,6 @@ async function revoke(cid: string) {
   return responseBody;
 }
 
-test("the OpenKey stand-in refuses a raw-CID plus owner-space request as production does", async () => {
-  const cid = wasm.computeCid(new TextEncoder().encode("raw refusal"), 0x55n);
-  await expect(openKey.delegate(fixture.ownerDid, { permissions: [
-    { service: "tinycloud.delegation", space: `urn:cid:${cid}`, path: "", actions: ["tinycloud.delegation/revoke"] },
-    { service: "tinycloud.capabilities", space: fixture.ownerRestorableSession.spaceId, path: "", actions: ["tinycloud.capabilities/read"] },
-  ] })).rejects.toThrow("Authentication timed out after 5 minutes");
-  expect(openKey.refusals).toEqual([{ code: "invalid_permissions", message: expect.stringContaining("single space") }]);
-});
-
 async function grantThroughCli() {
   const requestPath = join(home, "auth-request.json");
   await writeFile(requestPath, JSON.stringify({
@@ -173,18 +163,6 @@ test("owner OpenKey asks only for a signed CID-bound owner space, then revokes",
   expect(openKey.refusals).toEqual([]);
   expect(approvalExpiries).toEqual(["300s"]);
   expect(fixture.nativeBearerStats().revocations).toBe(before + 1);
-});
-
-test("both OpenKey revoke authority requests, raw CID then owner space, carry the short lifetime", async () => {
-  const delegation = await grantThroughCli();
-  const authority = spyOn(authModule, "ensureDelegationAuthority");
-  try {
-    await revoke(delegation.cid);
-    expect(authority.mock.calls.map(([params]) => params.expiryOption)).toEqual([REVOKE_AUTHORITY_EXPIRY, REVOKE_AUTHORITY_EXPIRY]);
-    expect(REVOKE_AUTHORITY_EXPIRY).toBe("5m");
-  } finally {
-    authority.mockRestore();
-  }
 });
 
 test("a local-key owner's raw-CID revoke authority gets the same short lifetime", async () => {

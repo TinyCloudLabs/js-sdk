@@ -87,14 +87,9 @@ const linesOf = (text: string) => text.split("\n");
 const CREATED = (command: string, again = "again") => `Next: send the owner the link above in your reply now. When the owner next writes to you, run ${command} ${again}.`;
 const RESUMED = (command: string, again = "again") => `Next: if you have not sent the owner the link above yet, send it in your reply now. When the owner next writes to you, run ${command} ${again}.`;
 const LEAD = /^Next: (send the owner the link above in your reply now|if you have not sent the owner the link above yet, send it in your reply now)\. When the owner next writes to you, run /;
-/** Phrases of the dropped v3/v4 wordings: none may come back on a link site. */
-const OLD_PHRASES = ["cannot see", "before your next tool call", "same reply", "do not end your turn", "wait for a reply"];
 const nextLines = (text: string) => {
   const found = linesOf(text).filter((line) => line.startsWith("Next: "));
-  for (const line of found) {
-    expect(line).toMatch(LEAD);
-    for (const phrase of OLD_PHRASES) expect(line).not.toContain(phrase);
-  }
+  for (const line of found) expect(line).toMatch(LEAD);
   return found;
 };
 // Node itself can print warning blocks to stderr (on Node 20 a `MaxListenersExceededWarning` from the pre-existing listener

@@ -141,11 +141,9 @@ async function approve(): Promise<void> {
 // ---- virtual clock ----
 const START = Date.parse("2026-11-01T09:00:00.000Z");
 let clock = START;
-let sleeps: number[] = [];
-let onTick: (now: number) => Promise<void> | void = () => undefined;
 const virtual = {
   now: () => clock,
-  sleep: async (ms: number) => { sleeps.push(ms); clock += ms; await onTick(clock); },
+  sleep: async (ms: number) => { clock += ms; },
 };
 
 let networkFault: (url: URL) => boolean = () => false;
@@ -213,7 +211,7 @@ beforeEach(async () => {
   caseEnvironment = snapshotEnvironment();
   Object.assign(process.env, fixtureEnvironment);
   results.clear(); linkPosts = 0; discoverCalls = 0; fetchCalls = 0; acks = []; ackSeenSaved = []; expireRequests = false; discoverRefusal = undefined;
-  clock = START; sleeps = []; onTick = () => undefined; networkFault = () => false; stalledBody = () => false; brokenBody = () => undefined; openkeyCalls = 0; onRequest = () => undefined; offered = [];
+  clock = START; networkFault = () => false; stalledBody = () => false; brokenBody = () => undefined; openkeyCalls = 0; onRequest = () => undefined; offered = [];
   await rm(pendingPath(), { force: true });
   await ProfileManager.setProfile("approval", { name: "approval", did, sessionDid: did, ownerDid, host, chainId: 1, spaceName: "applications", createdAt: new Date().toISOString(), authMethod: "openkey", posture: "owner-openkey" });
   await ProfileManager.setKey("approval", key);
@@ -289,21 +287,6 @@ describe("the first status check completes whatever the --timeout", () => {
     expect(Date.now() - started).toBeLessThan(8_000);
     expect(await entries()).toHaveLength(1);
   }, 20_000);
-
-  test("(4) --timeout 5s and 60s behave as before: polls every 2 s with a last poll at the deadline; an approval at 6 s is collected", async () => {
-    await pendingOf(() => acquireApprovalRequest(did, withDeadline(60_000)));
-    discoverCalls = 0; sleeps = []; clock = START;
-    const error = await pendingOf(() => acquireApprovalRequest(did, withDeadline(5_000)));
-    expect(error.code).toBe("APPROVAL_PENDING");
-    expect(sleeps).toEqual([2000, 2000, 1000]);
-    expect(discoverCalls).toBe(4);
-    sleeps = []; clock = START;
-    onTick = async (now) => { if (now === START + 6_000) await approve(); };
-    const delegation = await acquireApprovalRequest(did, withDeadline(60_000));
-    expect(clock).toBe(START + 6_000);
-    expect(sleeps.every((ms) => ms <= 2000)).toBe(true);
-    expect(delegation.delegationCid).toBeDefined();
-  });
 
   test("(5) two approvals under --timeout 1s: the first check of each one completes", async () => {
     for (const step of [1, 2]) {

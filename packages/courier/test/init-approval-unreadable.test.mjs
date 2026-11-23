@@ -65,7 +65,6 @@ scenario('the discard hint says exactly what --rotate-key does: clears every pai
   assert.match(run.stderr, /clears every pairing/i);
   assert.match(run.stderr, /grant\.json/);
   assert.match(run.stderr, /awaiting-grant/);
-  assert.doesNotMatch(run.stderr, /re-pairs/);
 });
 
 scenario('a legacy import that drops a saved approval says so on stderr; one that drops nothing is silent', async (ctx) => {

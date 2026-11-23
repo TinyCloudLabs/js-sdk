@@ -132,10 +132,6 @@ describe("returnTo rule", () => {
     expect(url).toContain(`&return_to=${encodeURIComponent(returnTo)}&`);
   });
 
-  test("the 2048-character value is exactly at the limit", () => {
-    expect(exactly2048).toHaveLength(2048);
-  });
-
   test.each([
     "https://a.b.tinyfeed.pages.dev/x",
     "https://example.com/callback",

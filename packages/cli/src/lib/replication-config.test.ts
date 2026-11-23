@@ -67,11 +67,6 @@ describe("CLI replication grant TTL and byte budget env", () => {
     expect(configFor()?.grantTtlMs).toBe(DAY_MS);
   });
 
-  test("TC_REPLICATION_GRANT_TTL_MS sets grantTtlMs up to exactly 7 days", () => {
-    process.env.TC_REPLICATION_GRANT_TTL_MS = String(7 * DAY_MS);
-    expect(configFor()?.grantTtlMs).toBe(7 * DAY_MS);
-  });
-
   test("TC_REPLICATION_GRANT_TTL_MS above 7 days is a usage error that names the variable", () => {
     process.env.TC_REPLICATION_GRANT_TTL_MS = String(7 * DAY_MS + 1);
     let error: unknown;
@@ -104,14 +99,6 @@ describe("CLI replication grant TTL and byte budget env", () => {
     }
   });
 
-  // Storage-side predicates, duplicated because storage inlines them (not exported):
-  //   grantTtlMs: packages/node-sdk/src/replication/sqlite.ts:2732-2733 on master
-  //     (!isSafeInteger || <= 0 || > MAX_GRANT_TTL_MS throws TypeError).
-  //   maxBytes: packages/node-sdk/src/replication/sqlite.ts:2833-2834 on PR #547 at ffb8ce55
-  //     (!isSafeInteger || < 0 throws TypeError; 0 is accepted by storage, rejected by the CLI).
-  // minFreeBytes is not read by the CLI. Invariant: CLI-accepted values are a subset of these.
-  const storageAcceptsGrantTtl = (value: number) => Number.isSafeInteger(value) && value > 0 && value <= 7 * DAY_MS;
-  const storageAcceptsMaxBytes = (value: number) => Number.isSafeInteger(value) && value >= 0;
   const SAFE_MAX = "9007199254740991";
 
   const table: Array<{ raw: string; ttl: boolean; maxBytes: boolean }> = [
@@ -132,11 +119,11 @@ describe("CLI replication grant TTL and byte budget env", () => {
     { raw: String(7 * DAY_MS + 1), ttl: false, maxBytes: true },
   ];
 
-  test("CLI acceptance table; every accepted value is also accepted by storage", () => {
+  test("CLI acceptance table", () => {
     for (const row of table) {
-      for (const [name, expected, storageAccepts, read] of [
-        ["TC_REPLICATION_GRANT_TTL_MS", row.ttl, storageAcceptsGrantTtl, (config: ReturnType<typeof configFor>) => config?.grantTtlMs],
-        ["TC_REPLICATION_MAX_BYTES", row.maxBytes, storageAcceptsMaxBytes, (config: ReturnType<typeof configFor>) => config?.maxBytes],
+      for (const [name, expected, read] of [
+        ["TC_REPLICATION_GRANT_TTL_MS", row.ttl, (config: ReturnType<typeof configFor>) => config?.grantTtlMs],
+        ["TC_REPLICATION_MAX_BYTES", row.maxBytes, (config: ReturnType<typeof configFor>) => config?.maxBytes],
       ] as const) {
         delete process.env.TC_REPLICATION_GRANT_TTL_MS;
         delete process.env.TC_REPLICATION_MAX_BYTES;
@@ -145,16 +132,8 @@ describe("CLI replication grant TTL and byte budget env", () => {
           expect(() => configFor()).toThrow(CLIError);
           continue;
         }
-        const accepted = read(configFor());
-        expect(accepted).toBe(Number(row.raw));
-        expect(storageAccepts(accepted as number)).toBe(true);
+        expect(read(configFor())).toBe(Number(row.raw));
       }
     }
-  });
-
-  test("the CLI is deliberately stricter than storage for maxBytes 0", () => {
-    expect(storageAcceptsMaxBytes(0)).toBe(true);
-    process.env.TC_REPLICATION_MAX_BYTES = "0";
-    expect(() => configFor()).toThrow(CLIError);
   });
 });

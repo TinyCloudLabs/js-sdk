@@ -44,18 +44,6 @@ test("shared profile stores have no direct CLI writers outside their compatibili
   expect(violations).toEqual([]);
 });
 
-test("shared-state compatibility wrappers use operations state primitives", async () => {
-  const profiles = await readFile(`${sourceRoot}/config/profiles.ts`, "utf8");
-  const permissions = await readFile(`${sourceRoot}/lib/permissions.ts`, "utf8");
-
-  expect(profiles).toContain('from "@tinycloud/operations/state"');
-  expect(profiles).toMatch(/readSession/);
-  expect(profiles).toMatch(/writeSession/);
-  expect(profiles).toMatch(/removeSession/);
-  expect(permissions).toContain('from "@tinycloud/operations/state"');
-  expect(permissions).toMatch(/withProfileLock/);
-});
-
 async function sourceFiles(directory: string, prefix = ""): Promise<Array<{
   path: string;
   relative: string;

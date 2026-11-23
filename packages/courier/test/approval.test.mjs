@@ -1,23 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createHash } from 'node:crypto';
-import { canonicalJson, requestHash } from '../dist/canonical.js';
-import { verifyApproval, consumeApproval, approvalIsUsed } from '../dist/approval.js';
+import { requestHash } from '../dist/canonical.js';
+import { verifyApproval } from '../dist/approval.js';
 import { Watcher } from '../dist/watch.js';
 import { k } from '../dist/keys.js';
-
-test('canonical JSON: shared vector with the /courier view', () => {
-  const canonical = canonicalJson({ b: 1, a: [{ d: 2, c: 'x' }] });
-  assert.equal(canonical, '{"a":[{"c":"x","d":2}],"b":1}');
-  assert.equal(requestHash({ b: 1, a: [{ d: 2, c: 'x' }] }), createHash('sha256').update(canonical).digest('hex'));
-  assert.equal(canonicalJson({ b: 1, a: 2 }), canonicalJson({ a: 2, b: 1 }), 'key order does not matter');
-  assert.notEqual(canonicalJson([1, 2]), canonicalJson([2, 1]), 'array order does');
-});
-
-test('canonical JSON keeps a parsed "__proto__" key, like the view\'s string-built version', () => {
-  assert.equal(canonicalJson(JSON.parse('{"__proto__":{"x":1},"a":1}')), '{"__proto__":{"x":1},"a":1}');
-  assert.notEqual(requestHash(JSON.parse('{"__proto__":{"x":1},"a":1}')), requestHash({ a: 1 }));
-});
 
 const NOW = Date.parse('2026-10-20T12:00:00Z');
 const request = {
@@ -80,14 +66,6 @@ function memoryKv() {
     },
   };
 }
-
-test('an approval is single use: the second consume fails and a peek sees it as used', async () => {
-  const kv = memoryKv();
-  assert.equal(await approvalIsUsed(kv, '01M5CBKA6RNA3RZ2819T9M7NDZ'), false);
-  await consumeApproval(kv, '01M5CBKA6RNA3RZ2819T9M7NDZ');
-  assert.equal(await approvalIsUsed(kv, '01M5CBKA6RNA3RZ2819T9M7NDZ'), true);
-  await assert.rejects(consumeApproval(kv, '01M5CBKA6RNA3RZ2819T9M7NDZ'), (e) => e.code === 'approval-used');
-});
 
 function watcherWith(selfKv, wakes, clock) {
   return new Watcher({

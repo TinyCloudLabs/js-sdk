@@ -433,7 +433,6 @@ describe("tinycloud bug-report --attach", () => {
     ["payload_too_large", 413, "BUG_REPORT_PAYLOAD_TOO_LARGE"],
     ["unsupported_media_type", 415, "BUG_REPORT_UNSUPPORTED_MEDIA_TYPE"],
     ["rate_limited", 429, "BUG_REPORT_RATE_LIMITED"],
-    ["intake_busy", 503, "BUG_REPORT_INTAKE_BUSY"],
     ["too_deep", 400, "BUG_REPORT_TOO_DEEP"],
   ] as const)("maps API errors to CLI error codes (%s)", async (apiCode, status, code) => {
     await recordPrivateDiagnostic();

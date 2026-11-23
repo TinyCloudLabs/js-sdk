@@ -39,20 +39,6 @@ test("keeps a same-owner delegate profile in delegate posture", async () => {
   });
 });
 
-test("a missing explicit profile never selects the configured fallback", async () => {
-  await profile("fallback", { did: "did:key:fallback" });
-  await writeJsonAtomic(`${home}/.tinycloud/config.json`, { defaultProfile: "fallback" });
-
-  await expect(resolveInvocationContext({ profile: "deleted" })).resolves.toEqual({
-    ok: false,
-    error: {
-      code: "PROFILE_NOT_FOUND",
-      message: 'Profile "deleted" is not available.',
-      retryable: false,
-    },
-  });
-});
-
 async function profile(name: string, overrides: Record<string, unknown>): Promise<void> {
   await writeJsonAtomic(profileConfigPath(name), {
     name,

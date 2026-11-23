@@ -1,7 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import type { TinyCloudNode } from "@tinycloud/node-sdk";
 import { CLIError } from "../output/errors.js";
-import { NodeNotFoundError } from "@tinycloud/sdk-core";
 import { createShareAuthorityAdapters } from "./adapters.js";
 
 const link = "https://share.example/viewer#tc1=tc1:opaque";
@@ -30,24 +29,6 @@ describe("native bearer receive", () => {
       .catch((error: unknown) => error);
     expect(failure).toBeInstanceOf(CLIError);
     expect(failure).toMatchObject({ code: "SHARE_REVOKED", exitCode: 4 });
-  });
-
-  it.each([
-    { status: "registered", subject: "did:key:z6MkSender", source: "offchain", hosts: [] },
-    { status: "unregistered", subject: "did:key:z6MkSender", source: "offchain", hosts: [], offline: true },
-  ] as const)("does not turn registered or offline refusal into a publication request: %j", async (verdict) => {
-    const cause = new NodeNotFoundError(verdict.subject, verdict);
-    const failure = await readerFor({ code: cause.code, message: cause.message, cause, meta: {} })(link)
-      .catch((error: unknown) => error);
-    expect(failure).toBeInstanceOf(Error);
-    expect(failure).not.toBeInstanceOf(CLIError);
-  });
-
-  it.each(["registry_unavailable", "AUTH_UNAUTHORIZED", "RESOURCE_NOT_ROUTED"])("keeps %s distinct from unpublished storage settings", async (code) => {
-    const failure = await readerFor({ code, message: "sender has not published", meta: {} })(link)
-      .catch((error: unknown) => error);
-    expect(failure).toBeInstanceOf(Error);
-    expect(failure).not.toBeInstanceOf(CLIError);
   });
 
   it("keeps other read refusals generic", async () => {

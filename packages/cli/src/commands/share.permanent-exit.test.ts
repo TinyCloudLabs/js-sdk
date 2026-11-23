@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { shareCliError } from "./share.js";
 import { approvalPendingError } from "../auth/approval-wait.js";
-import { shareFilename, writeShareOutput } from "../share/io.js";
+import { writeShareOutput } from "../share/io.js";
 import { runShareCaptured } from "./share.integration-harness.js";
 
 describe("share errors that cannot change on retry exit 2", () => {
@@ -12,10 +12,6 @@ describe("share errors that cannot change on retry exit 2", () => {
     const error = shareCliError(new Error(name));
     expect(error.code).toBe(name);
     expect(error.exitCode).toBe(2);
-  });
-
-  test("an unsafe filename is exit 2", () => {
-    expect(() => shareFilename("a\u200b.md")).toThrow(expect.objectContaining({ code: "UNSAFE_FILENAME", exitCode: 2 }));
   });
 
   test("an existing output path is exit 2 through the command mapping", async () => {

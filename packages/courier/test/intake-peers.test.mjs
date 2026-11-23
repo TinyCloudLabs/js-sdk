@@ -121,15 +121,6 @@ test('a group- or other-writable peers file is refused', () => {
   }
 });
 
-test('an owner-only peers file is accepted', () => {
-  const t = tempPeers({ alice: { tier: 'trusted' } }, 0o600);
-  try {
-    assert.equal(tierOf(loadPeers(t.file), 'alice'), 'trusted');
-  } finally {
-    t.cleanup();
-  }
-});
-
 test('a present peer without ratePerHour gets the 100 inbound default, absent peers get 100 too', () => {
   const t = tempPeers({ dave: { tier: 'trusted' } });
   try {

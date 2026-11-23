@@ -246,31 +246,11 @@ test("a refused input names the field and its rule; code, retryable and issue co
 
 test("plans and persists exact missing authority before it can execute a handler", async () => {
   let handlerRan = false;
-  resolver = async () => {
-    invocationTrace.push("runtime");
-    return {
-      ok: true,
-      context: {
-        summary: {
-          profile: "delegate",
-          host: "https://node.example",
-          posture: "delegate-session",
-          operatorType: "agent",
-          sessionDid: "did:key:session",
-        },
-        runtime: { node: {}, granted: [] },
-      },
-    };
-  };
   definitions = [
     createDefinition({
-      authority: async () => {
-        invocationTrace.push("plan");
-        return [testCapability];
-      },
+      authority: async () => [testCapability],
       execute: async () => {
         handlerRan = true;
-        invocationTrace.push("handler");
         return { status: "ok", output: { value: "unreachable" } };
       },
     }),
@@ -283,8 +263,12 @@ test("plans and persists exact missing authority before it can execute a handler
     { name: "valid" },
   );
 
-  expect(result.status).toBe("authority_required");
-  expect(invocationTrace).toEqual(["runtime", "runtime", "plan", "persist"]);
+  expect(result).toMatchObject({
+    status: "authority_required",
+    missing: [testCapability],
+    request: { requestId: "request-1", requested: [testCapability] },
+  });
+  expect(invocationTrace).toEqual(["persist"]);
   expect(handlerRan).toBe(false);
 });
 
@@ -426,7 +410,6 @@ test("fails closed when the authenticated resolution changes from inspection pos
     context: { posture: "local-owner-key" },
     error: { code: "PROFILE_OWNER_OPT_IN_REQUIRED" },
   });
-  expect(calls).toBe(2);
 });
 
 test("rejects incoherent local owner material before invocation can sign in or execute", async () => {

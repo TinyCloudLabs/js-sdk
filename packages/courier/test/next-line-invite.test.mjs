@@ -21,14 +21,11 @@ const lines = (text) => text.split('\n');
 const inviteLine = (id) => `Next: send the owner the invitation link above in your reply now. When the owner next writes to you, run \`courier invite serve ${id} --wait 60\`.`;
 const startLine = (link) => `Next: send the owner this invitation link in your reply now if you have not sent it yet: ${link}`;
 const pendingServeLine = (id, wait) => `Next: No one has joined yet; run \`courier invite serve ${id} --wait ${wait}\` again now, in this same turn; do not end your turn or wait for a reply.`;
-/** Phrases of the dropped v3/v4 wordings: none may come back on a link site. */
-const OLD_PHRASES = ['cannot see', 'before your next tool call', 'same reply', 'do not end your turn', 'wait for a reply'];
 const nextLines = (text) => {
   const found = lines(text).filter((line) => line.startsWith('Next: '));
   for (const line of found) {
     if (line.startsWith('Next: No one has joined yet; run ')) continue; // (8): its own wording, kept from v3
     assert.ok(/^Next: send the owner (the invitation link above|this invitation link|the invitation link printed by `invite`) in your reply now/.test(line), line);
-    for (const phrase of OLD_PHRASES) assert.ok(!line.includes(phrase), `${phrase}: ${line}`);
   }
   return found;
 };

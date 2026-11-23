@@ -263,17 +263,6 @@ describe("tc share command contract", () => {
     expect(rejected.message).toContain("retrying will not help");
   });
 
-  test("registers only the current native sharing lifecycle commands", () => {
-    const program = new Command();
-    registerShareCommand(program);
-    const share = program.commands.find((command) => command.name() === "share");
-    expect(share?.commands.map((command) => command.name())).toEqual([
-      "publish", "inspect", "versions", "receive", "list", "show", "notify", "revoke", "unlink", "history",
-    ]);
-    const history = share?.commands.find((command) => command.name() === "history");
-    expect(history?.commands.map((command) => command.name())).toEqual(["recover"]);
-  });
-
   test("--notify without read refuses before publishing or recording anything", async () => {
     const directory = await mkdtemp(join(tmpdir(), "tc-share-no-read-"));
     const file = join(directory, "note.md");

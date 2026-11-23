@@ -295,7 +295,7 @@ describe("a grant over two approvals that stopped at the second resumes both on 
   const linkOf = (error: InstanceType<typeof CLIError>) => (error.metadata as { pending: { approvalUrl: string } }).pending.approvalUrl;
 
   test("the first approval is served again and the second shows its same link: no new request is made", async () => {
-    await createPending();
+    const created = await createPending();
     await approve();
     const first = await acquireApprovalRequest(did, options());
     const waiting = await pendingOf(() => acquireApprovalRequest(did, { ...options(), permissions: second, ...wait(Date.now() + 1_000) }));
@@ -312,7 +312,7 @@ describe("a grant over two approvals that stopped at the second resumes both on 
     expect(offered).toEqual([secondRequest!.approvalUrl]);
     expect(linkPosts).toBe(2);
     expect(acks).toEqual([]);
-    expect((await entries()).map((item) => item.requestId)).toEqual([(await entries())[0]!.requestId, secondRequest!.requestId]);
+    expect((await entries()).map((item) => item.requestId)).toEqual([created.requestId, secondRequest!.requestId]);
   });
 });
 

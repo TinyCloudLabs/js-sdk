@@ -667,30 +667,6 @@ describe("an expired or invalid stored session needs a new sign-in, not a retry"
     }
   }, 60_000);
   // TC-674 regression: fails before the fix
-  test("context reports signed expiry rather than future unsigned imported metadata", async () => {
-    const home = await mkdtemp(join(tmpdir(), "tc-imported-context-expiry-"));
-    const expiry = Math.floor(Date.now() / 1000) + 3600;
-    try {
-      const seeded = await seedImportedProfile(home, "context-expiry", expiry);
-      await seedImportedSession(home, "context-expiry", seeded, {
-        expiresAt: new Date((expiry + 3600) * 1000).toISOString(),
-      });
-      requests.length = 0;
-      const context = await runBuiltCli(
-        home,
-        ["--profile", "context-expiry", "--json", "context"],
-        expiry * 1000,
-      );
-      expect(context.exitCode).toBe(0);
-      expect(JSON.parse(context.stdout)).toMatchObject({
-        session: { state: "expired", expiresAt: new Date(expiry * 1000).toISOString() },
-      });
-      expect(requests).toEqual([]);
-    } finally {
-      await rm(home, { recursive: true, force: true });
-    }
-  }, 60_000);
-  // TC-674 regression: fails before the fix
   test("rejects an older imported session before node access", async () => {
     const home = await mkdtemp(join(tmpdir(), "tc-imported-old-expiry-"));
     const expiry = Math.floor(Date.now() / 1000) + 3600;

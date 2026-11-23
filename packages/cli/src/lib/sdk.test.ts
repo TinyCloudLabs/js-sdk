@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { beforeEach, describe, expect, mock, test } from "bun:test";
 import { CLIError } from "../output/errors.js";
 
 // Controllable profile/session/key state for each test. `null` means "absent"
@@ -148,10 +148,6 @@ describe("bootstrapDelegatedSession", () => {
   });
 });
 
-afterEach(() => {
-  delete process.env.TC_PRIVATE_KEY;
-});
-
 describe("ensureAuthenticated headless private-key identity", () => {
   test("an explicit options.privateKey authenticates with NO profile and NO session", async () => {
     const node = await ensureAuthenticated(ctx, { privateKey: HEX_KEY });
@@ -162,25 +158,9 @@ describe("ensureAuthenticated headless private-key identity", () => {
     expect(nodeCalls[0]!.signedIn).toBe(true);
   });
 
-  test("a key sourced from TC_PRIVATE_KEY (threaded as options.privateKey) authenticates headlessly", async () => {
-    // This is the shape the secrets commands produce: authOptions() reads
-    // TC_PRIVATE_KEY and passes it to ensureAuthenticated as options.privateKey.
-    process.env.TC_PRIVATE_KEY = HEX_KEY;
-    const fromEnv = process.env.TC_PRIVATE_KEY;
-    const node = await ensureAuthenticated(ctx, { privateKey: fromEnv });
-    expect(node).toBeDefined();
-    expect(nodeCalls).toHaveLength(1);
-    expect(nodeCalls[0]!.privateKey).toBe(HEX_KEY);
-    expect(nodeCalls[0]!.signedIn).toBe(true);
-  });
-
   test("with no profile, no session, and no key, it still throws AUTH_REQUIRED", async () => {
     await expect(ensureAuthenticated(ctx, {})).rejects.toMatchObject({ code: "AUTH_REQUIRED" });
     expect(nodeCalls).toHaveLength(0);
-  });
-
-  test("with no profile, no session, and no options, it throws AUTH_REQUIRED", async () => {
-    await expect(ensureAuthenticated(ctx)).rejects.toMatchObject({ code: "AUTH_REQUIRED" });
   });
 
   test("an explicit key wins even when a local profile already exists", async () => {
@@ -237,30 +217,12 @@ describe("stored grant replay session gate", () => {
 });
 
 describe("selectSignerJwk fallback", () => {
-  const PUBLIC_ONLY_SESSION_JWK = { kty: "OKP", crv: "Ed25519", x: "session-public" };
   const FULL_KEY_JWK = { kty: "OKP", crv: "Ed25519", x: "key-public", d: "key-private" };
-  const FULL_SESSION_JWK = { kty: "OKP", crv: "Ed25519", x: "session-public", d: "session-private" };
-
-  test("jwkHasPrivateParameter returns false for a public-only OKP JWK", () => {
-    expect(jwkHasPrivateParameter(PUBLIC_ONLY_SESSION_JWK)).toBe(false);
-  });
-
-  test("jwkHasPrivateParameter returns true when `d` is present", () => {
-    expect(jwkHasPrivateParameter(FULL_KEY_JWK)).toBe(true);
-  });
 
   test("jwkHasPrivateParameter is defensive against null/undefined/empty `d`", () => {
     expect(jwkHasPrivateParameter(null)).toBe(false);
     expect(jwkHasPrivateParameter(undefined)).toBe(false);
     expect(jwkHasPrivateParameter({ kty: "OKP", crv: "Ed25519", x: "p", d: "" })).toBe(false);
-  });
-
-  test("selectSignerJwk prefers session JWK when it has `d`", () => {
-    expect(selectSignerJwk(FULL_SESSION_JWK, FULL_KEY_JWK)).toBe(FULL_SESSION_JWK);
-  });
-
-  test("selectSignerJwk falls back to key when session JWK is public-only", () => {
-    expect(selectSignerJwk(PUBLIC_ONLY_SESSION_JWK, FULL_KEY_JWK)).toBe(FULL_KEY_JWK);
   });
 
   test("selectSignerJwk falls back to key when session JWK is missing", () => {

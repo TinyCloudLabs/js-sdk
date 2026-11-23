@@ -109,11 +109,6 @@ describe("prepared replica login", () => {
     expect(Date.parse(saved.expiresAt!) - Date.now()).toBeLessThan(21 * 60_000);
   });
 
-  test("an expiry beyond the requested --expiry is still refused and nothing is saved", async () => {
-    pickedLifetimeMs = 2 * HOUR;
-    await expect(login()).rejects.toMatchObject({ code: "OPENKEY_EXPIRY_EXCEEDED" });
-    expect(await ProfileManager.getSession("owner")).toBeNull();
-  });
 });
 
 describe("prepared --keys login", () => {

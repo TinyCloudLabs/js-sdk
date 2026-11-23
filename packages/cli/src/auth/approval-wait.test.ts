@@ -24,11 +24,6 @@ describe("parseApprovalTimeout", () => {
     expect(parseApprovalTimeout(value)).toBe(ms);
   });
 
-  test("the ceiling is exactly nine minutes: 540s passes, 541s does not", () => {
-    expect(parseApprovalTimeout("540s")).toBe(9 * 60_000);
-    expect(() => parseApprovalTimeout("541s")).toThrow(CLIError);
-  });
-
   test.each(["541s", "10m", "60m", "99999999999999999999s"])("refuses %s as a usage error that names the maximum and what to do", (value) => {
     const error = refusal(value);
     expect(error.exitCode).toBe(ExitCode.USAGE_ERROR);

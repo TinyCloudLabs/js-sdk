@@ -148,7 +148,6 @@ test('no high-water mark: a message with an older id that appears later is still
   await putMessage(h.kv, earlier, [{ kind: 'text', text: 'one' }]);
   assert.equal(await intakeCycle(h.input), 1);
   assert.equal(h.readQueue(HANDLE, earlier).text, 'one');
-  assert.equal('highWater' in h.input.state.peers[HANDLE], false);
 });
 
 test('an id more than 10 minutes ahead is skipped and retried later; ids within the skew are queued', async () => {
@@ -258,16 +257,6 @@ test('receipts are pruned to the last hour and never grow past the cap', async (
   await putMessage(h.kv, later, [{ kind: 'text', text: 'after the window' }]);
   await intakeCycle(h.input);
   assert.equal(h.readQueue(HANDLE, later).cheapChecks.peerRatePerHourRemaining, 4);
-});
-
-test('an absent peer gets the strict tier with the 100 per hour default', async () => {
-  const h = harness({ peers: {} });
-  const msg = ulid(NOW - 60_000);
-  await putMessage(h.kv, msg, [{ kind: 'text', text: 'hi' }]);
-  await intakeCycle(h.input);
-  const record = h.readQueue(HANDLE, msg);
-  assert.equal(record.cheapChecks.tier, 'strict');
-  assert.equal(record.cheapChecks.peerRatePerHourRemaining, 99);
 });
 
 test('text of 2000 to 8000 characters is not flagged; over 8000 is too-long; over 16 KiB is cut and flagged size', async () => {

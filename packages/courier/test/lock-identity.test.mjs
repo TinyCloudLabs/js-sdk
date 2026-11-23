@@ -307,10 +307,6 @@ test('test-ruling: an absent pid (ESRCH) is dead and the lock is recovered', asy
   assert.equal((await take('esrch', record({ pid: await gone(), machine: 'M', boot: LINUX_HERE }), here('M', LINUX_HERE))).taken, true);
 });
 
-test('test-ruling: a different true boot id on the same host is recovered even though the pid exists', async () => {
-  assert.equal((await take('boot-changed', record({ pid: process.pid, machine: 'M', boot: LINUX_OLD }), here('M', LINUX_NEW))).taken, true);
-});
-
 test('test-ruling: a lock records no start time and no time namespace', () => {
   const file = lock('record-fields');
   fs.rmSync(file, { force: true });

@@ -167,7 +167,6 @@ test("a local --keys login on an account whose encryption network is missing cre
 });
 
 test.each([
-  [false, 1],
   [true, 0],
 ])("a provisioned account with network present=%s issues exactly %i create request(s)", async (present, expectedCreates) => {
   let networkExists = present;

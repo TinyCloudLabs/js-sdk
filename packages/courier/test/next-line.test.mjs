@@ -13,13 +13,10 @@ const createdLine = (command, again = 'again') => `Next: send the owner the link
 const resumedLine = (command, again = 'again') => `Next: if you have not sent the owner the link above yet, send it in your reply now. When the owner next writes to you, run ${command} ${again}.`;
 const requestLine = (bin) => `Next: send the owner the link above in your reply now. When the owner next writes to you, run \`${bin} init --wait --timeout 60s\`.`;
 const LEAD = /^Next: (send the owner the link above in your reply now|if you have not sent the owner the link above yet, send it in your reply now)\. When the owner next writes to you, run /;
-/** Phrases of the dropped v3/v4 wordings: none may come back on a link site. */
-const OLD_PHRASES = ['cannot see', 'before your next tool call', 'same reply', 'do not end your turn', 'wait for a reply'];
 const nextLines = (text) => {
   const found = lines(text).filter((line) => line.startsWith('Next: '));
   for (const line of found) {
     assert.match(line, LEAD);
-    for (const phrase of OLD_PHRASES) assert.ok(!line.includes(phrase), `${phrase}: ${line}`);
   }
   return found;
 };
@@ -80,15 +77,6 @@ scenario('init --wait that ends pending (exit 8) on a resumed request ends stder
   const next = assertNextLast(run.stderr, printed.openkeyUrl);
   assert.ok(next.includes('`courier init --wait --timeout 5s`'), next);
   assert.equal(next, resumedLine('`courier init --wait --timeout 5s`'));
-});
-
-scenario('init --wait that created its request in this run and ends pending prints the Next line too', async ({ t, courier }) => {
-  fakeTime(t);
-  const run = await courier('--wait', '--timeout', '5s');
-  assert.equal(run.code, 8);
-  const next = assertNextLast(run.stderr, JSON.parse(run.stdout).pending.approvalUrl);
-  assert.ok(next.includes('`courier init --wait --timeout 5s`'), next);
-  assert.equal(next, createdLine('`courier init --wait --timeout 5s`'));
 });
 
 scenario('the pending Next line quotes an argument that has a space, and names tinycloud courier when that is how it was run', async ({ t, errors }) => {

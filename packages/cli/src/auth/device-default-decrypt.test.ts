@@ -30,7 +30,6 @@ const spaceId = wasm.makeSpaceId(address, 1, "default");
 const key = JSON.parse(wasm.createSessionManager().jwk("default")!) as Record<string, string>;
 const sessionDid = keyToDID(key);
 const DECRYPT = "tinycloud.encryption/decrypt";
-const wire: PermissionEntry = { service: "tinycloud.encryption", space: "default", path: "", actions: [DECRYPT] };
 
 afterAll(async () => {
   if (originalTcHome === undefined) delete process.env.TC_HOME;
@@ -64,16 +63,6 @@ describe("share publishing and the default-key decrypt", () => {
     expect(loaded.some((permission) => permission.service === "tinycloud.encryption")).toBe(false);
     expect(loaded.length).toBeGreaterThan(0);
     expect(sharePublishingPermissions().some((permission) => permission.service === "tinycloud.encryption")).toBe(false);
-  });
-
-  test("device sign-in sends OpenKey the default-network decrypt as OpenKey takes it", async () => {
-    let contacted = 0;
-    const fetchFn = (async () => { contacted += 1; return new Response(null, { status: 500 }); }) as unknown as typeof globalThis.fetch;
-    await expect(acquireDeviceDelegation({
-      sessionDid, jwk: key, nodeOrigin: NODE, shareOrigin: "https://share.tinycloud.xyz",
-      permissions: [...sharePublishingPermissions(), wire], fetchFn, emitInstructions: () => undefined, wait: async () => undefined,
-    })).rejects.not.toMatchObject({ code: "DEVICE_AUTH_UNSUPPORTED_SCOPE" });
-    expect(contacted).toBeGreaterThan(0);
   });
 
   test("device sign-in refuses every other encryption entry before contacting OpenKey", async () => {

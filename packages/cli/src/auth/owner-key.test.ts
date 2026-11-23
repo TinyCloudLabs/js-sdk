@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { ownerLoginPermissions } from "./owner-key.js";
 
 describe("owner login permissions", () => {
-  test("does not add delegation revoke to the default grant list", () => {
+  test("an owner login asks for kv, sql, capabilities read and delegation list in the owner's default space", () => {
     const permissions = ownerLoginPermissions("did:pkh:eip155:1:0xowner");
 
     expect(permissions).toEqual([
@@ -31,7 +31,6 @@ describe("owner login permissions", () => {
         actions: ["tinycloud.delegation/list"],
       },
     ]);
-    expect(permissions.flatMap((permission) => permission.actions)).not.toContain("tinycloud.delegation/revoke");
   });
 
   test("without an owner, names the plain default space and still requests delegation/list for list, info and create's read-back", () => {

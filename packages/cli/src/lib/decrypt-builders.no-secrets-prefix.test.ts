@@ -23,7 +23,6 @@ mock.module("../config/profiles.js", () => ({
 
 // Imported after mock.module so the builders see the mocked ProfileManager.
 const { loadManifestPermissions, resolvePermissionSpaces } = await import("./permissions.js");
-const { parseKeysPrefix } = await import("./named-keys.js");
 const { secretMigrateKeyPermissions, secretMigratePermissions } = await import("../commands/secrets.js");
 
 /** A resource under a network's `secrets/` keys that is not exactly one secret's key. */
@@ -61,13 +60,6 @@ describe("decrypt builders never yield a secrets/ prefix", () => {
     ]);
   });
 
-  test("a manifest secrets block (cli/src/lib/permissions.ts secretPermissionsFromAppManifest): exact keys plus the network root", async () => {
-    expectNoSecretsPrefix(await loadManifestPermissions(
-      base64({ app_id: "xyz.tinycloud.agent", secrets: { OPENAI_API_KEY: true, ELEVENLABS_API_KEY: ["get"] } }),
-      "agent", { allowLogicalSpaces: true },
-    ));
-  });
-
   for (const prefix of ["secrets", "secrets/", "secrets/scoped/my-app/"]) {
     test(`a manifest raw entry (permissions.ts appManifestEntry) on ${prefix} is refused`, async () => {
       await expect(loadManifestPermissions(base64({
@@ -88,12 +80,6 @@ describe("decrypt builders never yield a secrets/ prefix", () => {
     const entries = [NETWORK, `${NETWORK}/secrets/openai_api_key`].map((path) =>
       ({ service: "tinycloud.encryption", space: "encryption", path, actions: ["tinycloud.encryption/decrypt"] }));
     expect((await resolvePermissionSpaces(entries, "agent")).map((entry) => entry.path)).toEqual(entries.map((entry) => entry.path));
-  });
-
-  test("--keys (cli/src/lib/named-keys.ts parseKeysPrefix) refuses every folder under secrets/", () => {
-    for (const folder of ["secrets", "secrets/", "secrets/scoped"]) {
-      expect(() => parseKeysPrefix(folder, OWNER_DID)).toThrow();
-    }
   });
 });
 

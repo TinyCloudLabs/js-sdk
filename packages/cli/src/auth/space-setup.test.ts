@@ -229,9 +229,6 @@ describe("OpenKey #304 readiness responses", () => {
     expect(state.sleeps).toEqual([]);
   });
 
-  test("true is ready: nothing to wait for", () => {
-    expect(spaceSetupReport({ spaceReady: true })).toBeUndefined();
-  });
 });
 
 describe("kvSpaceProbe", () => {

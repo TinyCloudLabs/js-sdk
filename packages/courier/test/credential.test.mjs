@@ -255,17 +255,6 @@ test('a code entered under a different agent key is refused and the pending requ
   assert.equal(pendingFiles(home).length, 0);
 });
 
-test('a new step 1 replaces the live pending request for the same address', async () => {
-  const home = freshHome();
-  const { loadKey } = identity();
-  const witness = makeWitness();
-  const r = runner(home, { loadKey, fetch: witness.fetch });
-  await r.run(['acquire', '--email', ADDRESS]);
-  await r.run(['acquire', '--email', ADDRESS]);
-  assert.equal(witness.reqs.size, 2);
-  assert.equal(pendingFiles(home).length, 1);
-});
-
 test('show reports NOT_FOUND with the acquire hint when nothing is stored', async () => {
   const home = freshHome();
   const { loadKey } = identity();

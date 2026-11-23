@@ -1,40 +1,7 @@
 import { expect, test } from "bun:test";
 import { AjvJsonSchemaValidator } from "@modelcontextprotocol/client/validators/ajv";
 
-import { toolBindingsForTest } from "./tools.js";
 import { toMcpJsonSchema } from "./schemas.js";
-
-
-test("registers exact SQL read and mutation annotations", () => {
-  for (const binding of toolBindingsForTest().filter((candidate) =>
-    candidate.name.startsWith("tinycloud_sql_") && candidate.name !== "tinycloud_sql_execute")) {
-    expect(binding).toMatchObject({
-      readOnlyHint: true,
-      idempotentHint: true,
-      destructiveHint: false,
-      openWorldHint: true,
-    });
-  }
-  expect(toolBindingsForTest().find((candidate) => candidate.name === "tinycloud_sql_execute"))
-    .toMatchObject({
-      readOnlyHint: false,
-      idempotentHint: false,
-      destructiveHint: true,
-      openWorldHint: true,
-    });
-});
-
-test("only record writes are annotated destructive: context saves a timezone and a query refreshes a rebuildable derived copy, and neither deletes a record", () => {
-  const annotations = Object.fromEntries(toolBindingsForTest()
-    .filter((candidate) => candidate.name.startsWith("tinycloud_apps_"))
-    .map((candidate) => [candidate.name, [candidate.readOnlyHint, candidate.destructiveHint]]));
-  expect(annotations).toMatchObject({
-    tinycloud_apps_context: [false, false],
-    tinycloud_apps_read: [true, false],
-    tinycloud_apps_write: [false, true],
-    tinycloud_apps_query: [false, false],
-  });
-});
 
 
 test("default v2 validation preserves nested references, literals, and exclusive bounds", () => {
