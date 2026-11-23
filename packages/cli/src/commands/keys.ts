@@ -126,7 +126,7 @@ function cliErrorFromAppKey(error: unknown, command: KeysCommand, path: string):
     if (error.code === "NETWORK_NOT_FOUND") {
       return new CLIError(
         "NOT_FOUND",
-        "This account has no default encryption network yet, and an app-key approval can't create one. Create it with an ordinary `auth login --keys <folder>` sign-in first.",
+        "This account has no default encryption network, and an app-key approval can't create one. Create it with an ordinary `auth login --keys <folder>` sign-in first.",
         ExitCode.NOT_FOUND,
       );
     }

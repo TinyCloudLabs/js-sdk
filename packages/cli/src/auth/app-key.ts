@@ -214,7 +214,7 @@ export async function verifiedSavedAppKey(profileName: string, host: string, pat
   if (new URL(host).origin !== new URL(permit.host).origin) {
     throw new CLIError(
       "APP_KEY_HOST_MISMATCH",
-      `This profile's approval was accepted by ${permit.host}, not ${host}. Sign in for that node to get a new approval.`,
+      `This profile's approval is for ${permit.host}, not ${host}. To use ${host}, sign in on a new profile.`,
       ExitCode.PERMISSION_DENIED,
     );
   }

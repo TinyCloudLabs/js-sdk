@@ -270,7 +270,7 @@ export async function startPreparedOpenKeyHandoff(options: {
         rejectResult(invalid("V2_EXPIRED",
           !options.paste && !process.stdin.isTTY
             ? "The browser could not reach the CLI. Re-run with --paste (Safari may require it). No session or key was saved."
-            : "Prepared OpenKey handoff expired; restart login for a fresh SIWE. No session or key was saved."));
+            : "The OpenKey request ended before it was approved. Start a new login. No session or key was saved."));
         close();
         void cancel();
       }
