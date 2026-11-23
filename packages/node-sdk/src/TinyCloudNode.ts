@@ -2777,7 +2777,7 @@ export class TinyCloudNode {
    * Node-reported expiry can only shorten the result; it never grants access.
    */
   async getRenewalEffectiveExpiry(leaseAuthorization: string): Promise<number> {
-    const { verifyRenewalHistory, RenewalLeaseExpiredError, RenewalAuthorityInactiveError } = await import("@tinycloud/sdk-core/delegations/renewal");
+    const { verifyRenewalHistory, RenewalLeaseExpiredError, RenewalAuthorityInactiveError, RenewalRenewerChangedError } = await import("@tinycloud/sdk-core/delegations/renewal");
     const session = this.currentTinyCloudSession();
     if (!session) throw new Error("A session is required to verify renewal authority");
     const original = await parseSignedSiweCacao(
@@ -2793,7 +2793,6 @@ export class TinyCloudNode {
     if (
       !principalDidEquals(original.issuer, ownerDid)
       || !principalDidEquals(lease.issuer, original.issuer)
-      || lease.audience !== identity.renewerDid
       || original.expiresAt === undefined
       || lease.expiresAt === undefined
       || Object.keys(lease.attenuation).length !== 1
@@ -2804,6 +2803,8 @@ export class TinyCloudNode {
     ) {
       throw new Error("Renewal lease does not authorize only this session delegation");
     }
+    // The lease names the renewer it was issued to; a node that rotated its renewer never renews it.
+    if (lease.audience !== identity.renewerDid) throw new RenewalRenewerChangedError();
     const leaseExpiresAt = Math.floor(Date.parse(lease.expiresAt) / 1000);
     const now = Math.floor(Date.now() / 1000);
     if (!Number.isSafeInteger(leaseExpiresAt) || leaseExpiresAt <= now) {

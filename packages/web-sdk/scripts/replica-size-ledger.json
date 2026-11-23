@@ -3617,5 +3617,23 @@
       "ceiling": { "index.mjs": 1535425, "index.cjs": 1466887 }
     },
     "reason": "TinyCloudWeb keeps an approved, ordinary runtime permission grant with the session so it is active again after a page reload, for the app it was approved for, and TinyCloudNode takes a grant filter and a reuseExisting option; node-sdk is bundled into the web-sdk root. Canonical Node 22/Bun 1.3.14 CI on #1102 (39b0fd67, master acb3dd2e) measured index.mjs 1535425 and index.cjs 1466887 gzip -9 bytes: +894 and +808 over the tc3443AppIdLineBreakRoot ceilings 1534531 and 1466079. No other ceiling moves. Details: TC-3549"
+  },
+  "tc3617HostedMcpLeaseRoot": {
+    "label": "a session renewal whose lease names a replaced renewer asks the owner again (TC-3617)",
+    "ruling": "size-ruling: TC-3617 (2026-11-23) row tc3617HostedMcpLeaseRoot index.mjs 1535484 (+59), index.cjs 1466903 (+16) gzip bytes over the tc3549KeptApprovalsRoot ceilings, CI's canonical figure, within the ruled +100 B / +100 B. Details: TC-3617",
+    "base": "d4c0cf6b3df06f79bd9acfeadc31970e9a41da86",
+    "sourceCommits": ["cea5dad7992f88b7bd1ee2ad1e154967f139b7bd"],
+    "canonicalCI": {
+      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45089187188",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45089187188/job/137414613992",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45089187188/job/137414613915"
+      ]
+    },
+    "root": {
+      "delta": { "index.mjs": 59, "index.cjs": 16 },
+      "ceiling": { "index.mjs": 1535484, "index.cjs": 1466903 }
+    },
+    "reason": "TinyCloudNode.getRenewalEffectiveExpiry refuses a session lease issued to a renewer the node no longer advertises with the coded RenewalRenewerChangedError, so the owner is asked again; node-sdk is bundled into the web-sdk root. Canonical Node 22/Bun 1.3.14 CI on #1122 (cea5dad7, master 27908364) measured index.mjs 1535484 and index.cjs 1466903 gzip -9 bytes: +59 and +16 over the tc3549KeptApprovalsRoot ceilings 1535425 and 1466887. No other ceiling moves. Details: TC-3617"
   }
 }

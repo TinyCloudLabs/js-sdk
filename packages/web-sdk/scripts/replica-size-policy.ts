@@ -499,6 +499,7 @@ export type Ledger = {
   tc3731ManifestOwnerRoot?: LogoutRatchet;
   tc3443AppIdLineBreakRoot?: LogoutRatchet;
   tc3549KeptApprovalsRoot?: LogoutRatchet;
+  tc3617HostedMcpLeaseRoot?: LogoutRatchet;
   tc2773LazyRestoreReplicaWorker?: Omit<WorkerRatchet, "worker"> & { replicaWorker: { delta: number; ceiling: number } };
 };
 
@@ -1152,6 +1153,7 @@ export function ancestryPins(root: Ledger, hasGatedOnly: boolean): Array<{ row: 
   if (root.tc3731ManifestOwnerRoot !== undefined) pins.push({ row: "tc3731ManifestOwnerRoot", pin: root.tc3731ManifestOwnerRoot.sourceCommits.at(-1)! });
   if (root.tc3443AppIdLineBreakRoot !== undefined) pins.push({ row: "tc3443AppIdLineBreakRoot", pin: root.tc3443AppIdLineBreakRoot.sourceCommits.at(-1)! });
   if (root.tc3549KeptApprovalsRoot !== undefined) pins.push({ row: "tc3549KeptApprovalsRoot", pin: root.tc3549KeptApprovalsRoot.sourceCommits.at(-1)! });
+  if (root.tc3617HostedMcpLeaseRoot !== undefined) pins.push({ row: "tc3617HostedMcpLeaseRoot", pin: root.tc3617HostedMcpLeaseRoot.sourceCommits.at(-1)! });
   if (hasGatedOnly) pins.push({ row: "gatedOnlyRatchet", pin: approvedGatedOnlyRatchet.sourceCommit });
   return pins;
 }
@@ -1275,6 +1277,7 @@ export function rootCeilings(root: Ledger): Array<{ row: string; ceiling: GzipSi
     ["tc3731ManifestOwnerRoot", root.tc3731ManifestOwnerRoot?.root.ceiling],
     ["tc3443AppIdLineBreakRoot", root.tc3443AppIdLineBreakRoot?.root.ceiling],
     ["tc3549KeptApprovalsRoot", root.tc3549KeptApprovalsRoot?.root.ceiling],
+    ["tc3617HostedMcpLeaseRoot", root.tc3617HostedMcpLeaseRoot?.root.ceiling],
   ];
   return rows.flatMap(([row, ceiling]) => ceiling === undefined ? [] : [{ row, ceiling }]);
 }
@@ -3949,6 +3952,26 @@ export const approvedTc3549KeptApprovalsRoot: LogoutRatchet = {
   "reason": "TinyCloudWeb keeps an approved, ordinary runtime permission grant with the session so it is active again after a page reload, for the app it was approved for, and TinyCloudNode takes a grant filter and a reuseExisting option; node-sdk is bundled into the web-sdk root. Canonical Node 22/Bun 1.3.14 CI on #1102 (39b0fd67, master acb3dd2e) measured index.mjs 1535425 and index.cjs 1466887 gzip -9 bytes: +894 and +808 over the tc3443AppIdLineBreakRoot ceilings 1534531 and 1466079. No other ceiling moves. Details: TC-3549"
 };
 
+/** The exact TC-3617 renewer-changed session renewal root allowance from canonical CI. */
+export const approvedTc3617HostedMcpLeaseRoot: LogoutRatchet = {
+  "label": "a session renewal whose lease names a replaced renewer asks the owner again (TC-3617)",
+  "ruling": "size-ruling: TC-3617 (2026-11-23) row tc3617HostedMcpLeaseRoot index.mjs 1535484 (+59), index.cjs 1466903 (+16) gzip bytes over the tc3549KeptApprovalsRoot ceilings, CI's canonical figure, within the ruled +100 B / +100 B. Details: TC-3617",
+  "base": "d4c0cf6b3df06f79bd9acfeadc31970e9a41da86",
+  "sourceCommits": ["cea5dad7992f88b7bd1ee2ad1e154967f139b7bd"],
+  "canonicalCI": {
+    "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45089187188",
+    "jobs": [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45089187188/job/137414613992",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45089187188/job/137414613915"
+    ]
+  },
+  "root": {
+    "delta": { "index.mjs": 59, "index.cjs": 16 },
+    "ceiling": { "index.mjs": 1535484, "index.cjs": 1466903 }
+  },
+  "reason": "TinyCloudNode.getRenewalEffectiveExpiry refuses a session lease issued to a renewer the node no longer advertises with the coded RenewalRenewerChangedError, so the owner is asked again; node-sdk is bundled into the web-sdk root. Canonical Node 22/Bun 1.3.14 CI on #1122 (cea5dad7, master 27908364) measured index.mjs 1535484 and index.cjs 1466903 gzip -9 bytes: +59 and +16 over the tc3549KeptApprovalsRoot ceilings 1535425 and 1466887. No other ceiling moves. Details: TC-3617"
+};
+
 export const approvedLedgerRows: Record<string, unknown> = {
   phase2Ratchet: approvedPhase2,
   fixRequiredRatchet: approvedFixRequiredRatchet,
@@ -4069,6 +4092,7 @@ export const approvedLedgerRows: Record<string, unknown> = {
   tc3731ManifestOwnerRoot: approvedTc3731ManifestOwnerRoot,
   tc3443AppIdLineBreakRoot: approvedTc3443AppIdLineBreakRoot,
   tc3549KeptApprovalsRoot: approvedTc3549KeptApprovalsRoot,
+  tc3617HostedMcpLeaseRoot: approvedTc3617HostedMcpLeaseRoot,
 };
 
 /** Only a git merge-base ledger may retain the pre-correction toolchain. */
@@ -4627,6 +4651,11 @@ export function validateLedger(value: Ledger, historicalBase = false): void {
       (!value.tc3443AppIdLineBreakRoot ||
         JSON.stringify(value.tc3549KeptApprovalsRoot) !== JSON.stringify(approvedTc3549KeptApprovalsRoot))) {
     throw new Error("Only the exact TC-3549 root admission is approved.");
+  }
+  if (value.tc3617HostedMcpLeaseRoot !== undefined &&
+      (!value.tc3549KeptApprovalsRoot ||
+        JSON.stringify(value.tc3617HostedMcpLeaseRoot) !== JSON.stringify(approvedTc3617HostedMcpLeaseRoot))) {
+    throw new Error("Only the exact TC-3617 root admission is approved.");
   }
 }
 
@@ -5664,5 +5693,13 @@ export function validateTc3549KeptApprovalsRootTransition(base?: LogoutRatchet, 
   if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc3549KeptApprovalsRoot) ||
       base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
     throw new Error("The TC-3549 root admission may be introduced once and cannot change later.");
+  }
+}
+
+/** The exact TC-3617 renewer-changed session renewal root admission is introduced once and immutable. */
+export function validateTc3617HostedMcpLeaseRootTransition(base?: LogoutRatchet, current?: LogoutRatchet): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc3617HostedMcpLeaseRoot) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The TC-3617 root admission may be introduced once and cannot change later.");
   }
 }
