@@ -37,8 +37,8 @@ test("TC-3443 records the exact canonical CI root and worker bytes of #1118 with
   expect(row.replicaWorker.ceiling - ledger.tc2931BootstrapScope.replicaWorker.ceiling).toBe(row.replicaWorker.delta);
   expect(row.worker.delta).toBeLessThanOrEqual(250);
   expect(row.replicaWorker.delta).toBeLessThanOrEqual(250);
-  expect(MAX_WORKER_GZIP_BYTES).toBe(row.worker.ceiling);
-  expect(MAX_REPLICA_WORKER_GZIP_BYTES).toBe(row.replicaWorker.ceiling);
+  expect(MAX_WORKER_GZIP_BYTES).toBe(ledger.tc3947ReplicaRevokeRoot.worker.ceiling);
+  expect(MAX_REPLICA_WORKER_GZIP_BYTES).toBe(ledger.tc3947ReplicaRevokeRoot.replicaWorker.ceiling);
 
   expect(ancestryPins(ledger, false)).toContainEqual({
     row: "tc3443SessionRetireRoot",

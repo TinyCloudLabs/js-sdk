@@ -500,7 +500,7 @@ export type Ledger = {
   tc3443AppIdLineBreakRoot?: LogoutRatchet;
   tc3549KeptApprovalsRoot?: LogoutRatchet;
   tc3617HostedMcpLeaseRoot?: LogoutRatchet;
-  tc3947ReplicaRevokeRoot?: LogoutRatchet;
+  tc3947ReplicaRevokeRoot?: LogoutRatchet & { worker: { delta: number; ceiling: number }; replicaWorker: { delta: number; ceiling: number } };
   tc2773LazyRestoreReplicaWorker?: Omit<WorkerRatchet, "worker"> & { replicaWorker: { delta: number; ceiling: number } };
 };
 
@@ -3976,9 +3976,9 @@ export const approvedTc3617HostedMcpLeaseRoot: LogoutRatchet = {
 };
 
 /** The exact TC-3947 revoked-grant JSON refusal root allowance from canonical CI. */
-export const approvedTc3947ReplicaRevokeRoot: LogoutRatchet = {
+export const approvedTc3947ReplicaRevokeRoot: NonNullable<Ledger["tc3947ReplicaRevokeRoot"]> = {
   "label": "a revoked grant in the node's JSON refusal is read as a revocation (TC-3947)",
-  "ruling": "size-ruling: TC-3947 (2026-11-23) row tc3947ReplicaRevokeRoot index.mjs 1535546 (+62), index.cjs 1466953 (+50) gzip bytes over the tc3617HostedMcpLeaseRoot ceilings, CI's canonical figure. Details: TC-3947",
+  "ruling": "size-ruling: TC-3947 (2026-11-23) row tc3947ReplicaRevokeRoot index.mjs 1535546 (+62), index.cjs 1466953 (+50) gzip bytes over the tc3617HostedMcpLeaseRoot ceilings, kv-storage worker 781191 (+234) and replica worker 774920 (+238) gzip bytes over the tc3443SessionRetireRoot ceilings, CI's canonical figures. Details: TC-3947",
   "base": "3ad8bb80e3b3b1f2342f4663cfe72f0ecd881093",
   "sourceCommits": ["d79271d35eefa9471209446e506284b3ecbb704e"],
   "canonicalCI": {
@@ -3992,7 +3992,9 @@ export const approvedTc3947ReplicaRevokeRoot: LogoutRatchet = {
     "delta": { "index.mjs": 62, "index.cjs": 50 },
     "ceiling": { "index.mjs": 1535546, "index.cjs": 1466953 }
   },
-  "reason": "KVService.changes reads the node's JSON revocation refusal ({\"code\", \"error\"}, nodes 1.25.17 and later) as a typed revocation before matching the revocation text; sdk-services is bundled into the web-sdk root. Canonical Node 22/Bun 1.3.14 CI on #1138 (d79271d3, master 3ad8bb80) measured index.mjs 1535546 and index.cjs 1466953 gzip -9 bytes: +62 and +50 over the tc3617HostedMcpLeaseRoot ceilings 1535484 and 1466903. No other ceiling moves. Details: TC-3947"
+  "worker": { "delta": 234, "ceiling": 781191 },
+  "replicaWorker": { "delta": 238, "ceiling": 774920 },
+  "reason": "KVService.changes and the replica transport read the node's JSON revocation refusal ({\"code\", \"error\"}, nodes 1.25.17 and later) as a revocation before matching the revocation text; sdk-services is bundled into the web-sdk root and, with the replica transport, into the replica and kv-storage workers. Canonical Node 22/Bun 1.3.14 CI on #1138 (d79271d3, master 3ad8bb80) measured index.mjs 1535546 and index.cjs 1466953 gzip -9 bytes: +62 and +50 over the tc3617HostedMcpLeaseRoot ceilings 1535484 and 1466903; kv-storage worker 781191 and replica worker 774920: +234 and +238 over the tc3443SessionRetireRoot ceilings 780957 and 774682. No other ceiling moves. Details: TC-3947"
 };
 
 export const approvedLedgerRows: Record<string, unknown> = {

@@ -1,7 +1,7 @@
 {
   "allowance": {
     "replica.mjs": 53241,
-    "replica.cjs": 68504,
+    "replica.cjs": 68650,
     "activation.mjs": 23412,
     "activation.cjs": 24981
   },
@@ -345,6 +345,15 @@
       "activation.mjs": 1,
       "activation.cjs": 1,
       "note": "Optional first-import and IDB activation gzip deltas against this PR's merge base"
+    },
+    {
+      "pr": "#1138",
+      "ticket": "TC-3947",
+      "replica.mjs": 0,
+      "replica.cjs": 146,
+      "activation.mjs": 1,
+      "activation.cjs": 0,
+      "note": "Optional first-import and IDB activation gzip deltas against this PR's merge base"
     }
   ],
   "tc2931": {
@@ -399,5 +408,59 @@
       }
     },
     "reason": "Canonical combined-head artifact bytes at the cited run. The prior TC-2936 canonical run43428324560/job131895190481 measured the recorded before values; the final checker also rebuilds the PR merge base and verifies every optional delta. Activation keeps its prior allowance. Earlier rows, mandatory direct checks and the fixed TC-2481 four-byte CJS baseline retirement remain intact. Details: TC-2931"
+  },
+  "tc3947": {
+    "label": "a revoked grant in the node's JSON refusal is read as a revocation, optional admission (TC-3947)",
+    "ruling": "size-ruling: TC-3947 (2026-11-23): exact canonical first-import delta +146 B on replica.cjs and the measured activation delta. Details: TC-3947",
+    "base": "3ad8bb80e3b3b1f2342f4663cfe72f0ecd881093",
+    "sourceCommits": [
+      "d79271d35eefa9471209446e506284b3ecbb704e"
+    ],
+    "canonicalCI": {
+      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45102787771",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45102787771/job/137457227215",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45102787771/job/137457227567"
+      ],
+      "before": {
+        "replica.mjs": 53235,
+        "replica.cjs": 68504,
+        "activation.mjs": 19144,
+        "activation.cjs": 20116
+      },
+      "after": {
+        "replica.mjs": 53235,
+        "replica.cjs": 68650,
+        "activation.mjs": 19145,
+        "activation.cjs": 20116
+      },
+      "delta": {
+        "replica.mjs": 0,
+        "replica.cjs": 146,
+        "activation.mjs": 1,
+        "activation.cjs": 0
+      }
+    },
+    "firstImport": {
+      "delta": {
+        "replica.mjs": 0,
+        "replica.cjs": 146
+      },
+      "ceiling": {
+        "replica.mjs": 53241,
+        "replica.cjs": 68650
+      }
+    },
+    "activation": {
+      "delta": {
+        "activation.mjs": 1,
+        "activation.cjs": 0
+      },
+      "ceiling": {
+        "activation.mjs": 23412,
+        "activation.cjs": 24981
+      }
+    },
+    "reason": "The replica transport reads the node's JSON revocation refusal, which adds 146 B to the replica.cjs first import. Canonical combined-head artifact bytes at the cited run: the merge-base build measured the recorded before values and the checker verifies every optional delta. replica.mjs and the activation chunks keep their prior allowance. Earlier rows, mandatory direct checks and the fixed TC-2481 four-byte CJS baseline retirement remain intact. Details: TC-3947"
   }
 }

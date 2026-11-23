@@ -7,6 +7,7 @@ import {
   validateLedger,
   validateTc3947ReplicaRevokeRootTransition,
 } from "./replica-size-policy";
+import { MAX_REPLICA_WORKER_GZIP_BYTES, MAX_WORKER_GZIP_BYTES } from "../../replica/scripts/check-worker-size";
 
 test("TC-3947 records the exact canonical CI root bytes of #1138", () => {
   validateLedger(ledger);
@@ -35,8 +36,14 @@ test("TC-3947 records the exact canonical CI root bytes of #1138", () => {
     row: "tc3947ReplicaRevokeRoot",
     pin: row.sourceCommits.at(-1),
   });
+  expect(row.worker.ceiling - ledger.tc3443SessionRetireRoot.worker.ceiling).toBe(row.worker.delta);
+  expect(row.replicaWorker.ceiling - ledger.tc3443SessionRetireRoot.replicaWorker.ceiling).toBe(row.replicaWorker.delta);
+  expect(row.worker).toEqual({ delta: 234, ceiling: 781191 });
+  expect(row.replicaWorker).toEqual({ delta: 238, ceiling: 774920 });
+  expect(MAX_WORKER_GZIP_BYTES).toBe(row.worker.ceiling);
+  expect(MAX_REPLICA_WORKER_GZIP_BYTES).toBe(row.replicaWorker.ceiling);
   expect(Object.keys(row).sort()).toEqual([
-    "base", "canonicalCI", "label", "reason", "root", "ruling", "sourceCommits",
+    "base", "canonicalCI", "label", "reason", "replicaWorker", "root", "ruling", "sourceCommits", "worker",
   ]);
 });
 
@@ -48,6 +55,8 @@ test("TC-3947 refuses mutation, removal, or a missing TC-3617 predecessor", () =
   for (const mutate of [
     (value: typeof row) => { value.root.ceiling["index.cjs"]++; },
     (value: typeof row) => { value.root.delta["index.mjs"]++; },
+    (value: typeof row) => { value.worker.ceiling++; },
+    (value: typeof row) => { value.replicaWorker.delta++; },
     (value: typeof row) => { value.sourceCommits[0] = "0".repeat(40); },
     (value: typeof row) => { value.canonicalCI.jobs[0] = "unreviewed"; },
   ]) {
