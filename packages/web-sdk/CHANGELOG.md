@@ -1,5 +1,14 @@
 # @tinycloudlabs/web-sdk
 
+## 3.14.0-beta.18
+
+### Patch Changes
+
+- Updated dependencies [532d5eb]
+  - @tinycloud/sdk-core@3.14.0-beta.18
+  - @tinycloud/node-sdk@3.14.0-beta.18
+  - @tinycloud/replica@0.4.7-beta.4
+
 ## 3.14.0-beta.17
 
 ### Minor Changes
