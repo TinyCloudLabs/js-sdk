@@ -33,6 +33,7 @@
     "bootstrap-grants-private",
     "cli-keeps-30-day-login",
     "device-refuses-secrets",
+    "generic-app-id-line-break",
     "generic-app-manifest",
     "generic-folder-port",
     "openkey-signs-permission-requests",

@@ -3603,7 +3603,7 @@
   "tc3549KeptApprovalsRoot": {
     "label": "ordinary runtime permission approvals stay approved across a page reload (TC-3549)",
     "ruling": "size-ruling: TC-3549 (2026-11-23) row tc3549KeptApprovalsRoot index.mjs 1535425 (+894), index.cjs 1466887 (+808) gzip bytes over the tc3443AppIdLineBreakRoot ceilings, CI's canonical figure. Details: TC-3549",
-    "base": "acb3dd2e0ecba7d1c8c58eb4dbe2ff1307db4eac",
+    "base": "6e4d8ab69d787f25723038728ee56da11d03657f",
     "sourceCommits": ["39b0fd671d1865b7708a149055576a8f2d99816a"],
     "canonicalCI": {
       "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45085618316",

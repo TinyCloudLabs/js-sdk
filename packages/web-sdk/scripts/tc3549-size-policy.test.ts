@@ -13,7 +13,7 @@ test("TC-3549 records the exact canonical CI root bytes of #1102 within the rule
   const row = ledger.tc3549KeptApprovalsRoot;
   const predecessor = ledger.tc3443AppIdLineBreakRoot;
   expect(row).toEqual(approvedTc3549KeptApprovalsRoot);
-  expect(row.base).toBe("acb3dd2e0ecba7d1c8c58eb4dbe2ff1307db4eac");
+  expect(row.base).toBe("6e4d8ab69d787f25723038728ee56da11d03657f");
   expect(row.canonicalCI).toEqual({
     run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45085618316",
     jobs: [
