@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
 import { evaluateOperationAuthority } from "./authority.js";
-import type { CapabilityRequirement, RuntimeOperationContext } from "./contract.js";
+import type { RuntimeOperationContext } from "./contract.js";
 import { secretsGetOperationDefinition } from "./operations/secrets-get.js";
 
 // A signed session reports a grant with no limits as `caveats: []` (the verified ReCap path) or `[{}]`, not as no
@@ -18,12 +18,12 @@ const ctx = {
   runtime: { node: { getEncryptionNetworkIdForSpace: () => NETWORK }, granted: [] },
 } as unknown as RuntimeOperationContext;
 
-async function missingFor(granted: Array<Record<string, unknown>>): Promise<readonly CapabilityRequirement[]> {
+async function missingFor(granted: Array<Record<string, unknown>>): Promise<ReadonlyArray<{ path: string; actions: readonly string[] }>> {
   const input = secretsGetOperationDefinition.input.parse({ name: "API_KEY" });
   const required = await secretsGetOperationDefinition.authority(ctx, input);
   const alternatives = await secretsGetOperationDefinition.authorityAlternatives!(ctx, input);
   // Only the encryption requirement is judged here; the kv read is granted and checked elsewhere.
-  return evaluateOperationAuthority(granted as never, required as never, undefined, alternatives).missing
+  return evaluateOperationAuthority(granted as never, required as never, undefined, alternatives as never).missing
     .filter((entry) => entry.service === "tinycloud.encryption") as never;
 }
 
