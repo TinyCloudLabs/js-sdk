@@ -88,7 +88,7 @@ describe.skipIf(!nodeBinary)("sign-out retires the session key on a real node", 
       ...config, privateKey: ownerKey, signer: new PrivateKeySigner(ownerKey), autoCreateSpace: true, autoBootstrapAccount: true,
     });
     await owner.signIn();
-    const put = await owner.kv.put("retire/message", "private");
+    const put = await owner.kv.withPrefix("test.retire").put("message", "private");
     expect(put.ok, JSON.stringify(put.ok ? undefined : put.error)).toBe(true);
     const leaving = owner.restorableSession!;
     // The account bootstrap's own session keys, activated on the node at sign-in.
@@ -113,14 +113,14 @@ describe.skipIf(!nodeBinary)("sign-out retires the session key on a real node", 
         siwe: session.siwe,
         signature: session.signature,
       });
-      const refused = await copy.kv.get("retire/message");
+      const refused = await copy.kv.withPrefix("test.retire").get("message");
       expect(refused.ok).toBe(false);
       expect(JSON.stringify(refused), session.spaceId).toContain("session_retired");
     }
 
     // The owner's next session is unaffected.
     await owner.signIn();
-    const read = await owner.kv.get("retire/message");
+    const read = await owner.kv.withPrefix("test.retire").get("message");
     expect(read.ok, JSON.stringify(read.ok ? undefined : read.error)).toBe(true);
   }, 120_000);
 
@@ -136,7 +136,7 @@ describe.skipIf(!nodeBinary)("sign-out retires the session key on a real node", 
     const strangerKey = randomBytes(32).toString("hex");
     const stranger = new TinyCloudNode({ ...config, signer: new PrivateKeySigner(strangerKey), autoCreateSpace: true });
     await stranger.signIn();
-    const put = await stranger.kv.put("retire/message", "private");
+    const put = await stranger.kv.withPrefix("test.retire").put("message", "private");
     expect(put.ok, JSON.stringify(put.ok ? undefined : put.error)).toBe(true);
     const leaving = stranger.restorableSession!;
     // A root the stranger signs for its own session key over the owner's space: it verifies, but no node admits it.
@@ -180,7 +180,7 @@ describe.skipIf(!nodeBinary)("sign-out retires the session key on a real node", 
       siwe: leaving.siwe,
       signature: leaving.signature,
     });
-    const refused = await copy.kv.get("retire/message");
+    const refused = await copy.kv.withPrefix("test.retire").get("message");
     expect(refused.ok).toBe(false);
     expect(JSON.stringify(refused)).toContain("session_retired");
   }, 120_000);

@@ -128,6 +128,19 @@ jobs:
           TC_TERMINAL_DELEGATION_E2E_NODE_BIN: ${{ runner.temp }}/tinycloud
         run: bash "$GITHUB_WORKSPACE/.github/scripts/run-private-tests.sh" bun test --max-concurrency=1 packages/node-sdk/src/TinyCloudNode.terminalDelegation.e2e.test.ts
 
+      - name: Run node-sdk session retirement e2e
+        env:
+          TC_SESSION_RETIRE_E2E_NODE_BIN: ${{ runner.temp }}/tinycloud
+          NO_COLOR: "1"
+        run: |
+          set -o pipefail
+          log="$RUNNER_TEMP/session-retire-e2e.log"
+          bash "$GITHUB_WORKSPACE/.github/scripts/run-private-tests.sh" bun test --max-concurrency=1 packages/node-sdk/src/TinyCloudNode.signOutRetire.e2e.test.ts 2>&1 | tee "$log"
+          if ! grep -Eq '^[[:blank:]]*2 pass[[:blank:]]*$' "$log" || grep -Eq '^[[:blank:]]*[1-9][0-9]* (skip|fail)[[:blank:]]*$' "$log"; then
+            echo "::error title=node-sdk session retirement e2e::expected exactly 2 passes and no skips or failures"
+            exit 1
+          fi
+
       - name: Run delegated encryption and multi-space runtime grant e2e
         env:
           TC_REPLICATION_E2E_NODE_BIN: ${{ runner.temp }}/tinycloud
