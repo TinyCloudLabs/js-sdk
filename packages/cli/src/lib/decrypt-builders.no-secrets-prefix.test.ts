@@ -109,6 +109,7 @@ const DECRYPT_BUILDERS: Record<string, string> = {
   "cli/src/share/adapters.ts": "runtime check on the network root",
   "cli/src/share/publishing-manifest.ts": "default/share/ prefix (Share publishing, not secrets)",
   "operations/src/invoke.ts": "checks a planned decrypt is one raw encryption resource",
+  "operations/src/operations/person-history.ts": "checks the session already holds decrypt on the one exact Contacts app key; builds no request and names no secrets/ key",
   "operations/src/operations/secrets-get.ts": "planSecretDecrypt: exact key, or network root when the session already holds it and not the key, or on a non-default network",
   "operations/src/secret-capabilities.ts": "the capability constant",
 };
