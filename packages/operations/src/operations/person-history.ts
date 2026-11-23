@@ -102,7 +102,7 @@ export const personHistoryOperation: OperationDefinition<Input, Output> = {
     // The generic request artifact accepts a listable KV folder, not read-only SQL or KV
     // prefixes. Require the owner-approved Inbox prefixes up front; never broaden that format.
     const { missing } = evaluateOperationAuthority(
-      context.runtime.granted as readonly PermissionEntry[], inbox, operationSpaceResolver(node, node.spaceId),
+      context.runtime.granted as unknown as readonly PermissionEntry[], inbox, operationSpaceResolver(node, node.spaceId),
     );
     if (missing.length) {
       const needed = missing.map(({ path, actions }) => `${actions.join(", ")} on ${path}`).join("; ");
@@ -204,7 +204,7 @@ async function readContacts(context: RuntimeOperationContext, spaces: OwnerSpace
   const kv = spaces.node.kvForSpace(spaces.applications);
   const network = `urn:tinycloud:encryption:${spaces.ownerDid}:default`;
   const resource = `${network}/${CONTACTS_KEY}`;
-  const exactDecrypt = (context.runtime.granted as readonly PermissionEntry[]).some((grant) =>
+  const exactDecrypt = (context.runtime.granted as unknown as readonly PermissionEntry[]).some((grant) =>
     grant.service === "tinycloud.encryption" && (grant.space === undefined || grant.space === "encryption") &&
     grant.path === resource && grant.actions.includes("tinycloud.encryption/decrypt") &&
     canonicalizeRecapCaveats(grant.caveats) === canonicalizeRecapCaveats(undefined)
@@ -222,7 +222,7 @@ async function readContacts(context: RuntimeOperationContext, spaces: OwnerSpace
         if (value.error.code === "KV_NOT_FOUND" || value.error.meta?.status === 404) continue;
         throw readError(value.error, "read a Contacts card");
       }
-      const entry = record(parseJson(new TextDecoder().decode(value.data.data)));
+      const entry = record(parseJson(new TextDecoder().decode(value.data.data as Uint8Array)));
       const fields = record(entry?.data);
       const name = string(fields?.name).trim();
       if (entry?.v !== 1 || !name || (sought.kind === "name" && !fuzzyName(name, sought.tokens))) continue;
@@ -420,7 +420,7 @@ async function preview(kv: IKVService, item: Match): Promise<string | null> {
       throw readError(value.error, "read an Inbox preview");
     }
     // Bound the work before any markup handling: a sender controls the body.
-    let text = new TextDecoder().decode(value.data.data);
+    let text = new TextDecoder().decode(value.data.data as Uint8Array);
     if (item.kind === "telegram") text = string(record(parseJson(text))?.text).slice(0, PREVIEW_CHARS);
     else {
       text = text.slice(0, PREVIEW_CHARS);
