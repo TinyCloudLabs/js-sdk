@@ -1500,6 +1500,7 @@ export class TinyCloudWeb {
     if (!session) throw new Error("Sign-in completed but no session available");
     // Explicit logout never permits an older tab's persisted proof to satisfy the next sign-in.
     if (!this.signOutCleanupFailed && this.signOutInFlight === 0) this.persistedRestoreBlocked = false;
+    const warnings = result ? result.warnings : undefined;
     return {
       address: session.address,
       walletAddress: session.address,
@@ -1507,7 +1508,7 @@ export class TinyCloudWeb {
       sessionKey: session.sessionKey,
       siwe: session.siwe,
       signature: session.signature,
-      ...(result?.warnings === undefined ? {} : { warnings: result.warnings }),
+      ...(warnings === undefined ? {} : { warnings }),
     };
   };
 
