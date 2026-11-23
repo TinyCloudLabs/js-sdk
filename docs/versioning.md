@@ -79,7 +79,7 @@ Guards:
 - If the push fails, nothing is published. Dispatch the job again.
 - If an earlier stable run pushed but did not finish publishing, the next dispatch finishes that release from its commit and graduates nothing new. Beta runs refuse to run until then.
 
-There is no manual publish workflow. `raw-publish.yml` and `manual-release.yml` were removed (TC-4123): they published from any ref, to `latest` by default, and ignored the release gate. Publish only through `changesets.yml`; to finish an interrupted stable release, dispatch it again as above.
+`raw-publish.yml` and `manual-release.yml` were removed (TC-4123): they published from any ref, to `latest` by default, and ignored the release gate. Releases publish only through `changesets.yml`; to finish an interrupted stable release, dispatch it again as above. `courier-stable-stage.yml` stages a sealed plan under the `staging` dist-tag and `npm-latest-rollback.yml` moves `latest`; neither publishes from an arbitrary ref.
 
 ### How releases push
 
