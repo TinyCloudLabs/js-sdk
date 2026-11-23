@@ -40,6 +40,7 @@ function web(stub: ReturnType<typeof node>, config: Record<string, unknown>) {
     config,
     signOutCount: 0,
     signOutInFlight: 0,
+    grantAskers: new WeakMap(),
     _manifest: MANIFEST,
     _node: stub,
     _testHooks: { showModal },

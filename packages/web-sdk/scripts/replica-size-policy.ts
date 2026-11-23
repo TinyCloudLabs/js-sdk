@@ -3932,21 +3932,21 @@ export const approvedTc3443AppIdLineBreakRoot: LogoutRatchet = {
 /** The exact TC-3549 kept-approvals root allowance from canonical CI. */
 export const approvedTc3549KeptApprovalsRoot: LogoutRatchet = {
   "label": "ordinary runtime permission approvals stay approved across a page reload (TC-3549)",
-  "ruling": "size-ruling: TC-3549 (2026-11-20) row tc3549KeptApprovalsRoot index.mjs 1535468 (+937), index.cjs 1466871 (+792) gzip bytes over the tc3443AppIdLineBreakRoot ceilings, CI's canonical figure. Details: TC-3549",
+  "ruling": "size-ruling: TC-3549 (2026-11-23) row tc3549KeptApprovalsRoot index.mjs 1535425 (+894), index.cjs 1466887 (+808) gzip bytes over the tc3443AppIdLineBreakRoot ceilings, CI's canonical figure. Details: TC-3549",
   "base": "acb3dd2e0ecba7d1c8c58eb4dbe2ff1307db4eac",
-  "sourceCommits": ["c19c84a1977189b20b7f464996c3b595c4b83952"],
+  "sourceCommits": ["39b0fd671d1865b7708a149055576a8f2d99816a"],
   "canonicalCI": {
-    "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44677358264",
+    "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45085618316",
     "jobs": [
-      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44677358264/job/136092358324",
-      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44677358264/job/136092358546"
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45085618316/job/137403426242",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45085618316/job/137403426480"
     ]
   },
   "root": {
-    "delta": { "index.mjs": 937, "index.cjs": 792 },
-    "ceiling": { "index.mjs": 1535468, "index.cjs": 1466871 }
+    "delta": { "index.mjs": 894, "index.cjs": 808 },
+    "ceiling": { "index.mjs": 1535425, "index.cjs": 1466887 }
   },
-  "reason": "TinyCloudWeb keeps an approved, ordinary runtime permission grant with the session so it is active again after a page reload, for the app it was approved for, and TinyCloudNode takes a grant filter and a reuseExisting option; node-sdk is bundled into the web-sdk root. Provisional: CI on #1102 (c19c84a1, master f7428c20) measured +937 and +792 over the TC-2490 ceilings 1529858 and 1462849; re-chained over the tc3443AppIdLineBreakRoot ceilings 1534531 and 1466079. No other ceiling moves. Details: TC-3549"
+  "reason": "TinyCloudWeb keeps an approved, ordinary runtime permission grant with the session so it is active again after a page reload, for the app it was approved for, and TinyCloudNode takes a grant filter and a reuseExisting option; node-sdk is bundled into the web-sdk root. Canonical Node 22/Bun 1.3.14 CI on #1102 (39b0fd67, master acb3dd2e) measured index.mjs 1535425 and index.cjs 1466887 gzip -9 bytes: +894 and +808 over the tc3443AppIdLineBreakRoot ceilings 1534531 and 1466079. No other ceiling moves. Details: TC-3549"
 };
 
 export const approvedLedgerRows: Record<string, unknown> = {
