@@ -1930,6 +1930,11 @@ export class TinyCloudNode {
       // A session replaced while the read was in flight owns no answer; a read that did not answer is asked again later.
       if (epoch !== this.sessionEpoch || this.auth !== auth) return false;
       if (outcome === "unreachable" && this.hostedOwnerRestore?.epoch === epoch) this.hostedOwnerRestore = undefined;
+      if (outcome === "refused") {
+        // The refused session is not kept: only its own stored record goes, and never a newer sign-in's (compared by session).
+        await auth.discardRefusedRestoredSession(candidate).catch(() => undefined);
+        return false;
+      }
       if (outcome !== "positive") return false;
       auth.adoptRestoredHostedOwnerProof(candidate);
       return true;
@@ -3309,8 +3314,8 @@ export class TinyCloudNode {
     // A throw here never stops local sign-out; every host it knew of is then reported unconfirmed.
     let retire: LeavingSession | undefined;
     try {
-      // A refused hosted-owner proof is discarded locally: the retire request carries session roots, so it would write.
-      if (options?.retireAtNodes === false) throw new Error("The session was refused before it was proven, so no node is asked to retire it.");
+      // A hosted-owner proof that was refused before any `/delegate` could have landed is discarded locally: the retire request carries session roots, so it would write.
+      if (options?.retireAtNodes === false) throw new Error("The session was refused before a delegation reached a node, so no node is asked to retire it.");
       // Otherwise the current session is retired wherever it is held, even while a newer sign-in or proof is pending:
       // a sign-out before the first session exists has no key to retire, and one after the proof's /delegate is cleaned up.
       retire = this.leavingSessionRetire();
@@ -3687,7 +3692,11 @@ export class TinyCloudNode {
       if (epoch !== this.sessionEpoch && attempt === this.latestSessionAttempt) {
         await this.endSession();
       } else if (this.auth?.hostedOwnerProofFailed && attempt === this.latestSessionAttempt) {
-        await this.endSession({ retireAtNodes: false });
+        // The proof failed. A `/delegate` the node may hold (accepted, or sent with an unknown outcome) is retired for this
+        // exact session at the pinned host; a refused or never-sent one is only discarded locally. The proof's own failure is
+        // what the caller gets: a teardown or retire problem never replaces it (a retire that fails is in nodeSignOutStatus()).
+        const retireAtNodes = this.auth.hostedOwnerDelegateMayHaveLanded;
+        await this.endSession({ retireAtNodes }).catch(() => undefined);
       } else if (attempt === this.latestSessionAttempt && this.config.allowHostedOwnerProof === true) {
         // A cancelled wallet or a refused prepared request leaves no half-made proof for a later restore to trip over.
         this.auth?.discardPendingHostedOwnerProof();

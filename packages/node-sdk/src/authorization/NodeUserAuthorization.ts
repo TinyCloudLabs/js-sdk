@@ -407,8 +407,10 @@ export interface NodeUserAuthorizationConfig {
   /** @internal Refuse new-account setup before requesting a signature. */
   requireExistingAccount?: boolean;
   /**
-   * @internal The signer is known not to host spaces by itself (a wallet, a local key or an external key), so a
-   * confirmed hosted space can stand for an existing account (TC-4082). Default off: managed or unknown signers refuse.
+   * @internal Lets an owner with no registry record sign in when the default node already hosts their own
+   * `applications` space (TC-4082). Default off. Sound only where the signer provisions nothing before the signature:
+   * a wallet, a local key, or OpenKey with its no-provision guard for third-party origins. It is not derived from the
+   * signer kind; the caller sets it (web-sdk does for every non-first-party origin, managed OpenKey included).
    */
   allowHostedOwnerProof?: boolean;
   /**
@@ -532,6 +534,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
   /** The sign-in in flight. Kept apart so a second sign-in never strips or reuses the active session's proof. */
   private _pendingHostedOwnerProof?: HostedOwnerProof;
   private _hostedOwnerProofFailed = false;
+  private _hostedOwnerDelegateMayHaveLanded = false;
 
   private sessionManager: ISessionManager;
   private activeSessionKeyId = "default";
@@ -846,6 +849,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
     this._hostedOwnerProof = undefined;
     this._pendingHostedOwnerProof = undefined;
     this._hostedOwnerProofFailed = false;
+    this._hostedOwnerDelegateMayHaveLanded = false;
     if (!session) {
       this._session = undefined;
       this._tinyCloudSession = undefined;
@@ -883,9 +887,14 @@ export class NodeUserAuthorization implements IUserAuthorization {
     return this._pendingHostedOwnerProof ?? this.activeHostedOwnerProof();
   }
 
-  /** True once a proof was refused or could not be checked: the session is to be discarded locally, with no write to a node. */
+  /** True once a proof was refused or could not be checked: the session is discarded locally; whether a node is asked to retire it follows {@link hostedOwnerDelegateMayHaveLanded}. */
   get hostedOwnerProofFailed(): boolean {
     return this._hostedOwnerProofFailed;
+  }
+
+  /** The proof's `/delegate` was accepted, or its outcome is unknown (5xx, transport error, timeout). False when nothing was sent or the node refused it. */
+  get hostedOwnerDelegateMayHaveLanded(): boolean {
+    return this._hostedOwnerDelegateMayHaveLanded;
   }
 
   /**
@@ -915,7 +924,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
    * A restored session whose owner the registry just authoritatively said has no record: the one pinned host and the
    * session's own primary `applications` space, which a read may now confirm. Undefined for anything else.
    */
-  restoredHostedOwnerCandidate(): { host: string; spaceId: string } | undefined {
+  restoredHostedOwnerCandidate(): { host: string; spaceId: string; session: TinyCloudSession } | undefined {
     const session = this._tinyCloudSession;
     const verdict = this.registryVerdict;
     if (!this.allowHostedOwnerProof || !this.requireExistingAccount || this.activeHostedOwnerProof() || !session ||
@@ -924,16 +933,31 @@ export class NodeUserAuthorization implements IUserAuthorization {
     const owned = /^tinycloud:pkh:eip155:(\d+):(0x[0-9a-fA-F]{40}):[^/]+$/.exec(session.spaceId);
     if (!owned || Number(owned[1]) !== session.chainId || owned[2]!.toLowerCase() !== session.address.toLowerCase()) return undefined;
     const spaceId = session.spaceId;
-    return { host: DEFAULT_TINYCLOUD_FALLBACK_HOST, spaceId };
+    return { host: DEFAULT_TINYCLOUD_FALLBACK_HOST, spaceId, session };
+  }
+
+  /** Whether a read made for the candidate still belongs to the current session: a newer sign-in has no part in its answer. */
+  private isRestoredCandidateCurrent(candidate: { session: TinyCloudSession }): boolean {
+    return this._tinyCloudSession?.delegationCid === candidate.session.delegationCid
+      && this._tinyCloudSession?.signature === candidate.session.signature;
   }
 
   /** A read has just confirmed the candidate: the proof now stands for this restored session only. */
-  adoptRestoredHostedOwnerProof(candidate: { host: string; spaceId: string }): void {
+  adoptRestoredHostedOwnerProof(candidate: { host: string; spaceId: string; session: TinyCloudSession }): void {
     const session = this._tinyCloudSession;
-    if (!session) return;
+    if (!session || !this.isRestoredCandidateCurrent(candidate)) return;
     this._hostedOwnerProof = {
       host: candidate.host, spaceId: candidate.spaceId, delegationCid: session.delegationCid, status: "proven",
     };
+  }
+
+  /**
+   * A restored session the strict read refused is no longer kept in storage. Only the record of that exact session is
+   * removed (by its signature), and only while it is still the current session: a newer sign-in's record is left alone.
+   */
+  async discardRefusedRestoredSession(candidate: { session: TinyCloudSession }): Promise<void> {
+    if (!this.isRestoredCandidateCurrent(candidate)) return;
+    await clearPersistedSessionIfOwn(this.sessionStorage, candidate.session.address, candidate.session.signature);
   }
 
   /**
@@ -979,6 +1003,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
     assertCurrent?.();
     if (mayProveHostedOwner) {
       this._hostedOwnerProofFailed = false;
+      this._hostedOwnerDelegateMayHaveLanded = false;
       this._pendingHostedOwnerProof = undefined;
     }
     const spaceId = restoredSpaceId ?? this.resolveSignInCapabilities(address, chainId).spaceId;
@@ -1951,16 +1976,23 @@ export class NodeUserAuthorization implements IUserAuthorization {
    * The only write a hosted-owner proof makes (TC-4082): one `/delegate` of the session delegation to the pinned node.
    * It is not retried and nothing else is sent. The node must report the exact primary space as activated; anything
    * else, including a skipped space, is a refusal.
+   *
+   * The request is bounded by the SDK's usual 5 s node timeout. Passing a signal also keeps it a single request:
+   * without one the shared activation flight may send a second attempt. An accepted answer, a 5xx, a transport error
+   * and a timeout all leave the delegation possibly persisted at the node, so `hostedOwnerDelegateMayHaveLanded`
+   * is set and a failed proof is then retired at the node; only a 4xx answer, which refuses the delegation, is not.
    */
   private async activateForHostedOwnerProof(proof: HostedOwnerProof, session: TinyCloudSession): Promise<void> {
     this.sessionHosts.add(proof.host);
     let activated: SpaceHostResult;
     try {
-      activated = await activateSessionWithHost(proof.host, session.delegationHeader);
+      activated = await activateSessionWithHost(proof.host, session.delegationHeader, AbortSignal.timeout(5_000));
     } catch (error) {
+      this._hostedOwnerDelegateMayHaveLanded = true;
       this.failHostedOwnerProof(proof);
       throw new NodeNotRespondingError([proof.host], error);
     }
+    this._hostedOwnerDelegateMayHaveLanded = activated.success || activated.status >= 500;
     if (!activated.success && activated.status >= 500) {
       this.failHostedOwnerProof(proof);
       throw Object.assign(new Error(`Failed to activate session: ${describeHostFailure(activated)}`), { cause: activated });
