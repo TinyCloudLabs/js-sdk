@@ -1,5 +1,19 @@
 # @tinycloudlabs/web-sdk
 
+## 3.14.0-beta.20
+
+### Patch Changes
+
+- f2ce056: Apps can request additional permissions after restoring a session with a verified renewal. The new permissions end by the time the restored session expires.
+
+  Details: TC-4028
+
+- Updated dependencies [f2ce056]
+- Updated dependencies [f2ce056]
+  - @tinycloud/sdk-core@3.14.0-beta.20
+  - @tinycloud/node-sdk@3.14.0-beta.20
+  - @tinycloud/replica@0.4.7-beta.6
+
 ## 3.14.0-beta.19
 
 ### Patch Changes
