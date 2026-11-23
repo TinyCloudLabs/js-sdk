@@ -1,6 +1,4 @@
 ---
-"@tinycloud/cli": patch
-"@tinycloud/operations": patch
 "@tinycloud/mcp": patch
 ---
 

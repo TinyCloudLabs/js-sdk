@@ -1,0 +1,15 @@
+{
+  "enabled": false,
+  "packages": [
+    "@tinycloud/bootstrap",
+    "@tinycloud/cli",
+    "@tinycloud/courier",
+    "@tinycloud/node-sdk",
+    "@tinycloud/node-sdk-wasm",
+    "@tinycloud/operations",
+    "@tinycloud/replica",
+    "@tinycloud/sdk-core",
+    "@tinycloud/sdk-services"
+  ],
+  "expect": {}
+}

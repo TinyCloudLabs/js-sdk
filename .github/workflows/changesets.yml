@@ -1,34 +1,64 @@
 name: Release
 
+# Stable-only releases from master (no pre mode, no beta cycle).
+#
+# A push to master versions and publishes ONLY the packages listed in
+# .github/release-scope.json, as plain stable versions on the `latest` dist-tag.
+# Every other workspace package keeps its version, CHANGELOG and pending
+# changesets until a maintainer adds it to that file. The file's `enabled`
+# switch is the only thing that lets this workflow release anything: while it is
+# false a push to master does nothing. See scripts/scoped-version.mjs.
 on:
   push:
     branches:
       - master
   workflow_dispatch:
     inputs:
-      confirm:
-        description: 'Type "release" to graduate the current betas to stable'
-        required: false
       resume:
-        description: 'Type "beta" to finish publishing the newest beta version commit when a beta publish stopped partway; nothing new is versioned'
+        description: 'Type "release" to finish publishing the newest release version commit when a release stopped partway; nothing new is versioned'
         required: false
 
-# One queue for both jobs, and never cancel a run once it starts (TC-1095).
-# Beta and stable runs push to the same master and publish the same npm
-# packages, so they must not overlap. A cancelled run used to leave npm
-# versions behind that the next version commit reused.
+# One queue for every job, and never cancel a run once it starts (TC-1095).
+# Release runs push to the same master and publish the same npm packages, so
+# they must not overlap. A cancelled run used to leave npm versions behind that
+# the next version commit reused.
 concurrency:
   group: release
   cancel-in-progress: false
 
 jobs:
-  # On push to master: publish incrementing beta pre-releases
-  beta:
-    name: Beta Release
-    if: github.event_name == 'push' && !contains(github.event.head_commit.message, '[skip ci]')
+  # Reads the switch in .github/release-scope.json from the pushed commit. Nothing else
+  # runs (no install, no key, no npm token) unless it is true.
+  gate:
+    name: Release gate
+    if: github.repository == 'TinyCloudLabs/js-sdk' && github.ref == 'refs/heads/master' && (github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && !contains(github.event.head_commit.message, '[skip ci]')))
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      enabled: ${{ steps.gate.outputs.enabled }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Read the release switch
+        id: gate
+        run: |
+          node .github/scripts/scoped-version.mjs check
+          node .github/scripts/scoped-version.mjs gate "$GITHUB_OUTPUT"
+
+  # On push to master: version and publish the in-scope packages' pending changesets.
+  release:
+    name: Release
+    needs: gate
+    if: needs.gate.outputs.enabled == 'true' && github.event_name == 'push'
     runs-on: ubuntu-latest
     # actions: read lets pre-publish read earlier Release runs' logs (TC-1457).
-    # contents: read is all this job needs. beta-github-releases holds
+    # contents: read is all this job needs. github-releases holds
     # contents: write and creates the GitHub Releases (O25).
     permissions:
       actions: read
@@ -61,11 +91,11 @@ jobs:
       # The checkout's lockfile is used as committed; only the versioning step below may change it (TC-1155).
       - run: bun install --frozen-lockfile
 
+      # Changesets that name at least one package in the release scope. Changesets for
+      # packages outside it stay pending and are not counted.
       - name: Check for pending changesets
         id: check
-        run: |
-          COUNT=$(find .changeset -name '*.md' ! -name 'README.md' | wc -l)
-          echo "pending=$COUNT" >> "$GITHUB_OUTPUT"
+        run: node .github/scripts/scoped-version.mjs pending "$GITHUB_OUTPUT"
 
       # Fail before versioning if the deploy key is missing (no fallback to
       # GH_TOKEN for the push).
@@ -75,34 +105,36 @@ jobs:
         env:
           RELEASE_DEPLOY_KEY: ${{ secrets.RELEASE_DEPLOY_KEY }}
 
-      # Majors are a human decision (TC-615): a new major changeset publishes
+      # Majors are a human decision (TC-615): a pending major changeset publishes
       # only after a maintainer's `approve-major-release:` sign-off commit.
       - name: Require sign-off for major bumps
         if: steps.check.outputs.pending != '0'
-        run: node .github/scripts/check-major-release-signoff.mjs beta
+        run: node .github/scripts/check-major-release-signoff.mjs release
 
-      - name: List pending changesets
+      - name: List the release scope and pending changesets
         if: steps.check.outputs.pending != '0'
         run: |
-          echo "## Pending changesets to consume:"
-          find .changeset -name '*.md' ! -name 'README.md' -exec basename {} \; | sort
+          echo "## Release scope:"
+          cat .github/release-scope.json
           echo ""
-          echo "## Current pre.json state:"
-          cat .changeset/pre.json
+          echo "## Pending changesets:"
+          find .changeset -name '*.md' ! -name 'README.md' -exec basename {} \; | sort
 
-      # A stable release that pushed but did not finish publishing leaves
-      # stable versions npm lacks. In pre mode `changeset publish` would tag
-      # them `beta`, and versioning could bump past them, so stop before
-      # versioning anything (TC-1095). Packages npm has never seen are new and
-      # are left to beta versioning.
-      - name: Refuse to run while a stable release is unfinished
+      # A release that pushed but did not finish publishing leaves versions npm
+      # lacks (TC-1095). Stop before versioning anything: finish it with the
+      # `resume: release` dispatch. This also stops a scoped release whose
+      # already-staged baseline versions are not on npm yet, so a version set
+      # aside for another source is never published from this one.
+      - name: Refuse to run while a release is unfinished
         if: steps.check.outputs.pending != '0'
         run: node .github/scripts/check-npm-release-provenance.mjs unpublished-stable
 
+      # Versions only the packages in the release scope and refuses the result unless the
+      # bumps are stable, same-major increases that match the locked inventory (when set).
       - name: Version and build
         if: steps.check.outputs.pending != '0'
         run: |
-          bun changeset version
+          node .github/scripts/scoped-version.mjs version
           # After a version bump bun 1.4 can need a second install to settle workspace dependency
           # specs; commit a lockfile that a later install leaves unchanged (TC-1155).
           for pass in 1 2 3; do
@@ -133,7 +165,7 @@ jobs:
       # Commit the version bump locally; nothing leaves the runner until the
       # npm check below has passed (TC-1457). The push still comes before any
       # publish (TC-1095).
-      - name: Commit beta version bumps
+      - name: Commit release version bumps
         id: release
         if: steps.check.outputs.pending != '0'
         run: |
@@ -144,7 +176,7 @@ jobs:
             echo "No changes to commit"
             echo "committed=false" >> "$GITHUB_OUTPUT"
           else
-            git commit -m "chore: beta version packages [skip ci]"
+            git commit -m "chore: release stable packages [skip ci]"
             echo "committed=true" >> "$GITHUB_OUTPUT"
           fi
           echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
@@ -159,7 +191,8 @@ jobs:
       # `changeset publish` silently skips versions npm already has. Fail
       # instead when npm's copy of a current version was published before the
       # commit that set it, or when an earlier run got npm to accept a version
-      # npm does not show yet (TC-1457). This runs before the push, so a stop
+      # npm does not show yet (TC-1457). It judges only the packages this commit
+      # versioned (RELEASE_SCOPE_FILE). This runs before the push, so a stop
       # leaves master and the pending changesets untouched.
       - name: Check npm before publishing
         if: steps.check.outputs.pending != '0'
@@ -169,11 +202,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           # Records each package's dist-tags before publishing, for post-publish's "tag back" commands.
           RELEASE_DIST_TAGS_FILE: ${{ runner.temp }}/npm-dist-tags.json
+          RELEASE_SCOPE_FILE: .github/release-scope.json
 
       # Push the version commit before publishing anything (TC-1095). If the
       # push fails because master moved, stop: nothing is published, and the
       # queued run for the newer master versions these changesets instead.
-      - name: Push beta version bumps
+      - name: Push release version bumps
         if: steps.check.outputs.pending != '0'
         run: |
           if [ "$COMMITTED" = true ]; then
@@ -188,7 +222,7 @@ jobs:
           COMMITTED: ${{ steps.release.outputs.committed }}
           GIT_SSH_COMMAND: ssh -F /dev/null -i ${{ runner.temp }}/release-ssh/id -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=${{ runner.temp }}/release-ssh/known_hosts -o GlobalKnownHostsFile=/dev/null
 
-      - name: Publish beta to npm
+      - name: Publish stable to npm
         if: steps.check.outputs.pending != '0'
         run: |
           # Publish only from the version commit that is on master.
@@ -225,22 +259,17 @@ jobs:
               if (changed) { fs.writeFileSync(f, JSON.stringify(pkg, null, 2) + "\n"); console.log("Resolved workspace refs in", f); }
             }
           '
-          # Use `changeset publish` instead of a hand-rolled loop so that
-          # already-published versions are skipped gracefully. The hand-rolled
-          # loop 403'd on sdk-core@2.1.0-beta.0 in the 2026-04-10 release after
-          # PR #182, aborting before the wasm packages (which actually needed
-          # publishing) were attempted. The check above fails the run instead
-          # when a version npm already has was published before its version
-          # commit.
+          # Publish in dependency order (publish-in-dependency-order.mjs): one
+          # `changeset publish` per layer of the in-scope packages, and npm must
+          # serve every tarball of a layer (HTTP 200) before the next layer
+          # starts. RELEASE_SCOPE_FILE hides every package outside the release
+          # scope and every version this commit did not set, so nothing else
+          # can be published from this checkout. Outside pre mode the versions
+          # go to the `latest` dist-tag.
           # Keep the output: npm can accept a version and show it hours later
           # (web-sdk, TC-1457). The accepted versions are recorded in this
           # run's log, which the next run's pre-publish reads, so a version
           # that is accepted but not yet visible is never published again.
-          # Publish in dependency order (publish-in-dependency-order.mjs): one
-          # `changeset publish` per layer of the workspace dependency graph, and
-          # npm must serve every tarball of a layer (HTTP 200) before the next
-          # layer starts. `changeset publish` alone starts all packages at once,
-          # so courier was installable before the sdk-core it requires.
           # The announce log is the publish log minus any version whose tarball
           # never appeared; only it feeds the GitHub Releases.
           set +e
@@ -252,8 +281,9 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           RELEASE_SHA: ${{ steps.release.outputs.sha }}
+          RELEASE_SCOPE_FILE: .github/release-scope.json
 
-      # Records whether this run's publish reported any versions. It runs even
+      # Records whether this run published versions. It runs even
       # when publish failed partway, so versions npm accepted still get releases.
       - name: Record whether this run published versions
         id: published
@@ -266,13 +296,13 @@ jobs:
             echo "published=false" >> "$GITHUB_OUTPUT"
           fi
 
-      # The log is kept one day for beta-github-releases, which runs in a
+      # The log is kept one day for github-releases, which runs in a
       # separate job so that only it holds contents: write.
-      - name: Keep the publish log for beta-github-releases
+      - name: Keep the publish log for github-releases
         if: always() && steps.published.outputs.published == 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: beta-publish-log
+          name: release-publish-log
           path: ${{ runner.temp }}/announce/changeset-publish.log
           retention-days: 1
           if-no-files-found: error
@@ -280,28 +310,30 @@ jobs:
       # Fails red when a published version requires an internal version npm
       # does not show (even one npm accepted), and prints the commands that move
       # its dist-tag back and forward. It never moves a dist-tag itself.
-      - name: Confirm npm has every current version
+      - name: Confirm npm has every released version
         if: steps.check.outputs.pending != '0'
         run: node .github/scripts/check-npm-release-provenance.mjs post-publish "$RUNNER_TEMP/changeset-publish.log"
         env:
           RELEASE_DIST_TAGS_FILE: ${{ runner.temp }}/npm-dist-tags.json
+          RELEASE_SCOPE_FILE: .github/release-scope.json
 
       - name: Remove release deploy key
         if: always()
         run: .github/scripts/release-deploy-key.sh remove
 
-  # Manual trigger (`resume: beta`): finish a beta publish that stopped after its
+  # Manual trigger (`resume: release`): finish a release that stopped after its
   # version commit was pushed (npm slow to show a version, a failed layer). A
-  # beta run versions and pushes before it publishes, so the next push run finds
-  # no pending changesets and publishes nothing; this job publishes the newest
-  # beta version commit's missing versions from that commit instead. Nothing is
-  # versioned or pushed, so it needs no deploy key and no contents: write.
-  # Idempotent: `changeset publish` skips versions npm already has, and the
-  # pre-publish check stops on a version an earlier run got npm to accept but
-  # npm does not show yet.
-  beta-resume:
-    name: Beta Resume
-    if: github.event_name == 'workflow_dispatch' && github.event.inputs.resume == 'beta'
+  # release run versions and pushes before it publishes, so the next push run
+  # finds no pending changesets and publishes nothing; this job publishes the
+  # missing versions from that release commit instead. Nothing is versioned or
+  # pushed, so it needs no deploy key and no contents: write. Idempotent:
+  # `changeset publish` skips versions npm already has, and the pre-publish
+  # check stops on a version an earlier run got npm to accept but npm does not
+  # show yet.
+  release-resume:
+    name: Release resume
+    needs: gate
+    if: needs.gate.outputs.enabled == 'true' && github.event_name == 'workflow_dispatch' && github.event.inputs.resume == 'release'
     runs-on: ubuntu-latest
     permissions:
       actions: read
@@ -334,14 +366,16 @@ jobs:
       - name: Install wasm-pack
         uses: ./.github/actions/install-wasm-pack
 
-      # The newest release commit on master must be a beta version commit whose
-      # versions npm lacks; a later stable release supersedes it (the step fails),
-      # and when npm has everything there is nothing to do (no commit selected).
-      - name: Find the unfinished beta release
-        id: unfinished
-        run: node "$RUNNER_TEMP/release-scripts/check-npm-release-provenance.mjs" unfinished-beta "$GITHUB_OUTPUT"
+      # Keep the checkout clean before selecting a previously pushed release.
+      - run: bun install --frozen-lockfile
 
-      - name: Check out the unfinished beta release
+      # All the missing versions must come from one release commit; the step fails otherwise,
+      # and when npm has everything there is nothing to do (no commit selected).
+      - name: Find the unfinished release
+        id: unfinished
+        run: node "$RUNNER_TEMP/release-scripts/check-npm-release-provenance.mjs" unfinished-stable "$GITHUB_OUTPUT"
+
+      - name: Check out the unfinished release
         if: steps.unfinished.outputs.sha != ''
         run: git checkout --quiet --detach "$RELEASE_SHA"
         env:
@@ -388,8 +422,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_DIST_TAGS_FILE: ${{ runner.temp }}/npm-dist-tags.json
+          RELEASE_SCOPE_FILE: .github/release-scope.json
 
-      - name: Publish beta to npm
+      - name: Publish stable to npm
         if: steps.unfinished.outputs.sha != ''
         run: |
           # Publish only from the unfinished version commit, as built above.
@@ -398,7 +433,7 @@ jobs:
             git status --short
             exit 1
           fi
-          # Resolve workspace:* to real versions before publishing, as the beta job does.
+          # Resolve workspace:* to real versions before publishing, as the release job does.
           node -e '
             const fs = require("fs");
             const glob = require("child_process").execSync("find packages -name package.json -not -path */node_modules/*", {encoding:"utf8"}).trim().split("\n");
@@ -433,6 +468,7 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           RELEASE_SHA: ${{ steps.unfinished.outputs.sha }}
+          RELEASE_SCOPE_FILE: .github/release-scope.json
 
       - name: Record whether this run published versions
         id: published
@@ -445,37 +481,38 @@ jobs:
             echo "published=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Keep the publish log for beta-github-releases
+      - name: Keep the publish log for github-releases
         if: always() && steps.published.outputs.published == 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: beta-publish-log
+          name: release-publish-log
           path: ${{ runner.temp }}/announce/changeset-publish.log
           retention-days: 1
           if-no-files-found: error
 
-      - name: Confirm npm has every current version
+      - name: Confirm npm has every released version
         if: steps.unfinished.outputs.sha != ''
         run: node "$RUNNER_TEMP/release-scripts/check-npm-release-provenance.mjs" post-publish "$RUNNER_TEMP/changeset-publish.log"
         env:
           RELEASE_DIST_TAGS_FILE: ${{ runner.temp }}/npm-dist-tags.json
+          RELEASE_SCOPE_FILE: .github/release-scope.json
 
-  # Creates the GitHub Releases for what the beta job published (O25). Only
+  # Creates the GitHub Releases for what the release jobs published (O25). Only
   # this job holds contents: write, and it installs no dependencies.
-  beta-github-releases:
-    name: Beta GitHub Releases
-    needs: [beta, beta-resume]
-    if: always() && (needs.beta.outputs.published == 'true' || needs.beta-resume.outputs.published == 'true')
+  github-releases:
+    name: GitHub Releases
+    needs: [release, release-resume]
+    if: always() && (needs.release.outputs.published == 'true' || needs.release-resume.outputs.published == 'true')
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
-      # Checked out at the version commit the beta job published, so the
+      # Checked out at the version commit the release job published, so the
       # CHANGELOG sections match the published versions. That commit's copy of
-      # the script is the one the beta job ran.
+      # the script is the one the release job ran.
       - uses: actions/checkout@v4
         with:
-          ref: ${{ needs.beta.outputs.release-sha || needs.beta-resume.outputs.release-sha }}
+          ref: ${{ needs.release.outputs.release-sha || needs.release-resume.outputs.release-sha }}
           persist-credentials: false
 
       - uses: actions/setup-node@v4
@@ -484,290 +521,14 @@ jobs:
 
       - uses: actions/download-artifact@v4
         with:
-          name: beta-publish-log
-          path: ${{ runner.temp }}/beta-publish
+          name: release-publish-log
+          path: ${{ runner.temp }}/release-publish
 
       # A failure is reported as an error annotation. npm already has the
       # versions, so this job does not fail.
       - name: Create GitHub Releases for published versions
-        run: node .github/scripts/github-releases.mjs create "$RUNNER_TEMP/beta-publish/changeset-publish.log" "$RELEASE_SHA"
+        run: node .github/scripts/github-releases.mjs create "$RUNNER_TEMP/release-publish/changeset-publish.log" "$RELEASE_SHA"
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-          RELEASE_SHA: ${{ needs.beta.outputs.release-sha || needs.beta-resume.outputs.release-sha }}
-
-  # Manual trigger: graduate betas to stable release
-  stable:
-    name: Stable Release
-    if: github.event_name == 'workflow_dispatch' && github.event.inputs.confirm == 'release'
-    runs-on: ubuntu-latest
-    permissions:
-      actions: read
-      contents: write
-      id-token: write
-    steps:
-      # The deploy key is not left in git config or ~/.ssh for install and
-      # build steps; only the push step below uses it.
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          ref: master
-          persist-credentials: false
-
-      # Recovery runs check out an older release commit that may predate this
-      # script, so keep a copy from master for the release step.
-      - name: Keep the GitHub release script
-        run: cp .github/scripts/github-releases.mjs "$RUNNER_TEMP/github-releases.mjs"
-
-      - uses: oven-sh/setup-bun@v1
-        with:
-          bun-version: latest
-          no-cache: true
-
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: wasm32-unknown-unknown
-
-      - name: Install wasm-pack
-        uses: ./.github/actions/install-wasm-pack
-
-      # Keep the checkout clean before selecting a previously pushed release.
-      - run: bun install --frozen-lockfile
-
-      # Finish an unfinished stable release before versioning anything new
-      # (TC-1095). If a previous stable run pushed its release commit but npm
-      # lacks some of its versions, this run checks out that commit and
-      # publishes exactly those versions from it; nothing new graduates. The
-      # step fails if the missing versions do not come from one release commit.
-      - name: Find an unfinished stable release
-        id: unfinished
-        run: node .github/scripts/check-npm-release-provenance.mjs unfinished-stable "$GITHUB_OUTPUT"
-
-      # Fail before versioning if the deploy key is missing (no fallback to
-      # GH_TOKEN for the push). Recovery runs do not push and need no key.
-      - name: Install release deploy key
-        if: steps.unfinished.outputs.sha == ''
-        run: .github/scripts/release-deploy-key.sh install
-        env:
-          RELEASE_DEPLOY_KEY: ${{ secrets.RELEASE_DEPLOY_KEY }}
-
-      - name: Check out the unfinished stable release
-        if: steps.unfinished.outputs.sha != ''
-        run: git checkout --quiet --detach "$RELEASE_SHA"
-        env:
-          RELEASE_SHA: ${{ steps.unfinished.outputs.sha }}
-
-      # A package that would graduate at a higher major than it entered pre
-      # mode needs a maintainer's `approve-major-release:` sign-off (TC-615).
-      - name: Require sign-off for major releases
-        if: steps.unfinished.outputs.sha == ''
-        run: node .github/scripts/check-major-release-signoff.mjs stable
-
-      - name: Exit pre mode and version
-        if: steps.unfinished.outputs.sha == ''
-        run: |
-          bun changeset pre exit
-          bun changeset version
-
-      - name: Normalize unversioned private workspaces
-        if: steps.unfinished.outputs.sha == ''
-        run: |
-          node <<'NODE'
-          const { execFileSync } = require('node:child_process');
-          const fs = require('node:fs');
-          const path = require('node:path');
-
-          const files = execFileSync('find', [
-            'apps', 'packages', 'tests', '-name', 'package.json',
-            '-not', '-path', '*/node_modules/*'
-          ], { encoding: 'utf8' }).trim().split('\n').filter(Boolean);
-
-          for (const file of files) {
-            const pkg = JSON.parse(fs.readFileSync(file, 'utf8'));
-            if (!pkg.private || pkg.version !== null) continue;
-
-            delete pkg.version;
-            fs.writeFileSync(file, JSON.stringify(pkg, null, 2) + '\n');
-
-            const changelog = path.join(path.dirname(file), 'CHANGELOG.md');
-            if (fs.existsSync(changelog)) {
-              const expected = `# ${pkg.name}\n\n## null`;
-              const actual = fs.readFileSync(changelog, 'utf8').trim();
-              if (actual !== expected) {
-                throw new Error(`Refusing to remove non-generated changelog: ${changelog}`);
-              }
-              fs.unlinkSync(changelog);
-            }
-
-            console.log(`Restored unversioned private workspace: ${pkg.name}`);
-          }
-          NODE
-
-      # Same lockfile settling as the beta job (TC-1155): the release commit must carry a lockfile
-      # that a later install leaves unchanged.
-      - name: Install newly versioned dependencies
-        if: steps.unfinished.outputs.sha == ''
-        run: |
-          for pass in 1 2 3; do
-            cp bun.lock "$RUNNER_TEMP/bun.lock.before"
-            bun install
-            cmp -s bun.lock "$RUNNER_TEMP/bun.lock.before" && break
-            if [ "$pass" = 3 ]; then echo "::error::bun.lock still changes after 3 installs"; exit 1; fi
-          done
-
-      # Recovery publishes the existing commit, including its original lockfile.
-      - name: Install unfinished release dependencies
-        if: steps.unfinished.outputs.sha != ''
-        run: bun install --frozen-lockfile
-
-      - name: Build
-        run: bun run build:release
-        env:
-          BUILD_SETUP_ENABLED: true
-          NODE_OPTIONS: --max-old-space-size=6144
-
-      - name: Verify node release pin
-        run: bun run --cwd packages/cli check:node-release
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-
-      # A published package must not pin another workspace package to a version
-      # this release replaces (TC-2014). Recovery runs publish an older commit
-      # that may not have the script, and were checked when they were cut.
-      - name: Check internal dependency pins
-        if: steps.unfinished.outputs.sha == ''
-        run: node scripts/check-internal-dep-pins.mjs
-
-      # Push before publishing anything (TC-1095). One push carries two
-      # commits: the stable release, then pre mode re-entered for the next
-      # beta cycle, so master is never left outside pre mode. Publish from the
-      # first commit: in pre mode `changeset publish` would use the beta
-      # dist-tag. If the push fails, nothing is published; dispatch again.
-      # If the publish fails after the push, dispatch again: the next run
-      # finishes this release first, and the beta job refuses to run until then.
-      - name: Commit and push stable release
-        if: steps.unfinished.outputs.sha == ''
-        id: release
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add .
-          git commit -m "chore: release stable packages [skip ci]"
-          RELEASE_SHA=$(git rev-parse HEAD)
-          echo "sha=$RELEASE_SHA" >> "$GITHUB_OUTPUT"
-          bun changeset pre enter beta
-          git add .
-          git commit -m "chore: enter beta pre-release mode [skip ci]"
-          if ! git push git@github.com:TinyCloudLabs/js-sdk.git master; then
-            echo "::error title=Stable release not pushed::Could not push to master (it has probably moved). Nothing was published; dispatch the stable release again."
-            exit 1
-          fi
-          # Pushed: the key has no further use in this job.
-          rm -rf "$RUNNER_TEMP/release-ssh"
-          git checkout --quiet --detach "$RELEASE_SHA"
-        env:
-          GIT_SSH_COMMAND: ssh -F /dev/null -i ${{ runner.temp }}/release-ssh/id -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=${{ runner.temp }}/release-ssh/known_hosts -o GlobalKnownHostsFile=/dev/null
-
-      - name: Setup Node for npm publish
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-          registry-url: 'https://registry.npmjs.org'
-
-      # `changeset publish` silently skips versions npm already has. Fail
-      # instead when npm's copy of a current version was published before the
-      # commit that set it. Recovery runs execute the script from the release
-      # commit being finished, which may predate the accepted-version record
-      # (TC-1457); only beta runs record it, so stable publishing is unchanged.
-      - name: Check npm before publishing
-        run: node .github/scripts/check-npm-release-provenance.mjs pre-publish
-        env:
-          # Read-only: lets the check see whether an earlier Release run already got npm to accept a version (TC-1457).
-          GH_TOKEN: ${{ github.token }}
-          # Records each package's dist-tags before publishing, for post-publish's "tag back" commands.
-          RELEASE_DIST_TAGS_FILE: ${{ runner.temp }}/npm-dist-tags.json
-
-      - name: Publish stable to npm
-        run: |
-          # Publish only from the stable release commit that is on master.
-          if [ "$(git rev-parse HEAD)" != "$RELEASE_SHA" ] || [ -n "$(git status --porcelain)" ]; then
-            echo "::error title=Not the pushed release commit::Refusing to publish: the checkout is not a clean copy of ${RELEASE_SHA}."
-            git status --short
-            exit 1
-          fi
-          # Resolve workspace:* to real versions before publishing.
-          # Belt-and-suspenders: changeset publish also resolves internally,
-          # but keeping this script ensures consistency with the prior workflow.
-          # This edits package.json files after the release commit, so the
-          # tree is dirty from here on; nothing commits these edits.
-          node -e '
-            const fs = require("fs");
-            const glob = require("child_process").execSync("find packages -name package.json -not -path */node_modules/*", {encoding:"utf8"}).trim().split("\n");
-            const versions = {};
-            for (const f of glob) {
-              const pkg = JSON.parse(fs.readFileSync(f, "utf8"));
-              if (pkg.name) versions[pkg.name] = pkg.version;
-            }
-            for (const f of glob) {
-              const raw = fs.readFileSync(f, "utf8");
-              const pkg = JSON.parse(raw);
-              let changed = false;
-              for (const depType of ["dependencies","devDependencies","peerDependencies"]) {
-                if (!pkg[depType]) continue;
-                for (const [name, ver] of Object.entries(pkg[depType])) {
-                  if (typeof ver === "string" && ver.startsWith("workspace:")) {
-                    if (versions[name]) { pkg[depType][name] = versions[name]; changed = true; }
-                  }
-                }
-              }
-              if (changed) { fs.writeFileSync(f, JSON.stringify(pkg, null, 2) + "\n"); console.log("Resolved workspace refs in", f); }
-            }
-          '
-          # Use `changeset publish` instead of a hand-rolled loop so that
-          # already-published versions are skipped gracefully, matching the
-          # beta job's behavior.
-          # Keep the output for the GitHub release step (O25).
-          # Publish in dependency order, waiting for npm to serve each layer's
-          # tarballs before the next layer (see the beta job).
-          node .github/scripts/publish-in-dependency-order.mjs "$RUNNER_TEMP/changeset-publish.log"
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-          RELEASE_SHA: ${{ steps.release.outputs.sha || steps.unfinished.outputs.sha }}
-
-      # One GitHub Release per package version this run published (O25). A
-      # failure is reported as an error annotation; npm already has the
-      # versions, so the job does not fail.
-      - name: Create GitHub Releases for published versions
-        run: node "$RUNNER_TEMP/github-releases.mjs" create "$RUNNER_TEMP/changeset-publish.log" "$RELEASE_SHA"
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-          RELEASE_SHA: ${{ steps.release.outputs.sha || steps.unfinished.outputs.sha }}
-
-      - name: Confirm npm has every current version
-        run: node .github/scripts/check-npm-release-provenance.mjs post-publish
-        env:
-          RELEASE_DIST_TAGS_FILE: ${{ runner.temp }}/npm-dist-tags.json
-
-      # Tag the commit that was published, not master's tip: a recovery run
-      # publishes an older release commit while master has moved on.
-      - name: Create GitHub Release
-        run: |
-          VERSION=$(node -e "console.log(require('./packages/web-sdk/package.json').version)")
-          if gh release view "v${VERSION}" >/dev/null 2>&1; then
-            echo "GitHub release v${VERSION} already exists; package-only release is complete."
-          else
-            gh release create "v${VERSION}" \
-              --title "v${VERSION}" \
-              --generate-notes \
-              --target "$RELEASE_SHA"
-          fi
-        env:
-          GH_TOKEN: ${{ github.token }}
-          RELEASE_SHA: ${{ steps.release.outputs.sha || steps.unfinished.outputs.sha }}
-
-      - name: Remove release deploy key
-        if: always()
-        # Inline, not the checked-out script: recovery runs check out a release
-        # commit that may predate the script.
-        run: rm -rf "$RUNNER_TEMP/release-ssh"
+          RELEASE_SHA: ${{ needs.release.outputs.release-sha || needs.release-resume.outputs.release-sha }}

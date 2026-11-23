@@ -99,44 +99,67 @@ git commit --allow-empty -m "approve-major-release: @tinycloud/<package>"
 ```
 
 The `Major release guard` check fails a PR that adds a `major` changeset or raises a major version
-without that sign-off. The Release workflow applies the same rule before publishing betas and before
-graduating them to stable (TC-615).
+without that sign-off. The Release workflow applies the same rule before versioning a release
+(`check-major-release-signoff.mjs release`, TC-615).
 
 Every changeset a PR adds or modifies needs a line that starts `Details: TC-<number>` (several
 tickets: `Details: TC-1, TC-2`); the `Changeset details` check fails the PR otherwise. It becomes
 the ticket line in the package CHANGELOG. `.changeset/README.md`, `config.json` and `pre.json` are
 exempt, as are the `dependabot-*.md` changesets that `dependabot-changeset.yml` generates.
 
-Release runs queue and never cancel each other. Each run pushes its version commit to `master` and
-then publishes from that commit; if `master` moved first, the run fails without publishing and the
-next run releases the changesets. Before publishing, it fails if npm's copy of any current version
-was published before the commit that set that version (TC-1095). The fix is a new changeset for that
-package, so the next run bumps past the stale version. A beta run also refuses to start while
-`master` has stable versions npm lacks (a stable release that did not finish publishing). A
-maintainer then re-dispatches the Stable Release, which publishes exactly those versions from their
-release commit and graduates nothing else in that run.
+## Releases (stable only, scoped)
+
+`master` is out of pre mode: there are no betas and no `.changeset/pre.json`. A push to `master` runs
+the Release workflow, which versions and publishes plain stable versions on the `latest` dist-tag for
+**only** the packages listed in `.github/release-scope.json`:
+
+- `enabled` is the only switch. While it is `false` a push releases nothing (the `Release gate` job
+  stops the run). Flipping it is a maintainer decision, never an agent's.
+- `packages` is the release scope. Every other workspace package keeps its version, CHANGELOG and
+  pending changesets. A changeset that names both kinds is split at release time: the in-scope lines
+  are consumed, the rest is written back as a pending changeset with the same text. To release another
+  package, a maintainer adds it to `packages` (its manifest version must be its last stable release, so
+  its pending changesets produce the next version) in a reviewed PR.
+- `expect` (optional) locks the exact inventory of one release: `{ "<name>": "<version>" }`. The run
+  fails before pushing unless exactly those versions come out. Clear it afterwards.
+- `scoped-version.mjs` runs `changeset version`, puts every out-of-scope package back (a dependent bump
+  is not a release; its pins on in-scope packages follow the new versions), and refuses the result
+  unless every in-scope bump is a stable, same-major increase and no in-scope package requires a
+  prerelease of a package outside the scope. `node .github/scripts/scoped-version.mjs plan` shows what
+  the next release would do, in a throwaway copy of the tree (it needs `bun install` first).
+- Provenance and publishing see only the packages the release commit versioned
+  (`RELEASE_SCOPE_FILE`): a version staged earlier from another commit is never republished or judged
+  against master's source, and a held package can never be published from this checkout.
+
+Release runs queue and never cancel each other. Each run pushes its version commit
+(`chore: release stable packages [skip ci]`) to `master` and then publishes from that commit; if
+`master` moved first, the run fails without publishing and the next run releases the changesets.
+Before publishing, it fails if npm's copy of any released version was published before the commit that
+set that version (TC-1095). The fix is a new changeset for that package, so the next run bumps past the
+stale version. A run also refuses to start while `master` has stable versions npm lacks (a release that
+did not finish publishing); dispatch the Release workflow with `resume: release` to publish exactly
+those versions from their release commit.
 npm can accept a publish and show it only much later (`@tinycloud/web-sdk`: 17 min to 2 h 25 min,
-TC-1457). The beta publish step records the versions npm accepted as `tinycloud-npm-accepted:` lines in the
-run's log. After the 30-minute budget, `Confirm npm has every current version` treats an accepted version
+TC-1457). The publish step records the versions npm accepted as `tinycloud-npm-accepted:` lines in the
+run's log. After the 30-minute budget, `Confirm npm has every released version` treats an accepted version
 that is still not visible as a warning and a pending marker, not a failure. The next run's pre-publish
 reads earlier Release runs' logs (read-only, `actions: read`) and stops, rather than publish the same
 version number from newer code, when a version is missing from npm but an earlier run accepted it. It
 names that run; wait until `npm view <name>@<version>` answers, then push to `master` again, or bump the
 package with a changeset. A version no run accepted is published from HEAD as before.
-The warning holds only while no current version requires the pending one. `npm publish` moves each
+The warning holds only while no released version requires the pending one. `npm publish` moves each
 package's dist-tag at once, so a published package that requires a pending (or missing) internal version
 fails `Confirm npm` red: installing it by tag fails with ETARGET (`@tinycloud/web-sdk@beta` →
 `web-sdk-wasm@1.7.7-beta.0`, 2026-10-20). The failure prints a "tag back" `npm dist-tag add` command
 (to the version pre-publish recorded) and a "roll forward" one; a maintainer runs them by hand. CI never
 moves dist-tags.
 
-Runbook: **`Confirm npm has every current version` warns "pending" for web-sdk → wait; never re-run;
-never use the `release` dispatch (that's STABLE).** If it fails for web-sdk only, the version was not
-recorded as accepted: check the publish step log and `npm view`, still never re-run or dispatch `release`.
-If it fails because a package requires a version npm does not show, hold merges; wait for the dependency
-or run the printed tag-back command, then roll forward once `npm view <dependency> version` answers.
-A beta run's pre-publish check runs before it pushes, so a stop there leaves `master` and the pending
-changesets untouched; push to `master` again once npm shows the version.
+Runbook: **`Confirm npm has every released version` warns "pending" → wait; never re-run; never use
+`resume: release` while the original run's versions may still be accepted.** If it fails because a
+package requires a version npm does not show, hold merges; wait for the dependency or run the printed
+tag-back command, then roll forward once `npm view <dependency> version` answers. The pre-publish check
+runs before the push, so a stop there leaves `master` and the pending changesets untouched; push to
+`master` again once npm shows the version.
 
 Stable-release installs use the committed lockfile before selecting a release and during recovery.
 Only a newly versioned release may refresh it: an unfrozen recovery install can rewrite workspace

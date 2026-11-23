@@ -1,5 +1,4 @@
 ---
-"@tinycloud/sdk-core": patch
 "@tinycloud/web-sdk": patch
 ---
 
