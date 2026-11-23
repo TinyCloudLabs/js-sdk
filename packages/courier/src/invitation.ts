@@ -6,9 +6,10 @@ import { ulid } from 'ulid';
 import { DelegatedAccess, NodeWasmBindings, activateValidatedRuntimeDelegation, deserializeDelegation, serializeDelegation } from '@tinycloud/node-sdk';
 import type { IKVService, PortableDelegation, TinyCloudNode, TinyCloudSession } from '@tinycloud/node-sdk';
 import { activateSessionWithHost } from '@tinycloud/sdk-core';
-import { createLink, resolveLink, signerFromJwk, linkIssuerPublicKey } from '@tinycloud/share-envelope/links';
+import { createLink, isLinkError, resolveLink, signerFromJwk, linkIssuerPublicKey } from '@tinycloud/share-envelope/links';
 import type { Ed25519PrivateJwk } from '@tinycloud/share-envelope/links';
 import { CourierError } from './errors.js';
+import { cmd } from './program.js';
 import { canonicalJson, requestHash } from './canonical.js';
 import { assertExactAuthority, assertPeerDelegation, bareDid } from './authority.js';
 import { k, PREFIX, peerReadPermissions } from './keys.js';
@@ -192,7 +193,10 @@ async function publishSession(node: TinyCloudNode, profile: Profile, body: Couri
   activateSession({ ...body.session, peer: handle });
 }
 function expiryCheck(body: CourierInvitation) {
-  if (Date.parse(body.expiresAt) <= Date.now()) throw new CourierError('invite-expired', 'Invitation expired; no session was created or substituted.');
+  if (Date.parse(body.expiresAt) <= Date.now()) {
+    const hint = body.mode === 'email' ? '' : ' The sender can issue a fresh private link for the intended chat with owner consent.';
+    throw new CourierError('invite-expired', `Invitation expired; no session was created or substituted.${hint}`);
+  }
 }
 function waitSeconds(args: ParsedArgs): number {
   const value = Number(args.get('wait') ?? '300');
@@ -297,7 +301,7 @@ export async function runInvite(args: ParsedArgs, deps: InviteDeps): Promise<voi
     const id = args.positional[1] ?? '';
     if (!validSessionId(id)) throw new CourierError('usage', 'courier invite serve <invitationId>');
     const state = await getJson<InviteState>(node.kv, inviteStateKey(id));
-    if (!state) refuse('No invitation issued by this profile.');
+    if (!state) refuse(`No invitation issued by this profile. Use the original issuer profile, or get owner consent to make a fresh private link with \`${cmd('invite --help')}\`.`);
     const body = parseInvitation(state.value.body);
     if (body.issuer !== profile.courierDid || !sameIdentity(body.artifact.from.owner, profile.ownerDid!) || body.host !== profile.host) refuse('Invitation belongs to another issuer.');
     expiryCheck(body);
@@ -411,7 +415,16 @@ export async function joinInvitation(link: string, args: ParsedArgs): Promise<vo
     body = received;
   } else {
     const opened = await resolveLink(link, { apiOrigin: process.env.COURIER_LINKS_API_ORIGIN ?? DEFAULT_API,
-      trustedOrigins: [process.env.COURIER_LINK_ORIGIN ?? DEFAULT_VIEWER], validateBody: (type, value) => { if (type !== 'courier') refuse('Not a Courier invitation.'); parseInvitation(value); } });
+      trustedOrigins: [process.env.COURIER_LINK_ORIGIN ?? DEFAULT_VIEWER], validateBody: (type, value) => { if (type !== 'courier') refuse('Not a Courier invitation.'); parseInvitation(value); } })
+      .catch((error: unknown) => {
+        if (!isLinkError(error)) throw error;
+        const hint = error.code === 'service_unavailable'
+          ? 'Retry the same invitation URL when the service is available.'
+          : error.code === 'gone' || error.code === 'expired'
+            ? 'Ask the sender for a fresh private invitation link.'
+            : 'Ask the sender for the exact full invitation URL, including its fragment. If it still fails, ask for a fresh private link.';
+        throw new CourierError(error.code, `Could not open this Courier invitation. ${hint}`, { cause: error });
+      });
     body = parseInvitation(opened.value);
     if (opened.header.audience !== (process.env.COURIER_LINKS_API_ORIGIN ?? DEFAULT_API) || opened.header.expiresAt !== body.expiresAt) refuse('Invitation audience or expiry changed.');
   }
@@ -426,13 +439,18 @@ export async function joinWithBody(body: CourierInvitation, wait: number): Promi
   if (body.host !== profile.host) refuse('Invitation uses another node host; no setup or session was changed.');
   if (body.issuer === profile.courierDid) refuse('Refusing to join this agent identity.');
   if (body.mode === 'same-owner' && !sameIdentity(body.artifact.from.owner, profile.ownerDid!)) refuse('Invitation requires another agent of the same owner.');
-  if (body.mode === 'named' && body.recipient !== profile.courierDid) refuse('Invitation is addressed to another agent key.');
+  if (body.mode === 'named' && body.recipient !== profile.courierDid) refuse('Invitation is addressed to another agent key. Use the intended profile or ask the sender for a fresh private link addressed to your current Courier key.');
   const hash = requestHash(body);
   const localFile = joinStateFile(body.id);
   fs.mkdirSync(path.dirname(localFile), { recursive: true, mode: 0o700 });
   let state: JoinState | undefined;
   try { state = JSON.parse(fs.readFileSync(localFile, 'utf8')) as JoinState; } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
-  if (state && (state.invitationHash !== hash || state.joined)) throw new CourierError('invite-used', 'Invitation already joined or changed. No other session was activated.');
+  if (state && (state.invitationHash !== hash || state.joined)) {
+    const hint = body.mode === 'email' ? '' : state.invitationHash !== hash
+      ? ' Ask the sender for a fresh private link.'
+      : ` Use \`${cmd('start')}\` to find your chat.`;
+    throw new CourierError('invite-used', `Invitation already joined or changed. No other session was activated.${hint}`);
+  }
   const relay = await relayKv(body, node);
   if (!state) {
     const outbound = await node.delegateTo(body.issuer, peerReadPermissions(body.artifact.callMe, profile.spaceId!, body.session.sessionId), { expiry: Date.parse(body.expiresAt) - Date.now(), requireActivation: true });
@@ -443,7 +461,10 @@ export async function joinWithBody(body: CourierInvitation, wait: number): Promi
   try { await putCreate(relay, `${relayRoot(body.id)}claim.json`, state.claim); } catch (error) {
     if (!(error instanceof CourierError && error.code === 'conflict')) throw error;
     const existing = await getJson<Signed<Claim>>(relay, `${relayRoot(body.id)}claim.json`);
-    if (!existing || requestHash(existing.value) !== requestHash(state.claim)) throw new CourierError('invite-used', 'Another recipient has already claimed this invitation.');
+    if (!existing || requestHash(existing.value) !== requestHash(state.claim)) {
+      const hint = body.mode === 'email' ? '' : ' Ask the sender for a fresh private link.';
+      throw new CourierError('invite-used', `Another recipient has already claimed this invitation.${hint}`);
+    }
   }
   const deadline = Math.min(Date.parse(body.expiresAt), Date.now() + wait * 1000);
   for (;;) {
