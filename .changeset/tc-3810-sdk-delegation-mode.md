@@ -13,6 +13,4 @@ Wallet-signed SIWE ReCap grants now declare their delegation mode in the top-lev
 - OpenKey verification accepts an absent mode for legacy-attenuable flows and pre-upgrade OpenKey responses while refusing flipped modes and dropped declared `"terminal"` modes.
 - The CLI forwards `delegationMode` on `/delegate` links and device authorization requests, verifies returned modes, and surfaces plain-language refusal copy when a node refuses re-delegation of a terminal grant (`terminal-parent-cannot-redelegate`).
 
-Terminal requests need OpenKey with TC-3810 step 4.
-
 Details: TC-3810
