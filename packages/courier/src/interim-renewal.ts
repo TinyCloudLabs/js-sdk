@@ -190,7 +190,7 @@ async function cleanup(node: TinyCloudNode, peer: InterimPeer, cid: string, save
 
 /** Network queries run unlocked; the caller persists each local change with a locked merge. */
 async function checkSiblings(node: TinyCloudNode, profile: Profile, peer: InterimPeer, save: ProfileSave, now: number): Promise<{ tip: AccountDelegationRecord; records: AccountDelegationRecord[] } | InterimResult> {
-  parentOf(node, profile, now);
+  const parent = parentOf(node, profile, now);
   const records = await issued(node, profile);
   const ledger = peer.outbound as LedgerEntry[];
   const current = ledgerTip(peer);
@@ -212,9 +212,23 @@ async function checkSiblings(node: TinyCloudNode, profile: Profile, peer: Interi
     }
     return { state: state.ownerRevoked ? 'owner-revoked' : 'revoked' };
   }
+  // Node v1.26.22's issued listing uses the ancestor's signed expiry, not
+  // its stamped effective end. Resolve only this disagreement by exact CID.
+  let confirmedActive: Set<string> | undefined;
+  for (const record of siblings) {
+    const end = record.expiresAt?.getTime();
+    if (record.status !== 'expired' || end === undefined || !(now < end && end <= parent.end)
+      || record.parents.length !== 1 || record.parents[0] !== parent.cid) continue;
+    const status = await node.getDelegationStatus(record.cid);
+    if (!status.ok || status.data.status !== 'active' || status.data.effective_expiry !== end / 1000) {
+      return { state: 'unavailable' };
+    }
+    (confirmedActive ??= new Set()).add(record.cid);
+  }
+  const active = (record: AccountDelegationRecord): boolean => record.status === 'active' || confirmedActive?.has(record.cid) === true;
   let orphaned = false;
   for (const record of siblings) {
-    if (record.status === 'active' && record.expiresAt && record.expiresAt.getTime() > now && !ledger.some(entry => entry.cid === record.cid)) {
+    if (active(record) && record.expiresAt && record.expiresAt.getTime() > now && !ledger.some(entry => entry.cid === record.cid)) {
       orphaned = true;
       await cleanup(node, peer, record.cid, save, disk => {
         // Reconciliation queried the node without holding the profile lock. Never claim
@@ -230,7 +244,7 @@ async function checkSiblings(node: TinyCloudNode, profile: Profile, peer: Interi
     if (entry.revokedAt || stateOf(peer).cleanup[entry.cid]?.intentAt) continue;
     if (entry.cid !== current.cid && Date.parse(entry.expiresAt) <= now) continue;
     const record = siblings.find(item => item.cid === entry.cid);
-    if (!record || record.status !== 'active') return { state: 'unavailable' };
+    if (!record || !active(record)) return { state: 'unavailable' };
     liveEnd(record.expiresAt, Date.now());
   }
   liveEnd(tip.expiresAt, Date.now());
