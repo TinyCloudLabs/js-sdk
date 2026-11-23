@@ -197,6 +197,8 @@ export interface HostedOwnerProof {
   delegationCid?: string;
   /** `pending` until the signed read answers 2xx. */
   status: "pending" | "proven";
+  /** The `/delegate` request has been sent (whether or not it answered): a sign-out then retires the session at the node. */
+  delegateSent?: boolean;
 }
 
 type JsonValue =
@@ -530,7 +532,10 @@ export class NodeUserAuthorization implements IUserAuthorization {
   private readonly includeImplicitCapabilitiesRead: boolean;
   private readonly requireExistingAccount: boolean;
   private readonly allowHostedOwnerProof: boolean;
+  /** The proof the active session stands on, once a read proved it. */
   private _hostedOwnerProof?: HostedOwnerProof;
+  /** The sign-in in flight. Kept apart so a second sign-in never strips or reuses the active session's proof. */
+  private _pendingHostedOwnerProof?: HostedOwnerProof;
   private _hostedOwnerProofFailed = false;
 
   private sessionManager: ISessionManager;
@@ -844,6 +849,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
     this._lastActivationActivatedSpaceIds = [];
     this._spaceHosting = "unknown";
     this._hostedOwnerProof = undefined;
+    this._pendingHostedOwnerProof = undefined;
     this._hostedOwnerProofFailed = false;
     if (!session) {
       this._session = undefined;
@@ -879,7 +885,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
    * `/delegate`, and a single read the request already holds. `pending` until that read answers, `proven` after.
    */
   get hostedOwnerProof(): Readonly<HostedOwnerProof> | undefined {
-    return this._hostedOwnerProof;
+    return this._pendingHostedOwnerProof ?? this.activeHostedOwnerProof();
   }
 
   /** True once a proof was refused or could not be checked: the session is to be discarded locally, with no write to a node. */
@@ -887,15 +893,27 @@ export class NodeUserAuthorization implements IUserAuthorization {
     return this._hostedOwnerProofFailed;
   }
 
-  /** The read answered positively: from now on routing to the proven space uses the pinned host. */
-  markHostedOwnerProven(): void {
-    if (this._hostedOwnerProof) this._hostedOwnerProof = { ...this._hostedOwnerProof, status: "proven" };
+  /**
+   * The read answered positively: from now on routing to the proven space uses the pinned host. Only the proof that read
+   * belonged to is promoted; false when a newer sign-in has replaced it meanwhile.
+   */
+  markHostedOwnerProven(proof: Readonly<HostedOwnerProof>): boolean {
+    if (this._pendingHostedOwnerProof !== proof) return false;
+    this._hostedOwnerProof = { ...proof, status: "proven" };
+    this._pendingHostedOwnerProof = undefined;
+    return true;
   }
 
-  /** The proof was refused or could not be read. Nothing it started may be used. */
-  failHostedOwnerProof(): void {
-    this._hostedOwnerProof = undefined;
+  /** The proof was refused or could not be read. Nothing it started may be used. A proof a newer sign-in has replaced is left alone. */
+  failHostedOwnerProof(proof?: Readonly<HostedOwnerProof>): void {
+    if (proof && this._pendingHostedOwnerProof !== proof) return;
+    this._pendingHostedOwnerProof = undefined;
     this._hostedOwnerProofFailed = true;
+  }
+
+  /** A sign-in that ended before its read (a cancelled wallet, an abandoned prepared request) leaves nothing behind. */
+  discardPendingHostedOwnerProof(): void {
+    this._pendingHostedOwnerProof = undefined;
   }
 
   /**
@@ -905,7 +923,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
   restoredHostedOwnerCandidate(): { host: string; spaceId: string } | undefined {
     const session = this._tinyCloudSession;
     const verdict = this.registryVerdict;
-    if (!this.allowHostedOwnerProof || !this.requireExistingAccount || this._hostedOwnerProof || !session ||
+    if (!this.allowHostedOwnerProof || !this.requireExistingAccount || this.activeHostedOwnerProof() || !session ||
       verdict?.status !== "unregistered" || verdict.offline) return undefined;
     // Only the session's own primary space: owned by the session's address, on its chain. No other space is read.
     const owned = /^tinycloud:pkh:eip155:(\d+):(0x[0-9a-fA-F]{40}):[^/]+$/.exec(session.spaceId);
@@ -930,7 +948,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
    * it already holds and no way to host or create anything. Anything else keeps the refusal.
    */
   private async beginHostedOwnerProof(address: string, chainId: number): Promise<ResourceDestination | undefined> {
-    this._hostedOwnerProof = undefined;
+    this._pendingHostedOwnerProof = undefined;
     const verdict = this.registryVerdict;
     if (!this.allowHostedOwnerProof || !this.requireExistingAccount || verdict?.status !== "unregistered" || verdict.offline) return undefined;
     const plan = this.resolveSignInCapabilities(address, chainId);
@@ -938,15 +956,20 @@ export class NodeUserAuthorization implements IUserAuthorization {
     const { assessHostedOwnerRecap, hostedOwnerPlanOperations } = await import("../space-hosting.js");
     if (pkhSpaceIdentity(plan.spaceId) !== pkhSpaceIdentity(spaceId) ||
       assessHostedOwnerRecap(hostedOwnerPlanOperations(plan), spaceId) === undefined) return undefined;
-    this._hostedOwnerProof = { owner: address.toLowerCase(), chainId, host: DEFAULT_TINYCLOUD_FALLBACK_HOST, spaceId, status: "pending" };
+    this._pendingHostedOwnerProof = { owner: address.toLowerCase(), chainId, host: DEFAULT_TINYCLOUD_FALLBACK_HOST, spaceId, status: "pending" };
     return { url: DEFAULT_TINYCLOUD_FALLBACK_HOST };
+  }
+
+  /** The proof of the active session: proven, and for that session's delegation only. */
+  activeHostedOwnerProof(): HostedOwnerProof | undefined {
+    const proof = this._hostedOwnerProof;
+    return proof && proof.delegationCid === this._tinyCloudSession?.delegationCid ? proof : undefined;
   }
 
   /** The pinned node for a resource the proof covers: the proven space itself, to read or write, never to host. */
   private provenDestinations(resource: string, access: ResourceAccess): ResourceDestination[] | undefined {
-    const proof = this._hostedOwnerProof;
+    const proof = this.activeHostedOwnerProof();
     if (proof?.status !== "proven" || (access !== "read" && access !== "write")) return undefined;
-    if (proof.delegationCid !== this._tinyCloudSession?.delegationCid) return undefined;
     const inSpace = pkhSpaceIdentity(resource) === pkhSpaceIdentity(proof.spaceId) ||
       pkhSpaceIdentity(resource).startsWith(`${pkhSpaceIdentity(proof.spaceId)}/`);
     return inSpace ? [{ url: proof.host }] : undefined;
@@ -960,11 +983,14 @@ export class NodeUserAuthorization implements IUserAuthorization {
     mayProveHostedOwner = false,
   ): Promise<void> {
     assertCurrent?.();
+    if (mayProveHostedOwner) {
+      this._hostedOwnerProofFailed = false;
+      this._pendingHostedOwnerProof = undefined;
+    }
     const spaceId = restoredSpaceId ?? this.resolveSignInCapabilities(address, chainId).spaceId;
     let destinations: ResourceDestination[];
     try {
-      destinations = await this.resolveResourceDestinations(spaceId, "read");
-      if (mayProveHostedOwner) this._hostedOwnerProof = undefined;
+      destinations = await this.resolveResourceDestinations(spaceId, "read", undefined, undefined, mayProveHostedOwner);
     } catch (error) {
       const pinned = mayProveHostedOwner && error instanceof AccountSetupRequiredError
         ? await this.beginHostedOwnerProof(address, chainId)
@@ -972,7 +998,8 @@ export class NodeUserAuthorization implements IUserAuthorization {
       if (!pinned) throw error;
       destinations = [pinned];
     }
-    if (this.requireExistingAccount && this.registryVerdict?.status === "unregistered" && this._hostedOwnerProof === undefined) {
+    if (this.requireExistingAccount && this.registryVerdict?.status === "unregistered" && this._pendingHostedOwnerProof === undefined &&
+      !(this.activeHostedOwnerProof() && !mayProveHostedOwner)) {
       throw new AccountSetupRequiredError();
     }
     for (const destination of destinations) {
@@ -984,7 +1011,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
   }
 
   /** Current registry routing; mutable restored hosts never supply no-entry authority. */
-  async resolveResourceDestinations(resource: string, access: ResourceAccess, noEntryHosts: readonly string[] = this.registryNoEntryHosts, dataRead?: boolean): Promise<ResourceDestination[]> {
+  async resolveResourceDestinations(resource: string, access: ResourceAccess, noEntryHosts: readonly string[] = this.registryNoEntryHosts, dataRead?: boolean, ignoreProof = false): Promise<ResourceDestination[]> {
     const owner = resource.startsWith("urn:tinycloud:encryption:")
       ? parseNetworkId(resource.split("/")[0]).ownerDid
       : parseSpaceUri(resource)?.owner ?? (() => {
@@ -1007,7 +1034,8 @@ export class NodeUserAuthorization implements IUserAuthorization {
         this.registryVerdict = resolved.verdict;
         if (resolved.verdict.status === "unregistered") {
           if (this.requireExistingAccount) {
-            const proven = this.provenDestinations(resource, access);
+            // A sign-in in flight asks the registry afresh: the active session's proof says nothing about the new one.
+            const proven = ignoreProof ? undefined : this.provenDestinations(resource, access);
             if (proven) return proven;
             throw new AccountSetupRequiredError();
           }
@@ -1881,7 +1909,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
     if (!this._tinyCloudSession) {
       throw new Error("Must be signed in to ensure space exists");
     }
-    if (this._hostedOwnerProof?.status === "pending") return this.activateForHostedOwnerProof(this._hostedOwnerProof, this._tinyCloudSession);
+    if (this._pendingHostedOwnerProof) return this.activateForHostedOwnerProof(this._pendingHostedOwnerProof, this._tinyCloudSession);
 
     const primarySpaceId = this._tinyCloudSession.spaceId;
     const primary = await this.resolveResourceDestinations(primarySpaceId, "read");
@@ -1932,24 +1960,28 @@ export class NodeUserAuthorization implements IUserAuthorization {
    */
   private async activateForHostedOwnerProof(proof: HostedOwnerProof, session: TinyCloudSession): Promise<void> {
     this.sessionHosts.add(proof.host);
+    // Recorded before the request leaves: from here a sign-out retires this session at the node.
+    const sent: HostedOwnerProof = { ...proof, delegateSent: true };
+    this._pendingHostedOwnerProof = sent;
     let activated: SpaceHostResult;
     try {
       activated = await activateSessionWithHost(proof.host, session.delegationHeader);
     } catch (error) {
-      this.failHostedOwnerProof();
+      this.failHostedOwnerProof(sent);
       throw new NodeNotRespondingError([proof.host], error);
     }
     if (!activated.success && activated.status >= 500) {
-      this.failHostedOwnerProof();
+      this.failHostedOwnerProof(sent);
       throw Object.assign(new Error(`Failed to activate session: ${describeHostFailure(activated)}`), { cause: activated });
     }
     this.recordActivationSkippedSpaces(activated, session.spaceId);
     const hostsPrimary = activated.success && (activated.activated ?? []).some((space) => pkhSpaceIdentity(space) === pkhSpaceIdentity(proof.spaceId));
     if (!hostsPrimary) {
-      this.failHostedOwnerProof();
+      this.failHostedOwnerProof(sent);
       throw new AccountSetupRequiredError();
     }
-    this._hostedOwnerProof = { ...proof, delegationCid: session.delegationCid };
+    if (this._pendingHostedOwnerProof !== sent) throw new Error("Sign-in was replaced before the hosted-space check finished.");
+    this._pendingHostedOwnerProof = { ...sent, delegationCid: session.delegationCid };
   }
 
   /**
@@ -1965,7 +1997,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
     const session = this._tinyCloudSession;
     if (hosting !== "not-hosted") return;
     // A hosted-owner proof never creates a space: the account is not set up, and nothing here may set it up.
-    if (this._hostedOwnerProof) return;
+    if (this.hostedOwnerProof) return;
     if (!session) throw new Error("Must be signed in to host the primary space");
     // Determine the effective space creation handler:
     // 1. Explicit spaceCreationHandler takes precedence

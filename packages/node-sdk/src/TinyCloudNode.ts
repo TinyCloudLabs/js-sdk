@@ -1917,6 +1917,8 @@ export class TinyCloudNode {
 
   /** One strict read per session epoch for a restored owner with no registry record. No `/delegate`, no retry. */
   private restoreHostedOwnerProof(): Promise<boolean> {
+    // A sign-in since then may have proven this session: the cached answer belongs to the epoch, the proof to the session.
+    if (this.auth?.activeHostedOwnerProof()?.status === "proven") return Promise.resolve(true);
     const attempt = this.hostedOwnerRestore;
     if (attempt?.epoch === this.sessionEpoch) return attempt.result;
     const auth = this.auth;
@@ -1971,10 +1973,10 @@ export class TinyCloudNode {
     const outcome = await this.readHostedOwner(proof.host, proof.spaceId, true);
     this.assertSessionEpoch(epoch, "Sign-in");
     if (outcome === "positive") {
-      auth.markHostedOwnerProven();
+      if (!auth.markHostedOwnerProven(proof)) throw new Error("Sign-in was replaced before the hosted-space check finished.");
       return;
     }
-    auth.failHostedOwnerProof();
+    auth.failHostedOwnerProof(proof);
     throw outcome === "refused"
       ? new AccountSetupRequiredError()
       : new NodeNotRespondingError([proof.host], new Error("The hosted-space check did not answer."));
@@ -3309,6 +3311,9 @@ export class TinyCloudNode {
     try {
       // A refused hosted-owner proof is discarded locally: the retire request carries session roots, so it would write.
       if (options?.retireAtNodes === false) throw new Error("The session was refused before it was proven, so no node is asked to retire it.");
+      // A sign-out before the proof's `/delegate` was sent: nothing was issued at any node, so there is nothing to retire.
+      const proof = this.auth?.hostedOwnerProof;
+      if (proof?.status === "pending" && proof.delegateSent !== true) throw new Error("The session was signed out before the hosted-space check sent anything, so no node is asked to retire it.");
       retire = this.leavingSessionRetire();
     } catch (error) {
       let hosts: string[] = [];
@@ -3684,6 +3689,9 @@ export class TinyCloudNode {
         await this.endSession();
       } else if (this.auth?.hostedOwnerProofFailed && attempt === this.latestSessionAttempt) {
         await this.endSession({ retireAtNodes: false });
+      } else if (attempt === this.latestSessionAttempt && this.config.allowHostedOwnerProof === true) {
+        // A cancelled wallet or a refused prepared request leaves no half-made proof for a later restore to trip over.
+        this.auth?.discardPendingHostedOwnerProof();
       }
       throw error;
     }
