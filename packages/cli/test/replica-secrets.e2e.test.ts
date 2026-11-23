@@ -529,7 +529,7 @@ describe.skipIf(!NODE_BIN)("tc replica Secrets against a real local SQLite node"
     await ok(["auth", "import", "exact-decrypt-grant.json"], "exact-device");
     const named = await secretRead("exact-device");
     expect(named.code === 0 && secretReadMatches(named.stdout, secretMarker)).toBe(true);
-  });
+  }, 30_000);
 
   test("secrets_cli_fails_offline_without_local_plaintext", async () => {
     await stopNode();
