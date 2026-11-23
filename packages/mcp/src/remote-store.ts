@@ -62,6 +62,8 @@ const FAST_POLL_WINDOW_MS = 60_000;
 const SLOW_POLL_INTERVAL_MS = 10_000;
 /** Approvals polled in the background at once; beyond this, calls collect. */
 const MAX_COLLECTION_POLLS = 64;
+/** Of those, the most one tenant may hold, so one tenant's links cannot take every slot. */
+const MAX_COLLECTION_POLLS_PER_TENANT = 4;
 /** How long after its request ends a result may still be collected (OpenKey keeps it 10 minutes). */
 const RESULT_COLLECTION_GRACE_MS = 600_000;
 /** A claimed result left by a stopped server becomes collectable again after this. */
@@ -304,7 +306,7 @@ export class RemoteTenantStore {
   readonly #approvalProcessing = new Map<string, Promise<void>>();
   readonly #linkCreations = new Map<string, Promise<string>>();
   readonly #collections = new Map<string, Promise<CollectionOutcome>>();
-  readonly #polls = new Map<string, NodeJS.Timeout>();
+  readonly #polls = new Map<string, { readonly stateRoot: string; timer: NodeJS.Timeout }>();
   #closed = false;
   readonly #endpoints: OpenKeyEndpoints;
   readonly #grantLifetimeSeconds: number;
@@ -314,11 +316,16 @@ export class RemoteTenantStore {
   constructor(config: RemoteStoreConfig) {
     this.#config = config;
     const openkeyOrigin = new URL(config.openkeyHost).origin;
+    const openkeyApiOrigin = new URL(
+      config.openkeyApiHost ?? (openkeyOrigin === "https://openkey.so" ? "https://api.openkey.so" : openkeyOrigin),
+    ).origin;
+    // Approval results, and the owner's signed approval inside them, are fetched from this origin.
+    if (!openkeyApiOrigin.startsWith("https://")) {
+      throw new Error("The OpenKey API origin must use https.");
+    }
     this.#endpoints = {
       openkeyOrigin,
-      openkeyApiOrigin: new URL(
-        config.openkeyApiHost ?? (openkeyOrigin === "https://openkey.so" ? "https://api.openkey.so" : openkeyOrigin),
-      ).origin,
+      openkeyApiOrigin,
       linksApiOrigin: new URL(config.linksApiOrigin ?? DEFAULT_LINKS_API_ORIGIN).origin,
     };
     this.#grantLifetimeSeconds = lifetimeSeconds(config.delegationExpiry);
@@ -546,7 +553,7 @@ export class RemoteTenantStore {
     await this.#hasValidSession(tenant, ownerDids);
   }
 
-  async connectStatus(subject: string, ownerDids: readonly string[] = []): Promise<ConnectStatus> {
+  async connectStatus(subject: string, ownerDids: readonly string[]): Promise<ConnectStatus> {
     const tenant = await this.#ensureTenant(subject);
     await this.#collectApprovals(tenant);
     const state = await this.#sessionState(tenant, ownerDids, true);
@@ -993,18 +1000,22 @@ export class RemoteTenantStore {
   /**
    * Poll one opened approval until it is collected or its request and result
    * window end: every 2 s for the first minute, then every 10 s. At most
-   * `MAX_COLLECTION_POLLS` run at once; beyond that the tenant's next call
+   * `MAX_COLLECTION_POLLS` run at once, and one tenant holds at most
+   * `MAX_COLLECTION_POLLS_PER_TENANT` of them; beyond that the tenant's next call
    * collects.
    */
   #startCollectionPoll(stateRoot: string, nonce: string): void {
     const key = this.#pendingPath(stateRoot, nonce);
     if (this.#closed || this.#polls.has(key) || this.#polls.size >= MAX_COLLECTION_POLLS) return;
+    let tenantPolls = 0;
+    for (const poll of this.#polls.values()) if (poll.stateRoot === stateRoot) tenantPolls++;
+    if (tenantPolls >= MAX_COLLECTION_POLLS_PER_TENANT) return;
     const startedAt = Date.now();
     const schedule = (): void => {
       const delay = Date.now() - startedAt < FAST_POLL_WINDOW_MS ? APPROVAL_POLL_INTERVAL_MS : SLOW_POLL_INTERVAL_MS;
       const timer = setTimeout(() => void tick(), delay);
       timer.unref();
-      this.#polls.set(key, timer);
+      this.#polls.set(key, { stateRoot, timer });
     };
     const tick = async (): Promise<void> => {
       const outcome = await this.#collectApproval(stateRoot, nonce, POLL_COLLECTION_TIMEOUT_MS);
@@ -1020,7 +1031,7 @@ export class RemoteTenantStore {
   /** Stop background collection. Pending approvals stay on disk for the next start. */
   async close(): Promise<void> {
     this.#closed = true;
-    for (const timer of this.#polls.values()) clearTimeout(timer);
+    for (const { timer } of this.#polls.values()) clearTimeout(timer);
     this.#polls.clear();
     await Promise.allSettled([...this.#collections.values()]);
   }
@@ -1041,7 +1052,8 @@ export class RemoteTenantStore {
   ): Promise<string> {
     const { node, session } = await this.#restoreApproval(tenant, data, resultOwner);
     this.#assertCurrentApproval(pending, session);
-    if (pending.ownerDids.length > 0 && !pending.ownerDids.some((did) => samePrincipal(node.did, did))) {
+    // An approval is stored only when its verified signer is the OAuth principal that asked.
+    if (!pending.ownerDids.some((did) => samePrincipal(node.did, did))) {
       throw new ApprovalOwnerMismatchError();
     }
     // The verifier reports one entry per signed action; the SDK subset check
@@ -1433,6 +1445,7 @@ export class RemoteTenantStore {
   ): Promise<PendingApproval> {
     const clearing = this.#clearing.get(this.tenantStateRoot(subject));
     if (clearing) await clearing;
+    if (ownerDids.length === 0) throw new Error("An approval link needs the account that requested it.");
     const tenant = await this.#ensureTenant(subject);
     const tenantId = this.#tenantId(subject);
     const normalizedOwners = ownerDids.map(normalizeDid);
