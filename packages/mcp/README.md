@@ -207,11 +207,11 @@ move's completed `steps` (`written`, `deleted`): an `ok` envelope can contain
 partial failures. Report partial outcomes rather than replaying the batch.
 `TIMEZONE_REQUIRED` requires setting the owner's timezone before writing.
 
-Production requests 30-day grants and uses 15-minute approval links. The
-connection approval also asks the owner for a 90-day renewal lease. Without
-a lease, the grant ends at its signed expiry. A connection grant that no
-longer renews needs a fresh connection approval. Per-request grants are
-renewed by the owner. To stop renewal directly, open OpenKey Settings, go to
+Production requests 30-day grants and uses 15-minute approval links. Every
+approval also asks the owner for a 90-day renewal lease. Without a lease, the
+grant ends at its signed expiry. A grant that no longer renews needs a fresh
+approval: connection approval for the account grant and per-request approval
+for a scoped grant. To stop renewal directly, open OpenKey Settings, go to
 Renewing permissions and select Stop renewal. Removing the connection does
 not immediately stop renewal.
 

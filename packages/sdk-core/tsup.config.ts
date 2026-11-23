@@ -29,6 +29,19 @@ const publicationCoreRoot: Plugin = {
   },
 };
 
+// The renewal-receipt entry reuses the renewal entry's file, so both subpaths export the same error classes and
+// `instanceof` holds across them. Source and tests keep the relative path.
+const sharedRenewal: Plugin = {
+  name: "shared-renewal",
+  setup(build) {
+    build.onResolve({ filter: /^\.\/renewal$/ }, (args) =>
+      args.kind === "import-statement" && /[\\/]delegations[\\/]renewal-receipt\.ts$/.test(args.importer)
+        ? { path: "@tinycloud/sdk-core/delegations/renewal", external: true }
+        : undefined,
+    );
+  },
+};
+
 export default defineConfig({
   entry: [
     "src/index.ts",
@@ -50,7 +63,7 @@ export default defineConfig({
   clean: true,
   sourcemap: true,
   splitting: false,
-  esbuildPlugins: [lazyIssued, publicationCoreRoot],
+  esbuildPlugins: [lazyIssued, publicationCoreRoot, sharedRenewal],
   // Resolve bundled deps' package.json "exports"/"browser" conditions as a
   // browser platform would. Node 20+ ships a global WebCrypto (globalThis.crypto),
   // so the browser-conditioned code these packages ship also runs correctly under

@@ -9898,6 +9898,97 @@
           },
           "prompted": {
             "type": "boolean"
+          },
+          "renewal": {
+            "type": "object",
+            "properties": {
+              "version": {
+                "type": "number",
+                "const": 1
+              },
+              "approvedLeaseLifetimeSeconds": {
+                "type": "integer",
+                "exclusiveMinimum": 0,
+                "minimum": -9007199254740991,
+                "maximum": 31536000
+              },
+              "approvedAt": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "receipt": {
+                "type": "object",
+                "properties": {
+                  "originalCid": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "leaseCid": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "leaseAuthorization": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "leaseExpiresAt": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "leaseGeneration": {
+                    "type": "integer",
+                    "exclusiveMinimum": 0,
+                    "minimum": -9007199254740991,
+                    "maximum": 9007199254740991
+                  },
+                  "nodeIdentity": {
+                    "type": "object",
+                    "properties": {
+                      "nodeDid": {
+                        "type": "string",
+                        "pattern": "^did\\:key\\:z"
+                      },
+                      "renewerDid": {
+                        "type": "string",
+                        "pattern": "^did\\:key\\:z"
+                      },
+                      "renewerPublicKey": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "renewerEpoch": {
+                        "type": "integer",
+                        "minimum": -9007199254740991,
+                        "maximum": 9007199254740991
+                      }
+                    },
+                    "required": [
+                      "nodeDid",
+                      "renewerDid",
+                      "renewerPublicKey",
+                      "renewerEpoch"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "required": [
+                  "originalCid",
+                  "leaseCid",
+                  "leaseAuthorization",
+                  "leaseExpiresAt",
+                  "leaseGeneration",
+                  "nodeIdentity"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "version",
+              "approvedLeaseLifetimeSeconds",
+              "approvedAt",
+              "receipt"
+            ],
+            "additionalProperties": false
           }
         },
         "required": [

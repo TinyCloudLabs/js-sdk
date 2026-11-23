@@ -70,8 +70,8 @@ const RESULT_COLLECTION_GRACE_MS = 600_000;
 /** A claimed result left by a stopped server becomes collectable again after this. */
 const PROCESSING_STALE_MS = 120_000;
 /**
- * The renewal lease every connection approval asks for. The owner may approve without it; then the
- * grant ends at its signed end and is approved again.
+ * The renewal lease every approval asks for, connection or scoped. The owner may approve without it;
+ * then the grant ends at its signed end and is approved again.
  */
 export const BOOTSTRAP_LEASE_SECONDS = 90 * 86_400;
 /** Idle tenants become eligible before seven days to leave time for the sweep and retries. */
@@ -849,7 +849,7 @@ export class RemoteTenantStore {
         permissions: pending.permissions,
         reason: approvalReason(pending),
         grantLifetimeSeconds: this.#grantLifetimeSeconds,
-        ...(pending.kind === "bootstrap" ? { leaseLifetimeSeconds: BOOTSTRAP_LEASE_SECONDS } : {}),
+        leaseLifetimeSeconds: BOOTSTRAP_LEASE_SECONDS,
         expiresAt: new Date(Math.min(Date.parse(pending.expiresAt), lastPossibleEnd)),
       });
     } catch (error) {
@@ -1009,7 +1009,7 @@ export class RemoteTenantStore {
       const { checked } = collected;
       const stored = pending.kind === "bootstrap"
         ? await this.#storeBootstrap(current, pending, checked.delegation, checked.ownerDid, checked.renewal)
-        : await this.#storeDelegation(current, pending, checked.delegation, checked.ownerDid);
+        : await this.#storeDelegation(current, pending, checked.delegation, checked.ownerDid, checked.renewal);
       await this.#updateIdleSignals(stateRoot, {
         at: stored.approvedAt,
         ...(openkey.request.renewal === undefined ? {} : { resolved: openkey.requestId }),
@@ -1407,6 +1407,7 @@ export class RemoteTenantStore {
     pending: PendingApproval,
     data: Record<string, unknown>,
     resultOwner: string,
+    renewal: ApprovalRenewal | undefined,
   ): Promise<{ cid: string; approvedAt: number }> {
     if (pending.requestId === undefined) throw new Error("Authority request is missing.");
     // Unlike bootstrap there is no empty-list exemption: a delegation is only
@@ -1437,6 +1438,7 @@ export class RemoteTenantStore {
         error,
       );
     }
+    const approvedAt = renewal === undefined ? issuedAt : await this.#admitRenewal(tenant, node.did, session, renewal);
     const result = await invokeOperation(
       "tinycloud.auth.import",
       1,
@@ -1447,6 +1449,7 @@ export class RemoteTenantStore {
         requestId: pending.requestId,
         delegationCid: delegation.cid,
         delegation,
+        ...(renewal === undefined ? {} : { renewal }),
       },
     );
     if (result.status === "error") {
@@ -1459,7 +1462,7 @@ export class RemoteTenantStore {
       );
     }
     if (result.status !== "ok") throw new ApprovalStageError("auth_import", "AUTHORITY_REQUIRED");
-    return { cid: session.delegationCid, approvedAt: issuedAt };
+    return { cid: session.delegationCid, approvedAt };
   }
 
   #assertCurrentApproval(pending: PendingApproval, session: CallbackSession): number {
@@ -1756,9 +1759,7 @@ export class RemoteTenantStore {
       this.#pendingDirectory(tenant.stateRoot),
       { tenantId, approvalEpoch: tenant.approvalEpoch, kind, requestId, permissions, ownerDids },
       (openkey) => this.#currentRequest(openkey) &&
-        (kind === "bootstrap"
-          ? openkey.request.renewal?.version === 1 && openkey.request.renewal.leaseLifetimeSeconds === BOOTSTRAP_LEASE_SECONDS
-          : openkey.request.renewal === undefined),
+        openkey.request.renewal?.version === 1 && openkey.request.renewal.leaseLifetimeSeconds === BOOTSTRAP_LEASE_SECONDS,
     );
     if (reusable !== undefined) return reusable;
     const nonce = randomBytes(24).toString("base64url");
