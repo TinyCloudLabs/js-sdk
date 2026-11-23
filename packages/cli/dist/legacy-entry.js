@@ -2223,7 +2223,7 @@ var init_hmac = __esm({
 });
 
 // ../sdk-core/src/manifest.ts
-import { resolveSecretPath, SECRET_NAME_RE, parseNetworkId, parseSecretCatalogKey } from "@tinycloud/sdk-services";
+import { isReservedSecretSpaceKeyPath, resolveSecretPath, SECRET_NAME_RE, parseNetworkId, parseSecretCatalogKey } from "@tinycloud/sdk-services";
 import { formatKeyResource, parseEncryptionResource } from "@tinycloud/sdk-services/encryption/resource";
 function parseExpiry(duration) {
   if (typeof duration !== "string" || duration.length === 0) {
@@ -2331,7 +2331,7 @@ function isSecretKeyPath(keyPath) {
   return parseSecretCatalogKey([...segments.slice(1, -1), name.toUpperCase()].join("/")) !== void 0;
 }
 function expandSecretKeyPermissionEntry(entry, networkUrn, keyPath) {
-  if (!isSecretKeyPath(keyPath)) {
+  if (!isReservedSecretSpaceKeyPath(keyPath) && !isSecretKeyPath(keyPath)) {
     if (keyPath === "secrets" || keyPath.startsWith("secrets/")) {
       throw new ManifestValidationError(
         "secret keys must be exact: secrets/<name> or secrets/scoped/<scope>/<name>, with the name in lower case"

@@ -11,16 +11,16 @@ import {
 test("TC-3802 records the exact canonical CI root bytes of #1133", () => {
   validateLedger(ledger);
   const row = ledger.tc3802SecretKeyCapRoot;
-  const predecessor = ledger.tc3801NamedKeysRoot;
+  const predecessor = ledger.tc3823BotHistoryKeyRoot;
   expect(row).toEqual(approvedTc3802SecretKeyCapRoot);
-  expect(row.base).toBe("171a7b391cff57591aad20ab827660cad6673c06");
+  expect(row.base).toBe("67f965e446d1ea6a0e6d8688228b1e2d8dada833");
   expect(row.canonicalCI).toEqual({
     run: "PLACEHOLDER: replaced by the canonical CI run of this head",
     jobs: ["PLACEHOLDER: sqlite Replica job", "PLACEHOLDER: postgres Replica job"],
   });
   expect(row.sourceCommits).toEqual(["fd14fa023d84e17436150e11fc198cfce3d09d18"]);
-  expect(row.root.ceiling).toEqual({ "index.mjs": 1539377, "index.cjs": 1471348 });
-  expect(row.root.delta).toEqual({ "index.mjs": 9, "index.cjs": 4 });
+  expect(row.root.ceiling).toEqual({ "index.mjs": 1539515, "index.cjs": 1471456 });
+  expect(row.root.delta).toEqual({ "index.mjs": 7, "index.cjs": 10 });
 
   for (const format of ["index.mjs", "index.cjs"] as const) {
     expect(row.root.ceiling[format] - predecessor.root.ceiling[format]).toBe(row.root.delta[format]);
@@ -36,7 +36,7 @@ test("TC-3802 records the exact canonical CI root bytes of #1133", () => {
   ]);
 });
 
-test("TC-3802 refuses mutation, removal, or a missing TC-3801 predecessor", () => {
+test("TC-3802 refuses mutation, removal, or a missing TC-3823 predecessor", () => {
   const row = ledger.tc3802SecretKeyCapRoot;
   validateTc3802SecretKeyCapRootTransition(undefined, row);
   validateTc3802SecretKeyCapRootTransition(row, structuredClone(row));
@@ -54,5 +54,5 @@ test("TC-3802 refuses mutation, removal, or a missing TC-3801 predecessor", () =
   }
 
   expect(() => validateTc3802SecretKeyCapRootTransition(row, undefined)).toThrow("TC-3802");
-  expect(() => validateLedger({ ...ledger, tc3801NamedKeysRoot: undefined })).toThrow("TC-3802");
+  expect(() => validateLedger({ ...ledger, tc3823BotHistoryKeyRoot: undefined })).toThrow("TC-3802");
 });

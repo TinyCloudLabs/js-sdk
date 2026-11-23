@@ -7,6 +7,8 @@ import type { Ledger } from "./replica-size-policy";
 // This admission is tested in its own context: the later TC-3947 and TC-3801 rows are removed.
 const root = structuredClone(rootLedger) as Ledger;
 delete root.tc3801NamedKeysRoot;
+delete root.tc3969SecretKeyCoverageRoot;
+delete root.tc3823BotHistoryKeyRoot;
 delete root.tc3802SecretKeyCapRoot;
 delete root.tc3947ReplicaRevokeRoot;
 const optional = structuredClone(optionalLedger) as OptionalLedger;

@@ -2259,7 +2259,7 @@ var init_hmac = __esm({
 });
 
 // ../sdk-core/src/manifest.ts
-import { resolveSecretPath, SECRET_NAME_RE, parseNetworkId, parseSecretCatalogKey } from "@tinycloud/sdk-services";
+import { isReservedSecretSpaceKeyPath, resolveSecretPath, SECRET_NAME_RE, parseNetworkId, parseSecretCatalogKey } from "@tinycloud/sdk-services";
 import { formatKeyResource, parseEncryptionResource } from "@tinycloud/sdk-services/encryption/resource";
 var import_ms, SERVICE_SHORT_TO_LONG, ENCRYPTION_PERMISSION_SERVICE, ENCRYPTION_MANIFEST_SPACE, SERVICE_LONG_TO_SHORT2, KEY_SEGMENT, KEY_APP_ID, KEY_PATH;
 var init_manifest = __esm({

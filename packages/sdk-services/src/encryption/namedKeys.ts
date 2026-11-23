@@ -3,9 +3,9 @@
  * encrypt / decrypt.
  *
  * Rules enforced here:
- * - Everything is dark unless the node's `/info` `features` contains
- *   `encryption-named-keys-v1`. Without it no key ability, key URN or `keyPath`
- *   is sent to the node; the call throws `NAMED_KEYS_UNSUPPORTED` first.
+ * - Node requests require `encryption-named-keys-v1` in `/info`. Without it the
+ *   call throws `NAMED_KEYS_UNSUPPORTED` before sending key abilities or paths.
+ *   Encrypting with a pinned descriptor makes no node request.
  * - Every invocation carries exactly ONE capability whose `with` is the EXACT
  *   key URN (a parsed `kind: "key"`; a prefix or bare network is never a
  *   target) and whose `can` is the one ability the call needs.
@@ -295,6 +295,14 @@ export interface KeyEncryptOptions extends KeyCallOptions {
    * the descriptor it returns: authenticated, `state: "active"`, expected kind.
    */
   ensureKey?: boolean;
+  /**
+   * Seal locally to a caller-verified descriptor for the exact network and key.
+   * The caller verifies provenance and freshness; no node state is fetched.
+   * Seeded keys require an active descriptor of kind `deletable`. For other
+   * keys, if supplied, state and kind must be `active` and `deterministic`.
+   * Cannot be combined with `ensureKey: true`.
+   */
+  descriptor?: PublicKeyDescriptor | KeyDescriptor;
 }
 
 export type DecryptManyResult =
@@ -690,13 +698,32 @@ export class NamedKeyClient {
     plaintext: Uint8Array,
     options?: KeyEncryptOptions,
   ): Promise<NamedKeyEnvelope> {
-    // The node answers a public GET for a seeded key with 404 `key_not_found`,
-    // so its public key is read through the authenticated describe.
-    const descriptor = options?.ensureKey
-      ? await this.ensureKey(path, options)
-      : isSeededKeyPath(path)
-        ? await this.describePublic(path, options)
-        : await this.getPublicKey(path, options);
+    let descriptor: PublicKeyDescriptor;
+    const pinned = options?.descriptor;
+    if (pinned !== undefined) {
+      if (options?.ensureKey === true) {
+        throw new NamedKeyError("INVALID_KEY_TARGET", "a pinned descriptor cannot be combined with ensureKey");
+      }
+      const networkId = this.networkFor(options);
+      this.keyUrn(networkId, path);
+      const seeded = isSeededKeyPath(path);
+      descriptor = seeded || (typeof pinned === "object" && pinned !== null && ("state" in pinned || "kind" in pinned))
+        ? assertEnsuredDescriptor(parseFullDescriptor(pinned, networkId, path), seeded ? "deletable" : "deterministic")
+        : parsePublicDescriptor(pinned, networkId, path);
+      const key = descriptor.publicEncryptionKey;
+      // Standard base64 of 32 bytes: one pad and two zero padding bits.
+      if (!descriptor.alg || !Number.isSafeInteger(descriptor.keyVersion) || descriptor.keyVersion < 1 ||
+          key.length !== 44 || !/^[A-Za-z0-9+/]{42}[AEIMQUYcgkosw048]=$/.test(key)) {
+        throw new NamedKeyError("INVALID_RESPONSE", "invalid pinned key descriptor");
+      }
+    } else {
+      // Seeded public keys need authenticated describe rather than a public GET.
+      descriptor = options?.ensureKey
+        ? await this.ensureKey(path, options)
+        : isSeededKeyPath(path)
+          ? await this.describePublic(path, options)
+          : await this.getPublicKey(path, options);
+    }
     const { crypto } = this.config;
     const symmetricKey = crypto.randomBytes(32);
     const ciphertext = crypto.authEncrypt(symmetricKey, plaintext, options?.aad);

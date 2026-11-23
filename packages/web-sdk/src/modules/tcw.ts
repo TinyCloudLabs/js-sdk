@@ -826,7 +826,7 @@ export class TinyCloudWeb {
       secrets = new WebSecretsService({
         getService: () => this.node.secretsForSpace(resolvedSpace),
         space: resolvedSpace,
-        getManifest: () => this._manifest,
+        getManifest: () => this._manifest === undefined ? undefined : this.node.capabilityRequest?.manifests,
         requestPermissions: (additional, options) => options === undefined
           ? this.requestPermissions(additional)
           : this.requestPermissions(additional, options),
