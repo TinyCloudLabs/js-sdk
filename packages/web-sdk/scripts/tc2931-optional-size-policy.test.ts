@@ -13,6 +13,8 @@ delete root.tc3802SecretKeyCapRoot;
 delete root.tc3862ExplorerOriginRoot;
 delete root.tc3522InvocationRefusalRoot;
 delete root.tc3947ReplicaRevokeRoot;
+delete root.tc3522InvocationRefusalKvWorker;
+delete root.tc3522InvocationRefusalReplicaWorker;
 const optional = structuredClone(optionalLedger) as OptionalLedger;
 delete optional.tc3947;
 optional.entries = optional.entries.filter((entry) => entry.pr !== "#1138");
