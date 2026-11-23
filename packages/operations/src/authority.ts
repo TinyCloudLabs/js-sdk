@@ -115,7 +115,8 @@ export function evaluateOperationAuthority(
         candidate.service === canonicalAlt.service &&
         operationSpacesEqual(candidate.space, canonicalAlt.space) &&
         candidate.path === canonicalAlt.path &&
-        candidate.caveats === undefined &&
+        // A verified session reports an unconstrained grant as `[]` or `[{}]`; only a real caveat is refused.
+        canonicalizeRecapCaveats(candidate.caveats) === canonicalizeRecapCaveats(undefined) &&
         canonicalAlt.actions.every((action) => candidate.actions.includes(action))
       );
     });

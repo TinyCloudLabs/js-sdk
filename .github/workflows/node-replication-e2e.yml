@@ -25,6 +25,7 @@ on:
       - "packages/mcp/src/**"
       - "packages/cli/src/lib/**"
       - "packages/operations/src/operations/secrets*"
+      - "packages/operations/src/authority*"
       - ".github/scripts/check-node-features.sh"
       - ".github/workflows/node-replication-e2e.yml"
   push:
@@ -407,6 +408,18 @@ jobs:
           bash "$GITHUB_WORKSPACE/.github/scripts/run-private-tests.sh" bun test --max-concurrency=1 packages/cli/src/commands/secrets-per-secret-keys.e2e.test.ts 2>&1 | tee "$RUNNER_TEMP/named-keys-cli.log"
           if grep -Eq '^ *[1-9][0-9]* skip' "$RUNNER_TEMP/named-keys-cli.log" || ! grep -Eq '^ *6 pass' "$RUNNER_TEMP/named-keys-cli.log" || grep -Eq '^ *[1-9][0-9]* fail' "$RUNNER_TEMP/named-keys-cli.log"; then
             echo "::error title=named-keys CLI e2e::tests were skipped, failed, or fewer than 6 passed"
+            exit 1
+          fi
+
+      - name: Run the scoped-login get e2e (a scoped OpenKey session reads a secret on its own key, no prior put)
+        timeout-minutes: 10
+        env:
+          TC_NAMED_KEYS_E2E_NODE_BIN: ${{ runner.temp }}/tinycloud-named-keys
+        run: |
+          set -o pipefail
+          bash "$GITHUB_WORKSPACE/.github/scripts/run-private-tests.sh" bun test --max-concurrency=1 packages/cli/src/commands/secrets-scoped-get.e2e.test.ts 2>&1 | tee "$RUNNER_TEMP/named-keys-scoped-get.log"
+          if grep -Eq '^ *[1-9][0-9]* skip' "$RUNNER_TEMP/named-keys-scoped-get.log" || ! grep -Eq '^ *1 pass' "$RUNNER_TEMP/named-keys-scoped-get.log" || grep -Eq '^ *[1-9][0-9]* fail' "$RUNNER_TEMP/named-keys-scoped-get.log"; then
+            echo "::error title=scoped-login get e2e::the test was skipped, failed, or did not pass"
             exit 1
           fi
 
