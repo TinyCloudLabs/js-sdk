@@ -56,7 +56,7 @@ test.each([false, true])("a pinned descriptor produces a readable envelope with 
   const metadata = { contentType: "text/plain" };
 
   const envelope = await h.perform.encrypt(keyPath, plaintext, {
-    descriptor: keyWrapV2 ? descriptor : publicDescriptor, aad, metadata, keyWrapV2,
+    descriptor, aad, metadata, keyWrapV2,
   });
   expect(envelope).toMatchObject({ v: 2, networkId, keyPath, keyVersion: 2, aad: base64Encode(aad), metadata,
     alg: keyWrapV2 ? KEY_WRAP_V2_ALG : DEFAULT_ENCRYPTION_ALG });
@@ -66,6 +66,22 @@ test.each([false, true])("a pinned descriptor produces a readable envelope with 
     : gcm(x25519.getSharedSecret(privateKey, wrapped.subarray(0, 32)), wrapped.subarray(33, 45)).decrypt(wrapped.subarray(45));
   const ciphertext = base64Decode(envelope.ciphertext);
   expect(gcm(symmetricKey, ciphertext.subarray(0, nonceBytes), aad).decrypt(ciphertext.subarray(nonceBytes))).toEqual(plaintext);
+  expect(h.calls()).toBe(0);
+});
+
+test("a seeded key requires both state and kind in the pinned descriptor", async () => {
+  const h = client();
+  for (const missingMetadata of [publicDescriptor, { ...publicDescriptor, state: "active" }, { ...publicDescriptor, kind: "deletable" }]) {
+    await expect(h.perform.encrypt(keyPath, new Uint8Array(1), { descriptor: missingMetadata })).rejects.toMatchObject({ code: "INVALID_RESPONSE" });
+  }
+  expect(h.calls()).toBe(0);
+});
+
+test("a deterministic key can use a public descriptor without state and kind", async () => {
+  const h = client();
+  const path = "share/bot-history-fixture";
+  const envelope = await h.perform.encrypt(path, utf8Encode("fixture"), { descriptor: { ...publicDescriptor, keyPath: path } });
+  expect(envelope).toMatchObject({ v: 2, networkId, keyPath: path });
   expect(h.calls()).toBe(0);
 });
 

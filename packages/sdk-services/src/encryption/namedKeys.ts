@@ -298,7 +298,8 @@ export interface KeyEncryptOptions extends KeyCallOptions {
   /**
    * Seal locally to a caller-verified descriptor for the exact network and key.
    * The caller verifies provenance and freshness; no node state is fetched.
-   * If supplied, state and kind must be active and appropriate for the path.
+   * Seeded keys require an active descriptor of kind `deletable`. For other
+   * keys, if supplied, state and kind must be `active` and `deterministic`.
    * Cannot be combined with `ensureKey: true`.
    */
   descriptor?: PublicKeyDescriptor | KeyDescriptor;
@@ -705,11 +706,9 @@ export class NamedKeyClient {
       }
       const networkId = this.networkFor(options);
       this.keyUrn(networkId, path);
-      descriptor = typeof pinned === "object" && pinned !== null && ("state" in pinned || "kind" in pinned)
-        ? assertEnsuredDescriptor(
-          parseFullDescriptor(pinned, networkId, path),
-          isSeededKeyPath(path) ? "deletable" : "deterministic",
-        )
+      const seeded = isSeededKeyPath(path);
+      descriptor = seeded || (typeof pinned === "object" && pinned !== null && ("state" in pinned || "kind" in pinned))
+        ? assertEnsuredDescriptor(parseFullDescriptor(pinned, networkId, path), seeded ? "deletable" : "deterministic")
         : parsePublicDescriptor(pinned, networkId, path);
       const key = descriptor.publicEncryptionKey;
       // Standard base64 of 32 bytes: one pad and two zero padding bits.
