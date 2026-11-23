@@ -100,13 +100,12 @@ function comparePathsByBytes(a: string, b: string): number {
  * The node's whole 401 body for a revoked chain: tinycloud-core's
  * `InvocationError::DelegationRevoked` (`delegation-revoked: <cid>`) or
  * `DelegationAncestorRevoked` (`delegation-ancestor-revoked: ancestor=<cid>
- * invoked=<cid>`, or `parent=<cid>` where the node names a revoked parent), rendered as-is
- * (older nodes prefixed `Invalid invocation: `).
+ * invoked=<cid>`), rendered as-is (older nodes prefixed `Invalid invocation: `).
  * Anchored: only CIDs follow the error kind, so a key, prefix or path in any
  * other 401 (e.g. `Unauthorized Action: <space>/kv/<prefix> / ...`) never matches.
  */
 const REVOKED_BODY =
-  /^(?:Invalid invocation: )?delegation-(?:(revoked): [A-Za-z0-9]+|(ancestor-revoked): ancestor=[A-Za-z0-9]+ (?:invoked|parent)=[A-Za-z0-9]+)$/;
+  /^(?:Invalid invocation: )?delegation-(?:(revoked): [A-Za-z0-9]+|(ancestor-revoked): ancestor=[A-Za-z0-9]+ invoked=[A-Za-z0-9]+)$/;
 
 /** The codes a node since 1.25.17 puts beside the text of a revocation refusal (TC-2381). */
 const NODE_REVOCATION_CODES: ReadonlySet<string> = new Set(["delegation_revoked", "parent_revoked", "ancestor_revoked"]);

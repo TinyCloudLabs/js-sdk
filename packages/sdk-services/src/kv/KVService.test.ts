@@ -1723,12 +1723,7 @@ describe("KVService.changes (tinycloud.kv/sync)", () => {
       '{"code":"parent_revoked","error":"delegation-ancestor-revoked: ancestor=bafyroot invoked=bafyleaf"}',
       ErrorCodes.AUTH_DELEGATION_ANCESTOR_REVOKED,
     ],
-    [
-      '{"code":"parent_revoked","error":"delegation-ancestor-revoked: ancestor=bafyroot parent=bafyparent"}',
-      ErrorCodes.AUTH_DELEGATION_ANCESTOR_REVOKED,
-    ],
-    ["delegation-ancestor-revoked: ancestor=bafyroot parent=bafyparent", ErrorCodes.AUTH_DELEGATION_ANCESTOR_REVOKED],
-  ])("maps the node's JSON or parent-named revocation body %s to a typed revocation code", async (body, code) => {
+  ])("maps the node's JSON revocation body %s to a typed revocation code", async (body, code) => {
     const service = new KVService({});
     service.initialize(createContext(async () => response(false, 401, body)));
 
