@@ -419,10 +419,13 @@ async function preview(kv: IKVService, item: Match): Promise<string | null> {
       if (value.error.code === "KV_NOT_FOUND" || value.error.meta?.status === 404 || value.error.code === "KV_RESPONSE_TOO_LARGE") continue;
       throw readError(value.error, "read an Inbox preview");
     }
-    // Bound the work before any parsing: a sender controls the body.
-    let text = new TextDecoder().decode(value.data.data.subarray(0, PREVIEW_BYTES));
-    if (item.kind === "telegram") text = string(record(parseJson(text))?.text);
-    else if (html) text = decodeEntities(stripMarkup(text));
+    // Bound the work before any markup handling: a sender controls the body.
+    let text = new TextDecoder().decode(value.data.data);
+    if (item.kind === "telegram") text = string(record(parseJson(text))?.text).slice(0, PREVIEW_CHARS);
+    else {
+      text = text.slice(0, PREVIEW_CHARS);
+      if (html) text = decodeEntities(stripMarkup(text));
+    }
     text = safeText(text, 240);
     if (text) return text;
   }

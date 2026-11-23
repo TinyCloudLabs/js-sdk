@@ -231,6 +231,10 @@ test("joins Telegram participants across shards, counting both directions only i
     expect(data.bodyReads).toEqual([body]);
     expect(await operation().execute(data.context, { person: "@old_ada", includePreviews: false }))
       .toMatchObject({ status: "ok", output: { conversations: [], coverage: { telegram: "partial" } } });
+    // A long message must not be cut mid-JSON: the 64 KB bound applies to the extracted text.
+    data.bodies.set(body, JSON.stringify({ text: `Long ${"é".repeat(100 * 1024)}`, content: null }));
+    expect(await operation().execute(data.context, { person: "@ada_quill" }))
+      .toMatchObject({ status: "ok", output: { conversations: [{ latestMessageId: "100", preview: `Long ${"é".repeat(235)}` }, { latestMessageId: "102" }] } });
   } finally { data.close(); }
 });
 
