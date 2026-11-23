@@ -8,6 +8,8 @@ import test from "node:test";
 
 import {
   buildFilters,
+  planFlags,
+  requiredFiles,
   guardRoute,
   guardRouteHead,
   ROOT_NPMRC,
@@ -528,4 +530,51 @@ test("a package-directory .npmrc is always refused, even the benign line", (t) =
     const { cwd, pkgDir } = npmrcCheckout(t, { committed: `${ROOT_NPMRC}\n`, packageNpmrc });
     assert.match(npmrcProblems(cwd, pkgDir).join(), /packages\/p\/\.npmrc would change npm's registry or auth/, JSON.stringify(packageNpmrc));
   }
+});
+
+// ---- non-Courier plans: per-package requiredFiles and plan-dependent steps ------------------------------------------
+
+const webSdkPlan = (requiredFiles) =>
+  loadPlan("web", {
+    ...policy,
+    plans: {
+      web: {
+        ...policy.plans["courier-0.8.1"],
+        packages: [{ name: "@tinycloud/web-sdk", dir: "packages/web-sdk", from: "3.14.0-beta.21", stable: "3.14.1", ...(requiredFiles ? { requiredFiles } : {}) }],
+        pins: [],
+      },
+    },
+  });
+const WEB_FILES = ["dist/index.mjs", "dist/index.cjs", "dist/index.d.ts"];
+
+test("a plan's requiredFiles replace the table for that package: a web-sdk build is accepted, a missing file refused", () => {
+  const plan = webSdkPlan(WEB_FILES);
+  const pkg = plan.packages[0];
+  const manifest = { name: "@tinycloud/web-sdk", version: "3.14.1", dependencies: { zod: "^3.23.0" } };
+  const shipped = ["package/package.json", ...WEB_FILES.map((file) => `package/${file}`)].map((path) => entry(path));
+  assert.deepEqual(tarballProblems({ pkg, plan, entries: shipped, manifest }), []);
+  const missing = tarballProblems({ pkg, plan, entries: shipped.filter((e) => e.path !== "package/dist/index.cjs"), manifest });
+  assert.match(missing.join(), /@tinycloud\/web-sdk: tarball lacks dist\/index\.cjs/);
+  // Without the plan's list the default (dist/index.js) applies and this build would be refused.
+  const plain = webSdkPlan();
+  assert.match(tarballProblems({ pkg: plain.packages[0], plan: plain, entries: shipped, manifest }).join(), /lacks dist\/index\.js/);
+});
+
+test("packages without requiredFiles keep the existing table and default", () => {
+  assert.deepEqual(requiredFiles(pkgOf("@tinycloud/courier")), ["dist/cli.js", "dist/index.js"]);
+  assert.deepEqual(requiredFiles(pkgOf("@tinycloud/cli")), ["bin/tinycloud", "dist/index.js"]);
+  assert.deepEqual(requiredFiles(pkgOf("@tinycloud/bootstrap")), ["dist/index.js"]);
+});
+
+test("requiredFiles must be a non-empty list of safe relative paths", () => {
+  for (const bad of [[], "dist/index.js", ["../evil"], ["/etc/passwd"], ["dist/../x"], ["dist//x"], ["./dist/x"], [""], [1], ["dist/a b"]]) {
+    assert.throws(() => webSdkPlan(bad), /requiredFiles must be a non-empty list of safe relative paths/, JSON.stringify(bad));
+  }
+  assert.doesNotThrow(() => webSdkPlan(["dist/index.mjs", "dist/wasm/index.cjs"]));
+});
+
+test("the node release pin check applies only to plans that stage the CLI", () => {
+  assert.deepEqual(planFlags(real), { nodeReleaseCheck: true });
+  assert.deepEqual(planFlags(loadPlan("courier-0.8.1")), { nodeReleaseCheck: false });
+  assert.deepEqual(planFlags(webSdkPlan(WEB_FILES)), { nodeReleaseCheck: false });
 });

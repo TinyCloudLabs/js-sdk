@@ -108,7 +108,13 @@ jobs:
           BUILD_SETUP_ENABLED: true
           NODE_OPTIONS: --max-old-space-size=6144
 
+      # The node release pin belongs to the CLI: run it only for plans that stage @tinycloud/cli.
+      - name: Plan flags
+        id: flags
+        run: node "$RUNNER_TEMP/route-scripts/courier-stable-stage.mjs" plan-flags >> "$GITHUB_OUTPUT"
+
       - name: Verify node release pin
+        if: steps.flags.outputs.node_release_check == 'true'
         run: bun run --cwd packages/cli check:node-release
         env:
           GITHUB_TOKEN: ${{ github.token }}
