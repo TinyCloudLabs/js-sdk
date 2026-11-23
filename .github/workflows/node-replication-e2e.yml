@@ -41,11 +41,10 @@ env:
   # tinycloud-node v1.20.6, the last release without per-secret keys (encryption-named-keys-v1), pinned by digest.
   # Only the legacy-node-e2e job runs it: secrets against a node that cannot parent a grant on a secret's own key (TC-3801).
   TINYCLOUD_LEGACY_NODE_IMAGE: ghcr.io/tinycloudlabs/tinycloud-node:1.20.6@sha256:41667d3d133aaa12290a2f3a744afacd838988327552d159c60f04466e66f86f
-  # tinycloud-node 1.26.21, the first release whose nodes create a key for one exact secret (node #703), pinned by digest.
-  # Only the named-keys-node-e2e job runs it. Replace PENDING with the release image's index digest (tag 1.26.21) when
-  # it is published; until then that job fails at the extract step on purpose. 1.26.20 lists encryption-named-keys-v1
+  # tinycloud-node 1.26.21, the first release whose nodes create a key for one exact secret (node #703), pinned by the
+  # digest of its published release index. Only the named-keys-node-e2e job runs it. 1.26.20 lists encryption-named-keys-v1
   # but rejects the exact-key key path (key_path_invalid), so it cannot stand in.
-  TINYCLOUD_NAMED_KEYS_NODE_IMAGE: ghcr.io/tinycloudlabs/tinycloud-node:1.26.21@sha256:PENDING
+  TINYCLOUD_NAMED_KEYS_NODE_IMAGE: ghcr.io/tinycloudlabs/tinycloud-node:1.26.21@sha256:fc9fd4efa884be75d05fe61dd55ffa6559a48df824647ce8c10739c7553afc26
 
 
 concurrency:
@@ -390,9 +389,6 @@ jobs:
 
       - name: Extract the pinned named-keys TinyCloud node
         run: |
-          case "$TINYCLOUD_NAMED_KEYS_NODE_IMAGE" in
-            *PENDING*) echo "::error title=named-keys node::TINYCLOUD_NAMED_KEYS_NODE_IMAGE has no digest yet: pin the tinycloud-node 1.26.21 release image (exact-key key.create, node #703)"; exit 1 ;;
-          esac
           docker pull "$TINYCLOUD_NAMED_KEYS_NODE_IMAGE"
           container="$(docker create "$TINYCLOUD_NAMED_KEYS_NODE_IMAGE")"
           docker cp "$container:/tinycloud" "$RUNNER_TEMP/tinycloud-named-keys"
