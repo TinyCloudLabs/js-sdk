@@ -51,7 +51,7 @@ There is one release path in this repo: stable releases from `master`. Pre mode 
 
 ### Stable releases: via changesets, from master, scoped
 
-`.github/workflows/changesets.yml` runs on every push to `master`. It versions and publishes plain stable versions to the `latest` dist-tag for **only** the packages listed in `.github/release-scope.json`. Every other workspace package keeps its version, CHANGELOG and pending changesets until a maintainer adds it to that list. The `enabled` field in that file is the only switch: while it is `false`, a push to `master` releases nothing.
+`.github/workflows/changesets.yml` runs on every push to `master`. It versions and publishes plain stable versions to the `latest` dist-tag for **only** the packages listed in `.github/release-scope.json`. Every other workspace package keeps its version, CHANGELOG and pending changesets until a maintainer adds it to that list. The `enabled` field in that file is the only switch of this workflow: while it is `false`, a push to `master` releases nothing. It does not cover the break-glass `raw-publish.yml` and `manual-release.yml`, which TC-4123 gates before the switch is enabled.
 
 The `Release` job:
 
@@ -68,7 +68,7 @@ Guards:
 
 - A pending `major` changeset releases only after an `approve-major-release:` line naming the package appears in a commit message between the commit that added the changeset and `master`'s HEAD.
 - If the push fails, nothing is published; the run for the newer commit releases the changesets.
-- If a run pushed but did not finish publishing, dispatch the workflow with `resume: release`: it publishes exactly the missing versions from their release commit and versions nothing. Pushes refuse to run until then.
+- If a run pushed but did not finish publishing, dispatch the workflow with `resume: release`: it publishes exactly the missing versions from their release commit and versions nothing. Pushes refuse to run until then. A resume publishes to `latest` on a dispatch, so it checks the commit instead of trusting its subject: author and committer must be `github-actions[bot]`; the versions must be in that commit's release scope; the previous version must still be the newest stable on npm; each missing version must be strictly above npm's newest stable (`latest` never moves down); and a major bump needs the same sign-off as a normal release. Otherwise it refuses and a maintainer publishes by hand.
 - A version staged or published earlier from another commit (the Courier 0.8.0 set, 0.8.1) is a baseline: provenance and publishing look only at packages the release commit versioned, and a missing baseline stops the run instead of being published from master's source.
 
 To release a held package, a maintainer adds it to `packages` in `.github/release-scope.json` in a reviewed PR, with its manifest at its last stable release and a `baselines` entry.

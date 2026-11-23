@@ -6,7 +6,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 
-import { attemptNeverPublished, releaseScope } from "./check-npm-release-provenance.mjs";
+import { RELEASE_BOT, attemptNeverPublished, gitRepo, releaseScope, resumeProblems } from "./check-npm-release-provenance.mjs";
 
 const major = fileURLToPath(new URL("./check-major-release-signoff.mjs", import.meta.url));
 const env = { ...process.env, GITHUB_ACTIONS: "", GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@example.com", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@example.com" };
@@ -25,7 +25,7 @@ function repository(t) {
     git("add", "--all");
     git("commit", "--quiet", "--allow-empty", "-m", message);
   };
-  return { commit, release: () => spawnSync(process.execPath, [major, "release"], { cwd: dir, env, encoding: "utf8" }) };
+  return { dir, git, commit, pr: (base, head) => spawnSync(process.execPath, [major, "pr", base, head], { cwd: dir, env, encoding: "utf8" }), release: () => spawnSync(process.execPath, [major, "release"], { cwd: dir, env, encoding: "utf8" }) };
 }
 
 test("release mode: a pending major changeset needs a sign-off after it was added, and only for that package", (t) => {
@@ -90,4 +90,65 @@ test("a cancelled stable-only attempt is proven never to have published only whi
   assert.deepEqual(attemptNeverPublished(attempt()), { ok: true });
   assert.equal(attemptNeverPublished(attempt(["Publish stable to npm"])).ok, false);
   assert.equal(attemptNeverPublished(attempt(["Push release version bumps"])).ok, false);
+});
+
+// ---- resume: release (a dispatch that publishes a pushed commit to `latest`) -----------------------------------
+
+const pkg = { name: "a", dir: "packages/a", version: "0.8.2" };
+const manifestAt = (version) => `{"name":"a","version":"${version}"}`;
+function resumeRepo({ from = "0.8.1", identity = { author: RELEASE_BOT, committer: RELEASE_BOT }, scoped = ["a"] } = {}) {
+  return {
+    identity: () => identity,
+    parent: () => "parent",
+    show: (rev, path) => (path === ".github/release-scope.json" ? JSON.stringify({ packages: scoped }) : rev === "parent" ? manifestAt(from) : undefined),
+  };
+}
+const resume = (repo, npmVersions) => resumeProblems({ repo, commit: "release", missing: [pkg], versionsOf: (name) => (name === "a" ? npmVersions : []) });
+
+test("resume: a bot-authored release on top of the newest stable is accepted, also when part of it was published", () => {
+  assert.deepEqual(resume(resumeRepo(), ["0.8.0", "0.8.1"]), []);
+});
+
+test("resume: the commit subject proves nothing; the author and committer must be the release bot", () => {
+  const human = "Someone <someone@example.com>";
+  const problems = resume(resumeRepo({ identity: { author: human, committer: RELEASE_BOT } }), ["0.8.1"]);
+  assert.equal(problems.length, 1);
+  assert.match(problems[0], /has author Someone <someone@example\.com>, not github-actions\[bot\]/);
+  assert.equal(resume(resumeRepo({ identity: { author: RELEASE_BOT, committer: human } }), ["0.8.1"]).length, 1);
+});
+
+test("resume: never moves `latest` down or skips a version published from elsewhere", () => {
+  // the route published 0.8.3 after the release commit set 0.8.2
+  const problems = resume(resumeRepo(), ["0.8.1", "0.8.3"]);
+  assert.ok(problems.some((p) => /newest stable 0\.8\.3.*move `latest` down|above the baseline 0\.8\.1/.test(p)), problems.join("\n"));
+  assert.ok(problems.some((p) => /would move `latest` down/.test(p)), problems.join("\n"));
+  // the baseline itself is not on npm
+  assert.match(resume(resumeRepo(), [])[0], /a@0\.8\.1 \(baseline\) is not on npm/);
+  // a prerelease above does not count against `latest`
+  assert.deepEqual(resume(resumeRepo(), ["0.8.1", "0.9.0-beta.1"]), []);
+});
+
+test("resume: a version outside the release scope of that commit is refused", () => {
+  assert.match(resume(resumeRepo({ scoped: ["b"] }), ["0.8.1"])[0], /a@0\.8\.2 is not in the release scope/);
+});
+
+test("gitRepo reads the author and committer identity of a commit", (t) => {
+  const repo = repository(t);
+  repo.commit("chore: release stable packages [skip ci]");
+  assert.deepEqual(gitRepo(repo.dir).identity("HEAD"), { author: "t <t@example.com>", committer: "t <t@example.com>" });
+});
+
+test("resume: a major bump in the pushed release needs the sign-off, as in a push release", (t) => {
+  const setup = (approve) => {
+    const repo = repository(t);
+    repo.commit("start", { "packages/a/package.json": manifestAt("1.4.0"), ".changeset/big.md": '---\n"a": major\n---\n\nBreak.\n' });
+    if (approve) repo.commit("approve-major-release: a");
+    repo.commit("chore: release stable packages [skip ci]", { "packages/a/package.json": manifestAt("2.0.0") });
+    repo.git("rm", "--quiet", ".changeset/big.md");
+    repo.git("commit", "--quiet", "--amend", "--no-edit");
+    return repo;
+  };
+  const unsigned = setup(false);
+  assert.equal(unsigned.pr("HEAD^", "HEAD").status, 1);
+  assert.equal(setup(true).pr("HEAD^", "HEAD").status, 0);
 });

@@ -6,8 +6,10 @@ name: Release
 # .github/release-scope.json, as plain stable versions on the `latest` dist-tag.
 # Every other workspace package keeps its version, CHANGELOG and pending
 # changesets until a maintainer adds it to that file. The file's `enabled`
-# switch is the only thing that lets this workflow release anything: while it is
-# false a push to master does nothing. See scripts/scoped-version.mjs.
+# switch is the only thing that lets THIS workflow release anything: while it is
+# false a push to master does nothing. It does not stop the separate break-glass
+# workflows (raw-publish.yml, manual-release.yml); gating them is TC-4123, which
+# must land before the switch is enabled. See scripts/scoped-version.mjs.
 on:
   push:
     branches:
@@ -374,6 +376,14 @@ jobs:
       - name: Find the unfinished release
         id: unfinished
         run: node "$RUNNER_TEMP/release-scripts/check-npm-release-provenance.mjs" unfinished-stable "$GITHUB_OUTPUT"
+
+      # A major bump in the commit needs the sign-off its changeset was merged with
+      # (or one in the commit itself), exactly as in a push release.
+      - name: Check the major sign-off of the unfinished release
+        if: steps.unfinished.outputs.sha != ''
+        run: node "$RUNNER_TEMP/release-scripts/check-major-release-signoff.mjs" pr "${RELEASE_SHA}^1" "$RELEASE_SHA"
+        env:
+          RELEASE_SHA: ${{ steps.unfinished.outputs.sha }}
 
       - name: Check out the unfinished release
         if: steps.unfinished.outputs.sha != ''

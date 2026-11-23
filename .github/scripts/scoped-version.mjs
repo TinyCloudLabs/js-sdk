@@ -258,6 +258,19 @@ export function npmVersions(name) {
   fail(`npm view ${name} versions failed: ${result.stderr.trim() || result.stdout.trim()}`);
 }
 
+// The newest stable (non-prerelease) version among `versions`, if any.
+export function newestStable(versions) {
+  const stable = versions.filter((v) => parseVersion(v) && !parseVersion(v).prerelease);
+  return stable.sort((a, b) => compare(parseVersion(a), parseVersion(b))).at(-1);
+}
+
+// Is stable `version` strictly above `other`? (False for anything that is not a plain version.)
+export function isAbove(version, other) {
+  const a = parseVersion(version);
+  const b = parseVersion(other);
+  return Boolean(a && b && !a.prerelease && compare(a, b) > 0);
+}
+
 // The baseline of every in-scope package must be the newest stable version npm has: anything newer was published
 // from somewhere else and has to be re-baselined first, anything missing was never staged.
 export function baselineProblems(scope, versionsOf) {

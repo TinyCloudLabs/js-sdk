@@ -83,6 +83,8 @@ import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs
 import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 
+import { baselineProblems, isAbove, newestStable, npmVersions } from "./scoped-version.mjs";
+
 const RELEASE_COMMIT = /^chore: (beta version packages|release stable packages)\b/;
 const STABLE_RELEASE_COMMIT = /^chore: release stable packages\b/;
 const BETA_RELEASE_COMMIT = /^chore: beta version packages\b/;
@@ -323,6 +325,10 @@ export function gitRepo(cwd = process.cwd()) {
       return result.status === 0 ? result.stdout.trim() : undefined;
     },
     subject: (rev) => ok(["log", "-1", "--format=%s", rev]),
+    identity: (rev) => {
+      const [author, committer] = ok(["log", "-1", "--format=%an <%ae>%n%cn <%ce>", rev]).split("\n");
+      return { author, committer };
+    },
     date: (rev) => ok(["log", "-1", "--format=%cI", rev]),
     show(rev, path) {
       const result = run(["show", `${rev}:${path}`]);
@@ -480,6 +486,36 @@ export function unfinishedStableRelease({ repo, view = npmView, packageExists = 
     if (parseJson(repo.show(commit, ".changeset/pre.json"))?.mode === "pre") problems.push(`${commit} is in pre mode`);
   }
   return { missing, problems, releaseCommit: problems.length ? undefined : commit };
+}
+
+// What a resume (`resume: release`) must check before it publishes a pushed release commit to `latest`. It runs
+// from a dispatch, so nothing about the commit may be taken on trust, and `latest` must never move down:
+//  - the commit is authored and committed by the release bot identity (the subject is only a label anyone can write);
+//  - every missing version is in the commit's own release scope;
+//  - each package's previous version (the commit's parent) is the newest stable version npm has (`baselineProblems`),
+//    so nothing was published from elsewhere in between (the Courier route, a later SDK patch);
+//  - each missing version is strictly above npm's newest stable version.
+// Major sign-off for the commit is a separate step (`check-major-release-signoff.mjs pr <parent> <commit>`).
+export const RELEASE_BOT = "github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>";
+
+export function resumeProblems({ repo, commit, missing, versionsOf = npmVersions }) {
+  const problems = [];
+  const who = repo.identity(commit);
+  for (const role of ["author", "committer"]) {
+    if (who[role] !== RELEASE_BOT) problems.push(`${commit} has ${role} ${who[role]}, not ${RELEASE_BOT}`);
+  }
+  const parent = repo.parent(commit);
+  const scoped = parseJson(repo.show(commit, ".github/release-scope.json"))?.packages;
+  for (const pkg of missing) {
+    const id = `${pkg.name}@${pkg.version}`;
+    if (!Array.isArray(scoped) || !scoped.includes(pkg.name)) problems.push(`${id} is not in the release scope of ${commit}`);
+    const from = parent && parseJson(repo.show(parent, `${pkg.dir}/package.json`))?.version;
+    if (!from || isPrerelease(from)) problems.push(`${id}: the version before ${commit} is ${from ?? "unknown"}, not a stable baseline`);
+    else problems.push(...baselineProblems({ packages: [pkg.name], baselines: { [pkg.name]: from } }, versionsOf));
+    const newest = newestStable(versionsOf(pkg.name));
+    if (newest && !isAbove(pkg.version, newest)) problems.push(`${id} is not above npm's newest stable ${newest}; publishing it to \`latest\` would move \`latest\` down`);
+  }
+  return problems;
 }
 
 // The beta version commit to finish publishing from, if any (the `resume: beta` Release run). A beta run versions and pushes
@@ -751,6 +787,15 @@ async function main([mode, output, ...rest]) {
     if (!releaseCommit) {
       const reason = "stable version not on npm";
       return report(missing.map((pkg) => ({ ...pkg, reason })), mode, problems);
+    }
+    // `resume: release` publishes a pushed commit to `latest`: check what that is before selecting it.
+    const untrusted = resumeProblems({ repo, commit: releaseCommit, missing });
+    if (untrusted.length) {
+      const message = `Refusing to resume the release ${releaseCommit}:\n  ${untrusted.join("\n  ")}`;
+      if (process.env.GITHUB_ACTIONS === "true") console.log(`::error title=Cannot resume the release::${untrusted.join("; ")}`);
+      console.error(message);
+      process.exitCode = 1;
+      return;
     }
     for (const pkg of missing) console.log(`${pkg.name}@${pkg.version} is missing from npm; set by ${releaseCommit}.`);
     console.log(`Finishing the stable release ${releaseCommit}; nothing new is versioned in this run.`);
