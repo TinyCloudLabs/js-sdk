@@ -505,6 +505,7 @@ export type Ledger = {
   tc3969SecretKeyCoverageRoot?: LogoutRatchet;
   tc3823BotHistoryKeyRoot?: LogoutRatchet;
   tc3802SecretKeyCapRoot?: LogoutRatchet;
+  tc3810ReaderRoot?: LogoutRatchet;
   tc2773LazyRestoreReplicaWorker?: Omit<WorkerRatchet, "worker"> & { replicaWorker: { delta: number; ceiling: number } };
 };
 
@@ -1164,6 +1165,7 @@ export function ancestryPins(root: Ledger, hasGatedOnly: boolean): Array<{ row: 
   if (root.tc3969SecretKeyCoverageRoot !== undefined) pins.push({ row: "tc3969SecretKeyCoverageRoot", pin: root.tc3969SecretKeyCoverageRoot.sourceCommits.at(-1)! });
   if (root.tc3823BotHistoryKeyRoot !== undefined) pins.push({ row: "tc3823BotHistoryKeyRoot", pin: root.tc3823BotHistoryKeyRoot.sourceCommits.at(-1)! });
   if (root.tc3802SecretKeyCapRoot !== undefined) pins.push({ row: "tc3802SecretKeyCapRoot", pin: root.tc3802SecretKeyCapRoot.sourceCommits.at(-1)! });
+  if (root.tc3810ReaderRoot !== undefined) pins.push({ row: "tc3810ReaderRoot", pin: root.tc3810ReaderRoot.sourceCommits.at(-1)! });
   if (hasGatedOnly) pins.push({ row: "gatedOnlyRatchet", pin: approvedGatedOnlyRatchet.sourceCommit });
   return pins;
 }
@@ -1293,6 +1295,7 @@ export function rootCeilings(root: Ledger): Array<{ row: string; ceiling: GzipSi
     ["tc3969SecretKeyCoverageRoot", root.tc3969SecretKeyCoverageRoot?.root.ceiling],
     ["tc3823BotHistoryKeyRoot", root.tc3823BotHistoryKeyRoot?.root.ceiling],
     ["tc3802SecretKeyCapRoot", root.tc3802SecretKeyCapRoot?.root.ceiling],
+    ["tc3810ReaderRoot", root.tc3810ReaderRoot?.root.ceiling],
   ];
   return rows.flatMap(([row, ceiling]) => ceiling === undefined ? [] : [{ row, ceiling }]);
 }
@@ -4087,6 +4090,25 @@ export const approvedTc3802SecretKeyCapRoot: LogoutRatchet = {
   "reason": "A secret name over 64 characters has no key of its own, so the manifest's isSecretKeyPath refuses it: one added check in sdk-core, bundled into the web root. migrateSecrets ships at @tinycloud/sdk-services/secrets/migrate and is not part of the root bundle."
 };
 
+export const approvedTc3810ReaderRoot: LogoutRatchet = {
+  "label": "read wallet-signed ReCap delegation modes (TC-3810 A1)",
+  "ruling": "size-ruling (14:12:28Z): TC-3810 A1 may add a root-only reader row at the canonical measurement, up to +200 B ESM and +120 B CJS over the current row.",
+  "base": "520726b1cb7f4cddf9cb0c45443afb55d2944dcb",
+  "sourceCommits": ["fde4cc70a2dc0e2c64cd9638f2f01dc1e696e117"],
+  "canonicalCI": {
+    "run": "45189194665",
+    "jobs": [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45189194665/job/137742717899",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45189194665/job/137742717971"
+    ]
+  },
+  "root": {
+    "delta": { "index.mjs": 181, "index.cjs": 107 },
+    "ceiling": { "index.mjs": 1539697, "index.cjs": 1471560 }
+  },
+  "reason": "The Web SDK root reads signed attenuable and terminal ReCap delegation modes and preserves the legacy parsed shape when mode is absent. Both canonical CI node jobs measured these exact gzip bytes on #1150. Details: TC-3810"
+};
+
 export const approvedLedgerRows: Record<string, unknown> = {
   phase2Ratchet: approvedPhase2,
   fixRequiredRatchet: approvedFixRequiredRatchet,
@@ -4213,6 +4235,7 @@ export const approvedLedgerRows: Record<string, unknown> = {
   tc3969SecretKeyCoverageRoot: approvedTc3969SecretKeyCoverageRoot,
   tc3823BotHistoryKeyRoot: approvedTc3823BotHistoryKeyRoot,
   tc3802SecretKeyCapRoot: approvedTc3802SecretKeyCapRoot,
+  tc3810ReaderRoot: approvedTc3810ReaderRoot,
 };
 
 /** Only a git merge-base ledger may retain the pre-correction toolchain. */
@@ -4801,6 +4824,11 @@ export function validateLedger(value: Ledger, historicalBase = false): void {
       (!value.tc3823BotHistoryKeyRoot ||
         JSON.stringify(value.tc3802SecretKeyCapRoot) !== JSON.stringify(approvedTc3802SecretKeyCapRoot))) {
     throw new Error("Only the exact TC-3802 root admission is approved.");
+  }
+  if (value.tc3810ReaderRoot !== undefined &&
+      (!value.tc3802SecretKeyCapRoot ||
+        JSON.stringify(value.tc3810ReaderRoot) !== JSON.stringify(approvedTc3810ReaderRoot))) {
+    throw new Error("Only the exact TC-3810 reader root admission is approved.");
   }
 }
 

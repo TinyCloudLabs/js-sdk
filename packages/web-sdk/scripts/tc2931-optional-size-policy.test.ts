@@ -10,6 +10,7 @@ delete root.tc3801NamedKeysRoot;
 delete root.tc3969SecretKeyCoverageRoot;
 delete root.tc3823BotHistoryKeyRoot;
 delete root.tc3802SecretKeyCapRoot;
+delete root.tc3810ReaderRoot;
 delete root.tc3947ReplicaRevokeRoot;
 const optional = structuredClone(optionalLedger) as OptionalLedger;
 delete optional.tc3947;
