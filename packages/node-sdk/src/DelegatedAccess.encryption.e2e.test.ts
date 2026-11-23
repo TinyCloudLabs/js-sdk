@@ -251,14 +251,16 @@ describe.skipIf(!nodeBinary)(
     test("an owner without a secret's own key: reads ask for exactly that key, and only an opted-in get signs", async () => {
       const hint = { service: "tinycloud.encryption", path: `${networkId}/secrets/other_key`, actions: ["tinycloud.encryption/decrypt"] };
       const signer = (owner as unknown as { signer: NonNullable<ConstructorParameters<typeof TinyCloudNode>[0]["signer"]> }).signer;
-      // The same wallet with the plain sign-in: the network decrypt only, never a
+      // The same wallet signed in with the owner defaults: the network decrypt only, never a
       // secrets/ key (that comes only from an explicit capability request).
+      const { ownerFullAccess } = await import("@tinycloud/sdk-core");
       const plain = new TinyCloudNode({
         host,
         tinycloudRegistryUrl: registry.url.origin,
         signer,
         wasmBindings: new NodeWasmBindings(),
         domain: "delegated-encryption.test",
+        ...ownerFullAccess(),
       });
       await plain.signIn();
       expect(await plain.readSecret({ space: secretsSpace, name: "OTHER_KEY" })).toEqual({ status: "permission_required", hint });

@@ -30,11 +30,11 @@ on:
 
 env:
   TC858_MODEL_FULL: ${{ github.event_name == 'schedule' && '1' || '0' }}
+  TINYCLOUD_NODE_IMAGE: ghcr.io/tinycloudlabs/tinycloud-node:1.20.6@sha256:41667d3d133aaa12290a2f3a744afacd838988327552d159c60f04466e66f86f
   # tinycloud-node 1.26.21, the first release with per-secret keys (encryption-named-keys-v1), pinned by digest (TC-3801).
-  TINYCLOUD_NODE_IMAGE: ghcr.io/tinycloudlabs/tinycloud-node:1.26.21@sha256:fc9fd4efa884be75d05fe61dd55ffa6559a48df824647ce8c10739c7553afc26
-  # The browser replica job stays on tinycloud-node 1.20.6: on 1.26.21 a revoked grant's next sync fails with
-  # GRANT_UNAUTHORIZED, not GRANT_REVOKED (TC-3947).
-  TINYCLOUD_BROWSER_NODE_IMAGE: ghcr.io/tinycloudlabs/tinycloud-node:1.20.6@sha256:41667d3d133aaa12290a2f3a744afacd838988327552d159c60f04466e66f86f
+  # Only the tests/cli secrets e2e suite runs it, with the named-keys switch on. The other jobs stay on 1.20.6: on 1.26.21 a
+  # revoked grant's next sync fails with GRANT_UNAUTHORIZED, not GRANT_REVOKED, and the replica is not purged (TC-3947).
+  TINYCLOUD_NAMED_KEYS_NODE_IMAGE: ghcr.io/tinycloudlabs/tinycloud-node:1.26.21@sha256:fc9fd4efa884be75d05fe61dd55ffa6559a48df824647ce8c10739c7553afc26
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
@@ -223,6 +223,14 @@ jobs:
           docker cp "$container:/tinycloud" "$RUNNER_TEMP/tinycloud"
           docker rm "$container"
           chmod +x "$RUNNER_TEMP/tinycloud"
+      - name: Extract the node binary with per-secret keys
+        if: ${{ !cancelled() && steps.relevance.outputs.relevant == 'true' && matrix.database == 'sqlite' }}
+        run: |
+          docker pull "$TINYCLOUD_NAMED_KEYS_NODE_IMAGE"
+          container="$(docker create "$TINYCLOUD_NAMED_KEYS_NODE_IMAGE")"
+          docker cp "$container:/tinycloud" "$RUNNER_TEMP/tinycloud-named-keys"
+          docker rm "$container"
+          chmod +x "$RUNNER_TEMP/tinycloud-named-keys"
       - name: Prepare JUnit reports
         if: ${{ !cancelled() && steps.relevance.outputs.relevant == 'true' }}
         run: mkdir -p "$RUNNER_TEMP/replica-junit"
@@ -339,7 +347,9 @@ jobs:
       - name: tests/cli secrets e2e against the node (TC-1902)
         if: ${{ !cancelled() && steps.relevance.outputs.relevant == 'true' && matrix.database == 'sqlite' }}
         timeout-minutes: 10
-        run: .github/scripts/run-cli-node-suite.sh "$RUNNER_TEMP/tinycloud" tests/cli/secrets/secrets-e2e.test.ts
+        env:
+          TINYCLOUD_ENCRYPTION_NETWORK__NAMED_KEYS_V1: "true"
+        run: .github/scripts/run-cli-node-suite.sh "$RUNNER_TEMP/tinycloud-named-keys" tests/cli/secrets/secrets-e2e.test.ts
 
       - name: Stop any tests/cli node still running
         if: ${{ always() && steps.relevance.outputs.relevant == 'true' && matrix.database == 'sqlite' }}
@@ -487,8 +497,8 @@ jobs:
       - name: Extract the pinned node binary
         if: ${{ steps.relevance.outputs.relevant == 'true' }}
         run: |
-          docker pull "$TINYCLOUD_BROWSER_NODE_IMAGE"
-          container="$(docker create "$TINYCLOUD_BROWSER_NODE_IMAGE")"
+          docker pull "$TINYCLOUD_NODE_IMAGE"
+          container="$(docker create "$TINYCLOUD_NODE_IMAGE")"
           docker cp "$container:/tinycloud" "$RUNNER_TEMP/tinycloud"
           docker rm "$container"
           chmod +x "$RUNNER_TEMP/tinycloud"
