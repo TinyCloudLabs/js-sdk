@@ -335,7 +335,6 @@ function makeFakeNode(overrides: {
             cid: "bafy-delegation",
             path: permissions[0]?.path ?? "",
             actions: permissions[0]?.actions ?? [],
-            expiry: new Date("2099-01-01T00:00:00.000Z"),
           },
           prompted: false,
         }
@@ -1408,7 +1407,6 @@ describe("CLI secrets commands", () => {
         path: descriptor.networkId,
         actions: ["decrypt"],
         scope: "whole-network",
-        expiresAt: "2099-01-01T00:00:00.000Z",
       },
     ]);
   });
@@ -1422,6 +1420,7 @@ describe("CLI secrets commands", () => {
         return true;
       });
       try {
+        currentProfile = { ...currentProfile, authMethod: "local", posture: "local-owner-key" };
         await runSecretsCommand(["secrets", "network", "grant", "did:key:z6MkRecipient", "shared"]);
       } finally {
         stderrSpy.mockRestore();
@@ -1984,21 +1983,12 @@ describe("CLI secrets commands", () => {
             service: "tinycloud.kv",
             space: "secrets",
             path: "vault/secrets/scoped/food-tracker/ANTHROPIC_API_KEY",
-            actions: ["tinycloud.kv/put", "tinycloud.kv/get"],
-            skipPrefix: true,
-          },
-          {
-            service: "tinycloud.encryption",
-            path: `${DEFAULT_NETWORK_ID}/secrets/scoped/food-tracker/anthropic_api_key`,
-            actions: ["tinycloud.encryption/key.create", "tinycloud.encryption/decrypt"],
+            actions: ["tinycloud.kv/put"],
             skipPrefix: true,
           },
         ],
       },
     ]);
-    // The owner's put→get round trip is one approval on the exact key: never the network root or a `secrets/` prefix.
-    expect(recorded.permissionRequests[0]!.requested.every((permission: { path: string }) =>
-      permission.path !== DEFAULT_NETWORK_ID && !permission.path.endsWith("/"))).toBe(true);
   });
 
   test("--space routes operations and permission requests to the requested space", async () => {

@@ -159,9 +159,8 @@ const SAFE_ERROR_DETAIL_POLICIES: Readonly<
         ? value
         : undefined,
   },
-  // `secrets.get` per-secret-key outcomes (TC-3284): the decrypt an owner would approve.
+  // `secrets.get` older-format outcome (TC-3284): the decrypt an owner would approve.
   SECRET_LEGACY_ENVELOPE: { names: safeSecretNames, scope: safeSecretScope, decrypt: safeSecretDecrypt },
-  SECRET_KEY_GRANT_REQUIRED: { names: safeSecretNames, scope: safeSecretScope, decrypt: safeSecretDecrypt },
   OPERATION_VERSION_UNSUPPORTED: {
     supportedVersions: (value) =>
       Array.isArray(value) && value.every((item) => Number.isInteger(item))

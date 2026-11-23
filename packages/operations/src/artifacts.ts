@@ -5,7 +5,6 @@ import { z } from "zod";
 
 import {
   canonicalizeCapabilities,
-  withChecksummedKeyOwner,
   evaluateOperationAuthority,
   evaluateAuthority,
 } from "./authority.js";
@@ -222,7 +221,7 @@ export function buildPermissionRequestArtifact(
   const now = input.now ?? (() => new Date());
   const createdAt = now();
   if (Number.isNaN(createdAt.getTime())) throw new TypeError("The artifact clock returned an invalid date.");
-  const requested = canonicalizeCapabilities(input.missing.map(withChecksummedKeyOwner));
+  const requested = canonicalizeCapabilities(input.missing);
   if (requested.length === 0) throw new TypeError("Permission requests require at least one missing capability.");
 
   return validatePermissionRequestArtifact({
@@ -304,10 +303,9 @@ export async function createOrReusePermissionRequest(
   // Registered operations already computed this exact missing set during
   // canonical preflight. Do not recompute it with the legacy global matcher:
   // that matcher intentionally treats same-named short/full spaces as equal.
-  // A key's owner is spelled the way the owner signs it (EIP-55), so approving the stored request works (TC-3284).
-  const missing = (input.resolveSpace === undefined
+  const missing = input.resolveSpace === undefined
     ? evaluateAuthority(input.granted, input.missing).missing
-    : canonicalizeCapabilities(input.missing)).map(withChecksummedKeyOwner);
+    : canonicalizeCapabilities(input.missing);
   const now = input.now ?? (() => new Date());
   const observedNow = now();
   if (Number.isNaN(observedNow.getTime())) throw new TypeError("The artifact clock returned an invalid date.");

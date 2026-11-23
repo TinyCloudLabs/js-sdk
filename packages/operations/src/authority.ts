@@ -3,7 +3,6 @@ import {
   isCapabilitySubset,
   type PermissionEntry,
 } from "@tinycloud/sdk-core";
-import * as nodeSdk from "@tinycloud/node-sdk";
 
 /**
  * A capability in the canonical form persisted in a v1 request artifact.
@@ -102,7 +101,7 @@ export function evaluateOperationAuthority(
       candidate.service === requested.service &&
       operationSpacesEqual(candidate.space, requested.space)
     );
-    if (isCapabilitySubset([withChecksummedKeyOwner(requested)], sameScope.map(withChecksummedKeyOwner)).subset) continue;
+    if (isCapabilitySubset([requested], sameScope).subset) continue;
     const requestedId = JSON.stringify(requested);
     const satisfiedByAlternative = alternatives !== undefined && alternatives.some((alternative) => {
       const [canonicalReplaces] = canonicalizeOperationCapabilities([alternative.replaces], resolveSpace);
@@ -120,25 +119,13 @@ export function evaluateOperationAuthority(
         canonicalAlt.actions.every((action) => candidate.actions.includes(action))
       );
     });
-    // A request for a secret's own key must name the owner the way the owner signs it (EIP-55), or approving it fails.
-    if (!satisfiedByAlternative) missing.push({ ...requested, path: withChecksummedKeyOwner(requested).path });
+    if (!satisfiedByAlternative) missing.push(requested);
   }
 
   return {
     satisfied: missing.length === 0,
     missing: canonicalizeCapabilities(missing),
   };
-}
-
-/**
- * The SDK compares a named encryption key (`<network>/<path>`, TC-3284) only with its owner in EIP-55 form, while
- * operation identity lowercases the owner. Restore the checksum for that comparison; identity stays lowercase.
- */
-export function withChecksummedKeyOwner(permission: PermissionEntry): PermissionEntry {
-  if (permission.service !== "tinycloud.encryption") return permission;
-  const match = permission.path.match(/^urn:tinycloud:encryption:did:pkh:eip155:(\d+):(0x[0-9a-fA-F]{40})(:[^/:]+\/.+)$/);
-  if (!match) return permission;
-  return { ...permission, path: `urn:tinycloud:encryption:did:pkh:eip155:${match[1]}:${nodeSdk.canonicalizeAddress(match[2]!)}${match[3]}` };
 }
 
 /**

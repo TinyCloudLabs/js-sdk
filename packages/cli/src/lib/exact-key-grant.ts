@@ -1,3 +1,4 @@
+import { ownerFullAccess } from "@tinycloud/sdk-core";
 import { createProfileRegistryCacheStore, createProfileRegistrySequenceStore } from "@tinycloud/operations/state";
 import type { PermissionEntry, TinyCloudNode } from "@tinycloud/node-sdk";
 import { ExitCode } from "../config/constants.js";
@@ -9,8 +10,8 @@ import { recordRegistryFallbackWarning } from "../output/warnings.js";
 const MIN_SIGNING_SESSION_MS = 10 * 60 * 1000;
 
 /**
- * A node signed in with the owner's wallet key whose session carries exactly `keyEntries` (each secret's own key,
- * with only the actions asked for) and nothing wider, so `delegateTo` can hand those keys to an agent. A secret's
+ * A node signed in with the owner's wallet key whose session is the owner's plain sign-in plus `keyEntries` (each
+ * secret's own key, with only the actions asked for; never a `secrets/` prefix), so `delegateTo` can hand those keys to an agent. A secret's
  * key must be in the SIGNED session a grant is cut from (TinyCloudNode.delegateTo), and the profile's stored
  * session never carries one. This session is one-use: it is never stored, and it ends no later than the grant it
  * signs (a secret-key grant lasts 1 hour unless asked, at most 7 days).
@@ -45,6 +46,7 @@ export async function withExactKeyNode<T>(params: {
     onRegistryFallback: recordRegistryFallbackWarning,
     tinycloudRegistryUrl: process.env.TC_REGISTRY_URL || params.profile?.tinycloudRegistryUrl,
     privateKey,
+    ...ownerFullAccess(),
     host: params.ctx.host,
     autoCreateSpace: true,
     additionalRawAbilities: keyAbilities,

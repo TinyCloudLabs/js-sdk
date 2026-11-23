@@ -4026,19 +4026,19 @@ export const approvedTc3801NamedKeysRoot: LogoutRatchet = {
 /** The exact TC-3802 secret-key name cap root allowance from canonical CI. */
 export const approvedTc3802SecretKeyCapRoot: LogoutRatchet = {
   "label": "per-secret keys: secret names over 64 characters have no key of their own (TC-3802)",
-  "ruling": "size-ruling: TC-3802 row tc3802SecretKeyCapRoot index.mjs 1534486 (+9), index.cjs 1466217 (+4) gzip bytes over the tc3801 ceilings, CI's canonical figure. Details: TC-3802",
-  "base": "cb3edeab4f66ae2fc7f84243c7b8fdc3a15fc812",
+  "ruling": "size-ruling: TC-3802 row tc3802SecretKeyCapRoot index.mjs 1539377 (+9), index.cjs 1471348 (+4) gzip bytes over the tc3801NamedKeysRoot ceilings, CI's canonical figure. Details: TC-3802",
+  "base": "171a7b391cff57591aad20ab827660cad6673c06",
   "sourceCommits": ["fd14fa023d84e17436150e11fc198cfce3d09d18"],
   "canonicalCI": {
-    "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45042684402",
+    "run": "PLACEHOLDER: replaced by the canonical CI run of this head",
     "jobs": [
-      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45042684402/job/137270407240",
-      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45042684402/job/137270407315"
+      "PLACEHOLDER: sqlite Replica job",
+      "PLACEHOLDER: postgres Replica job"
     ]
   },
   "root": {
     "delta": { "index.mjs": 9, "index.cjs": 4 },
-    "ceiling": { "index.mjs": 1534486, "index.cjs": 1466217 }
+    "ceiling": { "index.mjs": 1539377, "index.cjs": 1471348 }
   },
   "reason": "A secret name over 64 characters has no key of its own, so the manifest's isSecretKeyPath refuses it: one added check in sdk-core, bundled into the web root. migrateSecrets ships at @tinycloud/sdk-services/secrets/migrate and is not part of the root bundle."
 };

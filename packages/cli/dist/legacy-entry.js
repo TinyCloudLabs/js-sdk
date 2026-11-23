@@ -66,6 +66,8 @@ var init_constants = __esm({
       PENDING: 8,
       /** A write was refused because the owner's TinyCloud storage is full. */
       STORAGE_FULL: 10,
+      /** A secrets write was refused because the node has no per-secret keys (`NAMED_KEYS_UNSUPPORTED`); nothing was saved. */
+      NAMED_KEYS_UNSUPPORTED: 11,
       /** Interrupted by SIGINT/SIGTERM (`CANCELLED`). */
       CANCELLED: 130
     };
@@ -861,7 +863,7 @@ import {
   isValidSecretName,
   SECRET_REQUEST_MAX_NAMES
 } from "@tinycloud/operations/secret-request";
-import { authorizationVerdictOf, parseCapabilityResource, SERVICE_LONG_TO_SHORT, validatedCapabilityOf } from "@tinycloud/sdk-core";
+import { authorizationVerdictOf, NAMED_KEYS_CHECK_FAILED, NAMED_KEYS_CHECK_FAILED_MESSAGE, NAMED_KEYS_UNSUPPORTED, NAMED_KEYS_UNSUPPORTED_MESSAGE, parseCapabilityResource, SERVICE_LONG_TO_SHORT, validatedCapabilityOf } from "@tinycloud/sdk-core";
 import { routingFailure } from "@tinycloud/sdk-services";
 function setActiveProfileName(name) {
   activeProfileName = name;
@@ -884,6 +886,12 @@ function registryUnavailableError(error) {
 }
 function cliErrorFromService(error, message = error.message) {
   if (error instanceof CLIError) return error;
+  if (error.code === NAMED_KEYS_UNSUPPORTED) {
+    return new CLIError(NAMED_KEYS_UNSUPPORTED, NAMED_KEYS_UNSUPPORTED_MESSAGE, ExitCode.NAMED_KEYS_UNSUPPORTED);
+  }
+  if (error.code === NAMED_KEYS_CHECK_FAILED) {
+    return new CLIError(NAMED_KEYS_CHECK_FAILED, NAMED_KEYS_CHECK_FAILED_MESSAGE, ExitCode.NETWORK_ERROR);
+  }
   const nodeRetry = nodeRetryError(error);
   if (nodeRetry) return nodeRetry;
   const storageFull = storageFullError(error);
@@ -2215,8 +2223,8 @@ var init_hmac = __esm({
 });
 
 // ../sdk-core/src/manifest.ts
-import { resolveSecretPath, SECRET_NAME_RE, parseNetworkId } from "@tinycloud/sdk-services";
-import { parseEncryptionResource } from "@tinycloud/sdk-services/encryption/resource";
+import { resolveSecretPath, SECRET_NAME_RE, parseNetworkId, parseSecretCatalogKey } from "@tinycloud/sdk-services";
+import { formatKeyResource, parseEncryptionResource } from "@tinycloud/sdk-services/encryption/resource";
 function parseExpiry(duration) {
   if (typeof duration !== "string" || duration.length === 0) {
     throw new ManifestValidationError(
@@ -2260,8 +2268,9 @@ function expandEncryptionPermissionEntry(entry) {
     );
   }
   const sharePrefix = entry.path.endsWith("/share/");
-  if (entry.path.includes("/") && !sharePrefix) {
-    throw new ManifestValidationError("named keys go in manifest.keys");
+  const slash = entry.path.indexOf("/");
+  if (slash !== -1 && !sharePrefix) {
+    return [expandSecretKeyPermissionEntry(entry, entry.path.slice(0, slash), entry.path.slice(slash + 1))];
   }
   try {
     const network = parseNetworkId(sharePrefix ? entry.path.slice(0, -"/share/".length) : entry.path);
@@ -2314,6 +2323,52 @@ function expandEncryptionPermissionEntry(entry) {
       ...entry.description !== void 0 ? { description: entry.description } : {}
     }
   ];
+}
+function isSecretKeyPath(keyPath) {
+  const segments = keyPath.split("/");
+  const name = segments[segments.length - 1];
+  if (segments.length < 2 || segments[0] !== "secrets" || !SECRET_KEY_NAME_SEGMENT.test(name)) return false;
+  return parseSecretCatalogKey([...segments.slice(1, -1), name.toUpperCase()].join("/")) !== void 0;
+}
+function expandSecretKeyPermissionEntry(entry, networkUrn, keyPath) {
+  if (!isSecretKeyPath(keyPath)) {
+    if (keyPath === "secrets" || keyPath.startsWith("secrets/")) {
+      throw new ManifestValidationError(
+        "secret keys must be exact: secrets/<name> or secrets/scoped/<scope>/<name>, with the name in lower case"
+      );
+    }
+    throw new ManifestValidationError("named keys go in manifest.keys");
+  }
+  let resource;
+  try {
+    const network = parseEncryptionResource(networkUrn);
+    if (network.kind !== "network" || network.network !== "default") throw new Error("not the default network");
+    resource = formatKeyResource(network.networkId, keyPath);
+  } catch {
+    throw new ManifestValidationError("secret key entries require the owner's default network");
+  }
+  const actions = [];
+  for (const action of entry.actions) {
+    const full = action.startsWith("tinycloud.encryption/") ? action : `tinycloud.encryption/${action}`;
+    if (full !== "tinycloud.encryption/decrypt" && full !== "tinycloud.encryption/key.create") {
+      throw new ManifestValidationError(
+        `unknown secret key action ${JSON.stringify(action)}; expected decrypt or key.create`
+      );
+    }
+    if (!actions.includes(full)) actions.push(full);
+  }
+  if (actions.length === 0) {
+    throw new ManifestValidationError("secret key entries need decrypt or key.create");
+  }
+  return {
+    service: ENCRYPTION_PERMISSION_SERVICE,
+    space: ENCRYPTION_MANIFEST_SPACE,
+    path: resource,
+    actions,
+    skipPrefix: true,
+    ...entry.expiry !== void 0 ? { expiry: entry.expiry } : {},
+    ...entry.description !== void 0 ? { description: entry.description } : {}
+  };
 }
 function applyPrefix(prefix, path, skipPrefix) {
   if (skipPrefix) {
@@ -2820,7 +2875,7 @@ function withCapabilitiesReadForSpaces(resources) {
     ...[...spaces].map(capabilitiesReadPermission)
   ]);
 }
-var import_ms, DEFAULT_KNOWLEDGE_ROOT, ManifestValidationError, DEFAULT_EXPIRY, DEFAULT_DEFAULTS, DEFAULT_MANIFEST_VERSION, DEFAULT_MANIFEST_SPACE, SECRETS_SPACE, VAULT_PERMISSION_SERVICE, SERVICE_SHORT_TO_LONG, ENCRYPTION_PERMISSION_SERVICE, ENCRYPTION_MANIFEST_SPACE, SERVICE_LONG_TO_SHORT2, DEFAULT_STANDARD_ENTRIES, DEFAULT_ADMIN_ENTRIES, DEFAULT_ALL_ENTRIES, KEY_SEGMENT, KEY_APP_ID, KEY_PATH, KEY_ABILITIES;
+var import_ms, DEFAULT_KNOWLEDGE_ROOT, ManifestValidationError, DEFAULT_EXPIRY, DEFAULT_DEFAULTS, DEFAULT_MANIFEST_VERSION, DEFAULT_MANIFEST_SPACE, SECRETS_SPACE, VAULT_PERMISSION_SERVICE, SERVICE_SHORT_TO_LONG, ENCRYPTION_PERMISSION_SERVICE, ENCRYPTION_MANIFEST_SPACE, SERVICE_LONG_TO_SHORT2, DEFAULT_STANDARD_ENTRIES, DEFAULT_ADMIN_ENTRIES, DEFAULT_ALL_ENTRIES, SECRET_KEY_NAME_SEGMENT, KEY_SEGMENT, KEY_APP_ID, KEY_PATH, KEY_ABILITIES;
 var init_manifest = __esm({
   "../sdk-core/src/manifest.ts"() {
     "use strict";
@@ -2903,6 +2958,7 @@ var init_manifest = __esm({
         actions: ["read", "write"]
       }
     ];
+    SECRET_KEY_NAME_SEGMENT = /^[a-z][a-z0-9_]{0,63}$/;
     KEY_SEGMENT = "[a-z0-9][a-z0-9._-]{0,63}";
     KEY_APP_ID = new RegExp(`^${KEY_SEGMENT}$`);
     KEY_PATH = new RegExp(`^${KEY_SEGMENT}(?:/${KEY_SEGMENT}){2,7}$`);
@@ -5998,11 +6054,22 @@ function featuresForHost(host, fetchFn) {
   });
   return discovered;
 }
+function refusalTextOf(body) {
+  if (!body.startsWith("{")) return body;
+  try {
+    const parsed = JSON.parse(body);
+    if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed) && "code" in parsed && typeof parsed.code === "string" && NODE_REVOCATION_CODES.has(parsed.code) && "error" in parsed && typeof parsed.error === "string") {
+      return parsed.error;
+    }
+  } catch {
+  }
+  return body;
+}
 function isRevocation(error, status, request) {
   if (REVOKED_CODES.has(error.code)) return true;
   if (status !== 401 || request === void 0) return false;
   const lead = `${request}: 401 - `;
-  return error.message.startsWith(lead) && REVOKED_BODY.test(error.message.slice(lead.length));
+  return error.message.startsWith(lead) && REVOKED_BODY.test(refusalTextOf(error.message.slice(lead.length)));
 }
 function replicaErrorFromService(error, context2, request) {
   const meta = error.meta ?? {};
@@ -6138,7 +6205,7 @@ function kvSyncTransport(kv3, options = {}) {
     }
   };
 }
-var ReplicaErrorCode, REPLICA_ERROR, ReplicaError, RFC3339, DEFAULT_PAGE_LIMIT, DEFAULT_LEASE_TTL_MS, FETCH_CHUNK, REPAIR_BATCH, REPAIR_MAX_TRIES, REPAIR_BACKOFF_BASE_MS, RETENTION_REVOKED, PENDING_REFUSALS, Replica, BASE58, BASE32, featureCache, REVOKED_CODES, REVOKED_BODY, encoder;
+var ReplicaErrorCode, REPLICA_ERROR, ReplicaError, RFC3339, DEFAULT_PAGE_LIMIT, DEFAULT_LEASE_TTL_MS, FETCH_CHUNK, REPAIR_BATCH, REPAIR_MAX_TRIES, REPAIR_BACKOFF_BASE_MS, RETENTION_REVOKED, PENDING_REFUSALS, Replica, BASE58, BASE32, featureCache, REVOKED_CODES, REVOKED_BODY, NODE_REVOCATION_CODES, encoder;
 var init_dist = __esm({
   "../replica/dist/index.js"() {
     "use strict";
@@ -6658,6 +6725,7 @@ var init_dist = __esm({
     featureCache = /* @__PURE__ */ new Map();
     REVOKED_CODES = /* @__PURE__ */ new Set(["AUTH_DELEGATION_REVOKED", "AUTH_DELEGATION_ANCESTOR_REVOKED"]);
     REVOKED_BODY = /^(?:Invalid invocation: )?(?:delegation-revoked: [A-Za-z0-9]+|delegation-ancestor-revoked: ancestor=[A-Za-z0-9]+ (?:invoked|parent)=[A-Za-z0-9]+)$/;
+    NODE_REVOCATION_CODES = /* @__PURE__ */ new Set(["delegation_revoked", "parent_revoked", "ancestor_revoked"]);
     encoder = new TextEncoder();
   }
 });
@@ -18752,6 +18820,9 @@ function parseKeysPrefix(input, ownerDid) {
   if (prefix.length === 0) throw invalid4("the folder can't be empty.");
   if (prefix === "apps" || prefix.startsWith("apps/")) {
     throw invalid4("folders under `apps/` belong to apps and can't be used from the CLI.");
+  }
+  if (prefix === "secrets" || prefix.startsWith("secrets/")) {
+    throw invalid4("folders under `secrets/` belong to TinyCloud Secrets and can't be used with `--keys`.");
   }
   try {
     return { prefix, resource: formatPrefixResource(namedKeysNetworkId(ownerDid), prefix) };
@@ -45303,7 +45374,7 @@ import { CLI_NAME as CLI_NAME34 } from "@tinycloud/operations/cli-name";
 import { readFile as readFile18 } from "fs/promises";
 import { join as join24 } from "path";
 import { constants as osConstants, homedir, hostname, userInfo } from "os";
-import { appSecretScope, SECRET_TYPES as SECRET_TYPES2 } from "@tinycloud/sdk-core";
+import { appSecretScope, SECRET_TYPES as SECRET_TYPES2, secretNameTooLongRefusal } from "@tinycloud/sdk-core";
 import { invokeOperation as invokeOperation4 } from "@tinycloud/operations";
 import { isLocalOwnerProfile as isLocalOwnerProfile4, liveStoredLease as liveStoredLease3, ownerSessionLacksProof as ownerSessionLacksProof5 } from "@tinycloud/operations/profile";
 import {
@@ -46936,6 +47007,8 @@ function registerSecretsCommand(program, openKeyAcquisition) {
   secrets.command("put <name> [value]").description("Store a secret").option("--scope <scope>", "Logical secret scope").option("--space <name|uri>", "Target a non-default secrets space (short name or full URI)").option("--file <path>", "Read value from file").option("--stdin", "Read value from stdin").option("--type <type>", `What the secret is: ${SECRET_TYPES2.join(", ")} (default: secret). A totp secret must be a base32 seed or an otpauth:// link.`).option("--private-key <hex>", "Ethereum private key (or set TC_PRIVATE_KEY)").action(async (name, value4, options, cmd) => {
     try {
       const secretType = parseSecretTypeOption(options.type);
+      const tooLong = SECRET_NAME_RE2.test(name.trim()) ? secretNameTooLongRefusal(name) : void 0;
+      if (tooLong) throw new CLIError("INVALID_SECRET_NAME", tooLong.error.message, ExitCode.USAGE_ERROR);
       const globalOpts = cmd.optsWithGlobals();
       const ctx = await ProfileManager.resolveContext(globalOpts);
       const node = await ensureSecretsNode(ctx, options);
@@ -46958,7 +47031,8 @@ function registerSecretsCommand(program, openKeyAcquisition) {
       }
       const scopeOptions = resolveSecretScope(options);
       assertSecretValueMatchesType(secretType, secretValue);
-      const putOptions = secretType === void 0 ? scopeOptions : { ...scopeOptions, type: secretType };
+      const namedKey = process.env.TC_SECRETS_NAMED_KEY_WRITES === "1";
+      const putOptions = secretType === void 0 && !namedKey ? scopeOptions : { ...scopeOptions, ...secretType === void 0 ? {} : { type: secretType }, ...namedKey ? { namedKey: true } : {} };
       const result = await runSecretOperation({
         ctx,
         node,

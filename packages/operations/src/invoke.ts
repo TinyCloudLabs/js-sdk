@@ -901,8 +901,7 @@ async function persistAuthorityRequest(
     return {
       status: "ok",
       request: resolution.request,
-      // What is shown is what is stored: the request's own entries (a key's owner in EIP-55 form, TC-3284).
-      missing: resolution.request.requested as unknown as CapabilityRequirement[],
+      missing: canonicalMissing as CapabilityRequirement[],
     };
   } catch {
     return {

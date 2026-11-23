@@ -1106,38 +1106,12 @@ export interface HermeticEncryptedNode {
   ): Promise<Awaited<ReturnType<TinyCloudNode["delegateTo"]>>["delegation"]>;
   mintUntrustedDelegation(): Promise<Awaited<ReturnType<TinyCloudNode["delegateTo"]>>["delegation"]>;
   readAndDecrypt(node: TinyCloudNode, delegation: ValidatedRuntimeDelegation): Promise<void>;
-  /** The signed delegation and a signed, delegated KV read were validated and activated, with no decrypt required. */
-  assertNarrowDelegatedRead(
-    delegation: ValidatedRuntimeDelegation,
-    expectedSigningIssuer?: string,
-  ): void;
   assertNarrowDelegatedReadAndDecrypt(
     delegation: ValidatedRuntimeDelegation,
     expectedSigningIssuer?: string,
   ): void;
   assertDelegatedKvResources(resources: readonly string[]): void;
   stop(): void;
-}
-
-/** What both `assertNarrowDelegatedRead…` accessors check; `requireDecrypt` also demands an observed delegated decrypt. */
-function assertDelegatedTraffic(
-  transport: LoopbackEncryptedNode,
-  delegation: ValidatedRuntimeDelegation,
-  expectedSigningIssuer: string | undefined,
-  requireDecrypt: boolean,
-): void {
-  if (!transport.observed.signedDelegation || !transport.observed.signedInvocation ||
-    !transport.observed.delegatedKvRead || (requireDecrypt && !transport.observed.delegatedDecrypt)) {
-    throw new Error("loopback did not validate signed delegation and invocation traffic");
-  }
-  if (!transport.activations.has(delegation.cid)) {
-    throw new Error("loopback did not observe the validated delegation activation");
-  }
-  if (expectedSigningIssuer && !transport.observed.signingIssuers.some((issuer) =>
-    principalDidEquals(issuer, expectedSigningIssuer)
-  )) {
-    throw new Error("loopback did not observe a signature from the expected restored session key");
-  }
 }
 
 /**
@@ -1236,8 +1210,6 @@ export async function createHermeticEncryptedNode(
     abilities: ownerSessionAbilities,
     rawAbilities: {
       [networkId]: ["tinycloud.encryption/decrypt"],
-      // The owner's own exact key for the canary secret, so a test can delegate exactly that key (TC-3284 C3b).
-      [`${networkId}/secrets/hermetic_delegation_canary`]: ["tinycloud.encryption/decrypt"],
       [`${accountSpaceId}/kv/spaces/`]: ["tinycloud.kv/get", "tinycloud.kv/list"],
       [`${applicationsSpaceId}/kv/agents/demo/profile`]: ["tinycloud.kv/get"],
       ...(options.ownerConnectorCapabilities
@@ -1441,11 +1413,19 @@ export async function createHermeticEncryptedNode(
         throw new Error("loopback delegated decrypt failed");
       }
     },
-    assertNarrowDelegatedRead(delegation, expectedSigningIssuer) {
-      assertDelegatedTraffic(transport, delegation, expectedSigningIssuer, false);
-    },
     assertNarrowDelegatedReadAndDecrypt(delegation, expectedSigningIssuer) {
-      assertDelegatedTraffic(transport, delegation, expectedSigningIssuer, true);
+      if (!transport.observed.signedDelegation || !transport.observed.signedInvocation ||
+        !transport.observed.delegatedKvRead || !transport.observed.delegatedDecrypt) {
+        throw new Error("loopback did not validate signed delegation and invocation traffic");
+      }
+      if (!transport.activations.has(delegation.cid)) {
+        throw new Error("loopback did not observe the validated delegation activation");
+      }
+      if (expectedSigningIssuer && !transport.observed.signingIssuers.some((issuer) =>
+        principalDidEquals(issuer, expectedSigningIssuer)
+      )) {
+        throw new Error("loopback did not observe a signature from the expected restored session key");
+      }
     },
     assertDelegatedKvResources(resources) {
       for (const resource of resources) {

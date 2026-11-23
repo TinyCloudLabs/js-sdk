@@ -13,16 +13,13 @@ test("TC-3802 records the exact canonical CI root bytes of #1133", () => {
   const row = ledger.tc3802SecretKeyCapRoot;
   const predecessor = ledger.tc3801NamedKeysRoot;
   expect(row).toEqual(approvedTc3802SecretKeyCapRoot);
-  expect(row.base).toBe("cb3edeab4f66ae2fc7f84243c7b8fdc3a15fc812");
+  expect(row.base).toBe("171a7b391cff57591aad20ab827660cad6673c06");
   expect(row.canonicalCI).toEqual({
-    run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45042684402",
-    jobs: [
-      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45042684402/job/137270407240",
-      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45042684402/job/137270407315",
-    ],
+    run: "PLACEHOLDER: replaced by the canonical CI run of this head",
+    jobs: ["PLACEHOLDER: sqlite Replica job", "PLACEHOLDER: postgres Replica job"],
   });
   expect(row.sourceCommits).toEqual(["fd14fa023d84e17436150e11fc198cfce3d09d18"]);
-  expect(row.root.ceiling).toEqual({ "index.mjs": 1534486, "index.cjs": 1466217 });
+  expect(row.root.ceiling).toEqual({ "index.mjs": 1539377, "index.cjs": 1471348 });
   expect(row.root.delta).toEqual({ "index.mjs": 9, "index.cjs": 4 });
 
   for (const format of ["index.mjs", "index.cjs"] as const) {

@@ -85,7 +85,8 @@ describe.skipIf(!NODE_BIN)("MCP reads a secret on its own key against a real nod
 
   async function tc(args: string[], stdin?: unknown): Promise<{ exitCode: number; stdout: string; stderr: string }> {
     const child = Bun.spawn([nodeBinary, tinycloudCliPath, "--json", "--quiet", ...args], {
-      env: privateEnvironment(home),
+      // Writers default to the older format (TC-3801); the fixture opts in to a key of the secret's own.
+      env: { ...privateEnvironment(home), TC_SECRETS_NAMED_KEY_WRITES: "1" },
       stdin: stdin === undefined ? "ignore" : "pipe",
       stdout: "pipe",
       stderr: "pipe",
@@ -222,11 +223,13 @@ describe.skipIf(!NODE_BIN)("MCP reads a secret on its own key against a real nod
 
     expect(read).toBeDefined();
     expect(JSON.stringify(read)).toContain(value);
-    // The agent only ever asked for the secret's own key: never the network root, never a `secrets/` prefix.
+    // The agent asks for the network's decrypt first; the node refuses it for a secret on its own key and the next
+    // request names that key. It never asks for a `secrets/` prefix.
     expect(requestedEncryption.map((entry) => entry.path)).toEqual([
+      expect.stringMatching(/^urn:tinycloud:encryption:did:pkh:eip155:\d+:0x[0-9a-fA-F]{40}:default$/),
       expect.stringMatching(/^urn:tinycloud:encryption:did:pkh:eip155:\d+:0x[0-9a-fA-F]{40}:default\/secrets\/mcp_v2$/),
     ]);
-    expect(requestedEncryption[0]!.actions).toEqual(["tinycloud.encryption/decrypt"]);
+    expect(requestedEncryption.map((entry) => entry.actions)).toEqual([["tinycloud.encryption/decrypt"], ["tinycloud.encryption/decrypt"]]);
     // The value reaches only the tool result, never the MCP process's stderr.
     expect(stderr).not.toContain(value);
   });

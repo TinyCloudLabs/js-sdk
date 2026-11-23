@@ -61,7 +61,7 @@ describe("tinycloud.secrets.get", () => {
       },
       {
         service: "tinycloud.encryption",
-        path: `${NETWORK_ID}/secrets/scoped/food-tracker/api_key`,
+        path: NETWORK_ID,
         actions: ["tinycloud.encryption/decrypt"],
       },
     ]);
@@ -86,7 +86,7 @@ describe("tinycloud.secrets.get", () => {
       },
       {
         service: "tinycloud.encryption",
-        path: `${NETWORK_ID}/secrets/api_key`,
+        path: NETWORK_ID,
         actions: ["tinycloud.encryption/decrypt"],
       },
     ]);
@@ -125,7 +125,7 @@ describe("tinycloud.secrets.get", () => {
       input,
     );
 
-    expect(planned[1]).toMatchObject({ path: `${NETWORK_ID}/secrets/api_key` });
+    expect(planned[1]).toMatchObject({ path: NETWORK_ID });
   });
 
   test("fails closed when the encryption network cannot be resolved", async () => {
@@ -219,7 +219,7 @@ describe("tinycloud.secrets.get", () => {
     expect(JSON.stringify(result)).not.toContain("https://");
   });
 
-  test.each(["scoped"])("a scope no request link can express (%s) is not_requestable, never INTERNAL_ERROR", async (scope) => {
+  test.each(["scoped", "a".repeat(65)])("a scope no request link can express (%s) is not_requestable, never INTERNAL_ERROR", async (scope) => {
     const input = secretsGetOperationDefinition.input.parse({ name: "API_KEY", scope, space: TARGET_SPACE });
     const result = await secretsGetOperationDefinition.execute(
       context(async () => ({ status: "not_found" })),

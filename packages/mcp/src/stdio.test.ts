@@ -248,14 +248,12 @@ test("three real MCP processes request, import, restart, and retry the original 
     if (contentOf(authority)?.status !== "authority_required") {
       throw new Error("expected a canonical authority result");
     }
-    const request = contentOf(authority)!.request as { requestId: string; requested: Array<Record<string, unknown>> };
-    const requestId = request.requestId;
+    const requestId = (contentOf(authority)!.request as { requestId: string }).requestId;
     expect((contentOf(authority)!.request as Record<string, unknown>).kind).toBe("tinycloud.auth.request");
     await client.client.close();
     client = undefined;
 
-    // The owner grants exactly what the request asked for: the secret's own key, not the network (TC-3284 C4).
-    const delegation = await fixture.hermetic.mintDelegationWithPermissions(request.requested);
+    const delegation = await fixture.hermetic.mintDelegation();
     importedClient = await connectClient(home, ["--profile", fixture.profile]);
     const imported = await importedClient.client.callTool({
       name: "tinycloud_auth_import",
@@ -283,19 +281,15 @@ test("three real MCP processes request, import, restart, and retry the original 
       name: "tinycloud_secrets_get",
       arguments: { name: "HERMETIC_DELEGATION_CANARY" },
     });
-    // The hermetic secret is still in the older format (sealed to the network), and the owner granted only the
-    // secret's own key: the read reports that, and names the decrypt that would open it (TC-3284 C4).
     expect(contentOf(afterRestart)).toMatchObject({
-      status: "error",
-      error: { code: "SECRET_LEGACY_ENVELOPE" },
+      status: "ok",
+      output: { value: canary },
     });
     expect(JSON.stringify(afterRestart.content)).not.toContain(canary);
     expect(JSON.stringify({ ...afterRestart, structuredContent: undefined })).not.toContain(canary);
     expect(retryClient.stderr()).not.toContain(canary);
     expect(retryClient.stderr().length).toBeLessThanOrEqual(4096);
-    // An older-format secret read with only its own key never decrypts, so this asserts the signed, delegated read
-    // and the restored session key's signature without requiring a decrypt (TC-3284 C4b).
-    fixture.hermetic.assertNarrowDelegatedRead(delegation, fixture.sessionDid);
+    fixture.hermetic.assertNarrowDelegatedReadAndDecrypt(delegation, fixture.sessionDid);
     for (const file of ["profile.json", "session.json", "auth-requests.json", "additional-delegations.json"]) {
       const persisted = await readFile(join(home, ".tinycloud/profiles", fixture.profile, file), "utf8");
       expect(persisted).not.toContain(canary);
@@ -512,10 +506,8 @@ test("an authorized missing secret returns only the value-free setup action", as
       arguments: { name: "HERMETIC_DELEGATION_CANARY" },
     });
     expect(contentOf(authority)?.status).toBe("authority_required");
-    const request = contentOf(authority)!.request as { requestId: string; requested: Array<Record<string, unknown>> };
-    const requestId = request.requestId;
-    // The owner grants exactly what the request asked for: the secret's own key, not the network (TC-3284).
-    const delegation = await fixture.hermetic.mintDelegationWithPermissions(request.requested);
+    const requestId = (contentOf(authority)!.request as { requestId: string }).requestId;
+    const delegation = await fixture.hermetic.mintDelegation();
     await requestClient.client.close();
     requestClient = undefined;
 

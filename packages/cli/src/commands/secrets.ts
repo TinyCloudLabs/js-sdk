@@ -346,6 +346,8 @@ async function runSecretOperation<T>(params: {
   space?: string;
   label: string;
   operation: () => Promise<SecretResult<T>>;
+  /** The write seals the secret to a key of its own (TC-3801). */
+  namedKey?: boolean;
   /** Test seam for the owner OpenKey acquisition boundary. */
   openKeyAcquisition?: OpenKeyAcquisition;
 }): Promise<SecretResult<T>> {
@@ -366,6 +368,7 @@ async function runSecretOperation<T>(params: {
     options: params.scopeOptions,
     space: params.space,
     node: params.node,
+    namedKey: params.namedKey,
   });
   await withSpinner("Requesting secret permissions...", () =>
     ensureDelegationAuthority({
@@ -591,15 +594,13 @@ function ownerSecretApproval(
   }
   if (result.status !== "error") return undefined;
   const { code, details } = result.error;
-  if ((code !== "SECRET_LEGACY_ENVELOPE" && code !== "SECRET_KEY_GRANT_REQUIRED") || typeof details?.decrypt !== "string") {
+  if (code !== "SECRET_LEGACY_ENVELOPE" || typeof details?.decrypt !== "string") {
     return undefined;
   }
   return {
     // The operation may name the network with a lowercase owner; ask in the EIP-55 spelling every other entry uses.
     missing: [{ service: "tinycloud.encryption", path: canonicalNetworkUrn(details.decrypt), actions: [SECRET_DECRYPT_CAPABILITY] }],
-    reason: code === "SECRET_LEGACY_ENVELOPE"
-      ? `Read the secret ${name}. It's stored in the older format, so reading it needs access to all your encrypted data. Running \`${CLI_NAME} secrets migrate\` gives it its own key, and then this wider access isn't needed.`
-      : secretCommandReason("get", name),
+    reason: `Read the secret ${name}. It's stored in the older format, so reading it needs access to all your encrypted data. Running \`${CLI_NAME} secrets migrate\` gives it its own key, and then this wider access isn't needed.`,
   };
 }
 
@@ -1168,11 +1169,10 @@ function secretKvAbility(action: SecretAction): SecretKvAbility {
 }
 
 /**
- * What an owner approves for one secret command. A read asks to decrypt that secret's own key. A write asks to
- * create it (the key's descriptor carries the public key the value is sealed to) and, so the owner's put→get round
- * trip needs one approval, to read that same secret and decrypt that same key. `resolveSecretPath` refuses a name
- * or scope over 64 characters, so no network decrypt is built for one. A secret on a non-default network has no key
- * of its own and is read with the network decrypt, as is a secret still in the older format (`networkDecrypt`).
+ * What an owner approves for one secret command. A read decrypts with the network. A write that opts in to a key of the
+ * secret's own (`namedKey`, TC-3801) asks to create it (the key's descriptor carries the public key the value is sealed
+ * to) and, so the owner's put→get round trip needs one approval, to read that same secret and decrypt that same key.
+ * `resolveSecretPath` refuses a name or scope over 64 characters, so no key is built for one. Never a `secrets/` prefix.
  */
 function secretPermissionEntries(params: {
   action: SecretAction;
@@ -1180,38 +1180,40 @@ function secretPermissionEntries(params: {
   options?: SecretScopeOptions;
   space?: string;
   node: TinyCloudNode;
-  networkDecrypt?: boolean;
+  namedKey?: boolean;
 }): PermissionEntry[] {
   const path = params.action === "list"
     ? resolveSecretListPrefix(params.options)
     : resolveSecretPath(params.name ?? "", params.options).permissionPaths.vault;
+  const namedKeyPut = params.action === "put" && params.namedKey === true;
   const permissions: PermissionEntry[] = [{
     service: "tinycloud.kv",
     space: params.space ?? SECRETS_SPACE,
     path,
-    actions: params.action === "put" ? [secretKvAbility("put"), secretKvAbility("get")] : [secretKvAbility(params.action)],
+    actions: namedKeyPut ? [secretKvAbility("put"), secretKvAbility("get")] : [secretKvAbility(params.action)],
     skipPrefix: true,
   }];
-  if (params.action !== "get" && params.action !== "put") return permissions;
+  if (params.action !== "get" && !namedKeyPut) return permissions;
 
   const networkId = "getEncryptionNetworkIdForSpace" in params.node &&
     typeof params.node.getEncryptionNetworkIdForSpace === "function"
     ? params.node.getEncryptionNetworkIdForSpace(params.space ?? SECRETS_SPACE)
     : params.node.getDefaultEncryptionNetworkId();
+  if (params.action === "get") {
+    permissions.push({
+      service: "tinycloud.encryption",
+      path: networkId,
+      actions: [SECRET_DECRYPT_CAPABILITY],
+      skipPrefix: true,
+    });
+    return permissions;
+  }
   const key = networkId.endsWith(":default") ? secretKeyResourceForVaultPath(networkId, path) : undefined;
   if (key !== undefined) {
     permissions.push({
       service: "tinycloud.encryption",
       path: key,
-      actions: params.action === "get" ? [SECRET_DECRYPT_CAPABILITY] : [SECRET_KEY_CREATE_CAPABILITY, SECRET_DECRYPT_CAPABILITY],
-      skipPrefix: true,
-    });
-  }
-  if (params.action === "get" && (key === undefined || params.networkDecrypt === true)) {
-    permissions.push({
-      service: "tinycloud.encryption",
-      path: networkId,
-      actions: [SECRET_DECRYPT_CAPABILITY],
+      actions: [SECRET_KEY_CREATE_CAPABILITY, SECRET_DECRYPT_CAPABILITY],
       skipPrefix: true,
     });
   }
@@ -1904,6 +1906,7 @@ export function registerSecretsCommand(
           node,
           action: "put",
           name,
+          namedKey,
           scopeOptions,
           space: spaceUri,
           label: `Storing secret ${name}...`,
@@ -2003,7 +2006,7 @@ export function registerSecretsCommand(
           path: result.delegation.path,
           actions: result.delegation.actions,
           scope: "whole-network",
-          expiresAt: result.delegation.expiry.toISOString(),
+          ...(result.delegation.expiry === undefined ? {} : { expiresAt: result.delegation.expiry.toISOString() }),
         });
       } catch (error) {
         return handleError(error);

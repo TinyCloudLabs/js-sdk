@@ -97,7 +97,8 @@ describe.skipIf(!NODE_BIN)("per-secret keys against a real node", () => {
   let spaceId: string;
 
   async function tc(args: string[], stdin = ""): Promise<{ exitCode: number; stdout: string; stderr: string }> {
-    const env: Record<string, string | undefined> = { ...process.env, HOME: home, TC_HOME: home };
+    // Writers default to the older format (TC-3801); these fixtures opt in to a key of the secret's own.
+    const env: Record<string, string | undefined> = { ...process.env, HOME: home, TC_HOME: home, TC_SECRETS_NAMED_KEY_WRITES: "1" };
     delete env.TC_HOST;
     delete env.TC_PRIVATE_KEY;
     const child = Bun.spawn([process.execPath, join(import.meta.dir, "../index.ts"), "-q", "--json", ...args], {
@@ -155,6 +156,8 @@ describe.skipIf(!NODE_BIN)("per-secret keys against a real node", () => {
     }) as typeof process.exit);
     Object.defineProperty(process.stderr, "isTTY", { configurable: true, value: true });
     output.write = (chunk: unknown) => { stdout += String(chunk); return true; };
+    const namedKeyWrites = process.env.TC_SECRETS_NAMED_KEY_WRITES;
+    process.env.TC_SECRETS_NAMED_KEY_WRITES = "1";
     try {
       const program = new Command();
       program.option("-p, --profile <name>").option("--json");
@@ -164,6 +167,8 @@ describe.skipIf(!NODE_BIN)("per-secret keys against a real node", () => {
       // Name what the stand-in refused, if anything; the CLI reports only "invalid approval request".
       throw new Error(`${(error as Error).message}; refused: ${JSON.stringify(openKey.refusals.map((refusal) => refusal.message))}`);
     } finally {
+      if (namedKeyWrites === undefined) delete process.env.TC_SECRETS_NAMED_KEY_WRITES;
+      else process.env.TC_SECRETS_NAMED_KEY_WRITES = namedKeyWrites;
       output.write = originalWrite;
       exit.mockRestore();
       if (stderrTTY) Object.defineProperty(process.stderr, "isTTY", stderrTTY);
@@ -239,7 +244,7 @@ describe.skipIf(!NODE_BIN)("per-secret keys against a real node", () => {
     const recipient = wasm.createSessionManager().getDID("default").split("#")[0]!;
     const before = Date.now();
     const granted = await tc(["--profile", "owner", "secrets", "network", "grant", recipient]);
-    expect({ exitCode: granted.exitCode, stderr: granted.stderr }).toEqual({ exitCode: 0, stderr: "" });
+    expect({ exitCode: granted.exitCode, stderr: granted.stderr.includes("can read every secret in the") }).toEqual({ exitCode: 0, stderr: true });
     const { cid, expiresAt } = JSON.parse(granted.stdout) as { cid: string; expiresAt: string };
     expect(Date.parse(expiresAt)).toBeGreaterThan(before);
     expect(Date.parse(expiresAt)).toBeLessThanOrEqual(Date.now() + 3_600_000);
@@ -263,21 +268,26 @@ describe.skipIf(!NODE_BIN)("per-secret keys against a real node", () => {
     await Bun.write(join(root, "agent-kv-grant.json"), kvGrant.stdout);
     await ok(["--profile", "agent", "auth", "import", join(root, "agent-kv-grant.json")]);
 
-    // The agent asks for the secret: the CLI stores the request it needs approved, on the secret's own key.
+    // The agent asks for the secret: the CLI stores the request it needs approved. It asks for the network's decrypt;
+    // the secret's own key is the narrower grant that also answers it.
     const asked = await tc(["--profile", "agent", "secrets", "get", "AGENT_V2"]);
     expect(asked.exitCode).not.toBe(0);
     const { readProfileStore } = await import("@tinycloud/operations/state");
     const stored = (await readProfileStore<{ requested: Array<{ service: string; path: string }> }>("agent", "auth-requests")).records;
-    const request = stored.at(-1)!;
-    expect(request.requested.map(({ service, path }) => ({ service, path }))).toEqual([{
+    expect(stored.at(-1)!.requested.map(({ service, path }) => ({ service, path: path.toLowerCase() }))).toEqual([{
       service: "tinycloud.encryption",
-      path: `urn:tinycloud:encryption:${ownerDid}:default/secrets/agent_v2`,
+      path: `urn:tinycloud:encryption:${ownerDid}:default`.toLowerCase(),
     }]);
 
-    // The owner approves exactly the stored request with `tc auth grant`: the owner's wallet key signs a one-use
-    // session holding just that secret's key, and the grant is cut from it (1 h, the secret-key default).
+    // The owner approves the secret's own key with `tc auth grant`: the owner's wallet key signs a one-use session
+    // holding that key, and the grant is cut from it (1 h, the secret-key default).
+    const keyPath = `urn:tinycloud:encryption:${ownerDid}:default/secrets/agent_v2`;
+    const keyPermissions = join(root, "agent-secret-permissions.json");
+    await Bun.write(keyPermissions, JSON.stringify({
+      permissions: [{ service: "tinycloud.encryption", space: "encryption", path: keyPath, skipPrefix: true, actions: ["tinycloud.encryption/decrypt"] }],
+    }));
     const requestFile = join(root, "agent-secret-request.json");
-    await Bun.write(requestFile, JSON.stringify(request));
+    await ok(["--profile", "agent", "auth", "request", "--permission", keyPermissions, "--emit", requestFile]);
     const before = Date.now();
     const treeBefore = await snapshotTree(home);
     const granted = await tc(["--profile", "owner", "auth", "grant", requestFile]);
@@ -294,7 +304,7 @@ describe.skipIf(!NODE_BIN)("per-secret keys against a real node", () => {
       expect({ path, found: sessionMaterialIn(file.text) }).toEqual({ path, found: [] });
     }
     const grant = JSON.parse(granted.stdout) as { delegation: { path: string }; expiry: string };
-    expect(grant.delegation.path).toBe(request.requested[0]!.path);
+    expect(grant.delegation.path).toBe(keyPath);
     expect(Date.parse(grant.expiry)).toBeGreaterThan(before);
     expect(Date.parse(grant.expiry)).toBeLessThanOrEqual(Date.now() + 3_600_000);
     await Bun.write(join(root, "agent-secret-grant.json"), granted.stdout);
@@ -348,12 +358,15 @@ describe.skipIf(!NODE_BIN)("per-secret keys against a real node", () => {
     expect(await encryptionPaths("openkey-writer")).toEqual([[`urn:tinycloud:encryption:${ownerDid}:default/secrets/openkey_roundtrip`]]);
   });
 
-  test("a secret on its own key, read on the owner path, stores exactly one grant: the exact key, no root", async () => {
+  test("a secret on its own key, read on the owner path, takes the network's decrypt, then the exact key, and never a prefix", async () => {
     const keys = await openKeyOwner("openkey-reader");
     const read = await asOpenKeyOwner("openkey-reader", keys, ["get", "OPENKEY_ROUNDTRIP"]);
     expect(read.refusals).toEqual([]);
-    expect(read.requests).toHaveLength(1);
+    expect(read.requests).toHaveLength(2);
     expect(JSON.parse(read.stdout).name).toBe("OPENKEY_ROUNDTRIP");
-    expect(await encryptionPaths("openkey-reader")).toEqual([[`urn:tinycloud:encryption:${ownerDid}:default/secrets/openkey_roundtrip`]]);
+    expect(await encryptionPaths("openkey-reader")).toEqual([
+      [`urn:tinycloud:encryption:${ownerDid}:default`],
+      [`urn:tinycloud:encryption:${ownerDid}:default/secrets/openkey_roundtrip`],
+    ]);
   });
 });

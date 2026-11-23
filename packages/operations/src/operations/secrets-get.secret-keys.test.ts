@@ -1,14 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import { MAX_SECRET_NAME_LENGTH, MAX_SECRET_SCOPE_LENGTH } from "@tinycloud/sdk-services";
-import type { PermissionEntry } from "@tinycloud/sdk-core";
 
-import { evaluateOperationAuthority } from "../authority.js";
 import type { CapabilityRequirement, OperationContext, RuntimeOperationContext } from "../contract.js";
 import { redactOperationError } from "../redaction.js";
 import { secretsGetOperationDefinition } from "./secrets-get.js";
 
-// TC-3284: a secret read asks for the secret's own key; the network decrypt is only for a session that already reads
-// with it, and for a secret that has no key of its own.
+// TC-3284: a secret read plans the network decrypt, which the secret's own key stands in for; the hint names that key.
+// A secret still in the older format reports SECRET_LEGACY_ENVELOPE with the network decrypt to approve.
 const OWNER = "did:pkh:eip155:1:0xd559CCd9EB87c530A9a349262669386dE93cf412";
 const NETWORK = `urn:tinycloud:encryption:${OWNER}:default`;
 const KEY = `${NETWORK}/secrets/api_key`;
@@ -25,57 +23,30 @@ function context(granted: CapabilityRequirement[], readSecret: () => Promise<unk
   };
 }
 
-const plan = (granted: CapabilityRequirement[], name = "API_KEY") =>
-  secretsGetOperationDefinition.authority(
-    context(granted) as RuntimeOperationContext,
-    secretsGetOperationDefinition.input.parse({ name }),
-  );
+const parse = (input: { name: string; scope?: string }) => secretsGetOperationDefinition.input.parse(input);
+const hints = (input: { name: string; scope?: string }) =>
+  secretsGetOperationDefinition.runtimeHints!(context([]) as RuntimeOperationContext, parse(input));
 
 describe("tinycloud.secrets.get per-secret keys", () => {
-  test("plans the secret's own key for a session holding neither decrypt", async () => {
-    expect((await plan([]))[1]).toEqual(decrypt(KEY));
+  test("the plan is the network decrypt; the secret's own key replaces it, and is the runtime hint", async () => {
+    const ctx = context([]) as RuntimeOperationContext;
+    expect((await secretsGetOperationDefinition.authority(ctx, parse({ name: "API_KEY" })))[1]).toEqual(decrypt(NETWORK));
+    expect(await secretsGetOperationDefinition.authorityAlternatives!(ctx, parse({ name: "API_KEY" })))
+      .toEqual([{ replaces: decrypt(NETWORK), satisfiedBy: decrypt(KEY) }]);
+    expect(await hints({ name: "API_KEY" })).toEqual([decrypt(KEY)]);
   });
 
-  test("a session that reads with the network decrypt, and not the key, keeps reading with it", async () => {
-    expect((await plan([decrypt(NETWORK)]))[1]).toEqual(decrypt(NETWORK));
-    expect((await plan([decrypt(NETWORK), decrypt(KEY)]))[1]).toEqual(decrypt(KEY));
-  });
-
-  test("a name or scope of 64 characters plans its own key; 65 is refused before any decrypt is planned", async () => {
+  test("a name or scope of 64 characters has a key", async () => {
     const longest = `A${"B".repeat(MAX_SECRET_NAME_LENGTH - 1)}`;
     const scope = "s".repeat(MAX_SECRET_SCOPE_LENGTH);
-    expect((await plan([], longest))[1]).toEqual(decrypt(`${NETWORK}/secrets/${longest.toLowerCase()}`));
-    const scoped = await secretsGetOperationDefinition.authority(
-      context([]) as RuntimeOperationContext,
-      secretsGetOperationDefinition.input.parse({ name: "API_KEY", scope }),
-    );
-    expect(scoped[1]).toEqual(decrypt(`${NETWORK}/secrets/scoped/${scope}/api_key`));
-
-    for (const input of [{ name: `${longest}C` }, { name: "API_KEY", scope: `${scope}s` }]) {
-      expect(secretsGetOperationDefinition.input.safeParse(input).success).toBe(false);
-      // Even past input parsing, the plan refuses rather than falling back to the network root.
-      await expect(Promise.resolve().then(() =>
-        secretsGetOperationDefinition.authority(context([]) as RuntimeOperationContext, input as never))).rejects.toThrow();
-    }
-  });
-
-  test("a held exact key satisfies the plan whatever the case of its owner address", () => {
-    const entry = (path: string): PermissionEntry => ({
-      service: "tinycloud.encryption",
-      path,
-      actions: ["tinycloud.encryption/decrypt"],
-    });
-    expect(evaluateOperationAuthority([entry(KEY)], [entry(KEY)]).satisfied).toBe(true);
-    expect(evaluateOperationAuthority([entry(KEY.toLowerCase())], [entry(KEY)]).satisfied).toBe(true);
-    expect(evaluateOperationAuthority([entry(NETWORK)], [entry(KEY)]).satisfied).toBe(false);
-    expect(evaluateOperationAuthority([entry(`${NETWORK}/secrets/other`)], [entry(KEY)]).satisfied).toBe(false);
+    expect(await hints({ name: longest })).toEqual([decrypt(`${NETWORK}/secrets/${longest.toLowerCase()}`)]);
+    expect(await hints({ name: "API_KEY", scope })).toEqual([decrypt(`${NETWORK}/secrets/scoped/${scope}/api_key`)]);
   });
 
   test("a secret still in the older format reports SECRET_LEGACY_ENVELOPE with the network decrypt to approve", async () => {
-    const input = secretsGetOperationDefinition.input.parse({ name: "API_KEY" });
     const outcome = await secretsGetOperationDefinition.execute(
       context([decrypt(KEY)], async () => ({ status: "legacy_envelope" })),
-      input,
+      parse({ name: "API_KEY" }),
     );
     expect(outcome).toMatchObject({
       status: "error",
@@ -83,33 +54,10 @@ describe("tinycloud.secrets.get per-secret keys", () => {
     });
   });
 
-  test("a secret on its own key, read with only the network decrypt, reports SECRET_KEY_GRANT_REQUIRED", async () => {
-    const input = secretsGetOperationDefinition.input.parse({ name: "API_KEY" });
-    const outcome = await secretsGetOperationDefinition.execute(
-      context([decrypt(NETWORK)], async () => ({ status: "permission_required", hint: decrypt(KEY) })),
-      input,
-    );
-    expect(outcome).toMatchObject({
-      status: "error",
-      error: { code: "SECRET_KEY_GRANT_REQUIRED", details: { names: ["API_KEY"], decrypt: KEY } },
-    });
-  });
-
-  test("a missing key grant on a session planned on that key stays an authority request", async () => {
-    const input = secretsGetOperationDefinition.input.parse({ name: "API_KEY" });
-    const outcome = await secretsGetOperationDefinition.execute(
-      context([], async () => ({ status: "permission_required", hint: decrypt(KEY) })),
-      input,
-    );
-    expect(outcome).toMatchObject({ status: "authority_required", missing: [decrypt(KEY)] });
-  });
-
   test("the decrypt to approve crosses the result boundary; anything else in details does not", () => {
-    for (const [code, path] of [["SECRET_LEGACY_ENVELOPE", NETWORK], ["SECRET_KEY_GRANT_REQUIRED", KEY]] as const) {
-      const error = { code, message: "m", retryable: false, details: { names: ["API_KEY"], scope: "my-app", decrypt: path, value: "leak" } };
-      expect(redactOperationError(secretsGetOperationDefinition, error).details).toEqual({ names: ["API_KEY"], scope: "my-app", decrypt: path });
-      const odd = { ...error, details: { names: ["API_KEY"], decrypt: "https://example.test/steal" } };
-      expect(redactOperationError(secretsGetOperationDefinition, odd).details).toEqual({ names: ["API_KEY"] });
-    }
+    const error = { code: "SECRET_LEGACY_ENVELOPE" as const, message: "m", retryable: false, details: { names: ["API_KEY"], scope: "my-app", decrypt: NETWORK, value: "leak" } };
+    expect(redactOperationError(secretsGetOperationDefinition, error).details).toEqual({ names: ["API_KEY"], scope: "my-app", decrypt: NETWORK });
+    const odd = { ...error, details: { names: ["API_KEY"], decrypt: "https://example.test/steal" } };
+    expect(redactOperationError(secretsGetOperationDefinition, odd).details).toEqual({ names: ["API_KEY"] });
   });
 });
