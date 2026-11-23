@@ -508,6 +508,7 @@ export type Ledger = {
   tc3862ExplorerOriginRoot?: LogoutRatchet;
   tc3522InvocationRefusalRoot?: LogoutRatchet;
   tc3810ReaderRoot?: LogoutRatchet;
+  tc4082HostedOwnerRoot?: LogoutRatchet;
   tc3522InvocationRefusalKvWorker?: WorkerRatchet;
   tc3522InvocationRefusalReplicaWorker?: Omit<WorkerRatchet, "worker"> & { replicaWorker: { delta: number; ceiling: number } };
   tc2773LazyRestoreReplicaWorker?: Omit<WorkerRatchet, "worker"> & { replicaWorker: { delta: number; ceiling: number } };
@@ -1172,6 +1173,7 @@ export function ancestryPins(root: Ledger, hasGatedOnly: boolean): Array<{ row: 
   if (root.tc3862ExplorerOriginRoot !== undefined) pins.push({ row: "tc3862ExplorerOriginRoot", pin: root.tc3862ExplorerOriginRoot.sourceCommits.at(-1)! });
   if (root.tc3522InvocationRefusalRoot !== undefined) pins.push({ row: "tc3522InvocationRefusalRoot", pin: root.tc3522InvocationRefusalRoot.sourceCommits.at(-1)! });
   if (root.tc3810ReaderRoot !== undefined) pins.push({ row: "tc3810ReaderRoot", pin: root.tc3810ReaderRoot.sourceCommits.at(-1)! });
+  if (root.tc4082HostedOwnerRoot !== undefined) pins.push({ row: "tc4082HostedOwnerRoot", pin: root.tc4082HostedOwnerRoot.sourceCommits.at(-1)! });
   if (root.tc3522InvocationRefusalKvWorker !== undefined) pins.push({ row: "tc3522InvocationRefusalKvWorker", pin: root.tc3522InvocationRefusalKvWorker.sourceCommits.at(-1)! });
   if (root.tc3522InvocationRefusalReplicaWorker !== undefined) pins.push({ row: "tc3522InvocationRefusalReplicaWorker", pin: root.tc3522InvocationRefusalReplicaWorker.sourceCommits.at(-1)! });
   if (hasGatedOnly) pins.push({ row: "gatedOnlyRatchet", pin: approvedGatedOnlyRatchet.sourceCommit });
@@ -1306,6 +1308,7 @@ export function rootCeilings(root: Ledger): Array<{ row: string; ceiling: GzipSi
     ["tc3862ExplorerOriginRoot", root.tc3862ExplorerOriginRoot?.root.ceiling],
     ["tc3522InvocationRefusalRoot", root.tc3522InvocationRefusalRoot?.root.ceiling],
     ["tc3810ReaderRoot", root.tc3810ReaderRoot?.root.ceiling],
+    ["tc4082HostedOwnerRoot", root.tc4082HostedOwnerRoot?.root.ceiling],
   ];
   return rows.flatMap(([row, ceiling]) => ceiling === undefined ? [] : [{ row, ceiling }]);
 }
@@ -4194,6 +4197,33 @@ export const approvedTc3810ReaderRoot: LogoutRatchet = {
   "reason": "Both canonical jobs (SQLite and Postgres, run 45220085215, provisional head 3b44e890) measured 1540015/1470863 gzip bytes, 179/110 over #1148's measured 1539836/1470753. The Web SDK root reads signed attenuable and terminal ReCap delegation modes. Details: TC-3810"
 };
 
+export const approvedTc4082HostedOwnerRoot: LogoutRatchet = {
+  "label": "sign in a hosted owner with no registry record (TC-4082)",
+  "ruling": "Naomi 2026-11-23 22:50:03Z: up to +2139 B ESM and +1916 B CJS over tc3810ReaderRoot's ceilings, the exact bytes canonical CI measured; the PR body names what adds them and confirms no dev-only or dead code is bundled.",
+  "base": "b698913ae9a0f82a313d7e8c23dcddd4758b357c",
+  "sourceCommits": [
+    "98f7a2e4932a40c5d56273177f50d5e0443a436a"
+  ],
+  "canonicalCI": {
+    "run": "45259971982",
+    "jobs": [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45259971982/job/137991836287",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45259971982/job/137991835486"
+    ]
+  },
+  "root": {
+    "delta": {
+      "index.mjs": 2139,
+      "index.cjs": 1916
+    },
+    "ceiling": {
+      "index.mjs": 1542154,
+      "index.cjs": 1472779
+    }
+  },
+  "reason": "Both canonical jobs (SQLite and Postgres, run 45259971982 at beb2342d) measured 1542154/1472779 gzip bytes, 2139/1916 over tc3810ReaderRoot's 1540015/1470863. The Web SDK root carries the hosted-owner proof: the proof state in NodeUserAuthorization (begin, confirm, fail, restore candidate and adoption, proven-space routing), the TinyCloudNode restore and sign-in handling around it, and one allowHostedOwnerProof line in TinyCloudWeb. The assess and read helpers load from the lazy space-hosting chunk, not the root. Details: TC-4082"
+};
+
 export const approvedLedgerRows: Record<string, unknown> = {
   phase2Ratchet: approvedPhase2,
   fixRequiredRatchet: approvedFixRequiredRatchet,
@@ -4323,6 +4353,7 @@ export const approvedLedgerRows: Record<string, unknown> = {
   tc3862ExplorerOriginRoot: approvedTc3862ExplorerOriginRoot,
   tc3522InvocationRefusalRoot: approvedTc3522InvocationRefusalRoot,
   tc3810ReaderRoot: approvedTc3810ReaderRoot,
+  tc4082HostedOwnerRoot: approvedTc4082HostedOwnerRoot,
   tc3522InvocationRefusalKvWorker: approvedTc3522InvocationRefusalKvWorker,
   tc3522InvocationRefusalReplicaWorker: approvedTc3522InvocationRefusalReplicaWorker,
 };
@@ -4928,6 +4959,11 @@ export function validateLedger(value: Ledger, historicalBase = false): void {
       (!value.tc3522InvocationRefusalRoot ||
         JSON.stringify(value.tc3810ReaderRoot) !== JSON.stringify(approvedTc3810ReaderRoot))) {
     throw new Error("Only the exact TC-3810 reader root admission is approved.");
+  }
+  if (value.tc4082HostedOwnerRoot !== undefined &&
+      (!value.tc3810ReaderRoot ||
+        JSON.stringify(value.tc4082HostedOwnerRoot) !== JSON.stringify(approvedTc4082HostedOwnerRoot))) {
+    throw new Error("Only the exact TC-4082 hosted-owner root admission is approved.");
   }
   if (value.tc3522InvocationRefusalKvWorker !== undefined || value.tc3522InvocationRefusalReplicaWorker !== undefined) {
     if (!value.tc3947ReplicaRevokeRoot ||

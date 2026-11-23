@@ -3797,6 +3797,32 @@
     },
     "reason": "Both canonical jobs (SQLite and Postgres, run 45220085215, provisional head 3b44e890) measured 1540015/1470863 gzip bytes, 179/110 over #1148's measured 1539836/1470753. The Web SDK root reads signed attenuable and terminal ReCap delegation modes. Details: TC-3810"
   },
+  "tc4082HostedOwnerRoot": {
+    "label": "sign in a hosted owner with no registry record (TC-4082)",
+    "ruling": "Naomi 2026-11-23 22:50:03Z: up to +2139 B ESM and +1916 B CJS over tc3810ReaderRoot's ceilings, the exact bytes canonical CI measured; the PR body names what adds them and confirms no dev-only or dead code is bundled.",
+    "base": "b698913ae9a0f82a313d7e8c23dcddd4758b357c",
+    "sourceCommits": [
+      "98f7a2e4932a40c5d56273177f50d5e0443a436a"
+    ],
+    "canonicalCI": {
+      "run": "45259971982",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45259971982/job/137991836287",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45259971982/job/137991835486"
+      ]
+    },
+    "root": {
+      "delta": {
+        "index.mjs": 2139,
+        "index.cjs": 1916
+      },
+      "ceiling": {
+        "index.mjs": 1542154,
+        "index.cjs": 1472779
+      }
+    },
+    "reason": "Both canonical jobs (SQLite and Postgres, run 45259971982 at beb2342d) measured 1542154/1472779 gzip bytes, 2139/1916 over tc3810ReaderRoot's 1540015/1470863. The Web SDK root carries the hosted-owner proof: the proof state in NodeUserAuthorization (begin, confirm, fail, restore candidate and adoption, proven-space routing), the TinyCloudNode restore and sign-in handling around it, and one allowHostedOwnerProof line in TinyCloudWeb. The assess and read helpers load from the lazy space-hosting chunk, not the root. Details: TC-4082"
+  },
   "tc3522InvocationRefusalKvWorker": {
     "label": "retain invocation-refusal attribution in the kv-storage worker (TC-3522)",
     "ruling": "Naomi ACBX 2026-11-23: admit only the exact worker gzip bytes reproduced by SQLite and PostgreSQL, with zero headroom. Root, optional and gated ceilings are unchanged.",
