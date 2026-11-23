@@ -1931,7 +1931,7 @@ export class TinyCloudNode {
       if (epoch !== this.sessionEpoch || this.auth !== auth) return false;
       if (outcome === "unreachable" && this.hostedOwnerRestore?.epoch === epoch) this.hostedOwnerRestore = undefined;
       if (outcome === "refused") {
-        // The refused session is not kept: only its own stored record goes, and never a newer sign-in's (compared by session).
+        // The refused session is not kept: only its own stored record goes, and never a newer sign-in's (compared by signature).
         await auth.discardRefusedRestoredSession(candidate).catch(() => undefined);
         return false;
       }
@@ -3692,9 +3692,11 @@ export class TinyCloudNode {
       if (epoch !== this.sessionEpoch && attempt === this.latestSessionAttempt) {
         await this.endSession();
       } else if (this.auth?.hostedOwnerProofFailed && attempt === this.latestSessionAttempt) {
-        // The proof failed. A `/delegate` the node may hold (accepted, or sent with an unknown outcome) is retired for this
-        // exact session at the pinned host; a refused or never-sent one is only discarded locally. The proof's own failure is
-        // what the caller gets: a teardown or retire problem never replaces it (a retire that fails is in nodeSignOutStatus()).
+        // The proof failed. A `/delegate` the node may hold (accepted, or sent with an unknown outcome) is retired for the
+        // CURRENT session at the pinned host; a refused or never-sent one is only discarded locally. Under overlapping
+        // sign-ins this is best effort: endSession retires whichever session is current and the landed flag can be
+        // misattributed (TC-4154). The proof's own failure is what the caller gets: a teardown or retire problem never
+        // replaces it (a retire that fails is in nodeSignOutStatus()).
         const retireAtNodes = this.auth.hostedOwnerDelegateMayHaveLanded;
         await this.endSession({ retireAtNodes }).catch(() => undefined);
       } else if (attempt === this.latestSessionAttempt && this.config.allowHostedOwnerProof === true) {

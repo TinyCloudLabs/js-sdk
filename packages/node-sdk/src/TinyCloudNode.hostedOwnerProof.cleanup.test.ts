@@ -1,5 +1,8 @@
-// TC-4082: a failed hosted-owner proof asks the pinned node to retire the exact session it may have delegated to, and a
+// TC-4082: a failed hosted-owner proof asks the pinned node to retire the session it may have delegated to, and a
 // refused restore removes only its own stored session. The proof's own failure is always what the caller sees.
+// Most scenarios are sequential. The overlap tests cover only specific cases (an older refusal while the newer read is
+// held, a sign-in replaced after its /delegate, a restore read made for a replaced session); overlap misattribution
+// in general is accepted P3, TC-4154.
 import { afterEach, describe, expect, test } from "bun:test";
 import { REGISTRY_NOT_FOUND_BODY } from "@tinycloud/sdk-core";
 import { NodeWasmBindings } from "./NodeWasmBindings";

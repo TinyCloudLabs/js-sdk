@@ -1983,7 +1983,12 @@ export class NodeUserAuthorization implements IUserAuthorization {
    * without one the shared activation flight may send a second attempt. An accepted answer, a 5xx, a transport error
    * and a timeout all leave the delegation possibly persisted at the node, so a failed proof is then retired there;
    * only a 4xx answer, which refuses the delegation, is not. The outcome is recorded with the proof that sent the
-   * request, so an overlapping sign-in's answer can never change what this one cleans up.
+   * request, and only while that proof is still the pending one.
+   *
+   * Cleanup is best effort and not exact under overlapping sign-ins: the later steps of a proof (`ensureSpaceExists`)
+   * read the shared pending-proof slot, so one sign-in's failure can be attributed to another's proof. The result is a
+   * needless retire of the current session, or a delegation row the node keeps until its signed expiry. It never gains
+   * authority: an unretired session still needs a strict 2xx read before anything routes (TC-4154).
    */
   private async activateForHostedOwnerProof(proof: HostedOwnerProof, session: TinyCloudSession): Promise<void> {
     this.sessionHosts.add(proof.host);
