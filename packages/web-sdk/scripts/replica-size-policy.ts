@@ -498,6 +498,7 @@ export type Ledger = {
   tc3704OpenKeyPromptRoot?: LogoutRatchet;
   tc3731ManifestOwnerRoot?: LogoutRatchet;
   tc3443AppIdLineBreakRoot?: LogoutRatchet;
+  tc3549KeptApprovalsRoot?: LogoutRatchet;
   tc2773LazyRestoreReplicaWorker?: Omit<WorkerRatchet, "worker"> & { replicaWorker: { delta: number; ceiling: number } };
 };
 
@@ -1150,6 +1151,7 @@ export function ancestryPins(root: Ledger, hasGatedOnly: boolean): Array<{ row: 
   if (root.tc3704OpenKeyPromptRoot !== undefined) pins.push({ row: "tc3704OpenKeyPromptRoot", pin: root.tc3704OpenKeyPromptRoot.sourceCommits.at(-1)! });
   if (root.tc3731ManifestOwnerRoot !== undefined) pins.push({ row: "tc3731ManifestOwnerRoot", pin: root.tc3731ManifestOwnerRoot.sourceCommits.at(-1)! });
   if (root.tc3443AppIdLineBreakRoot !== undefined) pins.push({ row: "tc3443AppIdLineBreakRoot", pin: root.tc3443AppIdLineBreakRoot.sourceCommits.at(-1)! });
+  if (root.tc3549KeptApprovalsRoot !== undefined) pins.push({ row: "tc3549KeptApprovalsRoot", pin: root.tc3549KeptApprovalsRoot.sourceCommits.at(-1)! });
   if (hasGatedOnly) pins.push({ row: "gatedOnlyRatchet", pin: approvedGatedOnlyRatchet.sourceCommit });
   return pins;
 }
@@ -1272,6 +1274,7 @@ export function rootCeilings(root: Ledger): Array<{ row: string; ceiling: GzipSi
     ["tc3704OpenKeyPromptRoot", root.tc3704OpenKeyPromptRoot?.root.ceiling],
     ["tc3731ManifestOwnerRoot", root.tc3731ManifestOwnerRoot?.root.ceiling],
     ["tc3443AppIdLineBreakRoot", root.tc3443AppIdLineBreakRoot?.root.ceiling],
+    ["tc3549KeptApprovalsRoot", root.tc3549KeptApprovalsRoot?.root.ceiling],
   ];
   return rows.flatMap(([row, ceiling]) => ceiling === undefined ? [] : [{ row, ceiling }]);
 }
@@ -3926,6 +3929,26 @@ export const approvedTc3443AppIdLineBreakRoot: LogoutRatchet = {
   "reason": "A host with a line break gets its own o_ folder like any other host that is not a domain name, matching the vectors shared with OpenKey (sdk-core owner-access); sdk-core is bundled into the web-sdk root. Canonical Node 22/Bun 1.3.14 CI on #1135 (354f2184, master 5cc59110 merged in) measured index.mjs 1534531 and index.cjs 1466079 gzip -9 bytes: +1 and +2 over the tc3731ManifestOwnerRoot ceilings 1534530 and 1466077. No other ceiling moves. Details: TC-3443"
 };
 
+/** The exact TC-3549 kept-approvals root allowance from canonical CI. */
+export const approvedTc3549KeptApprovalsRoot: LogoutRatchet = {
+  "label": "ordinary runtime permission approvals stay approved across a page reload (TC-3549)",
+  "ruling": "size-ruling: TC-3549 (2026-11-23) row tc3549KeptApprovalsRoot index.mjs 1535425 (+894), index.cjs 1466887 (+808) gzip bytes over the tc3443AppIdLineBreakRoot ceilings, CI's canonical figure. Details: TC-3549",
+  "base": "6e4d8ab69d787f25723038728ee56da11d03657f",
+  "sourceCommits": ["39b0fd671d1865b7708a149055576a8f2d99816a"],
+  "canonicalCI": {
+    "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45085618316",
+    "jobs": [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45085618316/job/137403426242",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45085618316/job/137403426480"
+    ]
+  },
+  "root": {
+    "delta": { "index.mjs": 894, "index.cjs": 808 },
+    "ceiling": { "index.mjs": 1535425, "index.cjs": 1466887 }
+  },
+  "reason": "TinyCloudWeb keeps an approved, ordinary runtime permission grant with the session so it is active again after a page reload, for the app it was approved for, and TinyCloudNode takes a grant filter and a reuseExisting option; node-sdk is bundled into the web-sdk root. Canonical Node 22/Bun 1.3.14 CI on #1102 (39b0fd67, master acb3dd2e) measured index.mjs 1535425 and index.cjs 1466887 gzip -9 bytes: +894 and +808 over the tc3443AppIdLineBreakRoot ceilings 1534531 and 1466079. No other ceiling moves. Details: TC-3549"
+};
+
 export const approvedLedgerRows: Record<string, unknown> = {
   phase2Ratchet: approvedPhase2,
   fixRequiredRatchet: approvedFixRequiredRatchet,
@@ -4045,6 +4068,7 @@ export const approvedLedgerRows: Record<string, unknown> = {
   tc3704OpenKeyPromptRoot: approvedTc3704OpenKeyPromptRoot,
   tc3731ManifestOwnerRoot: approvedTc3731ManifestOwnerRoot,
   tc3443AppIdLineBreakRoot: approvedTc3443AppIdLineBreakRoot,
+  tc3549KeptApprovalsRoot: approvedTc3549KeptApprovalsRoot,
 };
 
 /** Only a git merge-base ledger may retain the pre-correction toolchain. */
@@ -4598,6 +4622,11 @@ export function validateLedger(value: Ledger, historicalBase = false): void {
       (!value.tc3731ManifestOwnerRoot ||
         JSON.stringify(value.tc3443AppIdLineBreakRoot) !== JSON.stringify(approvedTc3443AppIdLineBreakRoot))) {
     throw new Error("Only the exact TC-3443 app id line-break root admission is approved.");
+  }
+  if (value.tc3549KeptApprovalsRoot !== undefined &&
+      (!value.tc3443AppIdLineBreakRoot ||
+        JSON.stringify(value.tc3549KeptApprovalsRoot) !== JSON.stringify(approvedTc3549KeptApprovalsRoot))) {
+    throw new Error("Only the exact TC-3549 root admission is approved.");
   }
 }
 
@@ -5627,5 +5656,13 @@ export function validateTc3443AppIdLineBreakRootTransition(base?: LogoutRatchet,
   if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc3443AppIdLineBreakRoot) ||
       base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
     throw new Error("The TC-3443 app id line-break root admission may be introduced once and cannot change later.");
+  }
+}
+
+/** The exact TC-3549 kept-approvals root admission is introduced once and immutable. */
+export function validateTc3549KeptApprovalsRootTransition(base?: LogoutRatchet, current?: LogoutRatchet): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc3549KeptApprovalsRoot) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The TC-3549 root admission may be introduced once and cannot change later.");
   }
 }

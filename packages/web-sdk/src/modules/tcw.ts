@@ -125,7 +125,7 @@ import {
   BrowserSessionStorage,
   type BrowserSessionLoadResult,
 } from "../adapters/BrowserSessionStorage";
-import { isPanelResourceSet, rememberRuntimeGrants, reuseRuntimeGrants, serializeRuntimeGrantMutation, type RuntimeGrantStore } from "./runtimeGrantPersistence";
+import { isElevatedResource, isPanelResourceSet, isRememberableResourceSet, rememberAskedGrants, rememberRuntimeGrants, reuseRuntimeGrants, serializeRuntimeGrantMutation, storedGrantAskers, type RuntimeGrantStore } from "./runtimeGrantPersistence";
 import { RPCProviders, ClientConfig, Extension as ExtensionType } from "../providers";
 import { resolveSpaceCreationHandler } from "../authorization/WebSpaceCreationHandler";
 import { resolveOpenKeySigningKey, type OpenKeyConnection } from "../openkey-signing-key";
@@ -1148,16 +1148,21 @@ export class TinyCloudWeb {
         await reuseRuntimeGrants(
           grantStore,
           address,
-          (grant) =>
-            activateValidatedRuntimeDelegationOnNode(node, grant, {
+          async (grant) => {
+            const validated = await activateValidatedRuntimeDelegationOnNode(node, grant, {
               host: node.hosts[0]!,
               authorize: (permissions) => {
-                if (!isPanelResourceSet(permissions.map((entry) => ({ ...entry, space: entry.space ?? "" })), owner)) {
-                  throw new RuntimeDelegationRejectedError("authority_invalid", "Stored grant is not a panel grant.");
+                const signed = permissions.map((entry) => ({ ...entry, space: entry.space ?? "" }));
+                if (!isPanelResourceSet(signed, owner) && !isRememberableResourceSet(signed, owner)) {
+                  throw new RuntimeDelegationRejectedError("authority_invalid", "Stored grant is not one that is kept across a reload.");
                 }
                 return true;
               },
-            }),
+            });
+            const askers = storedGrantAskers(grant);
+            if (askers.length > 0) this.grantAskersOf(node).set(validated.cid, new Set(askers));
+            return validated;
+          },
           { isCurrent },
         );
       }
@@ -1632,9 +1637,39 @@ export class TinyCloudWeb {
   address = (): string | undefined => this._node?.address;
   chainId = (): number | undefined => this._node?.session?.chainId;
 
-  /** Returns whether the session or an unexpired runtime grant covers all entries. Never prompts. */
-  hasPermissions(entries: PermissionEntry[]): boolean {
-    return this._node?.hasRuntimePermissions(entries) ?? false;
+  /**
+   * Returns whether the session or an unexpired runtime grant covers all entries. Never prompts. With
+   * `options.onBehalfOf`, only the session's own permissions and the grants approved for that app count; a grant
+   * approved for no app, or for another one, does not. Without it, every grant counts.
+   */
+  hasPermissions(entries: PermissionEntry[], options?: { readonly onBehalfOf?: string }): boolean {
+    const node = this._node;
+    if (!node) return false;
+    const asker = options?.onBehalfOf;
+    return asker === undefined ? node.hasRuntimePermissions(entries) : node.hasRuntimePermissions(entries, { grantCids: this.grantCidsAskedBy(node, asker) });
+  }
+
+  /** The apps each installed grant was approved for, by cid. Per node, so a new sign-in starts empty. */
+  private readonly grantAskers = new WeakMap<TinyCloudNode, Map<string, Set<string>>>();
+
+  private grantAskersOf(node: TinyCloudNode): Map<string, Set<string>> {
+    const known = this.grantAskers.get(node);
+    if (known !== undefined) return known;
+    const created = new Map<string, Set<string>>();
+    this.grantAskers.set(node, created);
+    return created;
+  }
+
+  private grantCidsAskedBy(node: TinyCloudNode, asker: string): string[] {
+    return [...this.grantAskersOf(node)].flatMap(([cid, askers]) => (askers.has(asker) ? [cid] : []));
+  }
+
+  /**
+   * Resolves once the grants kept from before a page reload are active again, or after at most four seconds. Never
+   * rejects. Call it before `hasPermissions` right after a reload, so an app is not under-granted.
+   */
+  async permissionsReady(): Promise<void> {
+    await this.restoredNetworkWork?.grants;
   }
 
   get did(): string { return this.node.did; }
@@ -1879,12 +1914,29 @@ export class TinyCloudWeb {
    * `expiryMs` does not apply to them.
    *
    * `options.onBehalfOf` names the app the permissions are for when this
-   * app asks on its behalf; the prompt names both. `options.allowPromptSuppression: false`
-   * always shows the prompt, ignoring an earlier 30-day opt-out, and offers none.
+   * app asks on its behalf; the prompt names both. With it, only the session's own
+   * permissions and approvals given for that app count as already covering the request,
+   * and a new approval is signed for it even when another app's approval covers the same
+   * access. `options.allowPromptSuppression: false`
+   * always shows the prompt, ignoring an earlier 30-day opt-out, and offers none; a request
+   * to decrypt, create keys or read secrets always does so.
+   *
+   * An approved request that is not elevated (no decrypt or key creation, nothing in the secrets
+   * space, no caveats) is kept with the session and active again after a page reload, with its own
+   * signed expiry. An elevated one is not kept across a reload.
    */
-  async requestPermissions(
+  requestPermissions(
     additional: PermissionEntry[],
     options?: RequestPermissionsOptions,
+  ): Promise<RequestPermissionsResult> {
+    return this.requestPermissionsKeeping(additional, options, true);
+  }
+
+  /** `requestPermissions`; `keep` stores the issued non-elevated grants beside the session. The panel stores its own. */
+  private async requestPermissionsKeeping(
+    additional: PermissionEntry[],
+    options: RequestPermissionsOptions | undefined,
+    keep: boolean,
   ): Promise<RequestPermissionsResult> {
     validateAdditionalPermissions(additional);
 
@@ -1901,11 +1953,17 @@ export class TinyCloudWeb {
     }
 
     const node = await this.ensureNode();
+    const signOuts = this.signOutCount;
+    await this.restoredNetworkWork?.grants;
+    const asker = options?.onBehalfOf;
+    const grantFilter = asker === undefined ? undefined : { grantCids: this.grantCidsAskedBy(node, asker) };
     const hasRuntimePermissions =
       this._testHooks?.hasRuntimePermissions ?? ((requested) =>
-        node.hasRuntimePermissions(requested));
+        grantFilter === undefined ? node.hasRuntimePermissions(requested) : node.hasRuntimePermissions(requested, grantFilter));
     if (hasRuntimePermissions(additional)) {
-      const delegations = node.getRuntimePermissionDelegations(additional);
+      const delegations = grantFilter === undefined
+        ? node.getRuntimePermissionDelegations(additional)
+        : node.getRuntimePermissionDelegations(additional, grantFilter);
       return delegations.length > 0
         ? { approved: true, session: this.session(), delegations }
         : { approved: true, session: this.session() };
@@ -1918,6 +1976,7 @@ export class TinyCloudWeb {
         const grant = {
           ...(grantOptions?.expiryMs !== undefined ? { expiry: grantOptions.expiryMs } : {}),
           ...(signMessage !== undefined ? { signMessage } : {}),
+          ...(asker !== undefined ? { reuseExisting: false } : {}),
         };
         return node.grantRuntimePermissions(approved, Object.keys(grant).length > 0 ? grant : undefined);
       });
@@ -1929,16 +1988,34 @@ export class TinyCloudWeb {
       suppressPromptFor30Days: () =>
         suppressPermissionPromptFor30Days(manifest),
       grantPermissions,
-    }, options);
-    return result.approved
-      ? {
-          approved: true,
-          session: this.session(),
-          ...(result.delegations !== undefined
-            ? { delegations: result.delegations }
-            : {}),
-        }
-      : result;
+    // An elevated request (decrypt, key creation, secrets) is always asked: the "don't ask again" opt-out never covers it.
+    }, additional.some((entry) => isElevatedResource(entry)) ? { ...options, allowPromptSuppression: false } : options);
+    if (!result.approved) return result;
+    if (result.delegations !== undefined) await this.keepGrants(node, result.delegations, asker, keep, signOuts);
+    return {
+      approved: true,
+      session: this.session(),
+      ...(result.delegations !== undefined ? { delegations: result.delegations } : {}),
+    };
+  }
+
+  /** Records which app approved each grant, and stores the non-elevated ones when `keep`. */
+  private async keepGrants(
+    node: TinyCloudNode,
+    delegations: readonly PortableDelegation[],
+    asker: string | undefined,
+    keep: boolean,
+    signOuts: number,
+  ): Promise<void> {
+    if (asker !== undefined) {
+      const askers = this.grantAskersOf(node);
+      for (const delegation of delegations) askers.set(delegation.cid, new Set([...(askers.get(delegation.cid) ?? []), asker]));
+    }
+    const address = node.address;
+    const store = this.runtimeGrantStore();
+    if (!keep || store === undefined || address === undefined || this.signOutCount !== signOuts || this.signOutInFlight !== 0) return;
+    await rememberAskedGrants(store, address, delegations, asker,
+      () => this.signOutCount === signOuts && this.signOutInFlight === 0 && this._node === node);
   }
 
   /**
@@ -2061,7 +2138,7 @@ export class TinyCloudWeb {
   ): Promise<{ approved: boolean }> {
     await this.restoredNetworkWork?.grants;
     const signOuts = this.signOutCount;
-    const result = await this.requestPermissions(entries, options);
+    const result = await this.requestPermissionsKeeping(entries, options, false);
     const address = this._node?.address;
     const store = this.runtimeGrantStore();
     if (
