@@ -4003,21 +4003,21 @@ export const approvedTc3947ReplicaRevokeRoot: NonNullable<Ledger["tc3947ReplicaR
 /** The exact TC-3801 per-secret keys root allowance from canonical CI. */
 export const approvedTc3801NamedKeysRoot: LogoutRatchet = {
   "label": "per-secret keys: secret names seal to their own key (TC-3801)",
-  "ruling": "size-ruling: TC-3801 (2026-11-23) row tc3801NamedKeysRoot index.mjs 1539350 (+3804), index.cjs 1471296 (+4343) gzip bytes over the tc3947ReplicaRevokeRoot ceilings, CI's canonical figure, no lazy-load path, the row's own cap lifted by ruling. Details: TC-3801",
-  "base": "3ad8bb80e3b3b1f2342f4663cfe72f0ecd881093",
-  "sourceCommits": ["d8948e01ba76d5cfd3081ac28704a76f15163769"],
+  "ruling": "size-ruling: TC-3801 (2026-11-23) row tc3801NamedKeysRoot index.mjs 1539352 (+3806), index.cjs 1471317 (+4364) gzip bytes over the tc3947ReplicaRevokeRoot ceilings, CI's canonical figure, no lazy-load path, the row's own cap lifted by ruling. Details: TC-3801",
+  "base": "979145a429cbc0fb1c107da4e211dbabeb9afb81",
+  "sourceCommits": ["df543dbfdf4d896927bcd7596fbedcde68530e6d"],
   "canonicalCI": {
-    "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45097259831",
+    "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45112808012",
     "jobs": [
-      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45097259831/job/137439719432",
-      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45097259831/job/137439719260"
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45112808012/job/137488758667",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45112808012/job/137488758449"
     ]
   },
   "root": {
-    "delta": { "index.mjs": 3804, "index.cjs": 4343 },
-    "ceiling": { "index.mjs": 1539350, "index.cjs": 1471296 }
+    "delta": { "index.mjs": 3806, "index.cjs": 4364 },
+    "ceiling": { "index.mjs": 1539352, "index.cjs": 1471317 }
   },
-  "reason": "Secret names seal to their own key, so a secret's decrypt grant covers only that secret: sdk-services (resealToKey, the named-key paths, the long-name catalogue), sdk-core (exact secret key paths in the manifest and policy), node-sdk (NodeSecretsService, DelegatedAccess, the fail-closed put on a node without named keys) and web-sdk (WebSecretsService); sdk-services, sdk-core and node-sdk are bundled into the web-sdk root. Canonical Node 22/Bun 1.3.14 CI on #1131 (d8948e01, master 3ad8bb80) measured index.mjs 1539288 and index.cjs 1471246 gzip -9 bytes: +3804 and +4343 over the tc3617HostedMcpLeaseRoot ceilings 1535484 and 1466903; the row sits behind tc3947ReplicaRevokeRoot (1535546 and 1466953): 1539350 and 1471296. No other ceiling moves. Details: TC-3801"
+  "reason": "Secret names seal to their own key, so a secret's decrypt grant covers only that secret: sdk-services (resealToKey, the named-key paths, the long-name catalogue), sdk-core (exact secret key paths in the manifest and policy), node-sdk (NodeSecretsService, DelegatedAccess, the fail-closed put on a node without named keys) and web-sdk (WebSecretsService); sdk-services, sdk-core and node-sdk are bundled into the web-sdk root. Canonical Node 22/Bun 1.3.14 CI on #1131 (df543dbf, master 979145a4) measured index.mjs 1539352 and index.cjs 1471317 gzip -9 bytes: +3806 and +4364 over the tc3947ReplicaRevokeRoot ceilings 1535546 and 1466953. No other ceiling moves. Details: TC-3801"
 };
 
 export const approvedLedgerRows: Record<string, unknown> = {
