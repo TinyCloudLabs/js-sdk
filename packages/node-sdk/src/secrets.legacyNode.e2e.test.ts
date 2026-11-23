@@ -114,7 +114,7 @@ describe.skipIf(!legacyBinary)("secrets against a real node without per-secret k
         const before = await secrets.list();
         const counter = countSignatures(owner);
         try {
-          const put = await secrets.put("API_KEY", "new-value");
+          const put = await secrets.put("API_KEY", "new-value", { namedKey: true });
           expect(put.ok ? undefined : put.error).toMatchObject({
             code: "NAMED_KEYS_UNSUPPORTED", service: "secrets", message: NAMED_KEYS_UNSUPPORTED_MESSAGE,
           });
@@ -164,7 +164,7 @@ describe.skipIf(!legacyBinary)("secrets against a real node without per-secret k
       }) as typeof fetch;
       const counter = countSignatures(owner);
       try {
-        const put = await secrets.put("API_KEY", "new-value");
+        const put = await secrets.put("API_KEY", "new-value", { namedKey: true });
         expect(put.ok ? undefined : put.error).toMatchObject({
           code: "NAMED_KEYS_CHECK_FAILED", service: "secrets", meta: { retryable: true },
           message: "Couldn't reach this TinyCloud node to check that it can save secrets. Nothing was saved. Try again in a moment.",
@@ -175,7 +175,7 @@ describe.skipIf(!legacyBinary)("secrets against a real node without per-secret k
         globalThis.fetch = realFetch;
       }
       expect(await secrets.list()).toEqual(before);
-      const retried = await secrets.put("API_KEY", "new-value");
+      const retried = await secrets.put("API_KEY", "new-value", { namedKey: true });
       expect(retried.ok ? undefined : retried.error.code).toBe("NAMED_KEYS_UNSUPPORTED");
       expect(await secrets.list()).toEqual(before);
     }, 120_000);

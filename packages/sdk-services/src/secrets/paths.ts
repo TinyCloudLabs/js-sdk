@@ -34,6 +34,8 @@ export const TC832_RESERVED_SCOPES: readonly string[] = Object.freeze([
 ]);
 
 export interface SecretPutOptions extends SecretScopeOptions {
+  /** Seal to this secret's own key. The default seals to the network key. */
+  namedKey?: boolean;
   /** Write only when no secret exists under this name; never overwrite. */
   ifAbsent?: boolean;
   /**

@@ -102,9 +102,9 @@ describe("secret writes seal to the secret's own key", () => {
   test("put ensures the key and writes v2, over v1 and v2 alike, with the unchanged AAD", async () => {
     const h = harness();
     h.store("secrets/API_KEY", envelope({ v: 1 }));
-    expect((await h.secrets.put("API_KEY", "one")).ok).toBe(true);
+    expect((await h.secrets.put("API_KEY", "one", { namedKey: true })).ok).toBe(true);
     expect(h.stored("secrets/API_KEY")).toMatchObject({ v: 2, keyPath: "secrets/api_key" });
-    expect((await h.secrets.put("API_KEY", "two", { scope: "my-app" })).ok).toBe(true);
+    expect((await h.secrets.put("API_KEY", "two", { scope: "my-app", namedKey: true })).ok).toBe(true);
     expect(h.stored("secrets/scoped/my-app/API_KEY")).toMatchObject({ v: 2, keyPath: "secrets/scoped/my-app/api_key" });
 
     expect(h.calls.encrypt.map(({ keyPath, options }) => ({

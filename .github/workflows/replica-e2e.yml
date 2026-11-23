@@ -361,6 +361,7 @@ jobs:
         env:
           TINYCLOUD_ENCRYPTION_NETWORK__NAMED_KEYS_V1: "true"
           TINYCLOUD_ENCRYPTION_NETWORK__DELETION_LEDGER_PATH: ${{ runner.temp }}/secrets-e2e-deletions.jsonl
+          TC_SECRETS_NAMED_KEY_WRITES: "1"
         run: .github/scripts/run-cli-node-suite.sh "$RUNNER_TEMP/tinycloud" tests/cli/secrets/secrets-e2e.test.ts
 
       - name: Stop any tests/cli node still running

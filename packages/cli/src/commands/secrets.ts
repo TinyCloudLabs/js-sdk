@@ -1777,9 +1777,10 @@ export function registerSecretsCommand(
 
         const scopeOptions = resolveSecretScope(options);
         assertSecretValueMatchesType(secretType, secretValue);
-        const putOptions = secretType === undefined
+        const namedKey = process.env.TC_SECRETS_NAMED_KEY_WRITES === "1";
+        const putOptions = secretType === undefined && !namedKey
           ? scopeOptions
-          : { ...scopeOptions, type: secretType };
+          : { ...scopeOptions, ...(secretType === undefined ? {} : { type: secretType }), ...(namedKey ? { namedKey: true } : {}) };
         const result = await runSecretOperation({
           ctx,
           node,

@@ -116,7 +116,7 @@ describe.skipIf(!nodeBinary)(
         [secretsSpace, "OTHER_KEY", "other-value"],
         [primarySpace, "PRIMARY_KEY", "primary-space-value"],
       ] as const) {
-        const put = await owner.secretsForSpace(space).put(name, value);
+        const put = await owner.secretsForSpace(space).put(name, value, { namedKey: true });
         expect(put.ok, JSON.stringify(put.ok ? undefined : put.error)).toBe(true);
       }
       const encrypted = await owner.encryption.encryptToNetwork(networkId, plaintext);
@@ -283,7 +283,7 @@ describe.skipIf(!nodeBinary)(
         expect(restored.isSessionOnly).toBe(true);
         const denied = await restored.secretsForSpace(secretsSpace).get("OTHER_KEY", { requestPermission: true });
         expect(denied.ok ? undefined : denied.error).toMatchObject({ code: "DECRYPT_DENIED", key: "secrets/OTHER_KEY", permissionHint: hint });
-        const put = await restored.secretsForSpace(secretsSpace).put("OTHER_KEY", "overwritten");
+        const put = await restored.secretsForSpace(secretsSpace).put("OTHER_KEY", "overwritten", { namedKey: true });
         expect(put.ok ? undefined : put.error.code).toBe("PERMISSION_DENIED");
         expect(signatures).toBe(0);
 
@@ -366,7 +366,7 @@ describe.skipIf(!nodeBinary)(
       const scope = "s".repeat(64);
       const secrets = owner.secretsForSpace(secretsSpace);
 
-      const put = await secrets.put(name, "longest-value", { scope });
+      const put = await secrets.put(name, "longest-value", { scope, namedKey: true });
       expect(put.ok, JSON.stringify(put.ok ? undefined : put.error)).toBe(true);
       const record = await owner.kvForSpace(secretsSpace).get<unknown>(`vault/secrets/scoped/${scope}/${name}`);
       if (!record.ok) throw new Error(JSON.stringify(record.error));

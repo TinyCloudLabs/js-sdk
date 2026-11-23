@@ -292,6 +292,8 @@ jobs:
 
       - name: tc secrets against the 1.20.6 node
         timeout-minutes: 10
+        env:
+          TC_SECRETS_NAMED_KEY_WRITES: "1"
         run: .github/scripts/run-cli-node-suite.sh "$RUNNER_TEMP/tinycloud-legacy" tests/cli/secrets/secrets-legacy-node.e2e.test.ts
 
       - name: Stop any tests/cli node still running

@@ -81,8 +81,8 @@ function secretPermissionEntries(
     skipPrefix: true,
   });
 
-  // A secret opens with decrypt on its own key and is written after
-  // key.create on it (TC-3284); never the network root, never a prefix.
+  // Named-key writes ask for key.create on the secret, not a prefix.
+  // Reads check the exact key first; network-wrapped records use network decrypt.
   if ((action === "get" || action === "put") && encryptionNetworkId !== undefined) {
     entries.push({
       service: "tinycloud.encryption",
@@ -204,8 +204,10 @@ export class NodeSecretsService implements ISecretsService {
   ): ReturnType<ISecretsService["put"]> {
     const tooLong = secretNameTooLongRefusal(name);
     if (tooLong) return tooLong;
-    const refusal = this.config.namedKeysSupported ? namedKeysPutRefusal(await this.config.namedKeysSupported()) : undefined;
-    if (refusal) return refusal;
+    if (options?.namedKey === true && this.config.namedKeysSupported) {
+      const refusal = namedKeysPutRefusal(await this.config.namedKeysSupported());
+      if (refusal) return refusal;
+    }
     const permission = await this.ensurePermission(name, options, "put");
     if (!permission.ok) return permission;
     return options === undefined
@@ -246,14 +248,15 @@ export class NodeSecretsService implements ISecretsService {
 
   private async ensurePermission(
     name: string,
-    options: SecretGetOptions | undefined,
+    options: (SecretGetOptions & SecretPutOptions) | undefined,
     action: SecretAction,
   ): Promise<Result<void, ServiceError | VaultError>> {
     // Writes and lists still ask as before; a read asks only when told to.
     const mayAsk = action !== "get" || options?.requestPermission === true;
     const target = name || "secrets";
     let permissionEntries: PermissionEntry[];
-    const networkId = action === "get" || action === "put" ? this.config.getEncryptionNetworkId?.() : undefined;
+    const needsNamedKey = action === "get" || (action === "put" && options?.namedKey === true);
+    const networkId = needsNamedKey ? this.config.getEncryptionNetworkId?.() : undefined;
     try {
       permissionEntries = secretPermissionEntries(name, options, action, this.space, networkId);
     } catch (error) {
@@ -263,9 +266,8 @@ export class NodeSecretsService implements ISecretsService {
         error instanceof Error ? error : undefined,
       );
     }
-    // A node that cannot sign for the secret's own key still reads a secret
-    // sealed to the network before TC-3284 when it opens the whole network;
-    // that is accepted, never asked for. Not under `namedKeyOnly`.
+    // A held network decrypt grant can open a network-wrapped record, but
+    // is never requested as a fallback and is not allowed under namedKeyOnly.
     const [kvEntry, keyEntry] = permissionEntries;
     const networkRead = action === "get" && networkId !== undefined && keyEntry !== undefined &&
       keyEntry.path !== networkId && options?.namedKeyOnly !== true &&

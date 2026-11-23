@@ -3,7 +3,7 @@ import { NAMED_KEYS_UNSUPPORTED, NAMED_KEYS_UNSUPPORTED_MESSAGE, type ISecretsSe
 
 import { NodeSecretsService } from "./NodeSecretsService";
 
-// TC-3801: a secret is sealed to its own key, so a node without encryption-named-keys-v1 cannot take a put.
+// TC-3801: a put that opts in to per-secret keys requires encryption-named-keys-v1.
 // The refusal comes before any permission request and before any write; reads, lists and deletes are not affected.
 
 const MONICA_TEXT =
@@ -36,7 +36,7 @@ function setup(namedKeysSupported: boolean | undefined, held = false) {
 describe("NodeSecretsService.put on a node without per-secret keys", () => {
   test("is refused with NAMED_KEYS_UNSUPPORTED and Monica's words, asking and writing nothing", async () => {
     const h = setup(false);
-    const result = await h.secrets.put("API_KEY", "v");
+    const result = await h.secrets.put("API_KEY", "v", { namedKey: true });
     expect(result.ok ? undefined : result.error).toMatchObject({
       code: "NAMED_KEYS_UNSUPPORTED", service: "secrets", message: MONICA_TEXT,
     });
@@ -48,7 +48,7 @@ describe("NodeSecretsService.put on a node without per-secret keys", () => {
 
   test("a scoped put is refused the same way", async () => {
     const h = setup(false);
-    const result = await h.secrets.put("API_KEY", "v", { scope: "my-app" });
+    const result = await h.secrets.put("API_KEY", "v", { scope: "my-app", namedKey: true });
     expect(result.ok ? undefined : result.error.code).toBe("NAMED_KEYS_UNSUPPORTED");
     expect(h.grantPermissions).not.toHaveBeenCalled();
     expect(h.base.put).not.toHaveBeenCalled();
@@ -65,7 +65,7 @@ describe("NodeSecretsService.put on a node without per-secret keys", () => {
 
   test("a node that lists named keys still asks and then writes", async () => {
     const h = setup(true);
-    const result = await h.secrets.put("API_KEY", "v");
+    const result = await h.secrets.put("API_KEY", "v", { namedKey: true });
     expect(result.ok).toBe(true);
     expect(h.grantPermissions).toHaveBeenCalledTimes(1);
     expect(h.base.put).toHaveBeenCalledTimes(1);
@@ -73,7 +73,7 @@ describe("NodeSecretsService.put on a node without per-secret keys", () => {
 
   test("a node that cannot be asked fails closed: NAMED_KEYS_CHECK_FAILED, retryable, nothing asked, signed or written", async () => {
     const h = setup(undefined);
-    const result = await h.secrets.put("API_KEY", "v");
+    const result = await h.secrets.put("API_KEY", "v", { namedKey: true });
     expect(result.ok ? undefined : result.error).toMatchObject({
       code: "NAMED_KEYS_CHECK_FAILED",
       service: "secrets",

@@ -138,10 +138,8 @@ export class SecretsService implements ISecretsService {
         ? {}
         : { type: options.type }),
     } satisfies SecretPayload;
-    // Always sealed to the secret's own key (TC-3284), so a write never puts
-    // a network-wrapped copy over one already on its own key.
     return this.vault.put(secretPath.vaultKey, payload, {
-      keyPath: secretPath.keyPath,
+      ...(options?.namedKey === true ? { keyPath: secretPath.keyPath } : {}),
       ...(options?.ifAbsent === true ? { ifNoneMatch: "*" } : {}),
     });
   }

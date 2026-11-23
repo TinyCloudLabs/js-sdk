@@ -114,6 +114,7 @@ describe.skipIf(!NODE_BIN)("tc replica Secrets against a real local SQLite node"
   let secretsDir: string;
   const nodeSecret = randomBytes(48).toString("base64url");
   const ownerName = `TC733_${randomBytes(8).toString("hex").toUpperCase()}`;
+  const legacyName = `${ownerName}_LEGACY`;
   const secretMarker = secretValue();
   const scopedMarker = secretValue();
   const outsideMarker = secretValue();
@@ -175,7 +176,7 @@ describe.skipIf(!NODE_BIN)("tc replica Secrets against a real local SQLite node"
     if (child) await stopChild(child);
   }
 
-  async function tc(args: string[], profile: string, offline = false, stdin?: string): Promise<Run> {
+  async function tc(args: string[], profile: string, offline = false, stdin?: string, namedKeyWrites = false): Promise<Run> {
     let child: ChildProcess;
     try {
       child = trackChild(spawn("node", [
@@ -183,7 +184,11 @@ describe.skipIf(!NODE_BIN)("tc replica Secrets against a real local SQLite node"
         ...(offline ? ["--require", NO_NETWORK] : []), CLI, "-q", "--json", "--profile", profile, ...args,
       ], {
         cwd: home,
-        env: { ...cliEnvBase, TMPDIR: temp, TC_HOME: home, HOME: home, TC_NO_NETWORK_LOG: join(home, "network.log") },
+        env: {
+          ...cliEnvBase,
+          ...(namedKeyWrites ? { TC_SECRETS_NAMED_KEY_WRITES: "1" } : {}),
+          TMPDIR: temp, TC_HOME: home, HOME: home, TC_NO_NETWORK_LOG: join(home, "network.log"),
+        },
         stdio: ["pipe", "pipe", "pipe"],
       }));
     } catch {
@@ -226,8 +231,8 @@ describe.skipIf(!NODE_BIN)("tc replica Secrets against a real local SQLite node"
     return result;
   }
 
-  async function ok<T = unknown>(args: string[], profile: string, stdin?: string): Promise<T> {
-    const result = await tc(args, profile, false, stdin);
+  async function ok<T = unknown>(args: string[], profile: string, stdin?: string, namedKeyWrites = false): Promise<T> {
+    const result = await tc(args, profile, false, stdin, namedKeyWrites);
     if (result.code !== 0) throw new Error(`local tc command failed with exit ${result.code}`);
     return parseJson<T>(result.stdout.toString(), "local tc output unreadable");
   }
@@ -246,9 +251,10 @@ describe.skipIf(!NODE_BIN)("tc replica Secrets against a real local SQLite node"
     try {
       const value = parseJson<Record<string, unknown>>(bytes.toString(), "replica envelope JSON unreadable");
       const metadata = value.metadata as Record<string, unknown> | undefined;
-      return value.v === 1 &&
+      return value.v === 2 &&
         value.alg === "x25519-aes256gcm/v1" &&
-        typeof value.networkId === "string" &&
+        value.keyPath === `secrets/${ownerName.toLowerCase()}` &&
+        value.networkId === encryptionNetworkId &&
         typeof value.keyVersion === "number" &&
         typeof value.encryptedSymmetricKey === "string" &&
         typeof value.encryptedSymmetricKeyHash === "string" &&
@@ -349,10 +355,11 @@ describe.skipIf(!NODE_BIN)("tc replica Secrets against a real local SQLite node"
     await ok(["--host", host, "auth", "login", "--method", "local"], "owner");
     const network = await ok<{ networkId: string }>(["--host", host, "secrets", "network", "init"], "owner");
     encryptionNetworkId = network.networkId;
-    await ok(["--host", host, "secrets", "put", ownerName, "--stdin"], "owner", secretMarker);
+    await ok(["--host", host, "secrets", "put", legacyName, "--stdin"], "owner", secretMarker);
+    await ok(["--host", host, "secrets", "put", ownerName, "--stdin"], "owner", secretMarker, true);
     outOfScope = `vault/private/${ownerName}`;
     // A random secret name and random bytes are test fixtures only.
-    await ok(["--host", host, "secrets", "put", ownerName, "--scope", "TC733", "--stdin"], "owner", scopedMarker);
+    await ok(["--host", host, "secrets", "put", ownerName, "--scope", "TC733", "--stdin"], "owner", scopedMarker, true);
     const ownerProfile = await readProfile("owner");
     const ownerSigner = new PrivateKeySigner(ownerProfile.privateKey);
     const wasm = new NodeWasmBindings();
@@ -455,9 +462,25 @@ describe.skipIf(!NODE_BIN)("tc replica Secrets against a real local SQLite node"
 
 
   test("decrypt_grant_is_independent", async () => {
+    const legacy = await tc(["replica", "get", `vault/secrets/${legacyName}`, "--replica", shortName, "--raw"], "device");
+    expect(legacy.code).toBe(0);
+    expect(parseJson<{ v: number }>(legacy.stdout.toString(), "legacy envelope JSON unreadable").v).toBe(1);
+
     const denied = await secretRead("device");
     expect(denied.code !== 0).toBe(true);
     const ownerProfile = await readProfile("owner");
+    const namedDecrypt = {
+      service: "tinycloud.encryption",
+      space: "encryption",
+      path: `${encryptionNetworkId}/secrets/${ownerName.toLowerCase()}`,
+      actions: ["decrypt"],
+    };
+    const readKv = {
+      service: "tinycloud.kv",
+      space: secretsSpace,
+      path: encrypted,
+      actions: ["get"],
+    };
     const grantor = new TinyCloudNode({
       host,
       tinycloudRegistryUrl: registry.url.origin,
@@ -477,7 +500,7 @@ describe.skipIf(!NODE_BIN)("tc replica Secrets against a real local SQLite node"
           space: "encryption",
           path: encryptionNetworkId,
           actions: ["decrypt"],
-        }],
+        }, namedDecrypt, readKv],
       },
     });
     await grantor.signIn();
@@ -489,8 +512,23 @@ describe.skipIf(!NODE_BIN)("tc replica Secrets against a real local SQLite node"
     }]);
     await writeFile(join(home, "decrypt-grant.json"), JSON.stringify(issued.delegation));
     await ok(["auth", "import", "decrypt-grant.json"], "device");
-    const allowed = await secretRead("device");
+    const bareDenied = await secretRead("device");
+    expect(bareDenied.code).toBe(5);
+    expect(parseJson<{ error: { code: string }; value?: unknown }>(bareDenied.stderr, "refusal JSON unreadable")).toMatchObject({
+      error: { code: "PERMISSION_DENIED" },
+    });
+    expect(!bareDenied.stdout.includes(Buffer.from(secretMarker)) && !bareDenied.stderr.includes(secretMarker)).toBe(true);
+
+    const allowed = await tc(["secrets", "get", legacyName], "device");
     expect(allowed.code === 0 && secretReadMatches(allowed.stdout, secretMarker)).toBe(true);
+
+    await ok(["profile", "create", "exact-device", "--posture", "delegate-session", "--host", host, "--registry-url", registry.url.origin], "exact-device");
+    const exactDeviceDid = (await readProfile("exact-device")).did.split("#", 1)[0]!;
+    const exact = await grantor.delegateTo(exactDeviceDid, [readKv, namedDecrypt]);
+    await writeFile(join(home, "exact-decrypt-grant.json"), JSON.stringify(exact.delegation));
+    await ok(["auth", "import", "exact-decrypt-grant.json"], "exact-device");
+    const named = await secretRead("exact-device");
+    expect(named.code === 0 && secretReadMatches(named.stdout, secretMarker)).toBe(true);
   });
 
   test("secrets_cli_fails_offline_without_local_plaintext", async () => {
