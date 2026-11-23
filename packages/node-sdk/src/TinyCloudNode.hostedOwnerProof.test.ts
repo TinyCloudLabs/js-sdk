@@ -117,39 +117,36 @@ describe("a hosted owner with no registry record", () => {
     expect(requests.filter((request) => request.url.startsWith(HOSTILE))).toEqual([]);
   });
 
-  test("a delegation that does not activate the exact primary space is refused, with no read, no retry and no retire", async () => {
+  test("a delegation that does not activate the exact primary space is refused, with no read and no retry", async () => {
     for (const body of [{ activated: [], skipped: [applications] }, { activated: [sameOwnerOtherSpace], skipped: [] }, { activated: [], skipped: [] }]) {
-      const { failure, paths, signed, storage, requests } = await run({ delegate: () => Response.json(body) });
+      const { failure, paths, signed, storage } = await run({ delegate: () => Response.json(body) });
       expect(codeOf(failure)).toBe("ACCOUNT_SETUP_REQUIRED");
       expect(signed).toHaveLength(1);
       expect(paths("/delegate")).toHaveLength(1);
       expect(paths("/invoke")).toHaveLength(0);
       expect(storage.exists(address)).toBe(false);
-      expect(requests.map((request) => request.url)).not.toContain(`${DEFAULT_NODE}/session/retire`);
     }
   });
 
-  test.each([400, 401, 403, 404, 410])("a %d on the read is not positive: setup required, session cleared, no second /delegate, no retire", async (status) => {
+  test.each([400, 401, 403, 404, 410])("a %d on the read is not positive: setup required, session cleared, no second /delegate", async (status) => {
     const { failure, paths, storage, requests, node } = await run({ invoke: () => new Response("Space not found", { status }) });
     expect(codeOf(failure)).toBe("ACCOUNT_SETUP_REQUIRED");
     expect(paths("/delegate")).toHaveLength(1);
     expect(paths("/invoke")).toHaveLength(1);
     expect(storage.exists(address)).toBe(false);
     expect(node.session).toBeUndefined();
-    expect(requests.map((request) => request.url)).not.toContain(`${DEFAULT_NODE}/session/retire`);
     expect(requests.filter((request) => request.method !== "GET").map((request) => request.url).sort())
       .toEqual([`${DEFAULT_NODE}/delegate`, `${DEFAULT_NODE}/invoke`]);
   });
 
-  test("a 5xx or a network error on the read is not setup: it fails without the setup code and discards the session locally", async () => {
+  test("a 5xx or a network error on the read is not setup: it fails without the setup code and clears the session", async () => {
     for (const invoke of [() => new Response("boom", { status: 503 }), () => { throw new TypeError("network down"); }]) {
-      const { failure, paths, storage, requests } = await run({ invoke });
+      const { failure, paths, storage } = await run({ invoke });
       expect(failure).toBeDefined();
       expect(codeOf(failure)).not.toBe("ACCOUNT_SETUP_REQUIRED");
       expect(paths("/delegate")).toHaveLength(1);
       expect(paths("/invoke")).toHaveLength(1);
       expect(storage.exists(address)).toBe(false);
-      expect(requests.map((request) => request.url)).not.toContain(`${DEFAULT_NODE}/session/retire`);
     }
   });
 
@@ -159,7 +156,7 @@ describe("a hosted owner with no registry record", () => {
       expect(failure).toBeDefined();
       expect(paths("/delegate")).toHaveLength(1);
       expect(paths("/invoke")).toHaveLength(0);
-      expect(requests.map((request) => request.url)).not.toContain(`${DEFAULT_NODE}/session/retire`);
+      if (status < 500) expect(requests.map((request) => request.url)).not.toContain(`${DEFAULT_NODE}/session/retire`);
     }
   });
 });

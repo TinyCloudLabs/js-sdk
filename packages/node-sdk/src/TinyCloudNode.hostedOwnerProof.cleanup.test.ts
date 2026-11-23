@@ -98,8 +98,9 @@ describe("a failed hosted-owner proof after the /delegate was accepted", () => {
     expect(delegate).toHaveLength(1);
     expect(retire).toHaveLength(1);
     // The retire carries the root delegation the node was given for this very session, and is signed by that session's key.
-    expect(JSON.parse(retire[0]!.body ?? "{}")).toEqual({ delegations: [expect.any(String)] });
-    expect(delegate[0]!.authorization).toBeDefined();
+    expect(JSON.parse(retire[0]!.body ?? "{}")).toEqual({ delegations: [delegate[0]!.authorization] });
+    expect(retire[0]!.authorization).toBeDefined();
+    expect(retire[0]!.authorization).not.toBe(delegate[0]!.authorization);
     expect(status?.notConfirmed).toEqual([]);
     expect(status?.confirmed).toEqual([DEFAULT_NODE]);
     expect(storage.exists(address)).toBe(false);
@@ -114,7 +115,10 @@ describe("a failed hosted-owner proof after the /delegate was accepted", () => {
     const failure = await failureOf(node);
     const status = await node.nodeSignOutStatus();
     expect(codeOf(failure)).toBe("ACCOUNT_SETUP_REQUIRED");
-    expect(requests("POST", "/session/retire")).toHaveLength(1);
+    const [delegate] = requests("POST", "/delegate");
+    const retire = requests("POST", "/session/retire");
+    expect(retire).toHaveLength(1);
+    expect(JSON.parse(retire[0]!.body ?? "{}")).toEqual({ delegations: [delegate!.authorization] });
     expect(status?.confirmed).toEqual([]);
     expect(status?.notConfirmed).toHaveLength(1);
     expect(storage.exists(address)).toBe(false);
@@ -128,9 +132,12 @@ describe("a failed hosted-owner proof when the /delegate outcome is unknown", ()
     const failure = await failureOf(node);
     await node.nodeSignOutStatus();
     expect(failure.name).toBe("NodeNotRespondingError");
+    const [delegate] = requests("POST", "/delegate");
+    const retire = requests("POST", "/session/retire");
     expect(requests("POST", "/delegate")).toHaveLength(1);
     expect(requests("POST", "/invoke")).toHaveLength(0);
-    expect(requests("POST", "/session/retire")).toHaveLength(1);
+    expect(retire).toHaveLength(1);
+    expect(JSON.parse(retire[0]!.body ?? "{}")).toEqual({ delegations: [delegate!.authorization] });
     expect(storage.exists(address)).toBe(false);
     expect(node.session).toBeUndefined();
   });
@@ -140,8 +147,11 @@ describe("a failed hosted-owner proof when the /delegate outcome is unknown", ()
     const failure = await failureOf(node);
     await node.nodeSignOutStatus();
     expect(failure.message).toContain("Failed to activate session");
+    const [delegate] = requests("POST", "/delegate");
+    const retire = requests("POST", "/session/retire");
     expect(requests("POST", "/delegate")).toHaveLength(1);
-    expect(requests("POST", "/session/retire")).toHaveLength(1);
+    expect(retire).toHaveLength(1);
+    expect(JSON.parse(retire[0]!.body ?? "{}")).toEqual({ delegations: [delegate!.authorization] });
   });
 });
 
@@ -166,15 +176,18 @@ describe("a /delegate that never answers", () => {
     const realTimeout = AbortSignal.timeout.bind(AbortSignal);
     const timeouts: number[] = [];
     AbortSignal.timeout = (ms: number) => { timeouts.push(ms); return realTimeout(20); };
-    const { delegate } = slowNode();
-    const { node, storage, requests } = harness({ delegate });
+    const { delegate: hang } = slowNode();
+    const { node, storage, requests } = harness({ delegate: hang });
     const failure = await failureOf(node);
     await node.nodeSignOutStatus();
     expect(failure.name).toBe("NodeNotRespondingError");
     expect(timeouts).toContain(5_000);
+    const [delegate] = requests("POST", "/delegate");
+    const retire = requests("POST", "/session/retire");
     expect(requests("POST", "/delegate")).toHaveLength(1);
     expect(requests("POST", "/invoke")).toHaveLength(0);
-    expect(requests("POST", "/session/retire")).toHaveLength(1);
+    expect(retire).toHaveLength(1);
+    expect(JSON.parse(retire[0]!.body ?? "{}")).toEqual({ delegations: [delegate!.authorization] });
     expect(storage.exists(address)).toBe(false);
     expect(node.session).toBeUndefined();
   });
@@ -190,10 +203,9 @@ describe("a /delegate that never answers", () => {
     await Promise.resolve();
     const retire = requests("POST", "/session/retire");
     expect(retire).toHaveLength(1);
-    // The retire does not depend on what the /delegate did: it names the same session root the late /delegate carries.
+    // The retire does not depend on what the /delegate did: it carries the root of the very session the late /delegate carries.
     expect(late).toHaveLength(1);
-    expect(late[0]!.authorization).toBeDefined();
-    expect(retire[0]!.body).toContain(late[0]!.authorization!.replace(/^Bearer /, ""));
+    expect(JSON.parse(retire[0]!.body ?? "{}")).toEqual({ delegations: [late[0]!.authorization] });
     expect(retire[0]!.authorization).toBeDefined();
   });
 });

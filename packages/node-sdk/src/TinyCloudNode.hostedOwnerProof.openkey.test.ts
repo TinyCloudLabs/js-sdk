@@ -72,12 +72,11 @@ describe("an OpenKey sign-in for a hosted owner with no registry record", () => 
     expect(requests.filter((request) => request.url.startsWith(DEFAULT_NODE))).toEqual([]);
   });
 
-  test("a read that is not a 2xx is refused: setup required, session discarded locally, no retire", async () => {
+  test("a read that is not a 2xx is refused: setup required, session cleared", async () => {
     const { node, requests, failure } = await run({ invoke: () => new Response("Space not found", { status: 404 }) });
     expect(codeOf(failure)).toBe("ACCOUNT_SETUP_REQUIRED");
     expect(node.session).toBeUndefined();
     expect(requests.filter((request) => request.url === `${DEFAULT_NODE}/delegate`)).toHaveLength(1);
-    expect(requests.map((request) => request.url)).not.toContain(`${DEFAULT_NODE}/session/retire`);
   });
 });
 
