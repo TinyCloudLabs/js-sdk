@@ -3773,26 +3773,29 @@
   },
   "tc3810ReaderRoot": {
     "label": "read wallet-signed ReCap delegation modes (TC-3810 A1)",
-    "ruling": "Naomi 15:40:24Z approved the exact combined canonical CI measurement up to +181 B ESM and +107 B CJS over the measured TC-3522 head.",
+    "ruling": "Naomi 15:40:24Z approved the exact combined canonical CI measurement up to +181 B ESM and +107 B CJS over #1148's measured bytes. Naomi 17:23Z: ceilings set to the canonical measurement from Replica run 45220085215 (+179/+110 over #1148); the CJS +3 B over the earlier allowance is accepted as minifier variance of the ruled reader change.",
     "base": "eb4a66fd4525575618679e3204e8082a90c640ce",
     "sourceCommits": [
       "fde4cc70a2dc0e2c64cd9638f2f01dc1e696e117"
     ],
     "canonicalCI": {
-      "run": "pending",
-      "jobs": []
+      "run": "45220085215",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45220085215/job/137851673053",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45220085215/job/137851672657"
+      ]
     },
     "root": {
       "delta": {
-        "index.mjs": 181,
-        "index.cjs": 107
+        "index.mjs": 179,
+        "index.cjs": 110
       },
       "ceiling": {
-        "index.mjs": 1540017,
-        "index.cjs": 1470860
+        "index.mjs": 1540015,
+        "index.cjs": 1470863
       }
     },
-    "reason": "Provisional measurement limits derived from the canonical SQLite and Postgres measurements of TC-3522. The Web SDK root reads signed attenuable and terminal ReCap delegation modes. Details: TC-3810"
+    "reason": "Both canonical jobs (SQLite and Postgres, run 45220085215, provisional head 3b44e890) measured 1540015/1470863 gzip bytes, 179/110 over #1148's measured 1539836/1470753. The Web SDK root reads signed attenuable and terminal ReCap delegation modes. Details: TC-3810"
   },
   "tc3522InvocationRefusalKvWorker": {
     "label": "retain invocation-refusal attribution in the kv-storage worker (TC-3522)",
