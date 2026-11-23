@@ -1,5 +1,14 @@
 # @tinycloud/operations
 
+## 0.9.2-beta.12
+
+### Patch Changes
+
+- Updated dependencies [979145a]
+  - @tinycloud/sdk-services@3.14.0-beta.14
+  - @tinycloud/node-sdk@3.14.0-beta.14
+  - @tinycloud/sdk-core@3.14.0-beta.14
+
 ## 0.9.2-beta.11
 
 ### Patch Changes

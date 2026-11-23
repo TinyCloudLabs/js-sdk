@@ -5998,11 +5998,22 @@ function featuresForHost(host, fetchFn) {
   });
   return discovered;
 }
+function refusalTextOf(body) {
+  if (!body.startsWith("{")) return body;
+  try {
+    const parsed = JSON.parse(body);
+    if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed) && "code" in parsed && typeof parsed.code === "string" && NODE_REVOCATION_CODES.has(parsed.code) && "error" in parsed && typeof parsed.error === "string") {
+      return parsed.error;
+    }
+  } catch {
+  }
+  return body;
+}
 function isRevocation(error, status, request) {
   if (REVOKED_CODES.has(error.code)) return true;
   if (status !== 401 || request === void 0) return false;
   const lead = `${request}: 401 - `;
-  return error.message.startsWith(lead) && REVOKED_BODY.test(error.message.slice(lead.length));
+  return error.message.startsWith(lead) && REVOKED_BODY.test(refusalTextOf(error.message.slice(lead.length)));
 }
 function replicaErrorFromService(error, context2, request) {
   const meta = error.meta ?? {};
@@ -6138,7 +6149,7 @@ function kvSyncTransport(kv3, options = {}) {
     }
   };
 }
-var ReplicaErrorCode, REPLICA_ERROR, ReplicaError, RFC3339, DEFAULT_PAGE_LIMIT, DEFAULT_LEASE_TTL_MS, FETCH_CHUNK, REPAIR_BATCH, REPAIR_MAX_TRIES, REPAIR_BACKOFF_BASE_MS, RETENTION_REVOKED, PENDING_REFUSALS, Replica, BASE58, BASE32, featureCache, REVOKED_CODES, REVOKED_BODY, encoder;
+var ReplicaErrorCode, REPLICA_ERROR, ReplicaError, RFC3339, DEFAULT_PAGE_LIMIT, DEFAULT_LEASE_TTL_MS, FETCH_CHUNK, REPAIR_BATCH, REPAIR_MAX_TRIES, REPAIR_BACKOFF_BASE_MS, RETENTION_REVOKED, PENDING_REFUSALS, Replica, BASE58, BASE32, featureCache, REVOKED_CODES, REVOKED_BODY, NODE_REVOCATION_CODES, encoder;
 var init_dist = __esm({
   "../replica/dist/index.js"() {
     "use strict";
@@ -6658,6 +6669,7 @@ var init_dist = __esm({
     featureCache = /* @__PURE__ */ new Map();
     REVOKED_CODES = /* @__PURE__ */ new Set(["AUTH_DELEGATION_REVOKED", "AUTH_DELEGATION_ANCESTOR_REVOKED"]);
     REVOKED_BODY = /^(?:Invalid invocation: )?(?:delegation-revoked: [A-Za-z0-9]+|delegation-ancestor-revoked: ancestor=[A-Za-z0-9]+ (?:invoked|parent)=[A-Za-z0-9]+)$/;
+    NODE_REVOCATION_CODES = /* @__PURE__ */ new Set(["delegation_revoked", "parent_revoked", "ancestor_revoked"]);
     encoder = new TextEncoder();
   }
 });
