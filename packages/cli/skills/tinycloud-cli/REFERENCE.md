@@ -5,7 +5,7 @@ This release has **Commander coverage tracked, not complete parity**:
 
 - 5 migrated registration(s).
 - 1 partially migrated registration(s).
-- 153 legacy registration(s) remain Commander-owned.
+- 154 legacy registration(s) remain Commander-owned.
 
 - `auth import [source]` → `tinycloud.auth.import@1` (partial; legacy inputs: v1 delegation artifact, v1 permission artifact without command, bare portable delegation, stored delegation wrapper, cross-user delegation persisted with activated=false).
 - `registry show [account-id]` → `tinycloud.registry.show@1` (migrated).
@@ -176,7 +176,9 @@ identifiers such as `FIREFLIES_API_KEY`. `tinycloud secrets network show` accept
 either a short network name or a full
 `urn:tinycloud:encryption:<ownerDid>:<network>` identifier, and `tinycloud secrets
 network grant` takes the short network name, resolves the network, and issues
-`tinycloud.encryption/decrypt` on the whole network: every secret in it, including secrets added later. Share the decrypt grant
+`tinycloud.encryption/decrypt` on the whole network: every secret in it, including secrets added later. Your wallet
+signs the grant, so `tinycloud account delegations revoke <cid>` ends it. It lasts 1 hour unless you pass `--expiry`,
+and at most 7 days; a longer value is cut to 7 days. `expiresAt` in the JSON output shows when it ends. Share the decrypt grant
 separately from any KV or SQL reads the app also needs.
 
 ```bash

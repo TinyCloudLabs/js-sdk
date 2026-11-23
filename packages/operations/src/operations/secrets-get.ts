@@ -182,6 +182,25 @@ async function planSecretGetRuntimeHints(
   return exactKey === undefined ? [] : [exactKey];
 }
 
+/** The owner's encryption network for this secret (TC-3284), named in the older-format outcome. */
+function secretNetworkId(
+  context: OperationContext,
+  input: SecretsGetInput,
+  reference: SecretReference,
+): string {
+  const node = context.runtime?.node;
+  let networkSpace = reference.space;
+  if (input.space === undefined) {
+    try {
+      networkSpace = operationSpaceResolver(node, context.summary.space)("secrets");
+    } catch {
+      // Definition-focused callers may omit authenticated identity metadata;
+      // the runtime path supplies the owner space before production planning.
+    }
+  }
+  return resolveEncryptionNetworkId(node, networkSpace);
+}
+
 async function executeSecretGet(
   context: OperationContext,
   input: SecretsGetInput,
@@ -221,13 +240,22 @@ async function executeSecretGet(
     };
   }
 
-  return classifySecretRead(reference, result, context.runtime?.localOwner === true);
+  // Resolved only for the older-format outcome: a plain read never needs the network id here.
+  const network = (): string | undefined => {
+    try {
+      return secretNetworkId(context, input, reference);
+    } catch {
+      return undefined;
+    }
+  };
+  return classifySecretRead(reference, result, context.runtime?.localOwner === true, network);
 }
 
 function classifySecretRead(
   reference: SecretReference,
   result: SecretReadResult,
   localOwner: boolean,
+  network: () => string | undefined,
 ): OperationExecutionOutcome<SecretsGetOutput> {
   switch (result.status) {
     case "ok":
@@ -244,6 +272,15 @@ function classifySecretRead(
           requestId: "runtime-hint",
           fallback: `${CLI_NAME} auth grant <request-artifact>`,
         },
+      };
+    case "legacy_envelope":
+      return {
+        status: "error",
+        error: operationError(
+          "SECRET_LEGACY_ENVELOPE",
+          `${reference.name} is stored in the older format, which can be read only with access to all the owner's encrypted data. Ask the owner to run \`${CLI_NAME} secrets migrate\`, which gives it its own key.`,
+          { details: secretErrorDetails(reference, network()) },
+        ),
       };
     case "node_unreachable":
       return {
@@ -277,6 +314,15 @@ function classifySecretRead(
   return {
     status: "error",
     error: operationError("SECRET_READ_FAILED", "The secret read failed."),
+  };
+}
+
+/** Value-free details of a per-secret-key outcome: the secret and the decrypt an owner would approve for it. */
+function secretErrorDetails(reference: SecretReference, decrypt: string | undefined): Readonly<Record<string, unknown>> {
+  return {
+    names: [reference.name],
+    ...(reference.scope === undefined ? {} : { scope: reference.scope }),
+    ...(decrypt === undefined ? {} : { decrypt }),
   };
 }
 

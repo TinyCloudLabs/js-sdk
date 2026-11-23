@@ -152,20 +152,15 @@ const SAFE_ERROR_DETAIL_POLICIES: Readonly<
   KV_NOT_FOUND: {
     recoveryKind: (value) =>
       value === "put_locally" || value === "not_requestable" ? value : undefined,
-    names: (value) =>
-      Array.isArray(value) && value.length >= 1 && value.length <= 10 &&
-        value.every((name) => typeof name === "string" && name.length <= 256 && /^[A-Z][A-Z0-9_]*$/.test(name))
-        ? [...value]
-        : undefined,
-    scope: (value) =>
-      typeof value === "string" && value.length <= 256 && /^[a-z0-9]+(-[a-z0-9]+)*$/.test(value)
-        ? value
-        : undefined,
+    names: safeSecretNames,
+    scope: safeSecretScope,
     owner: (value) =>
       typeof value === "string" && /^did:pkh:eip155:[1-9][0-9]*:0x[0-9a-fA-F]{40}$/.test(value)
         ? value
         : undefined,
   },
+  // `secrets.get` older-format outcome (TC-3284): the decrypt an owner would approve.
+  SECRET_LEGACY_ENVELOPE: { names: safeSecretNames, scope: safeSecretScope, decrypt: safeSecretDecrypt },
   OPERATION_VERSION_UNSUPPORTED: {
     supportedVersions: (value) =>
       Array.isArray(value) && value.every((item) => Number.isInteger(item))
@@ -203,6 +198,28 @@ function safeStorageAccount(value: unknown): unknown | undefined {
   return typeof plan === "string" && /^[A-Za-z0-9][A-Za-z0-9 _.-]{0,31}$/.test(plan)
     ? { usedBytes, limitBytes, plan }
     : { usedBytes, limitBytes };
+}
+
+/** One to ten secret names, as `secrets.get` accepts them. */
+function safeSecretNames(value: unknown): unknown | undefined {
+  return Array.isArray(value) && value.length >= 1 && value.length <= 10 &&
+    value.every((name) => typeof name === "string" && name.length <= 256 && /^[A-Z][A-Z0-9_]*$/.test(name))
+    ? [...value]
+    : undefined;
+}
+
+function safeSecretScope(value: unknown): unknown | undefined {
+  return typeof value === "string" && value.length <= 256 && /^[a-z0-9]+(-[a-z0-9]+)*$/.test(value)
+    ? value
+    : undefined;
+}
+
+/** An encryption network of a did:pkh owner, or one secret's own key under it (`<network>/secrets/...`). */
+function safeSecretDecrypt(value: unknown): unknown | undefined {
+  return typeof value === "string" && value.length <= 512 &&
+    /^urn:tinycloud:encryption:did:pkh:eip155:[1-9][0-9]*:0x[0-9a-fA-F]{40}:[A-Za-z0-9_.-]{1,64}(\/secrets(\/[a-z0-9_-]{1,64}){1,3})?$/.test(value)
+    ? value
+    : undefined;
 }
 
 function redactSafeErrorDetails(

@@ -38,6 +38,18 @@ describe("exact per-secret keys in manifest permissions", () => {
       })]);
   });
 
+  test("TinyChat's Google Meet refresh token key (hyphenated scope) is accepted", () => {
+    expect(encryptionResources(`urn:tinycloud:encryption:${CANONICAL}:default/secrets/scoped/google-meet/refresh_token`, ["decrypt"]))
+      .toEqual([expect.objectContaining({
+        path: `urn:tinycloud:encryption:${CANONICAL}:default/secrets/scoped/google-meet/refresh_token`,
+        actions: ["tinycloud.encryption/decrypt"],
+      })]);
+  });
+
+  test("a scope over 64 characters has no key of its own", () => {
+    expect(() => encryptionResources(`urn:tinycloud:encryption:${CANONICAL}:default/secrets/scoped/${"a".repeat(65)}/refresh_token`, ["decrypt"])).toThrow();
+  });
+
   test.each([
     ["the whole secrets prefix", "default/secrets/"],
     ["a scope prefix", "default/secrets/scoped/feed/"],

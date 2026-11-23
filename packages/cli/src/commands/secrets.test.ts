@@ -1373,6 +1373,7 @@ describe("CLI secrets commands", () => {
   });
 
   test("ensures a decryption network and grants tinycloud.encryption/decrypt", async () => {
+    currentProfile = { ...currentProfile, authMethod: "local", posture: "local-owner-key" };
     const descriptor = makeDescriptor("urn:tinycloud:encryption:did:key:z6MkPrincipal:shared");
     currentNode = makeFakeNode({ networkInitResult: descriptor });
 
@@ -1419,6 +1420,7 @@ describe("CLI secrets commands", () => {
         return true;
       });
       try {
+        currentProfile = { ...currentProfile, authMethod: "local", posture: "local-owner-key" };
         await runSecretsCommand(["secrets", "network", "grant", "did:key:z6MkRecipient", "shared"]);
       } finally {
         stderrSpy.mockRestore();
