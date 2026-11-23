@@ -505,6 +505,7 @@ export type Ledger = {
   tc3969SecretKeyCoverageRoot?: LogoutRatchet;
   tc3823BotHistoryKeyRoot?: LogoutRatchet;
   tc3802SecretKeyCapRoot?: LogoutRatchet;
+  tc3862ExplorerOriginRoot?: LogoutRatchet;
   tc2773LazyRestoreReplicaWorker?: Omit<WorkerRatchet, "worker"> & { replicaWorker: { delta: number; ceiling: number } };
 };
 
@@ -1164,6 +1165,7 @@ export function ancestryPins(root: Ledger, hasGatedOnly: boolean): Array<{ row: 
   if (root.tc3969SecretKeyCoverageRoot !== undefined) pins.push({ row: "tc3969SecretKeyCoverageRoot", pin: root.tc3969SecretKeyCoverageRoot.sourceCommits.at(-1)! });
   if (root.tc3823BotHistoryKeyRoot !== undefined) pins.push({ row: "tc3823BotHistoryKeyRoot", pin: root.tc3823BotHistoryKeyRoot.sourceCommits.at(-1)! });
   if (root.tc3802SecretKeyCapRoot !== undefined) pins.push({ row: "tc3802SecretKeyCapRoot", pin: root.tc3802SecretKeyCapRoot.sourceCommits.at(-1)! });
+  if (root.tc3862ExplorerOriginRoot !== undefined) pins.push({ row: "tc3862ExplorerOriginRoot", pin: root.tc3862ExplorerOriginRoot.sourceCommits.at(-1)! });
   if (hasGatedOnly) pins.push({ row: "gatedOnlyRatchet", pin: approvedGatedOnlyRatchet.sourceCommit });
   return pins;
 }
@@ -1293,6 +1295,7 @@ export function rootCeilings(root: Ledger): Array<{ row: string; ceiling: GzipSi
     ["tc3969SecretKeyCoverageRoot", root.tc3969SecretKeyCoverageRoot?.root.ceiling],
     ["tc3823BotHistoryKeyRoot", root.tc3823BotHistoryKeyRoot?.root.ceiling],
     ["tc3802SecretKeyCapRoot", root.tc3802SecretKeyCapRoot?.root.ceiling],
+    ["tc3862ExplorerOriginRoot", root.tc3862ExplorerOriginRoot?.root.ceiling],
   ];
   return rows.flatMap(([row, ceiling]) => ceiling === undefined ? [] : [{ row, ceiling }]);
 }
@@ -4087,6 +4090,26 @@ export const approvedTc3802SecretKeyCapRoot: LogoutRatchet = {
   "reason": "A secret name over 64 characters has no key of its own, so the manifest's isSecretKeyPath refuses it: one added check in sdk-core, bundled into the web root. migrateSecrets ships at @tinycloud/sdk-services/secrets/migrate and is not part of the root bundle."
 };
 
+/** The exact TC-3862 Explorer origin root allowance from canonical CI. */
+export const approvedTc3862ExplorerOriginRoot: LogoutRatchet = {
+  "label": "recognize the Explorer origin for OpenKey account bootstrap (TC-3862)",
+  "ruling": "Naomi approved the exact root-only +6/+8 bytes for TC-3862 js-sdk #1146, conditional on matching SQLite and PostgreSQL measurements; both canonical merge-forward jobs in run 45187540570 agree. No other bucket changes.",
+  "base": "520726b1cb7f4cddf9cb0c45443afb55d2944dcb",
+  "sourceCommits": ["3605a389b76b778fa77bed7acce40c6047f0631b"],
+  "canonicalCI": {
+    "run": "45187540570",
+    "jobs": [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45187540570/job/137736956143",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45187540570/job/137736955873"
+    ]
+  },
+  "root": {
+    "delta": { "index.mjs": 6, "index.cjs": 8 },
+    "ceiling": { "index.mjs": 1539522, "index.cjs": 1471461 }
+  },
+  "reason": "The Web SDK bundles the shared first-party allowlist, which recognizes the exact Explorer origin even when the owner has no location record. OpenKey handles account bootstrap. Details: TC-3862"
+};
+
 export const approvedLedgerRows: Record<string, unknown> = {
   phase2Ratchet: approvedPhase2,
   fixRequiredRatchet: approvedFixRequiredRatchet,
@@ -4213,6 +4236,7 @@ export const approvedLedgerRows: Record<string, unknown> = {
   tc3969SecretKeyCoverageRoot: approvedTc3969SecretKeyCoverageRoot,
   tc3823BotHistoryKeyRoot: approvedTc3823BotHistoryKeyRoot,
   tc3802SecretKeyCapRoot: approvedTc3802SecretKeyCapRoot,
+  tc3862ExplorerOriginRoot: approvedTc3862ExplorerOriginRoot,
 };
 
 /** Only a git merge-base ledger may retain the pre-correction toolchain. */
@@ -4801,6 +4825,11 @@ export function validateLedger(value: Ledger, historicalBase = false): void {
       (!value.tc3823BotHistoryKeyRoot ||
         JSON.stringify(value.tc3802SecretKeyCapRoot) !== JSON.stringify(approvedTc3802SecretKeyCapRoot))) {
     throw new Error("Only the exact TC-3802 root admission is approved.");
+  }
+  if (value.tc3862ExplorerOriginRoot !== undefined &&
+      (!value.tc3802SecretKeyCapRoot ||
+        JSON.stringify(value.tc3862ExplorerOriginRoot) !== JSON.stringify(approvedTc3862ExplorerOriginRoot))) {
+    throw new Error("Only the exact TC-3862 root admission is approved.");
   }
 }
 
@@ -5877,5 +5906,13 @@ export function validateTc3802SecretKeyCapRootTransition(base?: LogoutRatchet, c
   if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc3802SecretKeyCapRoot) ||
       base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
     throw new Error("The TC-3802 root admission may be introduced once and cannot change later.");
+  }
+}
+
+/** The exact TC-3862 Explorer origin root admission is introduced once and immutable. */
+export function validateTc3862ExplorerOriginRootTransition(base?: LogoutRatchet, current?: LogoutRatchet): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc3862ExplorerOriginRoot) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The TC-3862 root admission may be introduced once and cannot change later.");
   }
 }
