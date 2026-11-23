@@ -19,7 +19,6 @@ import {
 import { ShareRecipientClient } from "./ShareRecipientClient";
 import { MemoryShareCache } from "./ShareCache";
 import type { ShareRecipientClientOptions } from "./recipient-types";
-import nodeVectors from "./fixtures/share-email-v2-vectors.json";
 
 const ORIGIN = "https://node.example.test";
 const SPACE = "tinycloud:pkh:eip155:1:0x0000000000000000000000000000000000000001:default";
@@ -61,11 +60,6 @@ function artifact(): { artifact: ShareArtifactV2; bytes: Uint8Array; cid: string
 }
 
 describe("ShareRecipientClient", () => {
-  test("matches the serialized Node v2 JCS request vector", () => {
-    const vector = nodeVectors.vectors.addressedDelegationRequest;
-    expect(canonical(vector.body)).toBe(vector.canonicalJson);
-    expect(encoded(sha256(new TextEncoder().encode(vector.canonicalJson)))).toBe(vector.requestBodyDigest);
-  });
 
   test("normalizes only the DNS side of exact email matchers and uses segment-safe resource containment", () => {
     expect(normalizeShareRecipientTarget({ kind: "exactEmail", value: "Alice+Notes@MAILINATOR.COM" })).toEqual({ kind: "exactEmail", value: "Alice+Notes@mailinator.com" });

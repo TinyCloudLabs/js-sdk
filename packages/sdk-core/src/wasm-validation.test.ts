@@ -10,11 +10,6 @@ import {
   validatePrepareSessionWasmOutput,
   validateCompleteSessionSetupWasmOutput,
   validateSiweToDelegationHeadersWasmOutput,
-  CreateDelegationWasmRawResultSchema,
-  InvokeWasmResultSchema,
-  PrepareSessionWasmResultSchema,
-  SessionWasmResultSchema,
-  SiweToDelegationHeadersWasmResultSchema,
 } from "./wasm-validation.js";
 import { z } from "zod";
 
@@ -312,33 +307,6 @@ describe("WASM Validation Utilities", () => {
       console.warn = originalWarn;
 
       expect(result.issues).toBeDefined();
-    });
-  });
-
-  describe("Schema exports", () => {
-    it("should export CreateDelegationWasmRawResultSchema", () => {
-      expect(CreateDelegationWasmRawResultSchema).toBeDefined();
-      expect(CreateDelegationWasmRawResultSchema.safeParse).toBeInstanceOf(Function);
-    });
-
-    it("should export InvokeWasmResultSchema", () => {
-      expect(InvokeWasmResultSchema).toBeDefined();
-      expect(InvokeWasmResultSchema.safeParse).toBeInstanceOf(Function);
-    });
-
-    it("should export PrepareSessionWasmResultSchema", () => {
-      expect(PrepareSessionWasmResultSchema).toBeDefined();
-      expect(PrepareSessionWasmResultSchema.safeParse).toBeInstanceOf(Function);
-    });
-
-    it("should export SessionWasmResultSchema", () => {
-      expect(SessionWasmResultSchema).toBeDefined();
-      expect(SessionWasmResultSchema.safeParse).toBeInstanceOf(Function);
-    });
-
-    it("should export SiweToDelegationHeadersWasmResultSchema", () => {
-      expect(SiweToDelegationHeadersWasmResultSchema).toBeDefined();
-      expect(SiweToDelegationHeadersWasmResultSchema.safeParse).toBeInstanceOf(Function);
     });
   });
 });

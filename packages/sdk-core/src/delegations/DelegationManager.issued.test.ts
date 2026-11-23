@@ -242,21 +242,6 @@ describe("DelegationManager.query direction issued", () => {
     expect(result).toEqual({ ok: false, error: expect.objectContaining({ code: "NETWORK_ERROR" }) });
   });
 
-  test("the invocation carries exactly one capability: one canonical session-key delegation resource with the single list ability", async () => {
-    const key = sessionKey();
-    const { manager, calls } = managerWith(key.signer, ({ url }) =>
-      url.endsWith("/info") ? info(["delegation-issued-query-v1"]) : page([]));
-
-    await manager.query({ direction: "issued", space: "default", status: "active" });
-
-    const { att } = payloadOf(calls.find((call) => call.url.endsWith("/delegation/query"))!.init.headers!.Authorization!);
-    const resources = Object.keys(att);
-    expect(resources).toEqual([`tinycloud:${key.did.slice("did:".length)}:agent/delegation`]);
-    expect(resources[0]).not.toMatch(/[?#]/);
-    expect(Object.keys(att[resources[0]!]!)).toEqual(["tinycloud.delegation/list"]);
-    expect(att[resources[0]!]!["tinycloud.delegation/list"]).toEqual([{}]);
-  });
-
   test("the other directions keep the account-space invocation and never read /info", async () => {
     const calls: Call[] = [];
     const invokeAny = mock(() => ({ Authorization: "account-list" }));

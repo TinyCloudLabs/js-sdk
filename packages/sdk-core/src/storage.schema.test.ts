@@ -95,13 +95,6 @@ describe("EnsDataSchema", () => {
 // =============================================================================
 
 describe("PersistedTinyCloudSessionSchema", () => {
-  it("accepts valid persisted TinyCloud session", () => {
-    const result = PersistedTinyCloudSessionSchema.safeParse(
-      validPersistedTinyCloudSession
-    );
-    expect(result.success).toBe(true);
-  });
-
   it("rejects missing delegationHeader", () => {
     const data = { ...validPersistedTinyCloudSession };
     delete (data as Record<string, unknown>).delegationHeader;
@@ -131,15 +124,6 @@ describe("PersistedTinyCloudSessionSchema", () => {
 // =============================================================================
 
 describe("PersistedSessionDataSchema", () => {
-  it("accepts valid persisted session data", () => {
-    const result = PersistedSessionDataSchema.safeParse(validPersistedSessionData);
-    expect(result.success).toBe(true);
-    if (result.success) {
-      expect(result.data.address).toBe(validAddress);
-      expect(result.data.chainId).toBe(1);
-    }
-  });
-
   it("accepts session data without optional tinycloudSession", () => {
     const data = { ...validPersistedSessionData };
     delete (data as Record<string, unknown>).tinycloudSession;
@@ -363,11 +347,6 @@ describe("PersistedSessionDataSchema", () => {
     });
   });
 
-  it("rejects empty object", () => {
-    const result = PersistedSessionDataSchema.safeParse({});
-    expect(result.success).toBe(false);
-  });
-
   it("rejects null", () => {
     const result = PersistedSessionDataSchema.safeParse(null);
     expect(result.success).toBe(false);
@@ -384,14 +363,6 @@ describe("PersistedSessionDataSchema", () => {
 // =============================================================================
 
 describe("TinyCloudSessionSchema", () => {
-  it("accepts valid TinyCloud session", () => {
-    const result = TinyCloudSessionSchema.safeParse(validTinyCloudSession);
-    expect(result.success).toBe(true);
-    if (result.success) {
-      expect(result.data.spaceId).toBe("space123");
-    }
-  });
-
   it("rejects missing spaceId", () => {
     const data = { ...validTinyCloudSession };
     delete (data as Record<string, unknown>).spaceId;

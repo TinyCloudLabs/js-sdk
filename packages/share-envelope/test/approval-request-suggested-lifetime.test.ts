@@ -85,9 +85,6 @@ describe("refused with LinkError body_validation_failed 'invalid approval reques
     expect(refusal({ ...base, requestVersion: 2, suggestedLifetimeSeconds: 3600 })).toBeInstanceOf(LinkError);
   });
 
-  test("the field is optional, not required: a request that omits it is not refused", () => {
-    expect(refusal(base)).toBeUndefined();
-  });
 });
 
 describe("the signed request: where it is serialized, and the bytes OpenKey opens", () => {

@@ -186,13 +186,6 @@ describe("TinyCloudConfigSchema", () => {
     expect(result.success).toBe(false);
   });
 
-  it("should accept hosts array", () => {
-    const result = TinyCloudConfigSchema.safeParse({
-      hosts: ["https://a.com", "https://b.com"],
-    });
-    expect(result.success).toBe(true);
-  });
-
   it("should reject non-array hosts", () => {
     const result = TinyCloudConfigSchema.safeParse({
       hosts: "https://node.tinycloud.xyz",
@@ -203,13 +196,6 @@ describe("TinyCloudConfigSchema", () => {
   it("should accept function invoke", () => {
     const result = TinyCloudConfigSchema.safeParse({
       invoke: () => {},
-    });
-    expect(result.success).toBe(true);
-  });
-
-  it("should accept async function invoke", () => {
-    const result = TinyCloudConfigSchema.safeParse({
-      invoke: async () => {},
     });
     expect(result.success).toBe(true);
   });

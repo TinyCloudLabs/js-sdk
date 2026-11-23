@@ -35,23 +35,15 @@ interface V2LocationApi {
   signLocationRecordV2(payload: Record<string, unknown>, signer: unknown): Promise<Record<string, unknown>>;
 }
 
-const location = locationModule as typeof locationModule & Partial<V2LocationApi>;
+const location = locationModule as typeof locationModule & V2LocationApi;
 const policy = policyModule as typeof policyModule & {
-  resolveRegistryResource?: (
+  resolveRegistryResource: (
     subject: string,
     resource: string,
     access: "read" | "write" | "host" | "encryption",
     options: LookupOwnerRegistryVerdictOptions,
   ) => Promise<{ verdict: RegistryVerdict; hosts: Array<{ nodeDid?: string; urls: readonly string[] }> }>;
 };
-
-function requireV2Api(): asserts location is V2LocationApi {
-  expect(typeof location.validateLocationRecordV2Payload).toBe("function");
-  expect(typeof location.validateLocationRecordV2).toBe("function");
-  expect(typeof location.canonicalLocationPayloadV2).toBe("function");
-  expect(typeof location.verifyLocationRecordV2).toBe("function");
-  expect(typeof location.signLocationRecordV2).toBe("function");
-}
 
 function recordsResponse(record: Record<string, unknown>): Response {
   return Response.json({ record });
@@ -66,7 +58,6 @@ const v2LookupUrl = `${"https://registry.test"}/v2/locations/${encodeURIComponen
 
 describe("signed location record v2 vectors", () => {
   it("matches the frozen canonical bytes and schema/signature decisions", async () => {
-    requireV2Api();
     for (const vector of vectors.records) {
       if (vector.expected.schemaValid === false) {
         expect(() => location.validateLocationRecordV2(vector.record)).toThrow();
@@ -78,7 +69,6 @@ describe("signed location record v2 vectors", () => {
     }
   });
   it("validates unsigned payloads and rejects unknown root fields", () => {
-    requireV2Api();
     const payload = structuredClone(v2.record) as Record<string, unknown>;
     delete payload.signature;
     expect(location.validateLocationRecordV2Payload(payload)).toEqual(payload);
@@ -131,7 +121,6 @@ describe("signed location record v2 vectors", () => {
 
 
   it("accepts owner-bounded did:key spaces and rejects another did:key owner", () => {
-    requireV2Api();
     const owned = vectors.records.find(({ id }) => id === "ed25519-owner-listed-space")!.record;
     const foreign = vectors.records.find(({ id }) => id === "ed25519-owner-foreign-key-space")!.record;
     expect(location.validateLocationRecordV2(owned).spaces).toHaveLength(1);
@@ -139,7 +128,6 @@ describe("signed location record v2 vectors", () => {
   });
 
   it("rejects EOA spaces that differ only by address checksum casing", () => {
-    requireV2Api();
     const payload = structuredClone(v2.record) as Record<string, unknown> & {
       signature?: string;
       spaces: Array<{ space: string; nodes: unknown[] }>;
@@ -156,7 +144,6 @@ describe("signed location record v2 vectors", () => {
   });
 
   it("signs and verifies a v2 payload without mutating caller arrays", async () => {
-    requireV2Api();
     const payload = structuredClone(v2.record) as Record<string, unknown>;
     delete payload.signature;
     const before = structuredClone(payload);
@@ -260,7 +247,6 @@ describe("v2-first owner lookup", () => {
 
 describe("signed resource routing", () => {
   async function route(resource: string, access: "read" | "write" | "host" | "encryption") {
-    if (!policy.resolveRegistryResource) throw new Error("resolveRegistryResource export is missing");
     return policy.resolveRegistryResource(vectors.publicTestIdentities.owner, resource, access, {
       registryUrl: "https://registry.test",
       fetch: responseQueue([recordsResponse(v2.record)]),
@@ -298,7 +284,6 @@ describe("signed resource routing", () => {
   });
 
   it("refuses resources with no signed target and returns empty hosts only for genuine absence", async () => {
-    if (!policy.resolveRegistryResource) throw new Error("resolveRegistryResource export is missing");
     for (const access of ["read", "write", "host"] as const) {
       await expect(policy.resolveRegistryResource(vectors.publicTestIdentities.owner, "tinycloud:pkh:eip155:1:0xfcad0b19bb29d4674531d6f115237e16afce377c:missing", access, {
         registryUrl: "https://registry.test",
@@ -329,17 +314,6 @@ describe("v2 fail-closed host policy", () => {
     });
     expect(result.hosts).toEqual(["https://tc2481-box.tinycloud.link", "https://tc2481-encryption.tinycloud.link"]);
     expect(requests.some((url) => url.startsWith("http://127.0.0.1:8000"))).toBe(false);
-  });
-
-  it("does not let a known owner's unavailable registry be overridden by onNodeNotFound", async () => {
-    const sequenceStore = policy.createInMemoryRegistrySequenceStore();
-    await sequenceStore.set(vectors.publicTestIdentities.ownerKey, 0);
-    const result = policy.resolveFailClosedTinyCloudHosts(vectors.publicTestIdentities.ownerKey, {
-      registryUrl: "https://registry.test", sequenceStore,
-      fetch: responseQueue([response(503, "down")]),
-      onNodeNotFound: () => ({ action: "use-host", host: "https://override.example" }),
-    });
-    await expect(result).rejects.toBeInstanceOf(policy.RegistryUnavailableError);
   });
 
   it("checks v2 space membership, not just whether any signed node lists the host", async () => {

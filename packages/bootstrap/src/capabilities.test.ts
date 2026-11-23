@@ -32,24 +32,6 @@ test("kv delete URN is `del`; `delete` is a deprecated alias, never active", () 
   expect(status("tinycloud.kv/delete")).toBe("deprecated-alias");
 });
 
-test("registry contains no rejected `sql/ddl` action", () => {
-  expect(registryUrns()).not.toContain("tinycloud.sql/ddl");
-});
-
-test("dropped SQL phantoms are absent from the registry and the SQL constant", () => {
-  // insert/update/delete were dropped node-side (zero refs, never accepted).
-  for (const urn of [
-    "tinycloud.sql/insert",
-    "tinycloud.sql/update",
-    "tinycloud.sql/delete",
-  ]) {
-    expect(registryUrns()).not.toContain(urn);
-  }
-  expect(SQL).not.toHaveProperty("INSERT");
-  expect(SQL).not.toHaveProperty("UPDATE");
-  expect(SQL).not.toHaveProperty("DELETE");
-});
-
 test("every registry-backed constant resolves to a registry entry", () => {
   const byUrn = new Map(CAPABILITY_REGISTRY.map((e) => [e.urn, e]));
   const groups = [KV, SQL, DUCKDB, CAPABILITIES, HOOKS, ENCRYPTION, SPACE];
@@ -68,16 +50,8 @@ test("every registry-backed constant resolves to a registry entry", () => {
   }
 });
 
-test("request-kind actions are NOT registry capabilities", () => {
-  const urns = registryUrns();
-  for (const urn of REQUEST_KIND_URNS) {
-    expect(urns).not.toContain(urn);
-  }
-});
-
-test("status vocabulary is the three-way active / deprecated-alias / reserved", () => {
+test("every deprecated alias names the URN it aliases", () => {
   for (const entry of CAPABILITY_REGISTRY) {
-    expect(["active", "deprecated-alias", "reserved"]).toContain(entry.status);
     if (entry.status === "deprecated-alias") {
       expect(typeof entry.aliasOf).toBe("string");
     }

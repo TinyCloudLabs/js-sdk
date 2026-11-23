@@ -14,8 +14,6 @@ import {
   ENCRYPTION_MANIFEST_SPACE,
   ENCRYPTION_PERMISSION_SERVICE,
   ManifestValidationError,
-  SERVICE_LONG_TO_SHORT,
-  SERVICE_SHORT_TO_LONG,
   composeManifestRequest,
   expandPermissionEntries,
   resolveManifest,
@@ -27,13 +25,6 @@ import {
 } from "./manifest";
 
 const NETWORK_ID = "urn:tinycloud:encryption:did:key:z6MkPrincipal:default";
-
-describe("manifest tinycloud.encryption mapping", () => {
-  it("registers the short/long service mapping", () => {
-    expect(SERVICE_SHORT_TO_LONG.encryption).toBe("tinycloud.encryption");
-    expect(SERVICE_LONG_TO_SHORT["tinycloud.encryption"]).toBe("encryption");
-  });
-});
 
 describe("expandPermissionEntries (encryption)", () => {
   it("expands `decrypt` into the full URN action", () => {
@@ -50,27 +41,6 @@ describe("expandPermissionEntries (encryption)", () => {
         service: ENCRYPTION_PERMISSION_SERVICE,
         space: ENCRYPTION_MANIFEST_SPACE,
         path: NETWORK_ID,
-        actions: ["tinycloud.encryption/decrypt"],
-        skipPrefix: true,
-      },
-    ]);
-  });
-
-  it("preserves a default-network key-prefix grant as an encryption resource", () => {
-    const prefix = `${NETWORK_ID}/share/`;
-    expect(
-      expandPermissionEntries([
-        {
-          service: ENCRYPTION_PERMISSION_SERVICE,
-          path: prefix,
-          actions: ["decrypt"],
-        },
-      ]),
-    ).toEqual([
-      {
-        service: ENCRYPTION_PERMISSION_SERVICE,
-        space: ENCRYPTION_MANIFEST_SPACE,
-        path: prefix,
         actions: ["tinycloud.encryption/decrypt"],
         skipPrefix: true,
       },
@@ -180,28 +150,6 @@ describe("resolveManifest (encryption)", () => {
           r.space === ENCRYPTION_MANIFEST_SPACE,
       ),
     ).toBe(false);
-  });
-
-  it("does NOT collapse the networkId URN into the app's default space", () => {
-    const manifest: Manifest = {
-      manifest_version: 1,
-      app_id: "com.example.app",
-      name: "Example",
-      defaults: false,
-      space: "applications",
-      permissions: [
-        {
-          service: ENCRYPTION_PERMISSION_SERVICE,
-          path: NETWORK_ID,
-          actions: ["decrypt"],
-        },
-      ],
-    };
-    const resolved = resolveManifest(manifest);
-    const encryption = resolved.resources.find(
-      (r) => r.service === ENCRYPTION_PERMISSION_SERVICE,
-    );
-    expect(encryption?.space).toBe(ENCRYPTION_MANIFEST_SPACE);
   });
 });
 

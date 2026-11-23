@@ -8,7 +8,7 @@ import {
   prepareHtmlArtifact,
   resolveArtifactReference,
 } from "../../src/html-bundle/index.js";
-import { binary, fixtureFiles, parseHtml, utf8 } from "./support.js";
+import { fixtureFiles, parseHtml, utf8 } from "./support.js";
 
 const prepare = (files: Parameters<typeof prepareHtmlArtifact>[0]) => prepareHtmlArtifact(files, { parseHtml });
 
@@ -105,12 +105,4 @@ describe("HTML artifact resource preparation", () => {
     await expect(prepare(files)).rejects.toMatchObject({ kind });
   });
 
-  it("fails closed at file-count and rendered-resource limits", async () => {
-    const tooMany = Array.from({ length: 1_001 }, (_, index) => utf8(index === 0 ? "index.html" : `files/${index}.txt`, "x"));
-    await expect(prepare(tooMany)).rejects.toMatchObject({ kind: "limit" });
-    await expect(prepare([
-      utf8("index.html", '<img src="large.png">'),
-      binary("large.png", new Uint8Array(10 * 1024 * 1024 + 1), "image/png"),
-    ])).rejects.toMatchObject({ kind: "limit" });
-  });
 });

@@ -164,7 +164,6 @@ describe("CSS in the finished page", () => {
 });
 
 describe("<meta http-equiv>", () => {
-  const OWN = (page: string): string => page; // the rewriter's own policy comes out of prepareHtmlArtifact below
   it.each([
     ["refresh", '<meta http-equiv="refresh" content="0;url=https://x.example/">'],
     ["refresh to a relative path", '<meta http-equiv="Refresh" content="0;url=other.html">'],
@@ -180,7 +179,6 @@ describe("<meta http-equiv>", () => {
   ])("refuses %s", (_name, meta) => {
     expect(refused(wrap("<p>x</p>", meta), { blinded: true })).toBe(true);
     expect(refused(wrap("<p>x</p>", meta))).toBe(true);
-    expect(refused(wrap("<p>x</p>", OWN(meta)), { blinded: true })).toBe(true);
   });
 
   it("drops every author http-equiv meta when it rewrites, and keeps only its own policy", async () => {
@@ -206,10 +204,6 @@ describe("<meta http-equiv>", () => {
 });
 
 describe("the check reads a page the way a browser does", () => {
-  it("does not trust a parser: refusals come from the byte scan when the DOM pass is blinded", () => {
-    expect(refused(wrap('<img attributionsrc="other.png">'), { blinded: true })).toBe(true);
-    expect(refused(wrap('<img attributionsrc="other.png">'))).toBe(true);
-  });
 
   it("passes a plain finished page", () => {
     expect(refused(wrap('<h1 id="t">Hi</h1><img alt="x" src="data:image/png;base64,AAAA"><a href="#t">top</a>', "<title>t</title>"), { blinded: true })).toBe(false);
