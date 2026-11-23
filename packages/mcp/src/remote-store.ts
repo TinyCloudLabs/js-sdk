@@ -1328,10 +1328,28 @@ export class RemoteTenantStore {
     });
     if (!receipt.confirmed.includes(host)) throw new Error("Node did not record session retirement.");
     await this.#clearAuthority(tenant);
-    await rm(stateRoot, { recursive: true, force: true });
+    await this.#removeCustody(stateRoot);
     this.#lastCalls.delete(stateRoot);
     this.#liveExposureUntil.delete(stateRoot);
     return true;
+  }
+
+  /**
+   * Remove what this server holds for a retired tenant: its key, session, grants, markers and caches.
+   * Files the owner's tools keep in the profile directory (`OWNER_DATA_FILES`) are the owner's, not custody,
+   * and stay. The key and the retiring fence go last, so an interrupted removal can be retried.
+   */
+  async #removeCustody(stateRoot: string): Promise<void> {
+    const profile = join(stateRoot, ".tinycloud", "profiles", PROFILE);
+    const keep = new Set(OWNER_DATA_FILES.map((name) => join(profile, name)));
+    const deferred = new Set([this.#keyPath(stateRoot), this.#retiringPath(stateRoot)]);
+    try {
+      await pruneExcept(stateRoot, keep, deferred);
+      for (const path of deferred) await rm(path, { force: true });
+      if (!await pruneExcept(stateRoot, keep, new Set())) await rm(stateRoot, { recursive: true, force: true });
+    } catch (error) {
+      if (!(isRecord(error) && error.code === "ENOENT")) throw error;
+    }
   }
 
   /** Whether a stored request opens on, and is collected from, the OpenKey origins this server is configured with. */
@@ -2059,6 +2077,26 @@ export class RemoteTenantStore {
   #leaseExposuresPath(stateRoot: string): string {
     return join(stateRoot, ".tinycloud", "lease-exposures.json");
   }
+}
+
+/** Owner-chosen preferences under a tenant's profile directory. Retirement keeps them. */
+const OWNER_DATA_FILES: readonly string[] = ["tc-apps.json"];
+
+/** Delete everything under `directory` except `keep` and `deferred`; empty directories go. Whether anything stayed. */
+async function pruneExcept(directory: string, keep: ReadonlySet<string>, deferred: ReadonlySet<string>): Promise<boolean> {
+  let retained = false;
+  for (const entry of await readdir(directory, { withFileTypes: true })) {
+    const path = join(directory, entry.name);
+    if (keep.has(path) || deferred.has(path)) {
+      retained = true;
+    } else if (entry.isDirectory()) {
+      if (await pruneExcept(path, keep, deferred)) retained = true;
+      else await rm(path, { recursive: true, force: true });
+    } else {
+      await rm(path, { force: true });
+    }
+  }
+  return retained;
 }
 
 function retirementRoot(delegation: unknown): string {

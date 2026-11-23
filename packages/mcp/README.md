@@ -231,7 +231,9 @@ delegate key and the request's time, and does not retire the key while the
 request remains open. Only after the node confirms retirement does the server
 remove the account's key, session, grants and open approval links. The node
 then refuses further use and renewal. If the node cannot confirm retirement,
-the server retains the account's state and retries.
+the server retains the account's state and retries. Retirement removes only what
+the server holds for the delegate; the owner's preference file `tc-apps.json`
+(the timezone) stays and is used again by the account's next delegate.
 The day-seven bound assumes the service and node are available and the sweep
 can process the due holders within its schedule. A refusal, outage or
 excessive backlog can delay confirmation.

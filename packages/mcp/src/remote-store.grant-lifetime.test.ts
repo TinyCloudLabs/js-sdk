@@ -1,10 +1,10 @@
 import "../../operations/test-support/test-bootstrap.mjs";
 import { afterEach, expect, test } from "bun:test";
-import { access, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, readdir, rm, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { BOOTSTRAP_LEASE_SECONDS, RemoteTenantStore } from "./remote-store.js";
+import { BOOTSTRAP_LEASE_SECONDS, RemoteTenantStore, TENANT_IDLE_MS } from "./remote-store.js";
 import { resetMcpRegistryFixture } from "./test-support/registry-fixture.mjs";
 import {
   LINKS_API_ORIGIN,
@@ -161,8 +161,66 @@ test("a connection approval opened with another lease, or without a standing pur
   }
 });
 
+test("retiring an idle tenant removes its key, grants and approvals but keeps the owner's tc-apps.json byte for byte", async () => {
+  const requester = await ownerDid(REQUESTER_KEY);
+  const subject = "openkey-user-idle";
+  // A loopback node that records the retirement, the way the node's POST /session/retire answers.
+  const retirements: string[] = [];
+  const node = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    async fetch(request) {
+      const path = new URL(request.url).pathname;
+      if (path === "/info") return Response.json({ nodeId: "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK" });
+      if (path === "/session/retire" && request.method === "POST") {
+        retirements.push(request.headers.get("authorization") ?? "");
+        return Response.json({ recorded: true });
+      }
+      return new Response("not found", { status: 404 });
+    },
+  });
+  cleanups.push(() => node.stop(true));
+  const { store, stateDir } = await storeWith({ delegationExpiry: "1h", nodeHost: node.url.origin });
+  const first = await store.connectStatus(subject, [requester]);
+  const root = store.tenantStateRoot(subject);
+  const profile = join(root, ".tinycloud/profiles/agent");
+  // The owner's timezone preference sits in the same profile directory as the delegate's custody.
+  const preference = `{\n  "timezone": "America/Los_Angeles",\n  "note": "kept exactly"\n}\n`;
+  await writeFile(join(profile, "tc-apps.json"), preference);
+  await writeFile(join(root, ".tinycloud/native-grant.json"), "{}");
+  await writeFile(join(profile, "registry-cache.json"), "{}");
+  await mkdir(join(profile, "extra"), { recursive: true });
+  await writeFile(join(profile, "extra/cache.json"), "{}");
+  await writeFile(join(root, ".tinycloud/last-call"), "");
+  const custody = ["key.json", "profile.json", "registry-cache.json", "extra"].map((name) => join(profile, name));
+  for (const path of [...custody, join(root, ".tinycloud/native-grant.json")]) expect(await exists(path)).toBe(true);
+  expect(await readdir(join(profile, "pending"))).not.toHaveLength(0);
+  await store.close();
+
+  const old = new Date(Date.now() - TENANT_IDLE_MS - 60_000);
+  await utimes(join(profile, "key.json"), old, old);
+  await rm(join(root, ".tinycloud/last-call"));
+
+  const { store: restarted } = await storeWith({ delegationExpiry: "1h", nodeHost: node.url.origin }, stateDir);
+  expect(await restarted.sweepIdleTenants()).toBe(1);
+  expect(retirements).toHaveLength(1);
+
+  // Custody and key material are gone; the owner's preference is untouched.
+  for (const path of [...custody, join(profile, "pending"), join(root, ".tinycloud/native-grant.json"), join(root, ".tinycloud/retiring")]) {
+    expect(await exists(path), path).toBe(false);
+  }
+  expect(await readFile(join(profile, "tc-apps.json"), "utf8")).toBe(preference);
+  expect((await readdir(profile)).sort()).toEqual(["tc-apps.json"]);
+
+  // The next call starts a new delegate beside the same preference.
+  const second = await restarted.connectStatus(subject, [requester]);
+  expect(second).toMatchObject({ connected: false, approvalUrl: expect.any(String) });
+  expect(second.sessionDid).not.toBe(first.sessionDid);
+  expect(await readFile(join(profile, "tc-apps.json"), "utf8")).toBe(preference);
+});
+
 async function storeWith(
-  lifetimes: { delegationExpiry: string; bootstrapDelegationExpiry?: string },
+  lifetimes: { delegationExpiry: string; bootstrapDelegationExpiry?: string; nodeHost?: string },
   existingStateDir?: string,
 ): Promise<{ store: RemoteTenantStore; openkey: FakeOpenKey; stateDir: string }> {
   const stateDir = existingStateDir ?? await mkdtemp(join(tmpdir(), "tinycloud-hosted-mcp-"));
