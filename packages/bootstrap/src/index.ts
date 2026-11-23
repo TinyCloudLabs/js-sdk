@@ -71,7 +71,7 @@ export const BOOTSTRAP_ENCRYPTION_NETWORK_NAME = "default";
 export const BOOTSTRAP_ENCRYPTION_NETWORK_RESOURCE_TEMPLATE =
   `urn:tinycloud:encryption:{ownerDid}:${BOOTSTRAP_ENCRYPTION_NETWORK_NAME}` as const;
 
-const DEFAULT_EXPIRY_MS = 30 * 24 * 60 * 60 * 1000;
+const DEFAULT_EXPIRY_MS = 7 * 24 * 60 * 60 * 1000;
 const VAULT_PERMISSION_SERVICE = "tinycloud.vault";
 const ENCRYPTION_PERMISSION_SERVICE = "tinycloud.encryption";
 const ENCRYPTION_MANIFEST_SPACE = "encryption";

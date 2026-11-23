@@ -1,4 +1,5 @@
 import { assertOwnerRenewalIdentity, verifyOwnerRenewal } from './owner-renewal.js';
+import { RenewalAuthorityInactiveError, RenewalLeaseExpiredError } from '@tinycloud/sdk-core/delegations/renewal';
 import { TinyCloudNode, DelegatedAccess, NodeWasmBindings, activateValidatedRuntimeDelegation, deserializeDelegation, serializeDelegation } from '@tinycloud/node-sdk';
 import { createRegistryVerdictCache } from '@tinycloud/sdk-core/registry-verdict-cache';
 import { createInMemoryRegistryCacheStore, createInMemoryRegistrySequenceStore, type RegistryCacheStore, type RegistrySequenceStore } from '@tinycloud/sdk-core';
@@ -88,8 +89,15 @@ export async function courierNode(profile: Profile, home?: string): Promise<Tiny
   };
   if (grant.renewal) {
     await verifyOwnerRenewal(grant, grant.ownerDid, grant.renewal);
-    if (Date.now() < expiry) await node.restoreSession(sessionData);
-    else await node.restoreSessionWithRenewal(sessionData, grant.renewal.receipt.leaseAuthorization);
+    // Restore through the lease whenever the node has renewed the grant, so delegations to peers can reach past its
+    // signed end before they lapse. Until the node's first renewal there is nothing to restore through, and the grant
+    // holds to its signed end. A revoked grant or a stopped lease is refused, never restored without the lease.
+    try {
+      await node.restoreSessionWithRenewal(sessionData, grant.renewal.receipt.leaseAuthorization);
+    } catch (error) {
+      if (Date.now() >= expiry || error instanceof RenewalAuthorityInactiveError || error instanceof RenewalLeaseExpiredError) throw error;
+      await node.restoreSession(sessionData);
+    }
     assertOwnerRenewalIdentity(grant.renewal, await node.renewalNodeIdentity());
   } else {
     await node.restoreSession(sessionData);

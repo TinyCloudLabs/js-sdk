@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import type { PermissionEntry } from "@tinycloud/sdk-core";
+import { ownerFullAccess, type PermissionEntry } from "@tinycloud/sdk-core";
 import { MissingSpacesError } from "./delegation";
 import { NodeWasmBindings } from "./NodeWasmBindings";
 import "./nodeDefaults";
@@ -66,6 +66,7 @@ describe.skipIf(!nodeBinary)(
         wasmBindings: new NodeWasmBindings(),
         domain: "multi-space-grant.test",
         autoCreateSpace: true,
+        ...ownerFullAccess(),
       });
       await owner.signIn();
       await owner.waitForAccountRegistrySync();

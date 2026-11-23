@@ -4,6 +4,7 @@ import { randomBytes } from "node:crypto";
 import {
   createInMemoryRegistryCacheStore,
   createInMemoryRegistrySequenceStore,
+  ownerFullAccess,
   pkhDid,
   signLocationRecordV2,
 } from "@tinycloud/sdk-core";
@@ -64,7 +65,7 @@ async function registeredOwner(options: { primary?: boolean; readOnly?: boolean 
   const node = new TinyCloudNode({
     privateKey: fixture.ownerPrivateKey, signer, wasmBindings: new NodeWasmBindings(), host: fixture.host,
     tinycloudRegistryUrl: registry.url.origin, autoCreateSpace: true,
-    autoDiscoverLocalNode: false,
+    autoDiscoverLocalNode: false, ...ownerFullAccess(),
     registryCacheStore: createInMemoryRegistryCacheStore(),
     registrySequenceStore: createInMemoryRegistrySequenceStore(),
   });

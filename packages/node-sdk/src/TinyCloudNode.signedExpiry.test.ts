@@ -8,6 +8,7 @@ import { NodeWasmBindings } from "./NodeWasmBindings";
 import { TinyCloudNode } from "./TinyCloudNode";
 import { PrivateKeySigner } from "./signers/PrivateKeySigner";
 import type { CapabilityKeyRegistry } from "@tinycloud/sdk-core";
+import { ownerFullAccess } from "@tinycloud/sdk-core";
 import { richResultFor, withExpiration } from "./test-support/openkey-result";
 import { unregisteredLocationRegistryResponse } from "./test-support/unregistered-location-registry";
 
@@ -54,6 +55,7 @@ function makeNode(sessionExpirationMs: number) {
     host: "https://tinycloud.test",
     sessionExpirationMs,
     autoCreateSpace: false,
+    ...ownerFullAccess(),
   } as ConstructorParameters<typeof TinyCloudNode>[0]);
   return { node, signer };
 }
@@ -149,6 +151,7 @@ describe("a restored session", () => {
       host: "https://tinycloud.test",
       sessionExpirationMs: 30 * DAY_MS,
       autoCreateSpace: false,
+      ...ownerFullAccess(),
     } as ConstructorParameters<typeof TinyCloudNode>[0]);
     await restored.restoreSession(persisted);
 

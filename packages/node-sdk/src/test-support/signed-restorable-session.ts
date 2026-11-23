@@ -14,11 +14,15 @@ export async function signedRestorableSession(options?: {
   ownedSpaceAbilities?: Record<string, Record<string, Record<string, string[]>>>;
   /** Signed onto every ReCap action before the owner signs. */
   caveat?: Record<string, unknown>;
+  /** Sign for this existing session key instead of a new one. */
+  sessionKey?: { jwk: object; verificationMethod: string };
+  /** The SIWE `Not Before`. */
+  notBefore?: Date;
 }) {
   const wasm = new NodeWasmBindings();
   const signer = new PrivateKeySigner(options?.privateKey ?? PROOF_PRIVATE_KEY);
   const manager = wasm.createSessionManager();
-  const jwk = JSON.parse(manager.jwk("default")!);
+  const jwk = options?.sessionKey?.jwk ?? JSON.parse(manager.jwk("default")!);
   const address = await signer.getAddress();
   const chainId = await signer.getChainId();
   const spaceId = wasm.makeSpaceId(address, chainId, "default");
@@ -29,7 +33,7 @@ export async function signedRestorableSession(options?: {
   const expirationTime = options?.expired
     ? new Date(now.getTime() - 60 * 60_000)
     : new Date(now.getTime() + 60 * 60_000);
-  const verificationMethod = manager.getDID("default");
+  const verificationMethod = options?.sessionKey?.verificationMethod ?? manager.getDID("default");
   const ownedSpaces = Object.fromEntries(Object.keys(options?.ownedSpaceAbilities ?? {})
     .map((name) => [name, wasm.makeSpaceId(address, chainId, name)]));
   const prepared = options?.expirationless
@@ -51,6 +55,7 @@ export async function signedRestorableSession(options?: {
       domain: "restore.test",
       issuedAt: issuedAt.toISOString(),
       expirationTime: expirationTime.toISOString(),
+      ...(options?.notBefore ? { notBefore: options.notBefore.toISOString() } : {}),
       spaceId,
       additionalSpaces: options?.signedSpaces ?? options?.spaces,
       // `spaceAbilities` replaces `abilities`, so it restates the primary space.

@@ -19,6 +19,8 @@ export interface AgentKey {
 
 export interface OwnerGrant {
   renewal?: ApprovalRenewal;
+  /** The owner answered a lease ask with a grant that ends at its own expiry: the automatic re-approval asks for none. */
+  renewalChoice?: 'finite';
   v: 1;
   delegationHeader: { Authorization: string };
   delegationCid: string;

@@ -2,7 +2,7 @@ import "../../operations/test-support/test-bootstrap.mjs";
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { contentHash, parseUcanGrant } from "@tinycloud/replica";
 import { restoreSessionStamp } from "@tinycloud/replica/profile-gate";
-import { NodeWasmBindings, TinyCloudNode } from "@tinycloud/node-sdk";
+import { NodeWasmBindings, TinyCloudNode, ownerFullAccess } from "@tinycloud/node-sdk";
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
@@ -348,7 +348,7 @@ describe.skipIf(!NODE_BIN)(`replication flag against a real node (${DATABASE_URL
     const manager = new NodeWasmBindings().createSessionManager();
     const recipientKey = manager.createSessionKey("tc-721-compact-delegate");
     const recipientDid = manager.getDID(recipientKey)!.split("#")[0]!;
-    const ownerSdk = new TinyCloudNode({ host, tinycloudRegistryUrl: registry.url.origin, privateKey: profile.privateKey, autoBootstrapAccount: false, autoCreateSpace: true, includeAccountRegistryPermissions: false });
+    const ownerSdk = new TinyCloudNode({ host, tinycloudRegistryUrl: registry.url.origin, privateKey: profile.privateKey, autoBootstrapAccount: false, autoCreateSpace: true, includeAccountRegistryPermissions: false, ...ownerFullAccess() });
     try {
       await ownerSdk.signIn();
       const compactGrant = await ownerSdk.delegateTo(recipientDid, [{
