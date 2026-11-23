@@ -120,8 +120,17 @@ the Release workflow, which versions and publishes plain stable versions on the 
   are consumed, the rest is written back as a pending changeset with the same text. To release another
   package, a maintainer adds it to `packages` (its manifest version must be its last stable release, so
   its pending changesets produce the next version) in a reviewed PR.
+- `baselines` is a go-time input: for every package in `packages`, the newest stable version npm has,
+  equal to its manifest version. Stable versions published from another commit since (the Courier
+  route's 0.8.1, a TC-4082 patch) must be re-baselined into the manifests, their internal pins and
+  `baselines` together, before the release; otherwise the run is refused (`baselines are not what npm
+  has`). A changeset for such a package that master still carries is consumed once, by the release
+  after the baseline (courier 0.8.1 -> 0.8.2), never by a second publish of the same slot.
 - `expect` (optional) locks the exact inventory of one release: `{ "<name>": "<version>" }`. The run
-  fails before pushing unless exactly those versions come out. Clear it afterwards.
+  fails before pushing unless exactly those versions come out. A successful run rewrites `baselines` to
+  the versions it released and clears `expect`.
+- A planned version that npm already has is refused before anything is committed or published: a
+  version slot is immutable, whatever bytes are in it.
 - `scoped-version.mjs` runs `changeset version`, puts every out-of-scope package back (a dependent bump
   is not a release; its pins on in-scope packages follow the new versions), and refuses the result
   unless every in-scope bump is a stable, same-major increase and no in-scope package requires a

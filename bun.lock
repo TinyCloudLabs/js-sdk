@@ -208,7 +208,7 @@
         "@tinycloud/sdk-core": "3.14.0",
         "@tinycloud/sdk-services": "3.14.0",
         "@tinycloud/share-envelope": "1.6.0",
-        "@tinycloud/share-sdk": "1.7.0-beta.0",
+        "@tinycloud/share-sdk": "1.6.0",
         "chalk": "^5.3.0",
         "commander": "^14.0.0",
         "jsdom": "26.1.0",
@@ -234,7 +234,7 @@
         "@tinycloud/node-sdk": "3.14.0",
         "@tinycloud/sdk-core": "3.14.0",
         "@tinycloud/share-envelope": "1.6.0",
-        "@tinycloud/share-sdk": "1.7.0-beta.0",
+        "@tinycloud/share-sdk": "1.6.0",
         "ulid": "^3.0.2",
       },
       "devDependencies": {
@@ -275,7 +275,7 @@
         "@tinycloud/sdk-core": "3.14.0",
         "@tinycloud/sdk-services": "3.14.0",
         "@tinycloud/share-envelope": "1.6.0",
-        "@tinycloud/share-sdk": "1.7.0-beta.0",
+        "@tinycloud/share-sdk": "1.6.0",
         "siwe": "^3.0.0",
       },
       "devDependencies": {
@@ -331,7 +331,7 @@
         "@tinycloud/bootstrap": "2.10.0",
         "@tinycloud/sdk-services": "3.14.0",
         "@tinycloud/share-envelope": "1.6.0",
-        "@tinycloud/share-sdk": "1.7.0-beta.0",
+        "@tinycloud/share-sdk": "1.6.0",
         "ms": "^2.1.3",
         "multiformats": "^13.4.1",
         "siwe": "^3.0.0",
@@ -424,7 +424,7 @@
     },
     "packages/share-sdk": {
       "name": "@tinycloud/share-sdk",
-      "version": "1.7.0-beta.0",
+      "version": "1.6.0",
       "dependencies": {
         "@noble/curves": "^1.9.2",
         "@noble/hashes": "^1.8.0",
@@ -463,7 +463,7 @@
         "@tinycloud/replica": "0.4.7",
         "@tinycloud/sdk-core": "3.14.0",
         "@tinycloud/share-envelope": "1.6.0",
-        "@tinycloud/share-sdk": "1.7.0-beta.0",
+        "@tinycloud/share-sdk": "1.6.0",
         "@tinycloud/web-sdk-wasm": "1.8.0-beta.0",
         "axios": "^1.7.9",
         "viem": "^2.45.0",

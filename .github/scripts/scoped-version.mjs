@@ -14,8 +14,15 @@
 //   3. puts every out-of-scope package back (version, CHANGELOG) except its dependency pins on in-scope
 //      packages, which follow the new in-scope versions so the workspace still links,
 //   4. refuses the result unless each in-scope bump is a stable, same-major, higher version, the result
-//      matches the locked inventory (`expect`, when set), and no in-scope package requires a
-//      prerelease of a package outside the scope.
+//      matches the locked inventory (`expect`, when set), no in-scope package requires a
+//      prerelease of a package outside the scope, and no planned version already exists on npm (a version
+//      slot is immutable: master's source must never take a number another commit published).
+//
+// Baselines: `baselines` in the scope file names the version each in-scope package is at, and it must be
+// the newest stable version npm has for it. It is an input of the go commit: whatever was published from
+// elsewhere since (the Courier route's 0.8.1, a later SDK patch) must be re-baselined into the manifests
+// and into `baselines` first, or the run is refused. A successful run rewrites `baselines` to the versions
+// it released and clears `expect`, so the next release starts from what was just published.
 //
 // usage: scoped-version.mjs <command> [options]
 //   gate [<github-output>]        write `enabled=true|false` (the scope file's switch) and exit 0
@@ -75,8 +82,23 @@ export function readScope(root = ".") {
       if (!parsed || parsed.prerelease) problems.push(`"expect" ${name}: ${JSON.stringify(version)} is not a stable version`);
     }
   }
+  const baselines = scope.baselines;
+  if (baselines !== undefined) {
+    if (typeof baselines !== "object" || baselines === null || Array.isArray(baselines)) problems.push('"baselines" must be an object of name -> version');
+    else {
+      for (const [name, version] of Object.entries(baselines)) {
+        if (!scope.packages?.includes(name)) problems.push(`"baselines" names ${name}, which is not in "packages"`);
+        const parsed = parseVersion(version);
+        if (!parsed || parsed.prerelease) problems.push(`"baselines" ${name}: ${JSON.stringify(version)} is not a stable version`);
+      }
+    }
+  }
+  if (scope.enabled === true) {
+    const missing = Array.isArray(scope.packages) ? scope.packages.filter((name) => baselines?.[name] === undefined) : [];
+    if (missing.length) problems.push(`"enabled" is true but "baselines" has no version for ${missing.join(", ")} (baselines are a go-time input: the newest stable version npm has for each package)`);
+  }
   if (problems.length) fail(`${SCOPE_FILE}: ${problems.join("; ")}`);
-  return { enabled: scope.enabled, packages: scope.packages, expect };
+  return { enabled: scope.enabled, packages: scope.packages, expect, baselines };
 }
 
 // ---- workspace ---------------------------------------------------------------------------------------------------
@@ -151,6 +173,9 @@ export function checkScope(root, scope) {
     if (!manifest) problems.push(`${name} is not a workspace package`);
     else if (manifest.private === true) problems.push(`${name} is private and cannot release`);
     else if (!parseVersion(manifest.version) || parseVersion(manifest.version).prerelease) problems.push(`${name}@${manifest.version} is not a stable version`);
+    else if (scope.baselines?.[name] !== undefined && scope.baselines[name] !== manifest.version) {
+      problems.push(`${name} is at ${manifest.version} but the scope file's baseline is ${scope.baselines[name]}; re-baseline both together`);
+    }
   }
   for (const { name, path } of changesetFiles(root)) {
     let parsed;
@@ -219,6 +244,40 @@ export function verifyInventory({ inventory, expect, outOfScopeChanges }) {
   return problems;
 }
 
+// ---- npm ---------------------------------------------------------------------------------------------------------
+
+// Every version npm has for `name` ([] when npm has never seen it).
+export function npmVersions(name) {
+  const result = spawnSync("npm", ["view", name, "versions", "--json"], { encoding: "utf8" });
+  let output = null;
+  try {
+    output = JSON.parse(result.stdout.trim() || "null");
+  } catch {}
+  if (result.status === 0) return Array.isArray(output) ? output : typeof output === "string" ? [output] : [];
+  if (output?.error?.code === "E404") return [];
+  fail(`npm view ${name} versions failed: ${result.stderr.trim() || result.stdout.trim()}`);
+}
+
+// The baseline of every in-scope package must be the newest stable version npm has: anything newer was published
+// from somewhere else and has to be re-baselined first, anything missing was never staged.
+export function baselineProblems(scope, versionsOf) {
+  const problems = [];
+  for (const name of scope.packages) {
+    const baseline = scope.baselines?.[name];
+    if (baseline === undefined) continue;
+    const onNpm = versionsOf(name);
+    if (!onNpm.includes(baseline)) problems.push(`${name}@${baseline} (baseline) is not on npm; stage it before releasing from master`);
+    const newer = onNpm.filter((v) => parseVersion(v) && !parseVersion(v).prerelease && compare(parseVersion(v), parseVersion(baseline)) > 0);
+    if (newer.length) problems.push(`npm already has stable ${name}@${newer.sort((a, b) => compare(parseVersion(a), parseVersion(b))).join(", ")} above the baseline ${baseline}; re-baseline to it first`);
+  }
+  return problems;
+}
+
+// Planned versions that npm already has: the slot is taken, whatever bytes are in it.
+export function takenVersions(inventory, versionsOf) {
+  return inventory.filter(({ name, to }) => versionsOf(name).includes(to)).map(({ name, to }) => `${name}@${to} already exists on npm; this release would reuse a published version slot`);
+}
+
 // ---- version -----------------------------------------------------------------------------------------------------
 
 function defaultChangesetVersion(root) {
@@ -242,11 +301,18 @@ export function pinsFollow(raw, renamed) {
   return moved ? `${JSON.stringify(manifest, null, 2)}\n` : raw;
 }
 
-export function scopedVersion(root, { scope, runChangesetVersion = defaultChangesetVersion, log = console.log } = {}) {
+export function scopedVersion(root, { scope, runChangesetVersion = defaultChangesetVersion, versionsOf = npmVersions, log = console.log } = {}) {
   scope ??= readScope(root);
   if (!scope.enabled) fail(`${SCOPE_FILE} has "enabled": false; refusing to version`);
   const problems = checkScope(root, scope);
   if (problems.length) fail(`release scope is not consistent:\n  ${problems.join("\n  ")}`);
+  const npmCache = new Map();
+  const cached = (name) => {
+    if (!npmCache.has(name)) npmCache.set(name, versionsOf(name));
+    return npmCache.get(name);
+  };
+  const stale = baselineProblems(scope, cached);
+  if (stale.length) fail(`the baselines are not what npm has:\n  ${stale.join("\n  ")}`);
 
   const before = workspaceManifests(root);
   const beforeVersions = new Map(before.map((m) => [m.manifest.name, m.manifest.version]));
@@ -295,10 +361,16 @@ export function scopedVersion(root, { scope, runChangesetVersion = defaultChange
       outOfScopeChanges: held.filter((m) => final.find((f) => f.dir === m.dir)?.manifest.version !== m.manifest.version).map((m) => m.manifest.name),
     }),
     ...(inventory.length ? prereleaseRuntimePins(final, scope.packages) : []),
+    ...takenVersions(inventory, cached),
   ];
   log(`changeset version moved ${inventory.length} in-scope package(s); put back ${putBack} out-of-scope package(s) that it had bumped as dependents.`);
   for (const { name, from, to, level } of inventory) log(`  ${name} ${from} -> ${to} (${level})`);
   if (finalProblems.length) fail(`the scoped release is refused:\n  ${finalProblems.join("\n  ")}`);
+  // The next release starts from what this one publishes.
+  const written = JSON.parse(readFileSync(join(root, SCOPE_FILE), "utf8"));
+  written.baselines = Object.fromEntries(scope.packages.map((name) => [name, afterVersions.get(name)]));
+  written.expect = {};
+  writeFileSync(join(root, SCOPE_FILE), `${JSON.stringify(written, null, 2)}\n`);
   return { inventory, putBack };
 }
 

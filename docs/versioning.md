@@ -57,7 +57,7 @@ The `Release` job:
 
 1. Counts pending changesets that name an in-scope package (a changeset naming both kinds is split at release time; the held part is written back unchanged).
 2. Requires a maintainer sign-off for any pending `major` changeset (`check-major-release-signoff.mjs release`) and refuses to start while an earlier release is unfinished.
-3. Runs `scoped-version.mjs version`: `changeset version`, then every out-of-scope package is put back (a dependent bump is not a release), and the result is refused unless each in-scope bump is a stable same-major increase, matches the locked inventory (`expect`, when set), and no in-scope package requires a prerelease of a package outside the scope.
+3. Runs `scoped-version.mjs version`: `changeset version`, then every out-of-scope package is put back (a dependent bump is not a release), and the result is refused unless each in-scope bump is a stable same-major increase, matches the locked inventory (`expect`, when set), no in-scope package requires a prerelease of a package outside the scope, and no planned version already exists on npm. Before versioning, each package's `baselines` entry in the scope file must equal its manifest and be the newest stable version npm has; stables published from another commit since (the Courier route, a later SDK patch) are re-baselined first. A successful run rewrites `baselines` to what it released and clears `expect`.
 4. Builds, checks the CLI's node release pin and the internal dependency pins, and commits `chore: release stable packages [skip ci]`.
 5. Checks npm (provenance and earlier accepted-but-not-visible versions) for the packages that commit versioned, pushes the commit to `master` with the release deploy key, then publishes in dependency order, waiting for npm to serve each layer.
 6. Confirms npm has every released version; `GitHub Releases` creates one GitHub Release per published package version.
@@ -69,9 +69,9 @@ Guards:
 - A pending `major` changeset releases only after an `approve-major-release:` line naming the package appears in a commit message between the commit that added the changeset and `master`'s HEAD.
 - If the push fails, nothing is published; the run for the newer commit releases the changesets.
 - If a run pushed but did not finish publishing, dispatch the workflow with `resume: release`: it publishes exactly the missing versions from their release commit and versions nothing. Pushes refuse to run until then.
-- A version staged earlier from another commit (the Courier 0.8.0 set) is a baseline: provenance and publishing look only at packages the release commit versioned, and a missing baseline stops the run instead of being published from master's source.
+- A version staged or published earlier from another commit (the Courier 0.8.0 set, 0.8.1) is a baseline: provenance and publishing look only at packages the release commit versioned, and a missing baseline stops the run instead of being published from master's source.
 
-To release a held package, a maintainer adds it to `packages` in `.github/release-scope.json` in a reviewed PR, with its manifest at its last stable release.
+To release a held package, a maintainer adds it to `packages` in `.github/release-scope.json` in a reviewed PR, with its manifest at its last stable release and a `baselines` entry.
 
 Break-glass only: `.github/workflows/raw-publish.yml` (manual dispatch, optional dist-tag override and dry run) publishes each package at its current version and skips versions npm already has. It does not run changeset versioning, the release scope, or the GitHub release steps, so create the GitHub release by hand.
 
