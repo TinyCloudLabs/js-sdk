@@ -3,7 +3,7 @@ import { onboardingPlan } from "./onboarding-scope.js";
 
 test("combined approval text names apps, the Feed and discovery for every normalized spelling", () => {
   const canonical = onboardingPlan("apps,feed");
-  expect(canonical.asks).toBe("Set up TinyCloud on this computer: use your apps and your Feed, and see your spaces, for 7 days.");
+  expect(canonical.asks).toBe("Set up TinyCloud on this computer: use your apps and your Feed, and see which spaces and apps you have, for 7 days.");
   for (const selector of ["feed,apps", " apps , feed ", " feed , apps ", "feed,apps,feed"]) {
     expect(onboardingPlan(selector)).toEqual(canonical);
   }
