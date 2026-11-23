@@ -1936,7 +1936,8 @@ export class TinyCloudNode {
         return false;
       }
       if (outcome !== "positive") return false;
-      return auth.adoptRestoredHostedOwnerProof(candidate);
+      auth.adoptRestoredHostedOwnerProof(candidate);
+      return true;
     })();
     this.hostedOwnerRestore = { epoch, result };
     return result;

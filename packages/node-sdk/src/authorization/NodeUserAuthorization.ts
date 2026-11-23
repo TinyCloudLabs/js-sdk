@@ -945,25 +945,21 @@ export class NodeUserAuthorization implements IUserAuthorization {
       && this._tinyCloudSession?.signature === candidate.session.signature;
   }
 
-  /**
-   * A read has just confirmed the candidate: the proof now stands for this restored session only. False when a newer
-   * session replaced it while the read was in flight: that session is not proven by a read made for another one.
-   */
-  adoptRestoredHostedOwnerProof(candidate: { host: string; spaceId: string; session: TinyCloudSession }): boolean {
+  /** A read has just confirmed the candidate: the proof now stands for this restored session only. */
+  adoptRestoredHostedOwnerProof(candidate: { host: string; spaceId: string; session: TinyCloudSession }): void {
     const session = this._tinyCloudSession;
-    if (!session || !this.isRestoredCandidateCurrent(candidate)) return false;
+    if (!session || !this.isRestoredCandidateCurrent(candidate)) return;
     this._hostedOwnerProof = {
       host: candidate.host, spaceId: candidate.spaceId, delegationCid: session.delegationCid, status: "proven",
     };
-    return true;
   }
 
   /**
-   * A restored session the strict read refused is no longer kept in storage. Only the record of that exact session is
-   * removed (by its signature), and only while it is still the current session: a newer sign-in's record is left alone.
+   * A restored session the strict read refused is no longer kept in storage. Only the record of that exact session goes:
+   * `clearPersistedSessionIfOwn` compares the stored record's signature with the refused session's, so a newer sign-in's
+   * record (persisted before that session becomes current, under another signature) is never removed.
    */
   async discardRefusedRestoredSession(candidate: { session: TinyCloudSession }): Promise<void> {
-    if (!this.isRestoredCandidateCurrent(candidate)) return;
     await clearPersistedSessionIfOwn(this.sessionStorage, candidate.session.address, candidate.session.signature);
   }
 

@@ -36,7 +36,7 @@ interface Seen {
 interface Behaviour {
   /** The answer to `/delegate`; may reject (a transport error) or follow the request's signal (a hang). */
   delegate?: (request: Request) => Response | Promise<Response>;
-  invoke?: () => Response;
+  invoke?: () => Response | Promise<Response>;
   retire?: () => Response | Promise<Response>;
   /** The wallet refuses to sign. */
   cancelSignature?: boolean;
@@ -326,7 +326,8 @@ describe("a restored session's read when a newer sign-in is already signing in",
     const newer = restored.node.signIn();
     await delegateHeld;
     releaseRead();
-    // The read was made for the replaced session: its caller is refused and nothing but that read reached the node.
+    // The read was made for the replaced session, so it proves nothing for the newer one: the old caller's list is
+    // refused and never sent (only that read reached the node), and the newer session is left to prove itself.
     expect((await restoreRead).ok).toBe(false);
     expect(reads).toBe(1);
     releaseDelegate();
@@ -337,31 +338,32 @@ describe("a restored session's read when a newer sign-in is already signing in",
 });
 
 describe("overlapping sign-ins", () => {
-  test("a refusal answered to one never cancels the cleanup owed to the other", async () => {
-    const older = Promise.withResolvers<Response>();
-    const newer = Promise.withResolvers<Response>();
+  test("a refusal answered to the older one never cancels the cleanup owed to the newer one", async () => {
+    const olderAnswer = Promise.withResolvers<Response>();
+    const newerRead = Promise.withResolvers<Response>();
     const { promise: olderSent, resolve: olderReached } = Promise.withResolvers<void>();
-    const { promise: newerSent, resolve: newerReached } = Promise.withResolvers<void>();
+    const { promise: newerReadSent, resolve: newerReadReached } = Promise.withResolvers<void>();
     let sent = 0;
     const { node, requests } = harness({
+      // The older /delegate is held. The newer one is accepted at once, and its strict read is held.
       delegate: () => {
         sent += 1;
-        if (sent === 1) { olderReached(); return older.promise; }
-        newerReached();
-        return newer.promise;
+        if (sent === 1) { olderReached(); return olderAnswer.promise; }
+        return Response.json({ activated: [applications], skipped: [] });
       },
+      invoke: () => { newerReadReached(); return newerRead.promise; },
     });
     const olderSignIn = node.signIn().then(() => undefined, (error: unknown) => error);
     await olderSent;
     const newerSignIn = node.signIn().then(() => undefined, (error: unknown) => error);
-    await newerSent;
-    // The newer sign-in's /delegate gets a 5xx (it may have landed). A few microtask turns later, before that sign-in has
-    // read how it failed, the older one's gets a 4xx. With the outcome kept on the auth rather than on the proof that sent
-    // the request, the 4xx would have cleared the newer sign-in's cleanup.
-    newer.resolve(new Response("boom", { status: 503 }));
-    for (let turn = 0; turn < 3; turn++) await Promise.resolve();
-    older.resolve(new Response("denied", { status: 403 }));
-    await Promise.all([olderSignIn, newerSignIn]);
+    await newerReadSent;
+    // The newer sign-in's /delegate has landed and its read is pending. Now the older one's /delegate is refused (4xx) and
+    // that sign-in has fully failed, before the newer read answers. A refusal that is recorded on the auth rather than on
+    // the proof that sent the request would clear the newer sign-in's cleanup here.
+    olderAnswer.resolve(new Response("denied", { status: 403 }));
+    expect(codeOf(await olderSignIn)).toBe("ACCOUNT_SETUP_REQUIRED");
+    newerRead.resolve(new Response("Space not found", { status: 404 }));
+    expect(codeOf(await newerSignIn)).toBe("ACCOUNT_SETUP_REQUIRED");
     await node.nodeSignOutStatus();
     const delegates = requests("POST", "/delegate");
     const retire = requests("POST", "/session/retire");
