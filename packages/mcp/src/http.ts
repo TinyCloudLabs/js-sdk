@@ -47,6 +47,9 @@ const MCP_CORS_ALLOWED_HEADERS =
 const MCP_CORS_EXPOSED_HEADERS = "WWW-Authenticate, Mcp-Session-Id, Mcp-Protocol-Version";
 const LOCAL_CLI_PACKAGE = ["@tinycloud", "cli"].join("/");
 const LOCAL_MCP_PACKAGE = ["@tinycloud", "mcp"].join("/");
+const MUSE_CHALLENGE_PREFIX = "muse-challenge=";
+const MUSE_CHALLENGE_PATH = "/.well-known/muse-challenge/";
+const MUSE_CHALLENGE_TOKEN = /^[A-Za-z0-9_-]{1,256}$/;
 
 export interface HostedMcpConfig extends RemoteStoreConfig {
   readonly oauthMetadata: OAuthMetadata;
@@ -56,6 +59,13 @@ export interface HostedMcpConfig extends RemoteStoreConfig {
    * signed token claims are checked.
    */
   readonly introspection?: Omit<TokenStatusConfig, "resourceUrl">;
+  /**
+   * Meta Muse domain-verification token (`TC_MCP_MUSE_CHALLENGE`), either the
+   * bare token or the whole `muse-challenge=<token>` line. When set, the hosted
+   * surface serves `GET /.well-known/muse-challenge/<token>`; unset, that path
+   * is not found.
+   */
+  readonly museChallenge?: string;
 }
 
 export interface HostedMcpApp {
@@ -85,11 +95,12 @@ export function createHostedMcpApp(config: HostedMcpConfig): HostedMcpApp {
     throw new Error("TC_MCP_NATIVE_SERVICE_CREDENTIAL must contain at least 32 bytes.");
   }
   const resourceUrl = canonicalResourceUrl(config.publicUrl);
+  const museChallenge = museChallengeToken(config.museChallenge);
   const statusFor = (resource: URL): TokenStatusChecker | undefined =>
     config.introspection === undefined
       ? undefined
       : createTokenStatusChecker({ ...config.introspection, resourceUrl: resource.toString() });
-  const hosted = createHostedSurface(config, resourceUrl, "hosted", statusFor(resourceUrl));
+  const hosted = createHostedSurface({ ...config, museChallenge }, resourceUrl, "hosted", statusFor(resourceUrl));
   const surfaces = [hosted];
   const restrictedByPath = new Map<string, HostedMcpApp>();
   for (const prefix of RESTRICTED_ADDRESS_PREFIXES) {
@@ -98,6 +109,7 @@ export function createHostedMcpApp(config: HostedMcpConfig): HostedMcpApp {
     const restricted = createHostedSurface({
       ...config,
       nativeServiceCredential: undefined,
+      museChallenge: undefined,
       stateDir: join(config.stateDir, prefix),
       approvalPath: connectUrl.pathname,
     }, restrictedUrl, "public", statusFor(restrictedUrl), ANNOTATION_TITLE_PREFIXES.has(prefix));
@@ -116,6 +128,20 @@ export function createHostedMcpApp(config: HostedMcpConfig): HostedMcpApp {
       await Promise.all(surfaces.map((surface) => surface.close()));
     },
   };
+}
+
+/**
+ * Accepts `TC_MCP_MUSE_CHALLENGE` as the bare token or as the full
+ * `muse-challenge=<token>` line Meta shows; returns the bare token.
+ */
+function museChallengeToken(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  if (!trimmed) return undefined;
+  const token = trimmed.startsWith(MUSE_CHALLENGE_PREFIX) ? trimmed.slice(MUSE_CHALLENGE_PREFIX.length) : trimmed;
+  if (!MUSE_CHALLENGE_TOKEN.test(token)) {
+    throw new Error("TC_MCP_MUSE_CHALLENGE must be a token of letters, digits, '-' or '_', optionally prefixed with 'muse-challenge='.");
+  }
+  return token;
 }
 
 function createHostedSurface(
@@ -327,6 +353,12 @@ function createHostedSurface(
       if (url.pathname === "/robots.txt" && surface === "hosted") {
         return request.method === "GET"
           ? publicText(`User-agent: *\nAllow: /\nContent-Signal: search=yes, ai-input=yes, ai-train=no\nSitemap: ${new URL("/sitemap.xml", resourceUrl)}\nAgentmap: ${new URL("/.well-known/ai-catalog.json", resourceUrl)}\n`, "text/plain; charset=utf-8")
+          : methodNotAllowed("GET");
+      }
+      if (config.museChallenge !== undefined && surface === "hosted" &&
+        url.pathname === `${MUSE_CHALLENGE_PATH}${config.museChallenge}`) {
+        return request.method === "GET"
+          ? publicText(`${MUSE_CHALLENGE_PREFIX}${config.museChallenge}`, "text/plain; charset=utf-8")
           : methodNotAllowed("GET");
       }
       if ((url.pathname === "/mcp/server-card" || url.pathname === "/.well-known/mcp/server-card.json") && surface === "hosted") {

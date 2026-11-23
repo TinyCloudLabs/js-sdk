@@ -86,6 +86,16 @@ write_mcp_deploy_env_file() {
     entries+=("$key=$quoted")
   done
 
+  # Optional public value: written only when set, so an unset variable leaves the file as before.
+  local muse_challenge=${TC_MCP_MUSE_CHALLENGE-}
+  if [ -n "$muse_challenge" ]; then
+    if ! [[ "$muse_challenge" =~ ^(muse-challenge=)?[A-Za-z0-9_-]{1,256}$ ]]; then
+      echo "::error::TC_MCP_MUSE_CHALLENGE must be the Muse token or the line muse-challenge=<token>" >&2
+      return 1
+    fi
+    entries+=("TC_MCP_MUSE_CHALLENGE=$(quote_mcp_phala_env_value TC_MCP_MUSE_CHALLENGE "$muse_challenge")")
+  fi
+
   umask 077
   MCP_DEPLOY_ENV_FILE=$(mktemp "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/mcp-deploy-env.XXXXXX") || return 1
   if ! printf '%s\n' "${entries[@]}" > "$MCP_DEPLOY_ENV_FILE" || ! chmod 0600 "$MCP_DEPLOY_ENV_FILE"; then

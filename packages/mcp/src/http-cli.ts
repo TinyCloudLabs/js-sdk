@@ -31,6 +31,9 @@ export async function main(): Promise<void> {
     ...(process.env.TC_MCP_NATIVE_SERVICE_CREDENTIAL === undefined
       ? {}
       : { nativeServiceCredential: process.env.TC_MCP_NATIVE_SERVICE_CREDENTIAL }),
+    ...(process.env.TC_MCP_MUSE_CHALLENGE === undefined
+      ? {}
+      : { museChallenge: process.env.TC_MCP_MUSE_CHALLENGE }),
     oauthMetadata,
     introspection: {
       endpoint: requiredUrl("TC_MCP_INTROSPECTION_URL").toString(),
