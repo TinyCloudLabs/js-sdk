@@ -5,8 +5,9 @@
 # and the entrypoint logic without Docker.
 #   1. `docker compose config` accepts the file with the token unset, empty and set.
 #   2. Without a token the sidecar container starts, stays running, prints the one disabled line and runs `tail`, not Vector.
-#   3. With a dummy token and no network the sidecar starts Vector, and the token is in no process's argument list:
-#      the printf that writes it is the shell builtin.
+#   3. With a dummy token and no network the sidecar starts Vector. The token stays out of every argument list because the
+#      printf that writes it is a builtin of the shell that runs the entrypoint (checked); a scan of the running
+#      argument lists is supporting evidence only.
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -74,9 +75,18 @@ for _ in $(seq 1 30); do
 done
 [ -n "${started}" ] || fail "Vector did not start with a dummy token"
 offline_cmd ps --status running --services | grep -qx vector || fail "the sidecar is not running with a dummy token"
+# The proof: printf is a builtin of the very shell that runs the entrypoint. Builtin status is per shell, so the
+# entrypoint must be exactly the shell asked below, and the token file must be written by a bare `printf`.
+shell="$(jq -r '.services.vector.entrypoint[0]' "${work}/offline.json")"
+jq -e --arg shell "${shell}" '.services.vector.entrypoint == [$shell, "-ec"]' "${work}/offline.json" >/dev/null \
+  || fail "the sidecar entrypoint is not a shell run with -ec"
+# shellcheck disable=SC2016  # the dollar signs are literal text of the compose source
+grep -Eq '^ +printf .%s. "\$\$BETTERSTACK_SOURCE_TOKEN" > /var/lib/vector/secrets/bs_token$' "${compose}" \
+  || fail "the token file is not written by a bare printf"
+builtin="$(offline_cmd exec -T vector "${shell}" -ec 'type printf')"
+grep -q 'shell builtin' <<<"${builtin}" || fail "printf is not a builtin of ${shell}: ${builtin}"
+# Supporting evidence only, not proof: a printf that is an external command would exit before this sample.
 if offline_cmd exec -T vector ps -o args | grep -qF -- "${dummy}"; then
   fail "the token appears in a process argument list"
 fi
-builtin="$(offline_cmd exec -T vector /bin/sh -c 'type printf')"
-grep -q 'shell builtin' <<<"${builtin}" || fail "printf in the sidecar shell is not the shell builtin: ${builtin}"
 echo "compose smoke passed"
