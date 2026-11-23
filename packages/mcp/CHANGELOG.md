@@ -1,5 +1,26 @@
 # @tinycloud/mcp
 
+## 0.12.0-beta.11
+
+### Minor Changes
+
+- 3d5cd63: The hosted MCP asks OpenKey for approval with a signed approval request and collects the approved delegation from OpenKey's result API. Opening a `/connect` link creates the request, signed by the tenant's own key, and redirects to its OpenKey link. The server collects the result in the background (every 2 seconds for the first minute, then every 10 seconds) and before each call from that account, stores it once and acknowledges it. A refused approval leaves the same link usable for a new attempt; the refusal is logged as `approval result rejected:` with its stage and code. Results are fetched only from the configured OpenKey API origin, `TC_OPENKEY_API_HOST` (default `https://api.openkey.so` for `https://openkey.so`). `TC_LINKS_API_ORIGIN` sets the links service that holds the request. The `/connect/callback` routes are removed. When OpenKey cannot create the request, the link answers `503` with a page asking the person to try again in a minute.
+
+  Details: TC-3617
+
+- 3d5cd63: The hosted MCP's connection approval asks the owner for a 90-day renewal lease. An approved lease is checked against the signed grant and admitted at the node before the session is stored, and the session keeps it, so the node renews the account grant until the lease ends. A lease that does not match the grant, was issued to a renewer the node replaced or comes with a grant ending within 15 minutes is refused and logged with stage `renewal`; a node that cannot admit the lease yet leaves the approval for the next collection. Past the grant's signed end, a session whose lease has ended or whose renewer changed starts a fresh connection approval, and a node that cannot answer reports the account unavailable.
+
+  Collection waits at most 3 seconds per call in total, reads at most 256 KiB of each OpenKey result reply, recovers a claimed result by the time recorded in the claim, collects for at most 10 minutes after a request ends and opens a new request when a stored one names other OpenKey origins.
+
+  Details: TC-3617
+
+### Patch Changes
+
+- Updated dependencies [3d5cd63]
+  - @tinycloud/sdk-core@3.14.0-beta.13
+  - @tinycloud/node-sdk@3.14.0-beta.13
+  - @tinycloud/operations@0.9.2-beta.11
+
 ## 0.11.1-beta.10
 
 ### Patch Changes

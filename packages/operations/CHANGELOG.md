@@ -1,5 +1,17 @@
 # @tinycloud/operations
 
+## 0.9.2-beta.11
+
+### Patch Changes
+
+- 3d5cd63: A renewal lease issued to a renewer the node no longer advertises fails with the coded error `RENEWAL_RENEWER_CHANGED` (`RenewalRenewerChangedError` from `@tinycloud/sdk-core/delegations/renewal`). Lease admission, renewal history checks and node-sdk's renewal restore throw it, and `restoreStoredSession` reads it as an expired session (`AUTH_EXPIRED`), so callers ask the owner for a new approval. The CLI matches the code, not the message. Courier's saved-renewal recovery reports it as `renewal-approval-required`.
+
+  Details: TC-3617
+
+- Updated dependencies [3d5cd63]
+  - @tinycloud/sdk-core@3.14.0-beta.13
+  - @tinycloud/node-sdk@3.14.0-beta.13
+
 ## 0.9.2-beta.10
 
 ### Patch Changes

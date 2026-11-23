@@ -16989,7 +16989,7 @@ import { setTimeout as wait } from "timers/promises";
 import { additionalDelegationsPath, profilePath as profilePath10 } from "@tinycloud/operations/state";
 import { principalDidEquals } from "@tinycloud/node-sdk";
 import { canonicalizeRecapCaveats, parseSignedCompactUcanAttenuation as parseSignedCompactUcanAttenuation2 } from "@tinycloud/sdk-core";
-import { admitOwnerRenewalLease, RENEWAL_LEASE_ORIGINAL_EXPIRED } from "@tinycloud/sdk-core/delegations/renewal";
+import { admitOwnerRenewalLease, RENEWAL_LEASE_ORIGINAL_EXPIRED, RENEWAL_RENEWER_CHANGED } from "@tinycloud/sdk-core/delegations/renewal";
 import { RENEWAL_ADMISSION_LEAD_MS, verifyOwnerRenewalLease } from "@tinycloud/sdk-core/delegations/renewal-receipt";
 function invalid(message) {
   return new CLIError("APPROVAL_RESULT_INVALID", message, ExitCode.PERMISSION_DENIED);
@@ -17192,7 +17192,7 @@ async function admitApprovedRenewal(host, entry, verified) {
     if (error instanceof Error && "code" in error && error.code === RENEWAL_LEASE_ORIGINAL_EXPIRED) {
       throw new CLIError("AUTH_EXPIRED", "The approved session has expired. No session was saved.", ExitCode.AUTH_REQUIRED);
     }
-    if (error instanceof Error && error.message === "Renewal node identity changed") {
+    if (error instanceof Error && "code" in error && error.code === RENEWAL_RENEWER_CHANGED) {
       throw refused("This renewal names a different TinyCloud node than the one you signed in to, so it wasn't turned on. Sign in again for a new approval.");
     }
     throw Object.assign(new CLIError(
