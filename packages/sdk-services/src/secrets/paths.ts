@@ -11,7 +11,8 @@ const SECRET_PREFIX = "secrets/";
 const SCOPED_SECRET_PREFIX = "secrets/scoped/";
 /** The one unscoped name whose key (`secrets/scoped`) is the parent of the scoped keys. */
 const RESERVED_SECRET_NAME = "SCOPED";
-const RESERVED_SECRET_SCOPES = new Set(["default", "global"]);
+const BOT_HISTORY_SCOPE = "tinychat-bot-history";
+const RESERVED_SECRET_SCOPES = new Set(["default", "global", BOT_HISTORY_SCOPE]);
 
 export interface SecretScopeOptions {
   /** Optional logical scope. Omit for the global secret namespace. */
@@ -31,6 +32,7 @@ export const TC832_RESERVED_SCOPES: readonly string[] = Object.freeze([
   "default",
   "global",
   "scoped",
+  BOT_HISTORY_SCOPE,
 ]);
 
 export interface SecretPutOptions extends SecretScopeOptions {
@@ -109,8 +111,8 @@ export interface ResolvedSecretPath {
  * The named key a secret is sealed to (TC-3284): `secrets/<lower(NAME)>`, or
  * `secrets/scoped/<scope>/<lower(NAME)>`. Lowercasing a `SECRET_NAME_RE` name
  * is injective. The scope must already be canonical (`SECRET_SCOPE_RE`); it is
- * never normalised. Throws for a name or scope over 64 bytes, and for the
- * unscoped name `SCOPED`: its key `secrets/scoped` is the parent of every scoped key.
+ * never normalised. Throws for a name or scope over 64 bytes, the reserved
+ * bot-history scope, and the unscoped name `SCOPED`, the parent of scoped keys.
  */
 export function secretKeyPath(name: string, scope?: string): string {
   if (!SECRET_NAME_RE.test(name) ||
@@ -119,6 +121,9 @@ export function secretKeyPath(name: string, scope?: string): string {
   }
   if (scope === undefined && name === RESERVED_SECRET_NAME) {
     throw new Error(`Secret name ${JSON.stringify(name)} is reserved.`);
+  }
+  if (scope === BOT_HISTORY_SCOPE) {
+    throw new Error(`Secret scope ${JSON.stringify(scope)} is reserved.`);
   }
   return `${scope === undefined ? SECRET_PREFIX : `${SCOPED_SECRET_PREFIX}${scope}/`}${name.toLowerCase()}`;
 }
@@ -134,6 +139,13 @@ export function parseSecretKeyPath(path: string): { name: string; scope?: string
   } catch {
     return undefined;
   }
+}
+
+/** The seeded key reserved for TinyChat bot history, not a secret record. */
+export const BOT_HISTORY_KEY_PATH = `${SCOPED_SECRET_PREFIX}${BOT_HISTORY_SCOPE}/bot-history`;
+
+export function isReservedSecretSpaceKeyPath(path: string): boolean {
+  return path === BOT_HISTORY_KEY_PATH;
 }
 
 /**

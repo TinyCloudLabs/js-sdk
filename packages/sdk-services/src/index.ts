@@ -448,6 +448,8 @@ export {
   MAX_SECRET_SCOPE_LENGTH,
   MAX_SECRET_NAME_LENGTH,
   TC832_RESERVED_SCOPES,
+  BOT_HISTORY_KEY_PATH,
+  isReservedSecretSpaceKeyPath,
   parseSecretCatalogKey,
   parseStoredSecretCatalogKey,
   secretNameTooLongMessage,
