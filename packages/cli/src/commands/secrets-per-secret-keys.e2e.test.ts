@@ -101,9 +101,12 @@ describe.skipIf(!NODE_BIN)("per-secret keys against a real node", () => {
     const env: Record<string, string | undefined> = { ...process.env, HOME: home, TC_HOME: home, TC_SECRETS_NAMED_KEY_WRITES: "1" };
     delete env.TC_HOST;
     delete env.TC_PRIVATE_KEY;
+    // A pipe written and closed, as the MCP e2e does: with a Blob stdin the CI Bun (1.3.14) stored an empty value.
     const child = Bun.spawn([process.execPath, join(import.meta.dir, "../index.ts"), "-q", "--json", ...args], {
-      env, stdin: new Blob([stdin]), stdout: "pipe", stderr: "pipe",
+      env, stdin: "pipe", stdout: "pipe", stderr: "pipe",
     });
+    child.stdin.write(stdin);
+    child.stdin.end();
     const [stdout, stderr, exitCode] = await Promise.all([
       new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited,
     ]);
