@@ -508,6 +508,7 @@ export type Ledger = {
   tc3862ExplorerOriginRoot?: LogoutRatchet;
   tc3522InvocationRefusalRoot?: LogoutRatchet;
   tc3810ReaderRoot?: LogoutRatchet;
+  tc3975NamedKeyWarningRoot?: LogoutRatchet;
   tc3522InvocationRefusalKvWorker?: WorkerRatchet;
   tc3522InvocationRefusalReplicaWorker?: Omit<WorkerRatchet, "worker"> & { replicaWorker: { delta: number; ceiling: number } };
   tc2773LazyRestoreReplicaWorker?: Omit<WorkerRatchet, "worker"> & { replicaWorker: { delta: number; ceiling: number } };
@@ -1172,6 +1173,7 @@ export function ancestryPins(root: Ledger, hasGatedOnly: boolean): Array<{ row: 
   if (root.tc3862ExplorerOriginRoot !== undefined) pins.push({ row: "tc3862ExplorerOriginRoot", pin: root.tc3862ExplorerOriginRoot.sourceCommits.at(-1)! });
   if (root.tc3522InvocationRefusalRoot !== undefined) pins.push({ row: "tc3522InvocationRefusalRoot", pin: root.tc3522InvocationRefusalRoot.sourceCommits.at(-1)! });
   if (root.tc3810ReaderRoot !== undefined) pins.push({ row: "tc3810ReaderRoot", pin: root.tc3810ReaderRoot.sourceCommits.at(-1)! });
+  if (root.tc3975NamedKeyWarningRoot !== undefined) pins.push({ row: "tc3975NamedKeyWarningRoot", pin: root.tc3975NamedKeyWarningRoot.sourceCommits.at(-1)! });
   if (root.tc3522InvocationRefusalKvWorker !== undefined) pins.push({ row: "tc3522InvocationRefusalKvWorker", pin: root.tc3522InvocationRefusalKvWorker.sourceCommits.at(-1)! });
   if (root.tc3522InvocationRefusalReplicaWorker !== undefined) pins.push({ row: "tc3522InvocationRefusalReplicaWorker", pin: root.tc3522InvocationRefusalReplicaWorker.sourceCommits.at(-1)! });
   if (hasGatedOnly) pins.push({ row: "gatedOnlyRatchet", pin: approvedGatedOnlyRatchet.sourceCommit });
@@ -1306,6 +1308,7 @@ export function rootCeilings(root: Ledger): Array<{ row: string; ceiling: GzipSi
     ["tc3862ExplorerOriginRoot", root.tc3862ExplorerOriginRoot?.root.ceiling],
     ["tc3522InvocationRefusalRoot", root.tc3522InvocationRefusalRoot?.root.ceiling],
     ["tc3810ReaderRoot", root.tc3810ReaderRoot?.root.ceiling],
+    ["tc3975NamedKeyWarningRoot", root.tc3975NamedKeyWarningRoot?.root.ceiling],
   ];
   return rows.flatMap(([row, ceiling]) => ceiling === undefined ? [] : [{ row, ceiling }]);
 }
@@ -4194,6 +4197,33 @@ export const approvedTc3810ReaderRoot: LogoutRatchet = {
   "reason": "Both canonical jobs (SQLite and Postgres, run 45220085215, provisional head 3b44e890) measured 1540015/1470863 gzip bytes, 179/110 over #1148's measured 1539836/1470753. The Web SDK root reads signed attenuable and terminal ReCap delegation modes. Details: TC-3810"
 };
 
+export const approvedTc3975NamedKeyWarningRoot: LogoutRatchet = {
+  "label": "report named-key omissions during sign-in (TC-3975)",
+  "ruling": "Naomi 2026-11-23 22:50:03Z: root-only allowance of up to +167 B ESM and +152 B CJS gzip for js-sdk #1144.",
+  "base": "c70e31715dbc62741625dfe2dfc6f30cece6deed",
+  "sourceCommits": [
+    "e11cfa271a872df5e9fed3f978e0d3f3ecb82b67"
+  ],
+  "canonicalCI": {
+    "run": "45177867274",
+    "jobs": [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45177867274/job/137703708459",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45177867274/job/137703708160"
+    ]
+  },
+  "root": {
+    "delta": {
+      "index.mjs": 167,
+      "index.cjs": 152
+    },
+    "ceiling": {
+      "index.mjs": 1540182,
+      "index.cjs": 1471015
+    }
+  },
+  "reason": "Both canonical jobs (SQLite and Postgres, run 45177867274, head e11cfa27) measured 1539683/1471605 gzip bytes, 167/152 over the then-newest TC-3802 ceilings of 1539516/1471453. The ceilings here carry that delta over the TC-3810 ceilings. The bytes are the Web SDK root's sign-in warning for secret key resources omitted when the node lacks encryption-named-keys-v1. Details: TC-3975"
+};
+
 export const approvedLedgerRows: Record<string, unknown> = {
   phase2Ratchet: approvedPhase2,
   fixRequiredRatchet: approvedFixRequiredRatchet,
@@ -4323,6 +4353,7 @@ export const approvedLedgerRows: Record<string, unknown> = {
   tc3862ExplorerOriginRoot: approvedTc3862ExplorerOriginRoot,
   tc3522InvocationRefusalRoot: approvedTc3522InvocationRefusalRoot,
   tc3810ReaderRoot: approvedTc3810ReaderRoot,
+  tc3975NamedKeyWarningRoot: approvedTc3975NamedKeyWarningRoot,
   tc3522InvocationRefusalKvWorker: approvedTc3522InvocationRefusalKvWorker,
   tc3522InvocationRefusalReplicaWorker: approvedTc3522InvocationRefusalReplicaWorker,
 };
@@ -4928,6 +4959,11 @@ export function validateLedger(value: Ledger, historicalBase = false): void {
       (!value.tc3522InvocationRefusalRoot ||
         JSON.stringify(value.tc3810ReaderRoot) !== JSON.stringify(approvedTc3810ReaderRoot))) {
     throw new Error("Only the exact TC-3810 reader root admission is approved.");
+  }
+  if (value.tc3975NamedKeyWarningRoot !== undefined &&
+      (!value.tc3810ReaderRoot ||
+        JSON.stringify(value.tc3975NamedKeyWarningRoot) !== JSON.stringify(approvedTc3975NamedKeyWarningRoot))) {
+    throw new Error("Only the exact TC-3975 named-key warning root admission is approved.");
   }
   if (value.tc3522InvocationRefusalKvWorker !== undefined || value.tc3522InvocationRefusalReplicaWorker !== undefined) {
     if (!value.tc3947ReplicaRevokeRoot ||
