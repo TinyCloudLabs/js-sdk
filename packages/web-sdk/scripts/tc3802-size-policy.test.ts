@@ -15,12 +15,15 @@ test("TC-3802 records the exact canonical CI root bytes of #1133", () => {
   expect(row).toEqual(approvedTc3802SecretKeyCapRoot);
   expect(row.base).toBe("67f965e446d1ea6a0e6d8688228b1e2d8dada833");
   expect(row.canonicalCI).toEqual({
-    run: "PLACEHOLDER: replaced by the canonical CI run of this head",
-    jobs: ["PLACEHOLDER: sqlite Replica job", "PLACEHOLDER: postgres Replica job"],
+    run: "45163202497",
+    jobs: [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45163202497/job/137653511265",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45163202497/job/137653512203",
+    ],
   });
-  expect(row.sourceCommits).toEqual(["fd14fa023d84e17436150e11fc198cfce3d09d18"]);
-  expect(row.root.ceiling).toEqual({ "index.mjs": 1539515, "index.cjs": 1471456 });
-  expect(row.root.delta).toEqual({ "index.mjs": 7, "index.cjs": 10 });
+  expect(row.sourceCommits).toEqual(["d09e029c3a20e1213760360afa7dc16c3ff0fc33"]);
+  expect(row.root.ceiling).toEqual({ "index.mjs": 1539516, "index.cjs": 1471453 });
+  expect(row.root.delta).toEqual({ "index.mjs": 8, "index.cjs": 7 });
 
   for (const format of ["index.mjs", "index.cjs"] as const) {
     expect(row.root.ceiling[format] - predecessor.root.ceiling[format]).toBe(row.root.delta[format]);
