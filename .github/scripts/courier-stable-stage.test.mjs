@@ -547,7 +547,7 @@ const webSdkPlan = (requiredFiles) =>
   });
 const WEB_FILES = ["dist/index.mjs", "dist/index.cjs", "dist/index.d.ts"];
 
-test("a plan's requiredFiles replace the table for that package: a web-sdk build is accepted, a missing file refused", () => {
+test("a plan's requiredFiles are what a table-less package must ship: a web-sdk build is accepted, a missing file refused", () => {
   const plan = webSdkPlan(WEB_FILES);
   const pkg = plan.packages[0];
   const manifest = { name: "@tinycloud/web-sdk", version: "3.14.1", dependencies: { zod: "^3.23.0" } };
@@ -560,10 +560,33 @@ test("a plan's requiredFiles replace the table for that package: a web-sdk build
   assert.match(tarballProblems({ pkg: plain.packages[0], plan: plain, entries: shipped, manifest }).join(), /lacks dist\/index\.js/);
 });
 
-test("packages without requiredFiles keep the existing table and default", () => {
+test("a plan's requiredFiles add to the table and never replace it", () => {
+  // (a) a plan listing README.md for the CLI still requires the table's bin/tinycloud and dist/index.js.
+  const cli = { ...pkgOf("@tinycloud/cli"), requiredFiles: ["README.md"] };
+  assert.deepEqual([...requiredFiles(cli)].sort(), ["README.md", "bin/tinycloud", "dist/index.js"]);
+  const plan = real;
+  const manifest = stableManifest(pkgOf("@tinycloud/cli"));
+  const entries = (...paths) => paths.map((path) => entry(`package/${path}`));
+  assert.deepEqual(tarballProblems({ pkg: cli, plan, entries: entries("package.json", "bin/tinycloud", "dist/index.js", "README.md"), manifest }), []);
+  const noBin = tarballProblems({ pkg: cli, plan, entries: entries("package.json", "dist/index.js", "README.md"), manifest }).join();
+  assert.match(noBin, /lacks bin\/tinycloud/);
+  assert.match(tarballProblems({ pkg: cli, plan, entries: entries("package.json", "bin/tinycloud", "dist/index.js"), manifest }).join(), /lacks README\.md/);
+  // The plan listing a table file again does not duplicate it.
+  assert.deepEqual(requiredFiles({ ...pkgOf("@tinycloud/courier"), requiredFiles: ["dist/cli.js", "x/y.js"] }), ["dist/cli.js", "dist/index.js", "x/y.js"]);
+});
+
+test("a package with a plan list and no table entry does not need dist/index.js (web-sdk)", () => {
+  // (b)
+  const webSdk = loadPlan("tc-4082").byName.get("@tinycloud/web-sdk");
+  assert.equal(requiredFiles(webSdk).includes("dist/index.js"), false);
+  assert.deepEqual(requiredFiles(webSdk), webSdk.requiredFiles);
+});
+
+test("a package with neither a table entry nor a plan list still requires dist/index.js", () => {
+  // (c)
+  assert.deepEqual(requiredFiles(pkgOf("@tinycloud/bootstrap")), ["dist/index.js"]);
   assert.deepEqual(requiredFiles(pkgOf("@tinycloud/courier")), ["dist/cli.js", "dist/index.js"]);
   assert.deepEqual(requiredFiles(pkgOf("@tinycloud/cli")), ["bin/tinycloud", "dist/index.js"]);
-  assert.deepEqual(requiredFiles(pkgOf("@tinycloud/bootstrap")), ["dist/index.js"]);
 });
 
 test("requiredFiles must be a non-empty list of safe relative paths", () => {

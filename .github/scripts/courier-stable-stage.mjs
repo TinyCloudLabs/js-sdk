@@ -51,8 +51,14 @@ const REQUIRED_FILES = {
   "@tinycloud/cli": ["bin/tinycloud", "dist/index.js"],
 };
 
-// What a package's tarball must ship: the plan's own list when it has one, else the table, else dist/index.js.
-export const requiredFiles = (pkg) => pkg.requiredFiles ?? REQUIRED_FILES[pkg.name] ?? ["dist/index.js"];
+// What a package's tarball must ship: the table's files plus the plan's own list (a plan adds, never replaces). Only a
+// package with neither falls back to dist/index.js, so a build that has no dist/index.js (web-sdk) lists its own files.
+export const requiredFiles = (pkg) => {
+  const table = REQUIRED_FILES[pkg.name] ?? [];
+  const listed = pkg.requiredFiles ?? [];
+  const all = [...new Set([...table, ...listed])];
+  return all.length ? all : ["dist/index.js"];
+};
 
 // Which plan-dependent workflow steps apply. The node release pin check is the CLI's own.
 export const planFlags = (plan) => ({ nodeReleaseCheck: plan.byName.has("@tinycloud/cli") });
