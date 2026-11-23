@@ -503,6 +503,7 @@ export type Ledger = {
   tc3947ReplicaRevokeRoot?: LogoutRatchet & { worker: { delta: number; ceiling: number }; replicaWorker: { delta: number; ceiling: number } };
   tc3801NamedKeysRoot?: LogoutRatchet;
   tc3969SecretKeyCoverageRoot?: LogoutRatchet;
+  tc3823BotHistoryKeyRoot?: LogoutRatchet;
   tc2773LazyRestoreReplicaWorker?: Omit<WorkerRatchet, "worker"> & { replicaWorker: { delta: number; ceiling: number } };
 };
 
@@ -1160,6 +1161,7 @@ export function ancestryPins(root: Ledger, hasGatedOnly: boolean): Array<{ row: 
   if (root.tc3947ReplicaRevokeRoot !== undefined) pins.push({ row: "tc3947ReplicaRevokeRoot", pin: root.tc3947ReplicaRevokeRoot.sourceCommits.at(-1)! });
   if (root.tc3801NamedKeysRoot !== undefined) pins.push({ row: "tc3801NamedKeysRoot", pin: root.tc3801NamedKeysRoot.sourceCommits.at(-1)! });
   if (root.tc3969SecretKeyCoverageRoot !== undefined) pins.push({ row: "tc3969SecretKeyCoverageRoot", pin: root.tc3969SecretKeyCoverageRoot.sourceCommits.at(-1)! });
+  if (root.tc3823BotHistoryKeyRoot !== undefined) pins.push({ row: "tc3823BotHistoryKeyRoot", pin: root.tc3823BotHistoryKeyRoot.sourceCommits.at(-1)! });
   if (hasGatedOnly) pins.push({ row: "gatedOnlyRatchet", pin: approvedGatedOnlyRatchet.sourceCommit });
   return pins;
 }
@@ -1287,6 +1289,7 @@ export function rootCeilings(root: Ledger): Array<{ row: string; ceiling: GzipSi
     ["tc3947ReplicaRevokeRoot", root.tc3947ReplicaRevokeRoot?.root.ceiling],
     ["tc3801NamedKeysRoot", root.tc3801NamedKeysRoot?.root.ceiling],
     ["tc3969SecretKeyCoverageRoot", root.tc3969SecretKeyCoverageRoot?.root.ceiling],
+    ["tc3823BotHistoryKeyRoot", root.tc3823BotHistoryKeyRoot?.root.ceiling],
   ];
   return rows.flatMap(([row, ceiling]) => ceiling === undefined ? [] : [{ row, ceiling }]);
 }
@@ -4042,6 +4045,25 @@ export const approvedTc3969SecretKeyCoverageRoot: LogoutRatchet = {
   "reason": "The Web SDK root includes the signed exact-key coverage check and uses the owner-bound manifest for secrets operations. Canonical Node.js 22/Bun 1.3.14 CI on #1143 (c302d7ce) measured 1539389 and 1471374 gzip -9 bytes over the TC-3801 ceilings of 1539368 and 1471344. Details: TC-3969"
 };
 
+export const approvedTc3823BotHistoryKeyRoot: LogoutRatchet = {
+  "label": "verified bot-history descriptor (TC-3823)",
+  "ruling": "size-ruling (10:24Z): TC-3823 js-sdk #1141: replica-size-ledger.json gains a root-only ratchet row tc3823BotHistoryKeyRoot over tc3969SecretKeyCoverageRoot with ceilings index.mjs 1539508 (+119) and index.cjs 1471446 (+72), canonicalCI run 45153655976; workers and other buckets unchanged.",
+  "base": "a974542e479c6f3c5d4fab10784a330a6003983d",
+  "sourceCommits": ["a8692311198e3b4643eb6018255c9013bf19c7bd"],
+  "canonicalCI": {
+    "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45153655976",
+    "jobs": [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45153655976/job/137621049279",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45153655976/job/137621049305"
+    ]
+  },
+  "root": {
+    "delta": { "index.mjs": 119, "index.cjs": 72 },
+    "ceiling": { "index.mjs": 1539508, "index.cjs": 1471446 }
+  },
+  "reason": "The Web SDK root includes sealing to a verified bot-history key descriptor and the exact runtime grant for that key. Canonical Node.js 22/Bun 1.3.14 CI on #1141 (a8692311) measured 1539508 and 1471446 gzip -9 bytes over the TC-3969/TC-3971 ceilings of 1539389 and 1471374. Workers and other buckets are unchanged. Details: TC-3823"
+};
+
 export const approvedLedgerRows: Record<string, unknown> = {
   phase2Ratchet: approvedPhase2,
   fixRequiredRatchet: approvedFixRequiredRatchet,
@@ -4166,6 +4188,7 @@ export const approvedLedgerRows: Record<string, unknown> = {
   tc3947ReplicaRevokeRoot: approvedTc3947ReplicaRevokeRoot,
   tc3801NamedKeysRoot: approvedTc3801NamedKeysRoot,
   tc3969SecretKeyCoverageRoot: approvedTc3969SecretKeyCoverageRoot,
+  tc3823BotHistoryKeyRoot: approvedTc3823BotHistoryKeyRoot,
 };
 
 /** Only a git merge-base ledger may retain the pre-correction toolchain. */
@@ -4744,6 +4767,11 @@ export function validateLedger(value: Ledger, historicalBase = false): void {
       (!value.tc3801NamedKeysRoot ||
         JSON.stringify(value.tc3969SecretKeyCoverageRoot) !== JSON.stringify(approvedTc3969SecretKeyCoverageRoot))) {
     throw new Error("Only the exact TC-3969/TC-3971 root admission is approved.");
+  }
+  if (value.tc3823BotHistoryKeyRoot !== undefined &&
+      (!value.tc3969SecretKeyCoverageRoot ||
+        JSON.stringify(value.tc3823BotHistoryKeyRoot) !== JSON.stringify(approvedTc3823BotHistoryKeyRoot))) {
+    throw new Error("Only the exact TC-3823 root admission is approved.");
   }
 }
 
