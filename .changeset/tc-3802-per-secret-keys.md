@@ -23,6 +23,8 @@ With `TC_SECRETS_NAMED_KEY_WRITES=1`, `tc secrets put` asks to save and read tha
 
 TinyChat's bot-history key and data live under a reserved scope. `tc secrets list`, `delete`, `put`, `migrate`, `request` and `manage` refuse that scope, in any spelling that canonicalises to it, before they sign in or ask; `migrateSecrets()` neither counts nor reseals anything under it; and the `tinycloud.secrets.get` and `tinycloud.secrets.status` operations and Secret Manager links refuse it.
 
+`tc auth grant` also refuses an agent request that names a key in that reserved scope, in any letter case, for a local-key owner and an OpenKey owner, before it prints the scope, contacts anything, signs or stores a grant.
+
 Fixed: approving a secret command from an OpenKey owner profile failed with "invalid approval request", because the request carried a local-only `skipPrefix` field. The approval request now leaves it out.
 
 Details: TC-3802

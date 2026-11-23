@@ -90,7 +90,7 @@ import {
   defaultManifestLoginExpiry,
 } from "../auth/scoped-login.js";
 import { assertNoCaveatLimits } from "../lib/caveat-refusal.js";
-import { isDecryptOnlyExactSecretKey, isExactSecretKeyPermission, isRawEncryptionPermission, isVerifiedRawEncryptionPermission } from "../lib/raw-encryption.js";
+import { assertNoBotHistoryKey, isDecryptOnlyExactSecretKey, isExactSecretKeyPermission, isRawEncryptionPermission, isVerifiedRawEncryptionPermission } from "../lib/raw-encryption.js";
 import { withExactKeyNode } from "../lib/exact-key-grant.js";
 import { canonicalOwnerDid } from "../lib/owner-did.js";
 import { assertNotLocalOwner, assertSessionReplaceable, commitLogin, readProfileSnapshot } from "../auth/login-commit.js";
@@ -1444,6 +1444,9 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
         const requested = finalizeSigningEntries(
           await resolvePermissionSpaces(entriesForSigning(parsed.requested as PermissionEntry[]), ctx.profile),
         );
+        // TinyChat's reserved bot-history key is never granted to an agent, by any owner, before anything is printed,
+        // asked, signed or stored.
+        assertNoBotHistoryKey(requested);
         // Before the scope is printed, the session is checked or any prompt is shown.
         if (profile.authMethod === "openkey") assertNoCaveatLimits(requested);
         const [applications] = await resolvePermissionSpaces(
@@ -2260,6 +2263,7 @@ const OPENKEY_AGENT_MAX_LIFETIME_MS = parseRequestedExpiry(APPS_AGENT_EXPIRY).du
 
 /** An agent request is approved in OpenKey only if it covers one space and no raw authority but one secret's own key. */
 export function assertOpenKeyAgentRequest(requested: PermissionEntry[]): void {
+  assertNoBotHistoryKey(requested);
   // One secret's own key, decrypt only, is the only raw encryption entry OpenKey signs for an agent: never a prefix, the
   // whole network or key creation (until OpenKey's route for it is live).
   if (requested.some((permission) =>

@@ -1183,7 +1183,7 @@ function secretKvAbility(action: SecretAction): SecretKvAbility {
  * to) and, so the owner's put→get round trip needs one approval, to read that same secret and decrypt that same key.
  * `resolveSecretPath` refuses a name or scope over 64 characters, so no key is built for one. Never a `secrets/` prefix.
  */
-function secretPermissionEntries(params: {
+export function secretPermissionEntries(params: {
   action: SecretAction;
   name?: string;
   options?: SecretScopeOptions;
