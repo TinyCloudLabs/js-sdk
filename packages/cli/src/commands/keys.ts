@@ -150,7 +150,7 @@ async function encryptForRecord(deps: KeysCommandDeps, ctx: CLIContext, path: st
   try {
     plaintext = sealPlaintext(header, input);
   } catch {
-    throw new CLIError("INVALID_INPUT", "The input isn't JSON. A sealed value must be one JSON value.", ExitCode.USAGE_ERROR);
+    throw new CLIError("INVALID_INPUT", "The input isn't JSON. A value to encrypt must be one JSON value.", ExitCode.USAGE_ERROR);
   }
   const registryUrl = registryUrlFor(ctx, await deps.getProfile(ctx.profile));
   const envelope = await withSpinner(`Encrypting with ${path}…`, async () => {
@@ -245,7 +245,7 @@ export function registerKeysCommand(program: Command, deps: KeysCommandDeps = de
     .description("Encrypt data with a named key and output the encrypted envelope as JSON")
     .option("--in <file>", "Read the data to encrypt from a file (default: standard input)")
     .option("--out <file>", "Write the envelope to a file (default: standard output)")
-    .option("--record-key <key>", "The full storage key of the record this value belongs to, for an app key from `auth login --keys <full-app-key> --app-key`. The value must be JSON. It is sealed to this owner and record only.")
+    .option("--record-key <key>", "The full storage key of the record this value belongs to, for an app key from `auth login --keys <full-app-key> --app-key`. The value must be JSON. It is encrypted for this owner and record only.")
     .action(async (path: string, options, cmd) => {
       try {
         const ctx = await deps.resolveContext(cmd.optsWithGlobals());
@@ -279,7 +279,7 @@ export function registerKeysCommand(program: Command, deps: KeysCommandDeps = de
     .description("Decrypt an envelope made with a named key and output the original data")
     .option("--in <file>", "Read the envelope from a file (default: standard input)")
     .option("--out <file>", "Write the decrypted data to a file (default: standard output)")
-    .option("--record-key <key>", "The full storage key of the record this envelope must have been sealed for, for an app key from `auth login --keys <full-app-key> --app-key`. Any other record, owner or space is refused.")
+    .option("--record-key <key>", "The full storage key of the record this envelope was encrypted for, for an app key from `auth login --keys <full-app-key> --app-key`. Any other record, owner or space is refused.")
     .action(async (options, cmd) => {
       try {
         const ctx = await deps.resolveContext(cmd.optsWithGlobals());

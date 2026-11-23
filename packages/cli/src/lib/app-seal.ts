@@ -40,7 +40,7 @@ export function sealPlaintext(header: string, json: string): Uint8Array {
 function contextMismatch(): CLIError {
   return new CLIError(
     "CONTEXT_MISMATCH",
-    "This envelope was not sealed for this owner, space and record key.",
+    "This envelope was not encrypted for this owner, space and record key.",
     ExitCode.PERMISSION_DENIED,
   );
 }
