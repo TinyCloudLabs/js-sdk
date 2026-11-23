@@ -10,7 +10,9 @@ import {
   buildFilters,
   guardRoute,
   guardRouteHead,
+  ROOT_NPMRC,
   loadPlan,
+  npmrcProblems,
   publish,
   publishLayers,
   runtimePinProblems,
@@ -457,4 +459,73 @@ test("publish stops at a failed package, a layer npm does not serve, a wrong git
   let calls = 0;
   const moved = publishHarness(t, { distTags: () => ({ latest: calls++ < 9 ? "0.7.0" : "0.8.0" }) });
   await assert.rejects(moved.run(), /latest moved/);
+});
+
+// ---- npm config in the checkout (real git repo, the default readers) ---------------------------------------------------
+
+// A checkout whose HEAD commits `committed` as the root .npmrc (or none), with `working` on disk afterwards.
+function npmrcCheckout(t, { committed, working = committed, packageNpmrc } = {}) {
+  const dir = mkdtempSync(join(tmpdir(), "stage-npmrc-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const git = (args) => assert.equal(spawnSync("git", args, { cwd: dir }).status, 0, args.join(" "));
+  git(["init", "-q"]);
+  git(["config", "user.email", "t@t"]);
+  git(["config", "user.name", "t"]);
+  mkdirSync(join(dir, "packages/p"), { recursive: true });
+  writeFileSync(join(dir, "packages/p/package.json"), "{}\n");
+  if (committed !== undefined) writeFileSync(join(dir, ".npmrc"), committed);
+  git(["add", "."]);
+  git(["commit", "-qm", "x"]);
+  if (working === undefined) rmSync(join(dir, ".npmrc"), { force: true });
+  else writeFileSync(join(dir, ".npmrc"), working);
+  if (packageNpmrc !== undefined) writeFileSync(join(dir, "packages/p/.npmrc"), packageNpmrc);
+  return { cwd: dir, pkgDir: join(dir, "packages/p") };
+}
+
+test("the root .npmrc is accepted only as exactly the default registry line, with or without one trailing newline", (t) => {
+  assert.equal(ROOT_NPMRC, "registry=https://registry.npmjs.org/");
+  for (const text of [ROOT_NPMRC, `${ROOT_NPMRC}\n`]) {
+    const { cwd, pkgDir } = npmrcCheckout(t, { committed: text });
+    assert.deepEqual(npmrcProblems(cwd, pkgDir), [], JSON.stringify(text));
+  }
+  const none = npmrcCheckout(t, {});
+  assert.deepEqual(npmrcProblems(none.cwd, none.pkgDir), [], "no root .npmrc at all");
+});
+
+test("any other root .npmrc is refused, even when it is the committed file", (t) => {
+  const refused = [
+    `${ROOT_NPMRC}\r\n`,
+    `${ROOT_NPMRC}\n\n`,
+    ` ${ROOT_NPMRC}\n`,
+    `${ROOT_NPMRC} \n`,
+    `${ROOT_NPMRC}\t`,
+    "registry=https://registry.npmjs.org\n",
+    "registry=https://evil.example/\n",
+    `${ROOT_NPMRC}\n//registry.npmjs.org/:_authToken=abc\n`,
+    `${ROOT_NPMRC}\nalways-auth=true\n`,
+    "//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}\n",
+    "",
+  ];
+  for (const text of refused) {
+    const { cwd, pkgDir } = npmrcCheckout(t, { committed: text });
+    assert.match(npmrcProblems(cwd, pkgDir).join(), /is not exactly "registry=https:\/\/registry\.npmjs\.org\/"/, JSON.stringify(text));
+  }
+});
+
+test("a root .npmrc that is not the release commit's file is refused, whatever it says", (t) => {
+  // Written after checkout over a different (or no) committed file.
+  for (const committed of [undefined, "registry=https://registry.npmjs.org/\n\n", "# other\n"]) {
+    const { cwd, pkgDir } = npmrcCheckout(t, { committed, working: `${ROOT_NPMRC}\n` });
+    assert.match(npmrcProblems(cwd, pkgDir).join(), /is not the release commit's committed file/, JSON.stringify(committed));
+  }
+  // Same bytes as committed but without the trailing newline the commit has: still not the committed file.
+  const edited = npmrcCheckout(t, { committed: `${ROOT_NPMRC}\n`, working: ROOT_NPMRC });
+  assert.match(npmrcProblems(edited.cwd, edited.pkgDir).join(), /is not the release commit's committed file/);
+});
+
+test("a package-directory .npmrc is always refused, even the benign line", (t) => {
+  for (const packageNpmrc of [`${ROOT_NPMRC}\n`, "//registry.npmjs.org/:_authToken=abc\n", ""]) {
+    const { cwd, pkgDir } = npmrcCheckout(t, { committed: `${ROOT_NPMRC}\n`, packageNpmrc });
+    assert.match(npmrcProblems(cwd, pkgDir).join(), /packages\/p\/\.npmrc would change npm's registry or auth/, JSON.stringify(packageNpmrc));
+  }
 });

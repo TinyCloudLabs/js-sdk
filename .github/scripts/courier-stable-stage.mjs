@@ -325,13 +325,42 @@ export function publishLayers(manifests) {
   })));
 }
 
+// The repo commits one root .npmrc: the default registry, no auth. That exact content (one optional trailing newline) is
+// the only npm config the publish accepts, and the file must still be the release commit's blob. Any other root
+// .npmrc, or any .npmrc in a package directory, could redirect the registry or carry auth.
+export const ROOT_NPMRC = "registry=https://registry.npmjs.org/";
+
+export function npmrcProblems(cwd, dir, { read = (path) => readFileSync(path, "utf8"), headBlob = (path) => run("git", ["show", `HEAD:${path}`], { cwd }) } = {}) {
+  const problems = [];
+  if (existsSync(join(dir, ".npmrc"))) problems.push(`${join(dir, ".npmrc")} would change npm's registry or auth`);
+  const root = join(cwd, ".npmrc");
+  if (existsSync(root)) {
+    const text = read(root);
+    if (text !== ROOT_NPMRC && text !== `${ROOT_NPMRC}\n`) problems.push(`${root} is not exactly "${ROOT_NPMRC}"`);
+    else {
+      let committed;
+      try {
+        committed = headBlob(".npmrc");
+      } catch {
+        committed = undefined;
+      }
+      if (committed !== text) problems.push(`${root} is not the release commit's committed file`);
+    }
+  }
+  return problems;
+}
+
 // Publish from the package directory of the release commit's checkout, not from the tarball: only a directory publish
 // makes npm record `gitHead` (the checkout's HEAD) in the registry. The directory gets the verified tarball's files,
 // is re-packed, and must re-pack to exactly the verified bytes before anything is published.
 function publishPackage({ pkg, tarball, integrity, tag }, cwd = process.cwd()) {
   const dir = join(cwd, pkg.dir);
-  for (const stray of [join(cwd, ".npmrc"), join(dir, ".npmrc")]) if (existsSync(stray)) fail(`${stray} would change npm's registry or auth; refusing`);
+  const npmrc = npmrcProblems(cwd, dir);
+  if (npmrc.length) fail(`refusing: ${npmrc.join("; ")}`);
   run("tar", ["-xzf", tarball, "--strip-components=1", "-C", dir]);
+  // The extraction must not have dropped npm config into the package directory either.
+  const after = npmrcProblems(cwd, dir);
+  if (after.length) fail(`refusing: ${after.join("; ")}`);
   const scratch = mkdtempSync(join(tmpdir(), "stage-repack-"));
   try {
     run("npm", ["pack", "--ignore-scripts", "--pack-destination", scratch], { cwd: dir });
