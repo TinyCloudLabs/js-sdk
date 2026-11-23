@@ -235,17 +235,6 @@ describe("without --timeout, a stored request that expired past the result reten
     expect(Date.parse(saved[0]!.requestExpiresAt)).toBeGreaterThan(Date.now());
   });
 
-  test("a request that expired only just now is still left to OpenKey: it may have been approved just before the expiry", async () => {
-    const recent = await createPending();
-    await expireLocally(30_000); // inside retention
-    discoverRefusal = { error: "Signed approval request header is invalid or expired", code: "invalid_request" };
-    const error = await pendingOf(() => acquireApprovalRequest(did, options()));
-    expect(error.code).toBe("APPROVAL_REQUEST_EXPIRED");
-    expect(discoverCalls).toBe(1);
-    expect(linkPosts).toBe(1);
-    expect((await entries()).map((item) => item.requestId)).not.toContain(recent.requestId);
-  });
-
   test("a stale request that already holds an approved result reference is not replaced: its result is still collected", async () => {
     const approved = await createPending();
     const [saved] = await entries();

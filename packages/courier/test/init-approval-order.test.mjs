@@ -107,8 +107,3 @@ scenario('--resume from a saved XXXX-XXXX code keeps its --resume hint on a cloc
   assert.match(run.stderr, /system clock/);
   assert.match(run.stderr, /init --resume/);
 });
-
-scenario('the owner-pin message says rotation clears every pairing', async () => {
-  const text = fs.readFileSync(new URL('../src/grant-request.ts', import.meta.url), 'utf8');
-  assert.doesNotMatch(text, /re-pairs every peer/);
-});

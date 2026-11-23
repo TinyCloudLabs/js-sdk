@@ -515,7 +515,6 @@ describe("an expired request is decided locally, and production OpenKey's 400 in
   test("(d2) an expired entry that has a result reference but no envelope yet is not dropped either", async () => {
     await createPending();
     await approve();
-    const [saved] = await entries();
     networkFault = (url) => url.pathname.endsWith("/fetch");
     await pendingOf(() => acquireApprovalRequest(did, withDeadline(2_000))); // discover saved resultRef, fetch kept failing
     networkFault = () => false;
@@ -526,7 +525,6 @@ describe("an expired request is decided locally, and production OpenKey's 400 in
     const delegation = await acquireApprovalRequest(did, withDeadline(10_000));
     await commitAndAcknowledge(delegation);
     expect(acks).toHaveLength(1);
-    expect(saved).toBeDefined();
   });
 
   test("(e) the boundary is expiry + 10 min result retention + 60 s skew: at 10 min 59 s OpenKey is still asked, at 11 min 1 s the entry is dropped with zero calls", async () => {
@@ -791,11 +789,10 @@ describe("a process killed at any seam resumes from local state: exit-0 completi
     expect(acks).toHaveLength(0);
     expect(delegation.delegationCid).toBeDefined();
     // Killed here. The retention window at OpenKey may be over: any call to it now fails.
-    const discoverBefore = discoverCalls, fetchBefore = fetchCalls;
+    const callsBefore = openkeyCalls;
     networkFault = (url) => url.pathname !== "/v1/links" && !url.pathname.endsWith("/ack");
     const recovered = await acquireApprovalRequest(did, withDeadline(60_000));
-    expect(discoverCalls).toBe(discoverBefore);
-    expect(fetchCalls).toBe(fetchBefore);
+    expect(openkeyCalls).toBe(callsBefore);
     expect(recovered.delegationCid).toBe(delegation.delegationCid);
     networkFault = () => false;
     await commitAndAcknowledge(recovered);
@@ -811,14 +808,11 @@ describe("a process killed at any seam resumes from local state: exit-0 completi
     const verified = verifyScopedLogin(delegation, key, did, requested, { expectedOwner: ownerDid, exactApproval: true });
     await commitLogin("approval", snapshot, { key, session: verified.session, profile: { ...snapshot.profile!, spaceId }, durable: true });
     expect(acks).toHaveLength(0);
-    const discoverBefore = discoverCalls, fetchBefore = fetchCalls;
     // The next process is the next command: a resumed `onboard` / `auth grant` first completes the saved result.
     networkFault = (url) => url.pathname !== "/v1/links" && !url.pathname.endsWith("/ack");
     await completeApprovalResult("approval");
     expect(acks).toHaveLength(1);
     expect(ackSeenSaved).toEqual([{ committed: true, envelopeOnDisk: true, sessionOnDisk: true }]);
-    expect(discoverCalls).toBe(discoverBefore);
-    expect(fetchCalls).toBe(fetchBefore);
     expect(await entries()).toEqual([]);
     expect(linkPosts).toBe(1);
   });

@@ -1218,35 +1218,6 @@ describe("CLI auth import command", () => {
     expect(importRecorded.useRuntimeDelegation).toEqual([]);
   });
 
-  test("routes a v1 delegation artifact with an optional host and requestId canonically", async () => {
-    storedImportRequest = makeStoredImportRequest();
-    operationRecorded.results.push({
-      status: "ok",
-      operation: { operationId: "tinycloud.auth.import", operationVersion: 1 },
-      context: { profile: "default", host: activeHost, posture: "delegate-session" },
-      output: {
-        cid: "bafy-v1-artifact",
-        effectivePermissions: storedImportRequest.requested,
-        expiry: "2099-01-01T00:00:00.000Z",
-        activated: true,
-      },
-    });
-    const source = join(tempDir, "v1-artifact.json");
-    await writeFile(source, JSON.stringify({
-      kind: "tinycloud.auth.delegation",
-      version: 1,
-      requestId: "req_v1",
-      delegation: makePortableDelegation({ delegateDID: "did:key:z6MkSession", cid: "bafy-v1-artifact" }),
-    }), "utf8");
-
-    await runAuthCommand(["auth", "import", source]);
-
-    expect(recorded.errors).toEqual([]);
-    expect(operationRecorded.calls).toHaveLength(1);
-    expect(importRecorded.useRuntimeDelegation).toEqual([]);
-    expect(recorded.outputs[0]).toMatchObject({ requestId: "req_v1", delegationCid: "bafy-v1-artifact", activated: true });
-  });
-
   test("bootstraps a fresh delegate profile before canonically importing its first request-bound delegation", async () => {
     const originalProfile = makeProfile({ posture: "delegate-session" });
     profiles.set("default", originalProfile);

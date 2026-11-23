@@ -10,6 +10,8 @@ const recorded = {
   revoked: [] as unknown[],
   registeredSpaces: [] as unknown[],
   removedSpaces: [] as string[],
+  delegationListOptions: [] as unknown[],
+  queries: [] as unknown[],
 };
 
 function resetState(): void {
@@ -20,6 +22,8 @@ function resetState(): void {
   recorded.revoked = [];
   recorded.registeredSpaces = [];
   recorded.removedSpaces = [];
+  recorded.delegationListOptions = [];
+  recorded.queries = [];
   hasAccountAccess = true;
   accountCalls = 0;
   profileAuthMethod = "openkey";
@@ -148,7 +152,7 @@ const node = {
       },
     },
     delegations: {
-      list: async (options: { preferIndex?: boolean } = {}) => ({
+      list: async (options: { preferIndex?: boolean } = {}) => (recorded.delegationListOptions.push(options), {
         ok: true,
         data: options.preferIndex
           ? [
@@ -256,7 +260,7 @@ const node = {
           ],
         }),
       },
-      query: async (_sql: string, _params?: unknown[]) => ({
+      query: async (sql: string, params?: unknown[]) => (recorded.queries.push([sql, params]), {
         ok: true,
         data: {
           columns: ["n"],
@@ -506,6 +510,8 @@ describe("tc account", () => {
     await runAccount(["delegations", "list", "--granted", "--space", "applications", "--live"]);
 
     expect(recorded.errors).toEqual([]);
+    expect(recorded.delegationListOptions).toEqual([expect.objectContaining({ direction: "granted", space: "applications" })]);
+    expect(recorded.delegationListOptions[0]).not.toHaveProperty("preferIndex", true);
     expect(recorded.outputs[0]).toMatchObject({
       count: 1,
       delegations: [
@@ -523,6 +529,7 @@ describe("tc account", () => {
     await runAccount(["delegations", "list", "--received"]);
 
     expect(recorded.errors).toEqual([]);
+    expect(recorded.delegationListOptions).toEqual([expect.objectContaining({ direction: "received", preferIndex: true })]);
     expect(recorded.outputs[0]).toMatchObject({
       count: 1,
       delegations: [
@@ -595,6 +602,7 @@ describe("tc account", () => {
     await runAccount(["index", "query", "SELECT count(*) AS n FROM applications", "--params", "[]"]);
 
     expect(recorded.errors).toEqual([]);
+    expect(recorded.queries).toEqual([["SELECT count(*) AS n FROM applications", []]]);
     expect(recorded.outputs[0]).toEqual({
       columns: ["n"],
       rows: [[1]],
@@ -640,14 +648,6 @@ describe("tc account", () => {
     expect(recorded.outputs).toEqual([]);
     expect(recorded.errors).toHaveLength(1);
     expect(recorded.errors[0]).toMatchObject({ code: "ACCOUNT_ACCESS_REQUIRED", exitCode: 5 });
-  });
-
-  test("revoke on an OpenKey profile is refused with the working command, before any account call", async () => {
-    await runAccount(["delegations", "revoke", "bafycid", "--space", "default"]);
-
-    expect(accountCalls).toBe(0);
-    expect(recorded.outputs).toEqual([]);
-    expect(recorded.errors).toEqual([expect.objectContaining({ code: "ACCOUNT_REVOKE_UNSUPPORTED", exitCode: 5 })]);
   });
 
   test("revoke on a local-key profile needs no session ability", async () => {

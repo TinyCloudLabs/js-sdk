@@ -69,5 +69,5 @@ test("Home-only scope initializes feed tables and issues the exact child without
 
 test("feed child issuance fails if its required hooks capability was omitted", async () => {
   const { node } = await parent(false);
-  await expect(node.delegateTo(did.split("#")[0]!, childScope, { expiry: "30d" })).rejects.toThrow();
+  await expect(node.delegateTo(did.split("#")[0]!, childScope, { expiry: "30d" })).rejects.toMatchObject({ name: "PermissionNotInManifestError" });
 });

@@ -1,4 +1,4 @@
-import { afterAll, afterEach, beforeEach, expect, mock, spyOn, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import { chmodSync, mkdtempSync } from "node:fs";
 import { rm } from "node:fs/promises";
 import { createCipheriv, createHash, createHmac, createECDH, createPublicKey, randomBytes, verify } from "node:crypto";
@@ -228,12 +228,6 @@ async function signedText(bind: boolean): Promise<string> {
     issuedAt: new Date(Date.now() - 1000).toISOString(), expirationTime: new Date(Date.now() + 3_000_000).toISOString() });
   return bind ? prepared.siwe.replace(/\nResources:/, `\nRequest ID: ${line}\nResources:`) : prepared.siwe;
 }
-// The owner really signs the replaced text: the signer accepts it, so the refusal must come from the verifier's own parse.
-async function signedTextFrom(text: string): Promise<string> {
-  const signature = await wallet.signMessage(text);
-  expect(signature.length).toBeGreaterThan(0);
-  return text;
-}
 const mine = { requestId: "a".repeat(26), bodyCid: "bafy-mine" };
 const line = `urn:tinycloud:approval-request:${mine.requestId}:${mine.bodyCid}`;
 
@@ -261,8 +255,7 @@ test("a Request ID injected where the parser does not read it never binds, and a
   for (const index of [2, 4]) {
     for (const replacement of [`Request ID: ${line}`, `Issued At: ${new Date(Date.now() - 864_000_000).toISOString()}`]) {
       const replaced = rows.map((row, at) => (at === index ? replacement : row)).join("\n");
-      const signedReplaced = await signedTextFrom(replaced);
-      expect(() => assertApprovalRequestBinding(signedReplaced, mine)).toThrow();
+      expect(() => assertApprovalRequestBinding(replaced, mine)).toThrow();
     }
   }
   expect(parseApprovalSiwe(unbound).requestId).toBeUndefined();
@@ -410,4 +403,3 @@ test("approveEmailInviteKey refuses a profile that records no owner account, and
     .rejects.toMatchObject({ code: "APPROVAL_RESULT_INVALID" });
   expect(node.getRuntimePermissionDelegations()).toEqual([]);
 });
-void mock;

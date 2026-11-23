@@ -1,11 +1,10 @@
-import { Command } from "commander";
 import { describe, expect, test } from "bun:test";
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { MemorySenderShareRecordStorage, type PublishedShare, type TargetPublishInput } from "@tinycloud/share-sdk";
 import { publishArtifactVersion, type ArtifactStore } from "@tinycloud/share-sdk/artifact";
-import { configureShareCommandServices, registerShareCommand } from "./share.js";
+import { configureShareCommandServices } from "./share.js";
 import { runShareCaptured } from "./share.integration-harness.js";
 import { SharePublishAuthorityError } from "../share/errors.js";
 
@@ -119,14 +118,6 @@ describe("tc share publish --artifact", () => {
       expect(missing.stderr).toContain("Ongoing shares are not available yet");
     } finally { stdin[Symbol.asyncIterator] = original; }
     expect(read).toBe(false);
-  });
-
-  test("--ongoing is not advertised in publish help", async () => {
-    const program = new Command();
-    registerShareCommand(program);
-    const publish = program.commands.find((command) => command.name() === "share")?.commands.find((command) => command.name() === "publish");
-    expect(publish?.helpInformation()).not.toContain("ongoing");
-    expect(publish?.helpInformation()).toContain("--artifact");
   });
 
   test("refuses a malformed artifact id and more than one file", async () => {

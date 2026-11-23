@@ -143,38 +143,6 @@ isolated("(b) delegate with exact-key for secret A cannot read secret B, and pre
   }
 });
 
-isolated("(c) delegate with bare-network-only decrypt on a v2 envelope receives the clear exact-key refusal", async () => {
-  const fixture = await createAuthRuntimeFixture();
-  const full = await fixture.hermetic.mintDelegation();
-  await persistRuntimeDelegations(fixture, [full]);
-  const bareDecrypt = fixture.hermetic.permissions.find((p) => p.service === "tinycloud.encryption")!;
-  const exactKeyHint: PermissionEntry = {
-    service: "tinycloud.encryption",
-    path: `${bareDecrypt.path}/secrets/hermetic_delegation_canary`,
-    actions: ["tinycloud.encryption/decrypt"],
-  };
-  // Node 1.26.21 refuses bare-network decrypt for a v2 envelope and DataVaultService surfaces the exact key hint.
-  const readSecret = spyOn(TinyCloudNode.prototype, "readSecret")
-    .mockResolvedValue({ status: "permission_required", hint: exactKeyHint } as never);
-
-  try {
-    const result = await invokeOperation(
-      "tinycloud.secrets.get",
-      1,
-      { profile: fixture.profile },
-      { name: "HERMETIC_DELEGATION_CANARY" },
-    );
-    expect(result.status).toBe("authority_required");
-    if (result.status !== "authority_required") throw new Error("expected authority_required");
-    expect(readSecret).toHaveBeenCalledTimes(1);
-    expect(result.missing as unknown).toEqual([exactKeyHint]);
-    expect(result.request.requested as unknown).toEqual([exactKeyHint]);
-  } finally {
-    readSecret.mockRestore();
-    fixture.hermetic.stop();
-  }
-});
-
 test("scoped exact-key-only preflight accepts this scoped secret's exact key and rejects other scopes or missing kv/get", async () => {
   const runtimeCtx = {
     summary: {

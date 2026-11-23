@@ -527,7 +527,3 @@ function outcomeCode(result: McpToolResult["structuredContent"]): string {
   if (Array.isArray(output?.ops) && output.ops.some((op) => op.outcome !== "ok")) return "PARTIAL";
   return "ok";
 }
-
-export function toolBindingsForTest(): readonly ToolBinding[] {
-  return TOOL_BINDINGS;
-}

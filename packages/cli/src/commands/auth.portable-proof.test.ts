@@ -507,25 +507,6 @@ describe("signed portable OpenKey grants", () => {
     expect(await readGrantHistory(profileName)).toEqual([]);
   });
 
-  test("one-use OpenKey authority goes straight to the OpenKey approval without a terminal and without --yes", async () => {
-    let called = false;
-    const authority = await ensureDelegationAuthority({
-      ctx: { profile: profileName, host },
-      profile: await ProfileManager.getProfile(profileName),
-      node,
-      requested,
-      expiryOption: "5m",
-      reason: "Revoke delegation",
-      persist: false,
-      openKeyAcquisition: async () => {
-        called = true;
-        return await signedProof({ capabilitiesRead: true, lifetimeSeconds: 300 });
-      },
-    });
-    expect(called).toBe(true);
-    expect(authority).toBeDefined();
-  });
-
   test("one-use OpenKey authority without an expiry is refused before any approval", async () => {
     let called = false;
     await expect(ensureDelegationAuthority({

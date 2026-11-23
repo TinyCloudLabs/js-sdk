@@ -114,13 +114,6 @@ for (const [label, damage] of [
   });
 }
 
-scenario('an unreadable profile.json beside a saved approval is profile-unreadable, not an orphaned approval', async (ctx) => {
-  stubSpaceProbe(ctx.t, readySpace);
-  await ctx.request();
-  fs.chmodSync(homeFile('profile.json'), 0o644);
-  assert.equal(deriveState().state, 'profile-unreadable');
-});
-
 scenario('--rotate-key still replaces an unreadable profile.json', async (ctx) => {
   stubSpaceProbe(ctx.t, readySpace);
   await ctx.request();

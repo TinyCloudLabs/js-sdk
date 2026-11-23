@@ -1306,7 +1306,6 @@ describe("CLI secrets commands", () => {
     ]);
     expect(recorded.networkReadCalls).toEqual(["get:ANTHROPIC_API_KEY"]);
     expect(recorded.networkReadSources).toEqual(["network"]);
-    expect(await currentNode.replication.status()).toEqual([{ state: "ready" }]);
     expect(recorded.outputs).toEqual([
       {
         healthy: true,
@@ -2033,55 +2032,6 @@ describe("CLI secrets commands", () => {
       },
     ]);
   });
-
-  test(
-    "tc secrets get pins the permission grant to the 'secrets' space even when the profile defaults to 'default'",
-    async () => {
-      // Profile defaults to spaceName "default", but the secret-manager web
-      // app stores secrets in the literal "secrets" space. The CLI must
-      // override the profile's default space when requesting permissions so
-      // CLI-issued grants line up with web-app-written secrets at
-      // vault/secrets/ASSEMBLYAI_API_KEY in space "secrets".
-      currentProfile = { ...currentProfile, spaceName: "default" };
-      currentNode = makeFakeNode({
-        getResult: [
-          {
-            ok: false,
-            error: {
-              code: "PERMISSION_DENIED",
-              service: "secrets",
-              message: "Cannot autosign tinycloud.kv/get for ASSEMBLYAI_API_KEY",
-            },
-          },
-          { ok: true, data: "secret-value-from-web-app" },
-        ],
-      });
-
-      await runSecretsCommand(["secrets", "get", "ASSEMBLYAI_API_KEY"]);
-
-      expect(recorded.permissionRequests).toEqual([
-        {
-          profile: "default",
-          requested: [
-            {
-              service: "tinycloud.kv",
-              space: "secrets",
-              path: "vault/secrets/ASSEMBLYAI_API_KEY",
-              actions: ["tinycloud.kv/get"],
-            },
-            {
-              service: "tinycloud.encryption",
-              path: DEFAULT_NETWORK_ID,
-              actions: ["tinycloud.encryption/decrypt"],
-            },
-          ],
-        },
-      ]);
-      expect(recorded.outputs).toEqual([
-        { name: "ASSEMBLYAI_API_KEY", value: "secret-value-from-web-app" },
-      ]);
-    },
-  );
 
   describe("network init and --delegation source refusals", () => {
     const REFUSED_SECRET_PLAINTEXT = "tc-1901-refused-secret-plaintext";

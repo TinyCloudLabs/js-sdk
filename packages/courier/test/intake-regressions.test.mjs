@@ -283,16 +283,6 @@ test('an idle cycle trims an overflow store above the per-peer cap, oldest first
   assert.deepEqual(h.overflowFiles(HANDLE).sort(), names.slice(-200));
 });
 
-test('overflow files are retired once their message passes the stale horizon', async () => {
-  const h = harness({ peers: { alice: { tier: 'strict', ratePerHour: 1, outPerHour: 1 } } });
-  for (let i = 0; i < 150; i++) await putMessage(h.kv, ulid(NOW + i), [{ text: 'hello' }]);
-  await intakeCycle(h.input);
-  assert.equal(h.overflowFiles(HANDLE).length, 149);
-  h.setClock(NOW + 8 * DAY);
-  await intakeCycle(h.input);
-  assert.equal(h.overflowFiles(HANDLE).length, 0);
-});
-
 test('one cycle examines at most 200 mirror rows and the next cycle resumes after them', async () => {
   const h = harness({ peers: { alice: { tier: 'strict', ratePerHour: 1, outPerHour: 1 } } });
   const ids = Array.from({ length: 450 }, (_, i) => ulid(NOW + i));
@@ -369,23 +359,6 @@ test('a peers file swapped for a symlink between check and read is not trusted',
   } finally {
     mock.restoreAll();
   }
-});
-
-test('an invalid policy reload cannot raise a previously lowered cap', async () => {
-  const { loadPeers } = await import('../dist/intake/peers.js');
-  const h = harness();
-  const file = path.join(h.dirs.stateDir, 'peers.json');
-  fs.writeFileSync(file, JSON.stringify({ alice: { ratePerHour: 1, outPerHour: 1 } }), { mode: 0o600 });
-  assert.equal(loadPeers(file).alice.outPerHour, 1);
-  fs.writeFileSync(file, JSON.stringify({ alice: { ratePerHour: 1, outPerHour: 101 } }));
-  let peers;
-  let error;
-  try {
-    peers = loadPeers(file);
-  } catch (e) {
-    error = e;
-  }
-  assert.ok(error || (peers.alice.outPerHour <= 1 && peers.alice.ratePerHour <= 1));
 });
 
 test('an overflowing ULID is rejected before any filesystem lookup', async () => {

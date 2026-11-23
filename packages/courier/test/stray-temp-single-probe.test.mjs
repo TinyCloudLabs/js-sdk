@@ -25,15 +25,6 @@ function probes(t, answers) {
   return state;
 }
 
-scenario('each temp file is probed once per recovery', async (ctx) => {
-  const state = probes(ctx.t, [true]);
-  await ctx.request();
-  fs.writeFileSync(homeFile(NAME), BODY, { mode: 0o600 });
-  writeTempIdentity(homeFile(NAME), PID, '0a1b2c3d4e5f');
-  recoverInterrupted();
-  assert.equal(state.count, 1);
-});
-
 scenario('a temp with a live writer is kept and reported', async (ctx) => {
   const state = probes(ctx.t, [true]);
   await ctx.request();

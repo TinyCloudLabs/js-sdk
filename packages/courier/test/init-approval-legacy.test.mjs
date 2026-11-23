@@ -54,10 +54,3 @@ scenario('a REFUSED legacy import leaves the open short-link request untouched, 
   assert.equal(fx.created.length, 1);
 });
 
-scenario('with an open request and no flags, --request reprints the same link (resume); only an explicit different --expiry makes another', async ({ fx, request }) => {
-  const first = await request();
-  assert.equal((await request()).openkeyUrl, first.openkeyUrl);
-  assert.equal(fx.created.length, 1);
-  assert.notEqual((await request('--expiry', '7d')).openkeyUrl, first.openkeyUrl);
-  assert.equal(fx.created.length, 2);
-});

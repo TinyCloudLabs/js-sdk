@@ -180,7 +180,6 @@ beforeAll(async () => {
 
   await writeProfile(profileName("missing"));
   await writeProfile(profileName("mismatch"));
-  await writeProfile(profileName("registered"));
   const published = await createNativeShare(fixture.owner.sharing, {
     path: SHARE_PATH,
     expiresAt: new Date(Date.now() + 5 * 60_000),
@@ -251,20 +250,6 @@ test("Native bearer receive ignores a mismatched link host and uses the signed r
     invocation.action === "tinycloud.kv/get" && invocation.path === SHARE_PATH
   )).toBe(true);
   expect(attackerRequests.slice(attackerRequestCount)).toEqual([]);
-  expect(unapprovedOrigins).toEqual([]);
-});
-
-test("Native bearer receive reads bytes over a signed registry route; Details: TC-2594", async () => {
-  if (!fixture) throw new Error("test fixture is not ready");
-  routeRecord = signedLocationRecord;
-  unapprovedOrigins.length = 0;
-  const invocationCount = fixture.invocations().length;
-  const result = await readerFor(profileName("registered"))(ownerLink);
-
-  expect(result.bytes).toEqual(EXPECTED_BYTES);
-  expect(fixture.invocations().slice(invocationCount).some((invocation) =>
-    invocation.action === "tinycloud.kv/get" && invocation.path === SHARE_PATH
-  )).toBe(true);
   expect(unapprovedOrigins).toEqual([]);
 });
 

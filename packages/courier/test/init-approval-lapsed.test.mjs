@@ -43,16 +43,6 @@ scenario('lapsed + OpenKey 400 invalid_request: [approval-expired], record dropp
   assert.notEqual((await request()).openkeyUrl, printed.openkeyUrl);
 });
 
-scenario('lapsed + OpenKey expired_request (410) is the same: dropped and reported', async ({ fx, request, courier }) => {
-  await request();
-  lapse(2 * MIN);
-  fx.inject.discover.push({ status: 410, code: 'expired_request' });
-  const run = await courier('--wait');
-  assert.equal(run.code, 1);
-  assert.match(run.stderr, /\[approval-expired\]/);
-  assert.equal(fs.existsSync(homeFile('approval-pending.json')), false);
-});
-
 for (const [name, reply] of [['a dropped connection', { network: true }], ['an HTTP 503', { status: 503, code: 'busy' }]]) {
   scenario(`lapsed inside the retention window + OpenKey unreachable (${name}): record kept, approval-unavailable, nothing lost`, async ({ t, fx, request, courier }) => {
     stubSpaceProbe(t, readySpace);

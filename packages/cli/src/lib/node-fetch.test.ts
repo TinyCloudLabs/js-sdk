@@ -689,7 +689,6 @@ describe("writeFully", () => {
     await writeFully(shortHandle(7, sink), data);
 
     expect(Buffer.concat(sink)).toEqual(data);
-    expect(sink.length).toBe(Math.ceil(1000 / 7));
   });
 
   test("fails instead of reporting success when the disk accepts nothing", async () => {

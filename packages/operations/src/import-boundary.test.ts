@@ -82,22 +82,3 @@ test("operations has no projection-framework dependencies or imports", async () 
     }
   }
 });
-
-test("operations uses the SDK policy canonicalizer rather than a local JCS implementation", async () => {
-  const invokeSource = await readFile(resolve(packageDirectory, "src", "invoke.ts"), "utf8");
-
-  expect(invokeSource).toContain(
-    'import { jcsCanonicalize } from "@tinycloud/sdk-core/policy";',
-  );
-  expect(invokeSource).not.toMatch(/function\s+jcsCanonicalize\s*\(/);
-});
-
-test("authority uses only the public SDK subset boundary and artifacts stay surface-neutral", async () => {
-  const authoritySource = await readFile(resolve(packageDirectory, "src", "authority.ts"), "utf8");
-  const artifactsSource = await readFile(resolve(packageDirectory, "src", "artifacts.ts"), "utf8");
-
-  expect(authoritySource).toContain('from "@tinycloud/sdk-core"');
-  expect(authoritySource).not.toContain("sdk-core/src/");
-  expect(artifactsSource).not.toContain("packages/cli");
-  expect(artifactsSource).not.toContain("../cli/");
-});

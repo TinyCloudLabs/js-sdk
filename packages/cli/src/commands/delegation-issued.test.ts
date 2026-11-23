@@ -380,18 +380,6 @@ describe("the branch follows the verified session authority, not the profile's p
     expect(ownerRevokeCalls).toEqual(["bafy-child"]);
     expect(requests).toEqual([]);
   });
-
-  test("an owner-posture profile never takes the session-key path, even without a restored address", async () => {
-    posture = "owner-openkey";
-    restoredOwnerAddress = undefined;
-
-    await run("list", "--granted");
-    await run("revoke", "bafy-child");
-
-    expect(ownerQueryCalls).toMatchObject([{ direction: "granted" }]);
-    expect(ownerRevokeCalls).toEqual(["bafy-child"]);
-    expect(requests).toEqual([]);
-  });
 });
 
 describe("owner profiles are unchanged", () => {

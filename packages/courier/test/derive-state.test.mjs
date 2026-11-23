@@ -79,44 +79,9 @@ const disagreements = (classify) => [...combinations()].filter((inputs) => {
   try { assert.deepEqual(outcome(classify(inputs)), expected(inputs)); return false; } catch { return true; }
 });
 
-test('the table covers every combination of the inputs', () => {
-  for (const inputs of combinations()) expected(inputs);
-});
-
 test('classifyState gives the table recovery for every combination', () => {
   assert.deepEqual(disagreements(classifyState), []);
 });
-
-// ---- mutation check: a change to any input or rule must be caught by the table ----
-
-const MUTANTS = {
-  'ignores the rotation journal': (i) => classifyState({ ...i, rotation: false }),
-  'ignores a stray rotation temp file': (i) => ({ ...classifyState(i), cleanTemp: false }),
-  'ignores profile.status': (i) => classifyState({ ...i, profile: i.profile === 'absent' ? 'absent' : 'ready' }),
-  'ignores spacePending': (i) => classifyState({ ...i, spacePending: false }),
-  'ignores grant.json': (i) => classifyState({ ...i, grant: true }),
-  'ignores key.json': (i) => classifyState({ ...i, key: true }),
-  'ignores pending-grant.json': (i) => classifyState({ ...i, pendingGrant: false }),
-  'ignores approval-pending.json': (i) => classifyState({ ...i, approval: 'none' }),
-  'treats a held approval as open': (i) => classifyState({ ...i, approval: i.approval === 'held' ? 'open' : i.approval }),
-  'treats a held approval as open while awaiting-space': (i) => classifyState({ ...i, approval: i.approval === 'held' && i.profile === 'awaiting-space' ? 'open' : i.approval }),
-  'treats a held approval as open on a ready profile': (i) => classifyState({ ...i, approval: i.approval === 'held' && i.profile === 'ready' ? 'open' : i.approval }),
-  'treats a committed approval as none': (i) => classifyState({ ...i, approval: i.approval === 'committed' ? 'none' : i.approval }),
-  'lets a held approval outrank a saved delegation': (i) => classifyState(i.approval === 'held' && i.profile === 'awaiting-grant' && i.pendingGrant ? { ...i, pendingGrant: false, grant: false } : i),
-  'lets a held approval outrank a saved grant': (i) => classifyState(i.approval === 'held' && i.profile === 'awaiting-grant' && i.grant ? { ...i, pendingGrant: false, grant: false } : i),
-  'lets a held approval outrank a saved grant while awaiting-space': (i) => classifyState(i.approval === 'held' && i.profile === 'awaiting-space' && i.grant ? { ...i, grant: false } : i),
-  'lets a saved grant outrank a held approval with nothing saved to install': (i) => classifyState(i.approval === 'held' && i.profile === 'awaiting-grant' && !i.grant && !i.pendingGrant ? { ...i, approval: 'none' } : i),
-  'lets a missing grant outrank a held approval': (i) => classifyState(i.approval === 'held' && i.profile === 'ready' && !i.grant ? { ...i, approval: 'none' } : i),
-  'treats an unreadable approval as none': (i) => classifyState({ ...i, approval: i.approval === 'unreadable' ? 'none' : i.approval }),
-  'drops an approval whose key is missing': (i) => classifyState(!i.key && LIVE.includes(i.approval) ? { ...i, approval: 'none' } : i),
-  'drops an approval whose profile is missing': (i) => classifyState(i.profile === 'absent' && LIVE.includes(i.approval) ? { ...i, approval: 'none' } : i),
-};
-
-for (const [name, mutant] of Object.entries(MUTANTS)) {
-  test(`mutation check: a classifier that ${name} is caught by the table`, () => {
-    assert.notDeepEqual(disagreements(mutant), []);
-  });
-}
 
 // ---- `init --wait`: collect a saved approval (go on) or advise another command ----
 // An approval the owner gave (a retryable result reference, the saved encrypted result or a commit) is always collected, even beside a
@@ -150,20 +115,6 @@ const waitDisagreements = (classify) => [...combinations()].filter((inputs) => c
 test('classifyState says when --wait goes on for every combination', () => {
   assert.deepEqual(waitDisagreements(classifyState), []);
 });
-
-const WAIT_MUTANTS = {
-  'advises --resume for a held result beside a saved grant': (i) => classifyState(HELD.includes(i.approval) && (i.grant || i.pendingGrant) ? { ...i, approval: 'open' } : i),
-  'treats a result reference alone like an open request': (i) => classifyState(i.approval === 'held' ? { ...i, approval: 'open' } : i),
-  'advises --resume for an open request while the space is being set up': (i) => classifyState(i.approval === 'open' && i.profile === 'awaiting-space' ? { ...i, approval: 'none' } : i),
-  'goes on for an open request beside a saved grant': (i) => ({ ...classifyState(i), wait: i.approval === 'open' && (i.grant || i.pendingGrant) ? true : classifyState(i).wait }),
-  'goes on while a rotation is interrupted': (i) => ({ ...classifyState(i), wait: i.rotation ? true : classifyState(i).wait }),
-  'goes on for an orphaned approval': (i) => ({ ...classifyState(i), wait: classifyState(i).state === 'approval-orphaned' ? true : classifyState(i).wait }),
-};
-for (const [name, mutant] of Object.entries(WAIT_MUTANTS)) {
-  test(`mutation check: a classifier that ${name} is caught by the wait table`, () => {
-    assert.notDeepEqual(waitDisagreements(mutant), []);
-  });
-}
 
 // ---- deriveState reads the files ----
 

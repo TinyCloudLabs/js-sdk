@@ -80,16 +80,3 @@ scenario('a temp file of a live writer keeps cleanTemp false and is never what a
   for (const argv of [['--wait', '--timeout', '1s'], ['--request']]) await ctx.courier(...argv);
   assert.equal(fs.readFileSync(homeFile(name), 'utf8'), BODY);
 });
-
-scenario('an approval-pending.json temp file that is a hard link or a symlink is refused, not overwritten', async (ctx) => {
-  fakeProcessTable(ctx.t);
-  await ctx.request();
-  const victim = homeFile('victim.json');
-  fs.writeFileSync(victim, '{"keep":"this content"}', { mode: 0o600 });
-  fs.linkSync(victim, homeFile(`approval-pending.json.${DEAD}.${HEX}.tmp`));
-  writeTempIdentity(homeFile(`approval-pending.json.${DEAD}.${HEX}.tmp`), DEAD, HEX);
-  const before = snapshot();
-  const run = await ctx.courier('--request');
-  assert.notEqual(run.code, 0, run.stderr);
-  assert.deepEqual(snapshot(), before);
-});

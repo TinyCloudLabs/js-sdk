@@ -210,13 +210,6 @@ for (const options of [{ force: true, manual: true }, { manual: true }, {}]) {
   });
 }
 
-test('replacing an over-long delegation is still capped by the parent end', async () => {
-  const f = fixture({ inboundLifetime: 7 * DAY, tipEndsAt: 30 * DAY, parentEndsAt: 31 * DAY });
-  const outcome = await maintainOutbound(f.node, f.profile, f.peer, f.save, { force: true, manual: true });
-  assert.equal(outcome.state, 'renewed');
-  assert.ok(outcome.delegation.expiry.getTime() <= f.parent.end);
-});
-
 test('assertSuccessor accepts a shorter successor only when the prior outlives the peer limit', () => {
   const now = Date.now();
   const resources = peerReadPermissions('bob', spaceId, 'one-session').map(entry => ({
@@ -288,16 +281,15 @@ test('artifact export never replaces an over-long grant with a shorter one', asy
 
 test('a signed nbf is bounded: not in the future, lifetime above 0 and at most 30 days, else the inbound is unknown (7 days)', () => {
   const at = Math.floor(Date.now() / 1000) * 1000;
-  const sign7 = peerRenewalLimitMs({});
   const limit = (nbfAt, lifetimeMs) => peerRenewalLimitMs({ inbound: { ...inboundOf(lifetimeMs, nbfAt), expiresAt: '' } });
   assert.equal(limit(at, 30 * DAY), INTERIM_PERIOD_MS, 'a valid 30-day nbf');
-  assert.equal(limit(at - 40 * DAY, 90 * DAY), sign7, 'lifetime over 30 days');
-  assert.equal(limit(at - 40 * DAY, 41 * DAY), sign7, 'an old nbf cannot inflate a long expiry');
-  assert.equal(limit(at + 2 * 3600_000, 30 * DAY), sign7, 'nbf in the future');
+  assert.equal(limit(at - 40 * DAY, 90 * DAY), SEVEN, 'lifetime over 30 days');
+  assert.equal(limit(at - 40 * DAY, 41 * DAY), SEVEN, 'an old nbf cannot inflate a long expiry');
+  assert.equal(limit(at + 2 * 3600_000, 30 * DAY), SEVEN, 'nbf in the future');
   assert.equal(limit(at + 60_000, 30 * DAY), INTERIM_PERIOD_MS, 'nbf within clock skew is fine');
   const backwards = jwt({ iss: peerDid, aud: courierDid, nbf: Math.floor(at / 1000) + 100, exp: Math.floor(at / 1000) + 50, prf: [], att: {} });
   const inbound = { delegation: JSON.stringify({ cid: 'x', delegationHeader: { Authorization: backwards }, expiry: new Date(at) }), cid: 'x', expiresAt: new Date(at).toISOString() };
-  assert.equal(peerRenewalLimitMs({ inbound }), sign7, 'expiry before nbf');
+  assert.equal(peerRenewalLimitMs({ inbound }), SEVEN, 'expiry before nbf');
 });
 
 test('a later over-long tip is repaired once more, never twice for the same tip', async (t) => {

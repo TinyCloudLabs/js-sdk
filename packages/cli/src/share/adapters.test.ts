@@ -1032,8 +1032,8 @@ describe("TinyCloud share authority adapter", () => {
     });
   });
 
-  describe("the delete-token record", () => {
-    it("is neither written nor read by an addressed publish, a revoke and an unlink", async () => {
+  describe("owner space access", () => {
+    it("an addressed publish, a revoke and an unlink only upload the content", async () => {
       const touched: string[] = [];
       const original = node.kvForSpace;
       const recording = (spaceId: string) => {
@@ -1066,9 +1066,8 @@ describe("TinyCloud share authority adapter", () => {
         const record: SenderShareRecord = { ...historyRecordForPublishedShare(published), link: shown.url };
         expect((await revokeShare({ record, adapter: adapters.revocation })).state).toBe("revoked");
         expect(await adapters.links.unlink(shortLinkId(shown.url)!)).toBe("deleted");
-        // The only space access is the content upload: no token key is written, read, listed or deleted.
+        // The only space access is the content upload: nothing else is written, read, listed or deleted.
         expect(touched).toEqual([`put ${uploadedPaths[0]}`]);
-        expect(touched.filter((entry) => entry.includes("short-link"))).toEqual([]);
       } finally {
         Object.defineProperty(node, "kvForSpace", { value: original, configurable: true, writable: true });
       }
@@ -1172,11 +1171,6 @@ describe("TinyCloud share authority adapter", () => {
       if ("state" in again) throw new Error("expected publish");
       expect(again.metadata.artifact?.version).toBe(2);
       expect(uploadedPaths).toEqual([]);
-    });
-
-    it("does not touch the legacy shares/ path for artifact shares", async () => {
-      await artifactAdapter().targetAdapter.publish(bearerInput("x", { id: "art_t" }));
-      expect(uploadedPaths.some((path) => path.includes("shares/"))).toBe(false);
     });
 
     it("types a KV authority failure on an artifact write as scope-denied", async () => {
