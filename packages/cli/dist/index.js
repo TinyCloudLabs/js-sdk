@@ -172,6 +172,8 @@ var init_constants = __esm({
       PENDING: 8,
       /** A write was refused because the owner's TinyCloud storage is full. */
       STORAGE_FULL: 10,
+      /** A secrets write was refused because the node has no per-secret keys (`NAMED_KEYS_UNSUPPORTED`); nothing was saved. */
+      NAMED_KEYS_UNSUPPORTED: 11,
       /** Interrupted by SIGINT/SIGTERM (`CANCELLED`). */
       CANCELLED: 130
     };
@@ -617,7 +619,7 @@ import {
   isValidSecretName,
   SECRET_REQUEST_MAX_NAMES
 } from "@tinycloud/operations/secret-request";
-import { authorizationVerdictOf, parseCapabilityResource, SERVICE_LONG_TO_SHORT, validatedCapabilityOf } from "@tinycloud/sdk-core";
+import { authorizationVerdictOf, NAMED_KEYS_CHECK_FAILED, NAMED_KEYS_CHECK_FAILED_MESSAGE, NAMED_KEYS_UNSUPPORTED, NAMED_KEYS_UNSUPPORTED_MESSAGE, parseCapabilityResource, SERVICE_LONG_TO_SHORT, validatedCapabilityOf } from "@tinycloud/sdk-core";
 import { routingFailure } from "@tinycloud/sdk-services";
 function setActiveProfileName(name) {
   activeProfileName = name;
@@ -2257,8 +2259,8 @@ var init_hmac = __esm({
 });
 
 // ../sdk-core/src/manifest.ts
-import { resolveSecretPath, SECRET_NAME_RE, parseNetworkId } from "@tinycloud/sdk-services";
-import { parseEncryptionResource } from "@tinycloud/sdk-services/encryption/resource";
+import { resolveSecretPath, SECRET_NAME_RE, parseNetworkId, parseSecretCatalogKey } from "@tinycloud/sdk-services";
+import { formatKeyResource, parseEncryptionResource } from "@tinycloud/sdk-services/encryption/resource";
 var import_ms, SERVICE_SHORT_TO_LONG, ENCRYPTION_PERMISSION_SERVICE, ENCRYPTION_MANIFEST_SPACE, SERVICE_LONG_TO_SHORT2, KEY_SEGMENT, KEY_APP_ID, KEY_PATH;
 var init_manifest = __esm({
   "../sdk-core/src/manifest.ts"() {
@@ -16292,6 +16294,9 @@ function parseKeysPrefix(input, ownerDid) {
   if (prefix.length === 0) throw invalid2("the folder can't be empty.");
   if (prefix === "apps" || prefix.startsWith("apps/")) {
     throw invalid2("folders under `apps/` belong to apps and can't be used from the CLI.");
+  }
+  if (prefix === "secrets" || prefix.startsWith("secrets/")) {
+    throw invalid2("folders under `secrets/` belong to TinyCloud Secrets and can't be used with `--keys`.");
   }
   try {
     return { prefix, resource: formatPrefixResource(namedKeysNetworkId(ownerDid), prefix) };
