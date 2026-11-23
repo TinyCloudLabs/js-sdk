@@ -2,7 +2,7 @@ import { sameTinyCloudNode } from "@tinycloud/sdk-core";
 import { admitOwnerRenewalLease, RENEWAL_LEASE_ORIGINAL_EXPIRED, RENEWAL_RENEWER_CHANGED } from "@tinycloud/sdk-core/delegations/renewal";
 import { RENEWAL_ADMISSION_LEAD_MS, verifyOwnerRenewalLease } from "@tinycloud/sdk-core/delegations/renewal-receipt";
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
-import { chmod, mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 
@@ -71,6 +71,17 @@ const PROCESSING_STALE_MS = 120_000;
  * grant ends at its signed end and is approved again.
  */
 export const BOOTSTRAP_LEASE_SECONDS = 90 * 86_400;
+/**
+ * A tenant with no authenticated call for this long loses its key, session, grants and pending
+ * approvals; its next call starts over with a new key and a fresh connection approval. A removed
+ * OpenKey connection makes no further authenticated calls, so its authority ends within this time.
+ */
+export const TENANT_IDLE_MS = 30 * 86_400_000;
+/** The first idle sweep runs this long after start, then every `IDLE_SWEEP_INTERVAL_MS`. */
+const IDLE_SWEEP_DELAY_MS = 60_000;
+const IDLE_SWEEP_INTERVAL_MS = 6 * 3_600_000;
+/** How often a tenant's calls touch its call marker, which the idle sweep reads after a restart. */
+const CALL_MARK_INTERVAL_MS = 3_600_000;
 const NATIVE_GRANT_IMPORT_REJECTION_CODES = new Set([
   "DELEGATION_ARTIFACT_INVALID",
   "DELEGATION_EXPIRED",
@@ -305,6 +316,13 @@ export class RemoteTenantStore {
   readonly #linkCreations = new Map<string, Promise<string>>();
   readonly #collections = new Map<string, Promise<CollectionOutcome>>();
   readonly #polls = new Map<string, NodeJS.Timeout>();
+  /** state root -> last authenticated call in this process (ms). */
+  readonly #lastCalls = new Map<string, number>();
+  /** state root -> when this process last touched the tenant's call marker (ms). */
+  readonly #callMarks = new Map<string, number>();
+  readonly #idleRemovals = new Map<string, Promise<void>>();
+  #sweepTimer?: NodeJS.Timeout;
+  #sweeping?: Promise<number>;
   #closed = false;
   readonly #endpoints: OpenKeyEndpoints;
   readonly #grantLifetimeSeconds: number;
@@ -322,6 +340,18 @@ export class RemoteTenantStore {
       linksApiOrigin: new URL(config.linksApiOrigin ?? DEFAULT_LINKS_API_ORIGIN).origin,
     };
     this.#grantLifetimeSeconds = lifetimeSeconds(config.delegationExpiry);
+    this.#scheduleSweep(IDLE_SWEEP_DELAY_MS);
+  }
+
+  #scheduleSweep(delay: number): void {
+    this.#sweepTimer = setTimeout(() => {
+      void this.sweepIdleTenants()
+        .catch(() => writeDiagnostic("idle sweep failed"))
+        .finally(() => {
+          if (!this.#closed) this.#scheduleSweep(IDLE_SWEEP_INTERVAL_MS);
+        });
+    }, delay);
+    this.#sweepTimer.unref();
   }
 
   async nativeServiceIdentity(): Promise<NativeServiceIdentity> {
@@ -1017,12 +1047,68 @@ export class RemoteTenantStore {
     schedule();
   }
 
-  /** Stop background collection. Pending approvals stay on disk for the next start. */
+  /** Stop background collection and idle sweeps. Pending approvals stay on disk for the next start. */
   async close(): Promise<void> {
     this.#closed = true;
+    clearTimeout(this.#sweepTimer);
     for (const timer of this.#polls.values()) clearTimeout(timer);
     this.#polls.clear();
-    await Promise.allSettled([...this.#collections.values()]);
+    await Promise.allSettled([...this.#collections.values(), this.#sweeping]);
+  }
+
+  /**
+   * Remove every tenant with no authenticated call for `TENANT_IDLE_MS`: its key, session, grants
+   * and pending approvals. A call arriving during a removal waits for it, then starts with a new key.
+   * Resolves to the number of tenants removed.
+   */
+  async sweepIdleTenants(): Promise<number> {
+    this.#sweeping ??= this.#sweepIdle().finally(() => {
+      this.#sweeping = undefined;
+    });
+    return this.#sweeping;
+  }
+
+  async #sweepIdle(): Promise<number> {
+    const tenants = join(this.#config.stateDir, "tenants");
+    const names = await readdir(tenants).catch((error: unknown) => {
+      if (isRecord(error) && error.code === "ENOENT") return [];
+      throw error;
+    });
+    let removed = 0;
+    for (const tenantId of names) {
+      if (this.#closed) break;
+      if (!/^[a-f0-9]{64}$/.test(tenantId)) continue;
+      const stateRoot = join(tenants, tenantId);
+      const lastActivity = await this.#lastActivity(stateRoot);
+      // Read again with no await before the removal is registered: a call seen meanwhile keeps the tenant.
+      if (lastActivity === undefined ||
+        Date.now() - Math.max(lastActivity, this.#lastCalls.get(stateRoot) ?? 0) < TENANT_IDLE_MS) continue;
+      const removal = this.#removeTenant(tenantId, stateRoot).finally(() => this.#idleRemovals.delete(stateRoot));
+      this.#idleRemovals.set(stateRoot, removal);
+      await removal;
+      removed++;
+      writeDiagnostic("idle tenant removed");
+    }
+    return removed;
+  }
+
+  /** The latest call, call-marker, session or key time; undefined for a tenant with no key or session. */
+  async #lastActivity(stateRoot: string): Promise<number | undefined> {
+    const [marker, session, key] = await Promise.all(
+      [this.#callMarkerPath(stateRoot), this.#sessionPath(stateRoot), this.#keyPath(stateRoot)]
+        .map((path) => stat(path).then((entry) => entry.mtimeMs, () => undefined)),
+    );
+    if (session === undefined && key === undefined) return undefined;
+    return Math.max(this.#lastCalls.get(stateRoot) ?? 0, marker ?? 0, session ?? 0, key ?? 0);
+  }
+
+  /** Clear the tenant's authority as a node refusal does, then remove its state, key included. */
+  async #removeTenant(tenantId: string, stateRoot: string): Promise<void> {
+    const tenant = await this.#readTenant(tenantId).catch(() => undefined);
+    if (tenant !== undefined) await this.#clearAuthority(tenant);
+    await rm(stateRoot, { recursive: true, force: true });
+    this.#lastCalls.delete(stateRoot);
+    this.#callMarks.delete(stateRoot);
   }
 
   /** Whether a stored request opens on, and is collected from, the OpenKey origins this server is configured with. */
@@ -1221,13 +1307,23 @@ export class RemoteTenantStore {
 
   async #ensureTenant(subject: string): Promise<TenantProfile> {
     const tenantId = this.#tenantId(subject);
-    const current = this.#initializing.get(tenantId);
-    if (current !== undefined) return current;
-    const initializing = this.#initializeTenant(tenantId).finally(() => {
-      this.#initializing.delete(tenantId);
-    });
-    this.#initializing.set(tenantId, initializing);
-    return initializing;
+    const stateRoot = join(this.#config.stateDir, "tenants", tenantId);
+    const calledAt = Date.now();
+    this.#lastCalls.set(stateRoot, calledAt);
+    await this.#idleRemovals.get(stateRoot);
+    let initializing = this.#initializing.get(tenantId);
+    if (initializing === undefined) {
+      initializing = this.#initializeTenant(tenantId).finally(() => {
+        this.#initializing.delete(tenantId);
+      });
+      this.#initializing.set(tenantId, initializing);
+    }
+    const tenant = await initializing;
+    if (calledAt - (this.#callMarks.get(stateRoot) ?? 0) >= CALL_MARK_INTERVAL_MS) {
+      this.#callMarks.set(stateRoot, calledAt);
+      await writeFile(this.#callMarkerPath(stateRoot), "", { mode: 0o600 });
+    }
+    return tenant;
   }
 
   async #hasValidSession(
@@ -1708,6 +1804,10 @@ export class RemoteTenantStore {
 
   #pendingDirectory(stateRoot: string): string {
     return join(stateRoot, ".tinycloud", "profiles", PROFILE, "pending");
+  }
+
+  #callMarkerPath(stateRoot: string): string {
+    return join(stateRoot, ".tinycloud", "last-call");
   }
 }
 

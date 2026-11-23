@@ -225,7 +225,9 @@ tool calls. `tinycloud_connect` reports `connected: true` only after a positive
 check; when the node cannot confirm the account, it reports `connected: false`
 without an approval URL and the caller retries shortly.
 The account's delegate key stays in place while the owner signs new permissions
-through the usual OpenKey approval flow.
+through the usual OpenKey approval flow. An account with no authenticated call
+for 30 days loses its delegate key, session, grants and open approval links; its
+next call asks for the connection approval again.
 
 HTTP integration tests cover approval renewal with an in-process node by
 default. The additional local-node case uses a v1.21.0 node binary when
