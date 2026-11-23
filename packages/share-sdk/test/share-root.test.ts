@@ -151,44 +151,6 @@ describe("decodeOwnerRootCacao strictness", () => {
     const body = { ...valid, p: { ...valid.p, resources: [recapResource({ att: {}, prf: [], extra: true })] } };
     expect(() => decodeOwnerRootCacao(Uint8Array.from(cbor(body)))).toThrow("ReCap has an unknown field");
   });
-
-  it("accepts xyz.tinycloud.policy/delegationMode terminal and attenuable, and absent", () => {
-    const rawRecap = (json: string) => `urn:recap:${Buffer.from(json, "utf8").toString("base64url")}`;
-    const absent = decodeOwnerRootCacao(Uint8Array.from(cbor(valid)));
-    expect(absent.delegationMode).toBeUndefined();
-    expect("delegationMode" in absent).toBe(false);
-
-    for (const mode of ["terminal", "attenuable"] as const) {
-      const body = {
-        ...valid,
-        p: { ...valid.p, resources: [recapResource({ att: {}, prf: [], "xyz.tinycloud.policy/delegationMode": mode })] },
-      };
-      const decoded = decodeOwnerRootCacao(Uint8Array.from(cbor(body)));
-      expect(decoded.delegationMode).toBe(mode);
-    }
-
-    // Invalid values (null, unknown string, empty string, non-strings) are refused.
-    for (const bad of [null, "Terminal", "legacy", "", 1, true, [], {}]) {
-      const body = {
-        ...valid,
-        p: { ...valid.p, resources: [recapResource({ att: {}, prf: [], "xyz.tinycloud.policy/delegationMode": bad })] },
-      };
-      expect(() => decodeOwnerRootCacao(Uint8Array.from(cbor(body)))).toThrow(/delegationMode/);
-    }
-
-    // Duplicate keys (both orders and \uXXXX escaped-name equivalents) are refused.
-    const dupCases = [
-      '{"att":{},"prf":[],"xyz.tinycloud.policy/delegationMode":"terminal","xyz.tinycloud.policy/delegationMode":"attenuable"}',
-      '{"att":{},"prf":[],"xyz.tinycloud.policy/delegationMode":"attenuable","xyz.tinycloud.policy/delegationMode":"terminal"}',
-      '{"att":{},"prf":[],"xyz.tinycloud.policy/delegationMode":"terminal","xyz.tinycloud.policy/delegationMode":"terminal"}',
-      '{"att":{},"prf":[],"\\u0078yz.tinycloud.policy/delegationMode":"terminal","xyz.tinycloud.policy/delegationMode":"attenuable"}',
-      '{"att":{},"prf":[],"xyz.tinycloud.policy/delegationMode":"terminal","\\u0078yz.tinycloud.policy/delegationMode":"attenuable"}',
-    ];
-    for (const raw of dupCases) {
-      const body = { ...valid, p: { ...valid.p, resources: [rawRecap(raw)] } };
-      expect(() => decodeOwnerRootCacao(Uint8Array.from(cbor(body)))).toThrow(/duplicate/i);
-    }
-  });
 });
 
 describe("ShareRoot.restore and clear", () => {

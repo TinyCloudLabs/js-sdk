@@ -103,6 +103,15 @@ function text(value: unknown, label: string): string {
   return value;
 }
 
+/**
+ * Reject duplicate JSON object member names (including `\uXXXX` escaped-name
+ * equivalents) before trusting `JSON.parse`'s last-key-wins output.
+ *
+ * Duplicated from `packages/sdk-core/src/delegations/terminal.ts`
+ * (`assertNoDuplicateJsonKeys`) because `@tinycloud/share-sdk` does not depend
+ * on `@tinycloud/sdk-core`. Keep both copies in sync; parity is enforced by
+ * `packages/sdk-core/src/delegations/recap-parser-parity.test.ts`.
+ */
 function assertNoDuplicateJsonKeys(json: string): void {
   const objects: Array<Set<string> | null> = [];
   const tokens = /"(?:[^"\\]|\\.)*"|[{}\[\]:,]|[^\s{}\[\]:,]+/g;

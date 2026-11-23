@@ -2,7 +2,6 @@
 "@tinycloud/sdk-core": minor
 "@tinycloud/share-sdk": patch
 "@tinycloud/node-sdk": minor
-"@tinycloud/web-sdk": patch
 "@tinycloud/cli": minor
 ---
 

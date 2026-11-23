@@ -90,7 +90,7 @@ describe("TC-3810 CLI delegationMode declarations, validation, and refusal copy"
     expect(() => verifySignedSession(built.data, built.jwk, built.sessionDid)).toThrow();
   });
 
-  test("verifySignedSession accepts absent on /a/ login and on pre-#735 declared paths, and refuses flipped declared mode", async () => {
+  test("verifySignedSession accepts absent on /a/ and attenuable paths, refuses absent or flipped on declared terminal, and refuses flipped on declared attenuable", async () => {
     const absent = await buildSignedSessionData();
     const terminal = await buildSignedSessionData((json) => {
       const obj = JSON.parse(json);
@@ -110,19 +110,21 @@ describe("TC-3810 CLI delegationMode declarations, validation, and refusal copy"
       `did:pkh:eip155:1:${ownerAccount.address.toLowerCase()}`,
     );
 
-    // Declared paths (/delegate?delegationMode= or --device): absent stays accepted (pre-#735 OpenKey), matching passes.
+    // Declared attenuable: absent stays accepted (legacy-attenuable / pre-#735 OpenKey), attenuable passes, terminal is refused.
     expect(verifySignedSession(absent.data, absent.jwk, absent.sessionDid, { delegationMode: "attenuable" }).ownerDid).toBeTruthy();
-    expect(verifySignedSession(absent.data, absent.jwk, absent.sessionDid, { delegationMode: "terminal" }).ownerDid).toBeTruthy();
     expect(verifySignedSession(attenuable.data, attenuable.jwk, attenuable.sessionDid, { delegationMode: "attenuable" }).ownerDid).toBeTruthy();
-    expect(verifySignedSession(terminal.data, terminal.jwk, terminal.sessionDid, { delegationMode: "terminal" }).ownerDid).toBeTruthy();
-
-    // Flipped declared modes are refused in both directions.
     expect(() =>
       verifySignedSession(terminal.data, terminal.jwk, terminal.sessionDid, { delegationMode: "attenuable" }),
     ).toThrow(/OpenKey returned a terminal grant when attenuable was requested/);
+
+    // Declared terminal: fail-closed — ONLY terminal passes; absent and attenuable are both refused.
+    expect(verifySignedSession(terminal.data, terminal.jwk, terminal.sessionDid, { delegationMode: "terminal" }).ownerDid).toBeTruthy();
+    expect(() =>
+      verifySignedSession(absent.data, absent.jwk, absent.sessionDid, { delegationMode: "terminal" }),
+    ).toThrow(/OpenKey returned an undeclared grant when terminal was requested/);
     expect(() =>
       verifySignedSession(attenuable.data, attenuable.jwk, attenuable.sessionDid, { delegationMode: "terminal" }),
-    ).toThrow(/OpenKey returned a attenuable grant when terminal was requested/);
+    ).toThrow(/OpenKey returned an attenuable grant when terminal was requested/);
   });
 
   test("withSiweDelegationMode round-trips cleanly through verifySignedSession", async () => {

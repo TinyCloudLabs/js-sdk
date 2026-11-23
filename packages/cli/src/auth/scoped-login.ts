@@ -1,4 +1,4 @@
-import { extractSiweDelegationMode, technicalExpiryRefusal, type DelegationMode } from "@tinycloud/sdk-core";
+import { extractSiweDelegationMode, isCompatibleSignedDelegationMode, technicalExpiryRefusal, type DelegationMode } from "@tinycloud/sdk-core";
 import { NodeWasmBindings, signedCompactUcanExpiry, type PermissionEntry } from "@tinycloud/node-sdk";
 import { isLocalOwnerProfile, liveStoredLease, ownerSessionLacksProof } from "@tinycloud/operations/profile";
 import { CLI_NAME } from "@tinycloud/operations/cli-name";
@@ -477,7 +477,8 @@ export interface SignedSessionExpectations {
   namedKeyRow?: ProfileNamedKeys;
   /**
    * Declared delegation mode sent on a path OpenKey reads (`/delegate?delegationMode=` or `/api/device-authorizations`).
-   * Absent is accepted as legacy-attenuable (for `/a/` and pre-#735 OpenKey), while a flipped mode is refused.
+   * A declared `"terminal"` must come back `"terminal"` (absent or `"attenuable"` is refused).
+   * Absent stays accepted when `"attenuable"` or nothing was declared; flipped modes are always refused.
    */
   delegationMode?: DelegationMode;
 }
@@ -569,10 +570,16 @@ export function verifySignedSession(
   if (expected.expectedOwner && normalizePkhIdentifier(expected.expectedOwner) !== normalizePkhIdentifier(ownerDid)) {
     throw new CLIError("OPENKEY_OWNER_MISMATCH", `The approved signing identity differs from this profile's owner. ${notStored} Use a new profile for another account.`, ExitCode.PERMISSION_DENIED);
   }
-  if (expected.delegationMode !== undefined && signedDelegationMode !== undefined && signedDelegationMode !== expected.delegationMode) {
+  if (expected.delegationMode !== undefined && !isCompatibleSignedDelegationMode(expected.delegationMode, signedDelegationMode)) {
+    const actual =
+      signedDelegationMode === undefined
+        ? "an undeclared"
+        : signedDelegationMode === "attenuable"
+          ? "an attenuable"
+          : `a ${signedDelegationMode}`;
     throw new CLIError(
       "OPENKEY_DELEGATION_MODE_MISMATCH",
-      `OpenKey returned a ${signedDelegationMode} grant when ${expected.delegationMode} was requested. ${notStored}`,
+      `OpenKey returned ${actual} grant when ${expected.delegationMode} was requested. ${notStored}`,
       ExitCode.PERMISSION_DENIED,
     );
   }

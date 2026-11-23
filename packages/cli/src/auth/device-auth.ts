@@ -623,7 +623,6 @@ export async function loginWithDeviceAuthorization(input: Omit<DeviceAuthorizati
   // when this login made it, i.e. it was held in memory; a stored key is kept).
   const result = await refusing({ profileName: input.profileName, key, storedKey: snapshot.key }, () => acquireDeviceDelegation({
     ...input,
-    delegationMode: input.delegationMode ?? "terminal",
     permissions,
     sessionDid,
     jwk: key,
