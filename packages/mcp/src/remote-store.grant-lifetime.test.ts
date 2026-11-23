@@ -1,6 +1,6 @@
 import "../../operations/test-support/test-bootstrap.mjs";
 import { afterEach, expect, test } from "bun:test";
-import { access, mkdir, mkdtemp, readFile, readdir, rm, utimes, writeFile } from "node:fs/promises";
+import { access, chmod, mkdir, mkdtemp, readFile, readdir, rm, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -164,7 +164,126 @@ test("a connection approval opened with another lease, or without a standing pur
 test("retiring an idle tenant removes exactly its custody and leaves every other file, the owner's tc-apps.json included, untouched", async () => {
   const requester = await ownerDid(REQUESTER_KEY);
   const subject = "openkey-user-idle";
-  // A loopback node that records the retirement, the way the node's POST /session/retire answers.
+  const { origin, retirements } = loopbackNode();
+  const { store, stateDir } = await storeWith({ delegationExpiry: "1h", nodeHost: origin });
+  const first = await store.connectStatus(subject, [requester]);
+  const root = store.tenantStateRoot(subject);
+  const tinycloud = join(root, ".tinycloud");
+  const profile = join(tinycloud, "profiles/agent");
+  // The owner's timezone preference, a file this server has never heard of, and a directory of the owner's sit beside the custody.
+  const preference = `{\n  "timezone": "America/Los_Angeles",\n  "note": "kept exactly"\n}\n`;
+  const note = `{"written":"by something else","n":[1,2,3]}`;
+  const nested = "owner's notes\n";
+  await writeFile(join(profile, "tc-apps.json"), preference);
+  await writeFile(join(profile, "owner-note.json"), note);
+  await writeFile(join(tinycloud, "owner-note.json"), note);
+  await mkdir(join(profile, "notes"), { recursive: true });
+  await writeFile(join(profile, "notes/a.md"), nested);
+  const owned = [
+    [join(profile, "tc-apps.json"), preference],
+    [join(profile, "owner-note.json"), note],
+    [join(tinycloud, "owner-note.json"), note],
+    [join(profile, "notes/a.md"), nested],
+  ] as const;
+  // Custody, every kind the server or the operations runtime keeps: each store and its metadata, caches, a stale
+  // atomic-write temporary, the profile lock and its staged owner file, grants, the call marker, lease exposures.
+  // Seeded only where the store has not written one itself, and with a shape the store reads. `session.json` is
+  // not seeded: the store would read a made-up one as a grant. Its metadata and temporary stand in for it.
+  const stores = ["additional-delegations", "auth-requests", "registry-cache", "registry-sequences"];
+  for (const name of stores) {
+    if (!await exists(join(profile, `${name}.json`))) await writeFile(join(profile, `${name}.json`), name === "additional-delegations" ? "[]" : "{}");
+    await writeFile(join(profile, `${name}.json.metadata.json`), "{}");
+  }
+  await writeFile(join(profile, "session.json.metadata.json"), "{}");
+  await writeFile(join(profile, "session.json.123.abcdef.tmp"), "{}");
+  await writeFile(join(profile, "delegation-binding-migration.json"), "{}");
+  await mkdir(join(profile, ".lock"), { recursive: true });
+  await writeFile(join(profile, ".lock/owner.json"), "{}");
+  await writeFile(join(profile, ".lock-owner-0123abcd.tmp"), "{}");
+  await writeFile(join(tinycloud, "native-grant.json"), "{}");
+  await writeFile(join(tinycloud, "lease-exposures.json"), JSON.stringify({ unknownSince: 0, pending: {} }));
+  await writeFile(join(tinycloud, "last-call"), "");
+  await writeFile(join(tinycloud, "retiring.123.abcdef.tmp"), "");
+  await mkdir(join(tinycloud, "profile-locks/agent/0"), { recursive: true });
+  await writeFile(join(tinycloud, "profile-locks/agent/0/owner.json"), "{}");
+  const custody = [
+    ...[...stores.flatMap((name) => [`${name}.json`, `${name}.json.metadata.json`]),
+      "key.json", "profile.json", "session.json.metadata.json", "session.json.123.abcdef.tmp", "delegation-binding-migration.json", ".lock", ".lock-owner-0123abcd.tmp", "pending"]
+      .map((name) => join(profile, name)),
+    ...["native-grant.json", "lease-exposures.json", "last-call", "retiring.123.abcdef.tmp", "profile-locks"].map((name) => join(tinycloud, name)),
+  ];
+  for (const path of custody) expect(await exists(path), path).toBe(true);
+  expect(await readdir(join(profile, "pending"))).not.toHaveLength(0);
+  await store.close();
+
+  // The call marker is the idle anchor here: it is six days and a minute old.
+  const old = new Date(Date.now() - TENANT_IDLE_MS - 60_000);
+  await utimes(join(tinycloud, "last-call"), old, old);
+  await utimes(join(profile, "key.json"), old, old);
+
+  const { store: restarted } = await storeWith({ delegationExpiry: "1h", nodeHost: origin }, stateDir);
+  expect(await restarted.sweepIdleTenants()).toBe(1);
+  expect(retirements).toHaveLength(1);
+
+  // Custody and key material are gone, the fence with it; nothing else was touched, byte for byte.
+  for (const path of [...custody, join(tinycloud, "retiring")]) expect(await exists(path), path).toBe(false);
+  for (const [path, content] of owned) expect(await readFile(path, "utf8"), path).toBe(content);
+  expect((await readdir(profile)).sort()).toEqual(["notes", "owner-note.json", "tc-apps.json"]);
+  expect((await readdir(tinycloud)).sort()).toEqual(["owner-note.json", "profiles"]);
+
+  // The next call starts a new delegate beside the same files.
+  const second = await restarted.connectStatus(subject, [requester]);
+  expect(second).toMatchObject({ connected: false, approvalUrl: expect.any(String) });
+  expect(second.sessionDid).not.toBe(first.sessionDid);
+  for (const [path, content] of owned) expect(await readFile(path, "utf8"), path).toBe(content);
+});
+
+// A removal that stops after the key went: the fence is the last thing removed, so a stop leaves it. The stop is real,
+// not simulated: the removal cannot delete the fence because its directory is read-only.
+test.skipIf(process.getuid?.() === 0)("a retirement interrupted after the key was removed is finished by the next sweep without asking the node again", async () => {
+  const requester = await ownerDid(REQUESTER_KEY);
+  const subject = "openkey-user-idle";
+  const { origin, retirements } = loopbackNode();
+  const { store, stateDir } = await storeWith({ delegationExpiry: "1h", nodeHost: origin });
+  const first = await store.connectStatus(subject, [requester]);
+  const root = store.tenantStateRoot(subject);
+  const tinycloud = join(root, ".tinycloud");
+  const profile = join(tinycloud, "profiles/agent");
+  const preference = `{"timezone":"Europe/Paris"}\n`;
+  await writeFile(join(profile, "tc-apps.json"), preference);
+  await store.close();
+  // Nothing in `.tinycloud` but the profiles and the fence, so the fence is the only thing the read-only directory blocks.
+  for (const name of await readdir(tinycloud)) if (name !== "profiles") await rm(join(tinycloud, name), { recursive: true, force: true });
+  await writeFile(join(tinycloud, "retiring"), "true\n");
+  const old = new Date(Date.now() - TENANT_IDLE_MS - 60_000);
+  await utimes(join(profile, "key.json"), old, old);
+
+  const { store: restarted } = await storeWith({ delegationExpiry: "1h", nodeHost: origin }, stateDir);
+  await chmod(tinycloud, 0o500);
+  cleanups.push(() => chmod(tinycloud, 0o700).catch(() => undefined));
+  expect(await restarted.sweepIdleTenants()).toBe(0);
+  // The node confirmed, the key is gone, the fence is the one thing left: the state a crash at that point leaves.
+  expect(retirements).toHaveLength(1);
+  expect(await exists(join(profile, "key.json"))).toBe(false);
+  expect(await exists(join(tinycloud, "retiring"))).toBe(true);
+
+  // An approval left behind in `pending/` by the interrupted removal is custody too.
+  await mkdir(join(profile, "pending"), { recursive: true });
+  await writeFile(join(profile, "pending/orphan.json"), "{}");
+  await chmod(tinycloud, 0o700);
+  expect(await restarted.sweepIdleTenants()).toBe(1);
+  expect(retirements).toHaveLength(1);
+  expect(await exists(join(tinycloud, "retiring"))).toBe(false);
+  expect(await exists(join(profile, "pending"))).toBe(false);
+  expect(await readFile(join(profile, "tc-apps.json"), "utf8")).toBe(preference);
+
+  const second = await restarted.connectStatus(subject, [requester]);
+  expect(second).toMatchObject({ connected: false, approvalUrl: expect.any(String) });
+  expect(second.sessionDid).not.toBe(first.sessionDid);
+});
+
+/** A loopback node that records retirements, the way the node's POST /session/retire answers. */
+function loopbackNode(): { origin: string; retirements: string[] } {
   const retirements: string[] = [];
   const node = Bun.serve({
     hostname: "127.0.0.1",
@@ -180,62 +299,8 @@ test("retiring an idle tenant removes exactly its custody and leaves every other
     },
   });
   cleanups.push(() => node.stop(true));
-  const { store, stateDir } = await storeWith({ delegationExpiry: "1h", nodeHost: node.url.origin });
-  const first = await store.connectStatus(subject, [requester]);
-  const root = store.tenantStateRoot(subject);
-  const profile = join(root, ".tinycloud/profiles/agent");
-  // The owner's timezone preference, a file this server has never heard of, and a directory of the owner's sit beside the custody.
-  const preference = `{\n  "timezone": "America/Los_Angeles",\n  "note": "kept exactly"\n}\n`;
-  const note = `{"written":"by something else","n":[1,2,3]}`;
-  const nested = "owner's notes\n";
-  await writeFile(join(profile, "tc-apps.json"), preference);
-  await writeFile(join(profile, "owner-note.json"), note);
-  await writeFile(join(root, ".tinycloud/owner-note.json"), note);
-  await mkdir(join(profile, "notes"), { recursive: true });
-  await writeFile(join(profile, "notes/a.md"), nested);
-  const owned = [
-    [join(profile, "tc-apps.json"), preference],
-    [join(profile, "owner-note.json"), note],
-    [join(root, ".tinycloud/owner-note.json"), note],
-    [join(profile, "notes/a.md"), nested],
-  ] as const;
-  // Custody: the key, the profile, caches, a leftover atomic-write temporary of the session, grants, the call marker.
-  await writeFile(join(root, ".tinycloud/native-grant.json"), "{}");
-  await writeFile(join(profile, "registry-cache.json"), "{}");
-  await writeFile(join(profile, "session.json.123.abcdef.tmp"), "{}");
-  await writeFile(join(profile, "delegation-binding-migration.json"), "{}");
-  await mkdir(join(root, ".tinycloud/profile-locks/agent/0"), { recursive: true });
-  await writeFile(join(root, ".tinycloud/profile-locks/agent/0/owner.json"), "{}");
-  await writeFile(join(root, ".tinycloud/last-call"), "");
-  const custody = ["key.json", "profile.json", "registry-cache.json", "session.json.123.abcdef.tmp", "delegation-binding-migration.json"]
-    .map((name) => join(profile, name));
-  custody.push(join(root, ".tinycloud/profile-locks"));
-  for (const path of [...custody, join(root, ".tinycloud/native-grant.json")]) expect(await exists(path)).toBe(true);
-  expect(await readdir(join(profile, "pending"))).not.toHaveLength(0);
-  await store.close();
-
-  const old = new Date(Date.now() - TENANT_IDLE_MS - 60_000);
-  await utimes(join(profile, "key.json"), old, old);
-  await rm(join(root, ".tinycloud/last-call"));
-
-  const { store: restarted } = await storeWith({ delegationExpiry: "1h", nodeHost: node.url.origin }, stateDir);
-  expect(await restarted.sweepIdleTenants()).toBe(1);
-  expect(retirements).toHaveLength(1);
-
-  // Custody and key material are gone; nothing else was touched, byte for byte.
-  for (const path of [...custody, join(profile, "pending"), join(root, ".tinycloud/native-grant.json"), join(root, ".tinycloud/retiring")]) {
-    expect(await exists(path), path).toBe(false);
-  }
-  for (const [path, content] of owned) expect(await readFile(path, "utf8"), path).toBe(content);
-  expect((await readdir(profile)).sort()).toEqual(["notes", "owner-note.json", "tc-apps.json"]);
-  expect((await readdir(join(root, ".tinycloud"))).sort()).toEqual(["owner-note.json", "profiles"]);
-
-  // The next call starts a new delegate beside the same files.
-  const second = await restarted.connectStatus(subject, [requester]);
-  expect(second).toMatchObject({ connected: false, approvalUrl: expect.any(String) });
-  expect(second.sessionDid).not.toBe(first.sessionDid);
-  for (const [path, content] of owned) expect(await readFile(path, "utf8"), path).toBe(content);
-});
+  return { origin: node.url.origin, retirements };
+}
 
 async function storeWith(
   lifetimes: { delegationExpiry: string; bootstrapDelegationExpiry?: string; nodeHost?: string },

@@ -1303,7 +1303,17 @@ export class RemoteTenantStore {
   /** Fence new approval work, then retire the key at the node before touching saved authority. */
   async #removeTenant(tenantId: string, stateRoot: string): Promise<true> {
     const retiring = this.#retiringPath(stateRoot);
-    if (await fileModifiedAt(retiring) === undefined) await secureWrite(retiring, true);
+    const fenced = await fileModifiedAt(retiring) !== undefined;
+    if (!fenced) {
+      await secureWrite(retiring, true);
+    } else if (await fileModifiedAt(this.#keyPath(stateRoot)) === undefined) {
+      // A removal that stopped after the key went. The key is deleted only once the node confirmed retirement,
+      // so only local files are left, and there is no key to retire with: finish them, with the fence last.
+      await this.#removeCustody(stateRoot);
+      this.#lastCalls.delete(stateRoot);
+      this.#liveExposureUntil.delete(stateRoot);
+      return true;
+    }
     const tenant = await this.#readTenant(tenantId);
     const [session, additional] = await Promise.all([
       readJson<unknown>(this.#sessionPath(stateRoot)),
@@ -2083,15 +2093,16 @@ export class RemoteTenantStore {
   }
 }
 
-/** Files under `.tinycloud/profiles/<profile>/` that are the delegate's key, authority or caches, with their atomic-write temporaries. */
+/** Files under `.tinycloud/profiles/<profile>/` that are the delegate's key, authority or caches, with their atomic-write temporaries. `.lock` is the operations runtime's profile lock. */
 const CUSTODY_PROFILE_NAMES = [
-  "key.json", "profile.json", "delegation-binding-migration.json",
+  "key.json", "profile.json", "delegation-binding-migration.json", ".lock",
   ...["session", "additional-delegations", "auth-requests", "registry-cache", "registry-sequences"]
     .flatMap((store) => [`${store}.json`, `${store}.json.metadata.json`]),
 ];
-const CUSTODY_PROFILE_FILE = namedFile(CUSTODY_PROFILE_NAMES);
-/** Entries directly under `.tinycloud/` that this server keeps for the tenant (`profile-locks` is the operations runtime's lock bookkeeping). The `retiring` fence is removed separately, last. */
-const CUSTODY_TINYCLOUD_FILE = namedFile(["native-grant.json", "last-call", "lease-exposures.json", "profile-locks"]);
+/** The lock's owner record, staged beside `.lock` under the name `.lock-owner-<token>.tmp`. */
+const CUSTODY_PROFILE_FILE = new RegExp(`${namedFile(CUSTODY_PROFILE_NAMES).source}|^\\.lock-owner-[^/]+\\.tmp$`);
+/** Entries directly under `.tinycloud/` that this server keeps for the tenant (`profile-locks` is the operations runtime's lock bookkeeping). The `retiring` fence itself is removed separately, last; its temporaries go here. */
+const CUSTODY_TINYCLOUD_FILE = namedFile(["native-grant.json", "last-call", "lease-exposures.json", "profile-locks", "retiring"]);
 
 /** Matches exactly these names, and their `<name>.<suffix>.tmp` / `.<name>.<suffix>.tmp` temporaries. */
 function namedFile(names: readonly string[]): RegExp {

@@ -231,11 +231,19 @@ delegate key and the request's time, and does not retire the key while the
 request remains open. Only after the node confirms retirement does the server
 remove the account's key, session, grants and open approval links. The node
 then refuses further use and renewal. If the node cannot confirm retirement,
-the server retains the account's state and retries. Retirement deletes only the
-paths the server keeps for the delegate (key, profile, session, grants, pending
-approvals, caches, markers and lock records). Every other file in the account's
-state directory, such as the owner's preference file `tc-apps.json` (the
-timezone), is left as it is and is used again by the account's next delegate.
+the server retains the account's state and retries. Retirement deletes exactly
+these paths, under `.tinycloud/profiles/agent/`: `key.json`, `profile.json`,
+`session.json`, `additional-delegations.json`, `auth-requests.json`,
+`registry-cache.json`, `registry-sequences.json` with the `.metadata.json` file
+beside each store, `delegation-binding-migration.json`, `pending/`, `.lock/` and
+the owner record staged beside it; and under `.tinycloud/`: `native-grant.json`,
+`last-call`, `lease-exposures.json`, `profile-locks/` and the `retiring` fence,
+with any atomic-write temporary of these files. The key goes next to last and
+the fence last, so a removal that stops between them is finished by the next
+sweep without asking the node again. Every other file in the account's state
+directory, such as the owner's preference file `tc-apps.json` (the timezone),
+is left as it is and is used again by the account's next delegate; a directory
+that still holds one stays.
 The day-seven bound assumes the service and node are available and the sweep
 can process the due holders within its schedule. A refusal, outage or
 excessive backlog can delay confirmation.
