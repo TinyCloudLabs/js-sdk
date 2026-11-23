@@ -1089,7 +1089,7 @@ function resolveNotBeforeSecs(notBefore: Date | undefined, expiration: Date, now
  */
 export interface DelegateToOptions {
   /**
-   * Override expiry. ms-format string ("7d", "1h") or raw milliseconds. Default 30 d (the session tier). When any entry is
+   * Override expiry. ms-format string ("7d", "1h") or raw milliseconds. Default 7 d (`EXPIRY.SESSION_MS`). When any entry is
    * an encryption grant on a secret's key (or keys under `secrets`), the default is 1 h and an expiry over 7 d is capped to
    * 7 d (TC-3801); the returned `delegation.expiry` is the expiry signed.
    */

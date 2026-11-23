@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { NAMED_KEYS_UNSUPPORTED_MESSAGE } from "@tinycloud/sdk-core";
+import { NAMED_KEYS_UNSUPPORTED_MESSAGE, ownerFullAccess } from "@tinycloud/sdk-core";
 import { NodeWasmBindings } from "./NodeWasmBindings";
 import "./nodeDefaults";
 import "./replication/node-loader";
@@ -37,7 +37,8 @@ describe.skipIf(!legacyBinary)("secrets against a real node without per-secret k
       wasmBindings: new NodeWasmBindings(),
       domain: "legacy-node-secrets.test",
       autoCreateSpace: true,
-      ...(capabilityRequest === undefined ? {} : { capabilityRequest: capabilityRequest as never }),
+      // The plain sign-in is the owner's full-access session: it covers `vault/secrets/` and the default encryption network.
+      ...(capabilityRequest === undefined ? ownerFullAccess() : { capabilityRequest: capabilityRequest as never }),
     });
     await signed.signIn();
     await signed.waitForAccountRegistrySync();
