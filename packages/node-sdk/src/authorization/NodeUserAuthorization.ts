@@ -533,8 +533,8 @@ export class NodeUserAuthorization implements IUserAuthorization {
   private _hostedOwnerProof?: HostedOwnerProof;
   /** The sign-in in flight. Kept apart so a second sign-in never strips or reuses the active session's proof. */
   private _pendingHostedOwnerProof?: HostedOwnerProof;
-  private _hostedOwnerProofFailed = false;
-  private _hostedOwnerDelegateMayHaveLanded = false;
+  /** How the sign-in in flight failed its proof, recorded by the proof that failed and only while it was still the pending one. */
+  private _failedHostedOwnerProof?: { delegateMayHaveLanded: boolean };
 
   private sessionManager: ISessionManager;
   private activeSessionKeyId = "default";
@@ -848,8 +848,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
     this._spaceHosting = "unknown";
     this._hostedOwnerProof = undefined;
     this._pendingHostedOwnerProof = undefined;
-    this._hostedOwnerProofFailed = false;
-    this._hostedOwnerDelegateMayHaveLanded = false;
+    this._failedHostedOwnerProof = undefined;
     if (!session) {
       this._session = undefined;
       this._tinyCloudSession = undefined;
@@ -887,14 +886,14 @@ export class NodeUserAuthorization implements IUserAuthorization {
     return this._pendingHostedOwnerProof ?? this.activeHostedOwnerProof();
   }
 
-  /** True once a proof was refused or could not be checked: the session is discarded locally; whether a node is asked to retire it follows {@link hostedOwnerDelegateMayHaveLanded}. */
+  /** True once the current sign-in's proof was refused or could not be checked: the session is discarded; whether a node is asked to retire it follows {@link hostedOwnerDelegateMayHaveLanded}. */
   get hostedOwnerProofFailed(): boolean {
-    return this._hostedOwnerProofFailed;
+    return this._failedHostedOwnerProof !== undefined;
   }
 
-  /** The proof's `/delegate` was accepted, or its outcome is unknown (5xx, transport error, timeout). False when nothing was sent or the node refused it. */
+  /** The failed proof's `/delegate` was accepted, or its outcome is unknown (5xx, transport error, timeout). False when nothing was sent or the node refused it. */
   get hostedOwnerDelegateMayHaveLanded(): boolean {
-    return this._hostedOwnerDelegateMayHaveLanded;
+    return this._failedHostedOwnerProof?.delegateMayHaveLanded === true;
   }
 
   /**
@@ -908,11 +907,15 @@ export class NodeUserAuthorization implements IUserAuthorization {
     return true;
   }
 
-  /** The proof was refused or could not be read. Nothing it started may be used. A proof a newer sign-in has replaced is left alone. */
-  failHostedOwnerProof(proof?: Readonly<HostedOwnerProof>): void {
-    if (proof && this._pendingHostedOwnerProof !== proof) return;
+  /**
+   * The proof was refused or could not be read. Nothing it started may be used. `delegateMayHaveLanded` says whether
+   * its `/delegate` may be held by the node (accepted, or sent with an unknown outcome), which a cleanup then retires.
+   * A proof a newer sign-in has replaced is left alone: neither the failure nor its outcome is recorded.
+   */
+  failHostedOwnerProof(proof: Readonly<HostedOwnerProof>, delegateMayHaveLanded: boolean): void {
+    if (this._pendingHostedOwnerProof !== proof) return;
     this._pendingHostedOwnerProof = undefined;
-    this._hostedOwnerProofFailed = true;
+    this._failedHostedOwnerProof = { delegateMayHaveLanded };
   }
 
   /** A sign-in that ended before its read (a cancelled wallet, an abandoned prepared request) leaves nothing behind. */
@@ -942,13 +945,17 @@ export class NodeUserAuthorization implements IUserAuthorization {
       && this._tinyCloudSession?.signature === candidate.session.signature;
   }
 
-  /** A read has just confirmed the candidate: the proof now stands for this restored session only. */
-  adoptRestoredHostedOwnerProof(candidate: { host: string; spaceId: string; session: TinyCloudSession }): void {
+  /**
+   * A read has just confirmed the candidate: the proof now stands for this restored session only. False when a newer
+   * session replaced it while the read was in flight: that session is not proven by a read made for another one.
+   */
+  adoptRestoredHostedOwnerProof(candidate: { host: string; spaceId: string; session: TinyCloudSession }): boolean {
     const session = this._tinyCloudSession;
-    if (!session || !this.isRestoredCandidateCurrent(candidate)) return;
+    if (!session || !this.isRestoredCandidateCurrent(candidate)) return false;
     this._hostedOwnerProof = {
       host: candidate.host, spaceId: candidate.spaceId, delegationCid: session.delegationCid, status: "proven",
     };
+    return true;
   }
 
   /**
@@ -1002,8 +1009,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
   ): Promise<void> {
     assertCurrent?.();
     if (mayProveHostedOwner) {
-      this._hostedOwnerProofFailed = false;
-      this._hostedOwnerDelegateMayHaveLanded = false;
+      this._failedHostedOwnerProof = undefined;
       this._pendingHostedOwnerProof = undefined;
     }
     const spaceId = restoredSpaceId ?? this.resolveSignInCapabilities(address, chainId).spaceId;
@@ -1979,8 +1985,9 @@ export class NodeUserAuthorization implements IUserAuthorization {
    *
    * The request is bounded by the SDK's usual 5 s node timeout. Passing a signal also keeps it a single request:
    * without one the shared activation flight may send a second attempt. An accepted answer, a 5xx, a transport error
-   * and a timeout all leave the delegation possibly persisted at the node, so `hostedOwnerDelegateMayHaveLanded`
-   * is set and a failed proof is then retired at the node; only a 4xx answer, which refuses the delegation, is not.
+   * and a timeout all leave the delegation possibly persisted at the node, so a failed proof is then retired there;
+   * only a 4xx answer, which refuses the delegation, is not. The outcome is recorded with the proof that sent the
+   * request, so an overlapping sign-in's answer can never change what this one cleans up.
    */
   private async activateForHostedOwnerProof(proof: HostedOwnerProof, session: TinyCloudSession): Promise<void> {
     this.sessionHosts.add(proof.host);
@@ -1988,19 +1995,17 @@ export class NodeUserAuthorization implements IUserAuthorization {
     try {
       activated = await activateSessionWithHost(proof.host, session.delegationHeader, AbortSignal.timeout(5_000));
     } catch (error) {
-      this._hostedOwnerDelegateMayHaveLanded = true;
-      this.failHostedOwnerProof(proof);
+      this.failHostedOwnerProof(proof, true);
       throw new NodeNotRespondingError([proof.host], error);
     }
-    this._hostedOwnerDelegateMayHaveLanded = activated.success || activated.status >= 500;
     if (!activated.success && activated.status >= 500) {
-      this.failHostedOwnerProof(proof);
+      this.failHostedOwnerProof(proof, true);
       throw Object.assign(new Error(`Failed to activate session: ${describeHostFailure(activated)}`), { cause: activated });
     }
     this.recordActivationSkippedSpaces(activated, session.spaceId);
     const hostsPrimary = activated.success && (activated.activated ?? []).some((space) => pkhSpaceIdentity(space) === pkhSpaceIdentity(proof.spaceId));
     if (!hostsPrimary) {
-      this.failHostedOwnerProof(proof);
+      this.failHostedOwnerProof(proof, activated.success);
       throw new AccountSetupRequiredError();
     }
     if (this._pendingHostedOwnerProof !== proof) throw new Error("Sign-in was replaced before the hosted-space check finished.");

@@ -1936,8 +1936,7 @@ export class TinyCloudNode {
         return false;
       }
       if (outcome !== "positive") return false;
-      auth.adoptRestoredHostedOwnerProof(candidate);
-      return true;
+      return auth.adoptRestoredHostedOwnerProof(candidate);
     })();
     this.hostedOwnerRestore = { epoch, result };
     return result;
@@ -1981,7 +1980,7 @@ export class TinyCloudNode {
       if (!auth.markHostedOwnerProven(proof)) throw new Error("Sign-in was replaced before the hosted-space check finished.");
       return;
     }
-    auth.failHostedOwnerProof(proof);
+    auth.failHostedOwnerProof(proof, true);
     throw outcome === "refused"
       ? new AccountSetupRequiredError()
       : new NodeNotRespondingError([proof.host], new Error("The hosted-space check did not answer."));

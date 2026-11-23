@@ -59,6 +59,7 @@ async function run(scenario: Scenario = {}) {
       if (url.pathname === "/.well-known/tinycloud/node-keys") return Response.json({ nodeDid });
       if (url.pathname === "/delegate") return scenario.delegate?.() ?? Response.json({ activated: [applications], skipped: [] });
       if (url.pathname === "/invoke") return scenario.invoke?.() ?? Response.json([]);
+      if (url.pathname === "/session/retire") return Response.json({ recorded: true });
     }
     throw new Error(`Unexpected request ${url.origin}${url.pathname}`);
   }) as typeof fetch;
@@ -135,8 +136,10 @@ describe("a hosted owner with no registry record", () => {
     expect(paths("/invoke")).toHaveLength(1);
     expect(storage.exists(address)).toBe(false);
     expect(node.session).toBeUndefined();
+    await node.nodeSignOutStatus();
+    expect(requests.filter((request) => request.method === "POST" && request.url === `${DEFAULT_NODE}/session/retire`)).toHaveLength(1);
     expect(requests.filter((request) => request.method !== "GET").map((request) => request.url).sort())
-      .toEqual([`${DEFAULT_NODE}/delegate`, `${DEFAULT_NODE}/invoke`]);
+      .toEqual([`${DEFAULT_NODE}/delegate`, `${DEFAULT_NODE}/invoke`, `${DEFAULT_NODE}/session/retire`]);
   });
 
   test("a 5xx or a network error on the read is not setup: it fails without the setup code and clears the session", async () => {
@@ -187,15 +190,17 @@ describe("requests that cannot be proven are refused before anything is signed",
 
   test("a creation handler or autoCreateSpace never creates anything for the proof", async () => {
     let asked = 0;
-    const { failure, requests } = await run({
+    const { failure, requests, node } = await run({
       invoke: () => new Response("Space not found", { status: 404 }),
       node: { autoCreateSpace: true, spaceCreationHandler: { confirmSpaceCreation: async () => { asked++; return true; }, onSpaceCreated() {}, onSpaceCreationFailed() {} } as never },
     });
     expect(codeOf(failure)).toBe("ACCOUNT_SETUP_REQUIRED");
     expect(asked).toBe(0);
     expect(requests.map((request) => request.url)).not.toContain(`${DEFAULT_NODE}/peer/generate/${applications}`);
+    await node.nodeSignOutStatus();
+    expect(requests.filter((request) => request.method === "POST" && request.url === `${DEFAULT_NODE}/session/retire`)).toHaveLength(1);
     expect(requests.filter((request) => request.method !== "GET").map((request) => request.url).sort())
-      .toEqual([`${DEFAULT_NODE}/delegate`, `${DEFAULT_NODE}/invoke`]);
+      .toEqual([`${DEFAULT_NODE}/delegate`, `${DEFAULT_NODE}/invoke`, `${DEFAULT_NODE}/session/retire`]);
   });
 });
 

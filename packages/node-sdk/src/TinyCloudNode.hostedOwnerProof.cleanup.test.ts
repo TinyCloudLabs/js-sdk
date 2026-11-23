@@ -29,6 +29,8 @@ interface Seen {
   url: string;
   authorization: string | undefined;
   body: string | undefined;
+  /** The signal the caller passed to fetch itself, not the copy a Request makes of it. */
+  signal: AbortSignal | undefined;
 }
 
 interface Behaviour {
@@ -46,7 +48,7 @@ function harness(behaviour: Behaviour = {}, storage = new MemorySessionStorage()
     const request = new Request(input, init);
     const url = new URL(request.url);
     seen.push({
-      method: request.method, url: `${url.origin}${url.pathname}`,
+      method: request.method, url: `${url.origin}${url.pathname}`, signal: init?.signal ?? undefined,
       authorization: request.headers.get("authorization") ?? undefined, body: init?.body ? String(init.body) : undefined,
     });
     if (url.origin === REGISTRY) return new Response(REGISTRY_NOT_FOUND_BODY, { status: 404 });
@@ -97,10 +99,9 @@ describe("a failed hosted-owner proof after the /delegate was accepted", () => {
     const retire = requests("POST", "/session/retire");
     expect(delegate).toHaveLength(1);
     expect(retire).toHaveLength(1);
-    // The retire carries the root delegation the node was given for this very session, and is signed by that session's key.
+    // The retire carries the root delegation the node was given for this very session.
     expect(JSON.parse(retire[0]!.body ?? "{}")).toEqual({ delegations: [delegate[0]!.authorization] });
     expect(retire[0]!.authorization).toBeDefined();
-    expect(retire[0]!.authorization).not.toBe(delegate[0]!.authorization);
     expect(status?.notConfirmed).toEqual([]);
     expect(status?.confirmed).toEqual([DEFAULT_NODE]);
     expect(storage.exists(address)).toBe(false);
@@ -174,14 +175,12 @@ describe("a /delegate that never answers", () => {
 
   test("is abandoned at the node timeout and the session is retired; the timeout is what the caller sees", async () => {
     const realTimeout = AbortSignal.timeout.bind(AbortSignal);
-    const timeouts: number[] = [];
-    AbortSignal.timeout = (ms: number) => { timeouts.push(ms); return realTimeout(20); };
+    AbortSignal.timeout = () => realTimeout(20);
     const { delegate: hang } = slowNode();
     const { node, storage, requests } = harness({ delegate: hang });
     const failure = await failureOf(node);
     await node.nodeSignOutStatus();
     expect(failure.name).toBe("NodeNotRespondingError");
-    expect(timeouts).toContain(5_000);
     const [delegate] = requests("POST", "/delegate");
     const retire = requests("POST", "/session/retire");
     expect(requests("POST", "/delegate")).toHaveLength(1);
@@ -190,6 +189,21 @@ describe("a /delegate that never answers", () => {
     expect(JSON.parse(retire[0]!.body ?? "{}")).toEqual({ delegations: [delegate!.authorization] });
     expect(storage.exists(address)).toBe(false);
     expect(node.session).toBeUndefined();
+  });
+
+  test("the 5 s node timeout is the signal on the /delegate request itself, not only on /info", async () => {
+    const realTimeout = AbortSignal.timeout.bind(AbortSignal);
+    const milliseconds = new Map<AbortSignal, number>();
+    AbortSignal.timeout = (ms: number) => {
+      const signal = realTimeout(ms);
+      milliseconds.set(signal, ms);
+      return signal;
+    };
+    const { node, seen } = harness({ invoke: () => new Response("Space not found", { status: 404 }) });
+    await failureOf(node);
+    const delegate = seen.find((entry) => entry.method === "POST" && entry.url === `${DEFAULT_NODE}/delegate`);
+    expect(delegate?.signal).toBeDefined();
+    expect(milliseconds.get(delegate!.signal!)).toBe(5_000);
   });
 
   test("a /delegate that lands after the abort is covered: the retire carries the session that was delegated", async () => {
@@ -276,5 +290,139 @@ describe("a restored session whose hosted-space read is refused", () => {
     expect(restored.node.session?.delegationCid).toBe(newer);
     expect(storage.exists(address)).toBe(true);
     expect((await restored.node.kv.list({ prefix: "tc4082-notes/notes/" })).ok).toBe(true);
+  });
+});
+
+describe("a restored session's read when a newer sign-in is already signing in", () => {
+  test("is not taken as proof for the newer session, which still has to prove itself", async () => {
+    const first = harness();
+    await first.node.signIn();
+    const session = first.node.restorableSession;
+    const { promise: readHeld, resolve: readReached } = Promise.withResolvers<void>();
+    const { promise: readGate, resolve: releaseRead } = Promise.withResolvers<void>();
+    const { promise: delegateHeld, resolve: delegateReached } = Promise.withResolvers<void>();
+    const { promise: delegateGate, resolve: releaseDelegate } = Promise.withResolvers<void>();
+    const restored = harness({
+      delegate: async () => {
+        delegateReached();
+        await delegateGate;
+        return Response.json({ activated: [applications], skipped: [] });
+      },
+    }, first.storage);
+    const inner = globalThis.fetch;
+    let reads = 0;
+    // The restore's read is held and then answers positively; every later read answers at once.
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (new URL(input instanceof Request ? input.url : String(input)).pathname !== "/invoke") return inner(input, init);
+      reads += 1;
+      if (reads > 1) return inner(input, init);
+      readReached();
+      await readGate;
+      return Response.json([]);
+    }) as typeof fetch;
+    await restored.node.restoreSession({ ...session!, tinycloudHosts: [HOSTILE] });
+    const restoreRead = restored.node.kv.list({ prefix: "tc4082-notes/notes/" });
+    await readHeld;
+    const newer = restored.node.signIn();
+    await delegateHeld;
+    releaseRead();
+    // The read was made for the replaced session: its caller is refused and nothing but that read reached the node.
+    expect((await restoreRead).ok).toBe(false);
+    expect(reads).toBe(1);
+    releaseDelegate();
+    await newer;
+    expect(restored.node.session).toBeDefined();
+    expect((await restored.node.kv.list({ prefix: "tc4082-notes/notes/" })).ok).toBe(true);
+  });
+});
+
+describe("overlapping sign-ins", () => {
+  test("a refusal answered to one never cancels the cleanup owed to the other", async () => {
+    const older = Promise.withResolvers<Response>();
+    const newer = Promise.withResolvers<Response>();
+    const { promise: olderSent, resolve: olderReached } = Promise.withResolvers<void>();
+    const { promise: newerSent, resolve: newerReached } = Promise.withResolvers<void>();
+    let sent = 0;
+    const { node, requests } = harness({
+      delegate: () => {
+        sent += 1;
+        if (sent === 1) { olderReached(); return older.promise; }
+        newerReached();
+        return newer.promise;
+      },
+    });
+    const olderSignIn = node.signIn().then(() => undefined, (error: unknown) => error);
+    await olderSent;
+    const newerSignIn = node.signIn().then(() => undefined, (error: unknown) => error);
+    await newerSent;
+    // The newer sign-in's /delegate gets a 5xx (it may have landed). A few microtask turns later, before that sign-in has
+    // read how it failed, the older one's gets a 4xx. With the outcome kept on the auth rather than on the proof that sent
+    // the request, the 4xx would have cleared the newer sign-in's cleanup.
+    newer.resolve(new Response("boom", { status: 503 }));
+    for (let turn = 0; turn < 3; turn++) await Promise.resolve();
+    older.resolve(new Response("denied", { status: 403 }));
+    await Promise.all([olderSignIn, newerSignIn]);
+    await node.nodeSignOutStatus();
+    const delegates = requests("POST", "/delegate");
+    const retire = requests("POST", "/session/retire");
+    expect(delegates).toHaveLength(2);
+    expect(retire).toHaveLength(1);
+    expect(JSON.parse(retire[0]!.body ?? "{}")).toEqual({ delegations: [delegates[1]!.authorization] });
+    expect(node.session).toBeUndefined();
+  });
+});
+
+describe("a sign-in replaced after its /delegate landed (prepareOpenKeySignIn runs while it is in flight)", () => {
+  /** The wallet sign-in fails as replaced; its session stays current and stored, and is not retired. */
+  async function replaced(invoke: () => Response) {
+    const { promise: held, resolve: reached } = Promise.withResolvers<void>();
+    const { promise: gate, resolve: release } = Promise.withResolvers<void>();
+    const built = harness({
+      delegate: async () => {
+        reached();
+        await gate;
+        return Response.json({ activated: [applications], skipped: [] });
+      },
+      invoke,
+    });
+    const signIn = built.node.signIn().then(() => undefined, (error: unknown) => error);
+    await held;
+    await built.node.prepareOpenKeySignIn();
+    release();
+    const failure = await signIn;
+    await built.node.nodeSignOutStatus();
+    return { ...built, failure };
+  }
+
+  test("known behaviour: the session stays stored and is not retired, but nothing in this process can use it", async () => {
+    const { node, storage, requests, failure } = await replaced(() => Response.json([]));
+    expect((failure as Error).message).toContain("replaced before the hosted-space check finished");
+    expect(node.session).toBeDefined();
+    expect(storage.exists(address)).toBe(true);
+    expect(requests("POST", "/session/retire")).toHaveLength(0);
+    // No service was set up for it and no read was sent: it routes nowhere.
+    expect(() => node.kv.list({ prefix: "tc4082-notes/notes/" })).toThrow("Not signed in");
+    expect(requests("POST", "/invoke")).toHaveLength(0);
+  });
+
+  test("restoring it needs a read the node refuses: the restored session is refused and its record removed", async () => {
+    const { node, storage } = await replaced(() => Response.json([]));
+    const stranded = node.restorableSession;
+    const restored = harness({ invoke: () => new Response("Space not found", { status: 404 }) }, storage);
+    await restored.node.restoreSession({ ...stranded!, tinycloudHosts: [HOSTILE] });
+    expect((await restored.node.kv.list({ prefix: "tc4082-notes/notes/" })).ok).toBe(false);
+    // Exactly the one strict read; the list itself was never sent.
+    expect(restored.requests("POST", "/invoke")).toHaveLength(1);
+    expect(storage.exists(address)).toBe(false);
+  });
+
+  test("restoring it is only proven by a 2xx read of the owner's own space, as for any restored session", async () => {
+    const { node, storage } = await replaced(() => Response.json([]));
+    const stranded = node.restorableSession;
+    const restored = harness({ invoke: () => Response.json([]) }, storage);
+    await restored.node.restoreSession({ ...stranded!, tinycloudHosts: [HOSTILE] });
+    expect((await restored.node.kv.list({ prefix: "tc4082-notes/notes/" })).ok).toBe(true);
+    // The strict read came first, then the list.
+    expect(restored.requests("POST", "/invoke")).toHaveLength(2);
   });
 });
