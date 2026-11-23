@@ -147,6 +147,9 @@ export * from "./providers";
 export {
   // Session and auth types
   type ClientSession,
+  type ClientSignInResult,
+  type SignInResult,
+  type SignInWarning,
   type SiweConfig,
   type EnsData,
   SiweMessage,

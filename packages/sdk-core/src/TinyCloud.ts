@@ -4,6 +4,7 @@ import {
   Extension,
   SignInOptions,
 } from "./userAuthorization";
+import type { ClientSignInResult } from "./client-types";
 import {
   ServiceContext,
   IService,
@@ -475,7 +476,7 @@ export class TinyCloud {
    * @param options - Optional per-call SIWE overrides for this sign-in only
    * @returns The new session
    */
-  public async signIn(options?: SignInOptions): Promise<ClientSession> {
+  public async signIn(options?: SignInOptions): Promise<ClientSignInResult> {
     const session = await this.userAuthorization.signIn(options);
 
     // Notify services of the new session

@@ -13,6 +13,9 @@
 // Platform-agnostic client types (canonical definitions)
 export {
   ClientSession,
+  type ClientSignInResult,
+  type SignInResult,
+  type SignInWarning,
   EnsData,
   SiweConfig,
   ServerHost,

@@ -6,6 +6,8 @@ import {
   ISigner,
   ISessionStorage,
   ClientSession,
+  type ClientSignInResult,
+  type SignInResult,
   Extension,
   PersistedSessionData,
   TinyCloudSession,
@@ -146,7 +148,7 @@ function lastAnchoredLine(siwe: string, pattern: RegExp): string | undefined {
 
 export type OpenKeyAuthorizationResultV1 = Awaited<ReturnType<NodeUserAuthorizationAuthorizeFn>>;
 
-type PreparedOpenKeySession = {
+type PreparedOpenKeySession = SignInResult & {
   siwe: string;
   jwk: Record<string, unknown>;
   spaceId: string;
@@ -1340,7 +1342,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
   private resolveSignInCapabilities(
     address: string,
     chainId: number,
-  ): {
+  ): SignInResult & {
     abilities: AbilitiesMap;
     spaceId: string;
     spaceAbilities?: Record<string, AbilitiesMap>;
@@ -1359,7 +1361,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
   private resolveBaseSignInCapabilities(
     address: string,
     chainId: number,
-  ): {
+  ): SignInResult & {
     abilities: AbilitiesMap;
     spaceId: string;
     spaceAbilities?: Record<string, AbilitiesMap>;
@@ -1425,6 +1427,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
         }
       }
     }
+    let omittedResources: Set<string> | undefined;
     const spaceResources = request.resources.filter((entry) => {
       if (entry.service !== ENCRYPTION_PERMISSION_SERVICE) {
         return true;
@@ -1451,6 +1454,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
       // own key: the whole sign-in would be refused. Drop only those entries; the
       // rest of the request, the network decrypt included, is signed as asked.
       if (ownSecrets && this._nodeFeaturesKnown && !this._nodeFeatures.includes("encryption-named-keys-v1")) {
+        (omittedResources ??= new Set()).add(entry.path);
         return false;
       }
       for (const action of entry.actions) {
@@ -1496,6 +1500,9 @@ export class NodeUserAuthorization implements IUserAuthorization {
       spaceAbilities,
       rawAbilities:
         Object.keys(rawAbilities).length > 0 ? rawAbilities : undefined,
+      ...(omittedResources === undefined ? {} : {
+        warnings: [{ code: "NODE_FEATURE_UNAVAILABLE", feature: "encryption-named-keys-v1", resources: [...omittedResources] }],
+      }),
     };
   }
 
@@ -2023,7 +2030,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
    *
    * @param options - Optional per-call SIWE overrides for this sign-in only
    */
-  async signIn(options?: SignInOptions): Promise<ClientSession> {
+  async signIn(options?: SignInOptions): Promise<ClientSignInResult> {
     await this.bindManifestOwnerFromSigner();
     this.warnIfGenericManifest();
     refuseCaveated(this.getCapabilityRequest()?.manifests);
@@ -2165,7 +2172,8 @@ export class NodeUserAuthorization implements IUserAuthorization {
     await this.ensureSpaceExists();
     this.assertSignInCurrent(generation);
 
-    return clientSession;
+    const { warnings } = capabilityPlan;
+    return warnings === undefined ? clientSession : { ...clientSession, warnings };
   }
 
   /**
@@ -2230,12 +2238,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
    * ```
    */
   async prepareSessionForSigning(identity?: OpenKeySignInIdentity): Promise<{
-    prepared: {
-      siwe: string;
-      jwk: Record<string, unknown>;
-      spaceId: string;
-      verificationMethod: string;
-    };
+    prepared: PreparedOpenKeySession;
     keyId: string;
     jwk: Record<string, unknown>;
     address: string;
@@ -2292,7 +2295,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
     });
 
     return {
-      prepared,
+      prepared: capabilityPlan.warnings === undefined ? prepared : { ...prepared, warnings: capabilityPlan.warnings },
       keyId,
       jwk,
       address,
@@ -2312,32 +2315,28 @@ export class NodeUserAuthorization implements IUserAuthorization {
    * @param jwk - The JWK from `prepareSessionForSigning()`
    */
   async signInWithPreparedSession(
-    prepared: { siwe: string; jwk: Record<string, unknown>; spaceId: string; verificationMethod: string },
+    prepared: PreparedOpenKeySession,
     signature: string,
     keyId: string,
     jwk: Record<string, unknown>,
-  ): Promise<ClientSession> {
+  ): Promise<ClientSignInResult> {
     const generation = this.sessionGeneration;
     return this.completePreparedSession(prepared, signature, keyId, jwk, generation);
   }
 
   private async completePreparedSession(
-    prepared: {
-      siwe: string;
-      jwk: Record<string, unknown>;
-      spaceId: string;
-      verificationMethod: string;
-    },
+    prepared: PreparedOpenKeySession,
     signature: string,
     keyId: string,
     jwk: Record<string, unknown>,
     generation: number,
     identity?: OpenKeySignInIdentity,
-  ): Promise<ClientSession> {
+  ): Promise<ClientSignInResult> {
     this.assertSignInCurrent(generation);
     // Complete session setup with the prepared session + signature
+    const { warnings, ...signedSession } = prepared;
     const session = this.wasm.completeSessionSetup({
-      ...prepared,
+      ...signedSession,
       signature,
     });
 
@@ -2420,7 +2419,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
     await this.ensureSpaceExists();
     this.assertSignInCurrent(generation);
 
-    return clientSession;
+    return warnings === undefined ? clientSession : { ...clientSession, warnings };
   }
 
   /**
@@ -2490,7 +2489,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
         attempt: number,
       ) => Promise<OpenKeyAuthorizationResultV1 | null>;
     },
-  ): Promise<ClientSession> {
+  ): Promise<ClientSignInResult> {
     const pending = await this.prepareOpenKeySignIn(options);
     return this.completeOpenKeySignIn(pending, authorizeFn(pending.request), options);
   }
@@ -2605,7 +2604,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
     pending: PreparedOpenKeyAuthorization,
     authorization: Promise<OpenKeyAuthorizationResultV1>,
     options?: Parameters<NodeUserAuthorization["signInWithOpenKey"]>[1],
-  ): Promise<ClientSession> {
+  ): Promise<ClientSignInResult> {
     if (Date.now() - pending.createdAt > 5 * 60_000) {
       throw new Error("Prepared OpenKey sign-in expired; prepare again");
     }
@@ -2749,7 +2748,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
     keyId: string,
     jwk: Record<string, unknown>,
     options?: { expiryChangeable?: boolean; maxExpiresAt?: OpenKeyMaxExpiresAt },
-  ): Promise<ClientSession> {
+  ): Promise<ClientSignInResult> {
     const generation = this.sessionGeneration;
     const signed = await this.verifyOpenKeyResult(result, prepared, {
       allowExpirationChange: options?.expiryChangeable === true,
@@ -3242,6 +3241,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
       jwk: prepared.jwk,
       spaceId: prepared.spaceId,
       verificationMethod: prepared.verificationMethod,
+      ...(prepared.warnings === undefined ? {} : { warnings: prepared.warnings }),
     };
   }
 

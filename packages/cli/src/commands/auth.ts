@@ -9,7 +9,7 @@ import { createInterface } from "node:readline";
 import type { IncomingMessage } from "node:http";
 import { TinyCloudNode, grantAuthRequest, principalDidEquals, REPLICA_LOGOUT_PENDING_FILE, signedCompactUcanExpiry, type AuthDelegationArtifact, type PermissionEntry, type PortableDelegation, type RuntimeDelegationActivator, type TinyCloudSession } from "@tinycloud/node-sdk";
 import type { ProfileReplicaApprovalEntry, ProfileReplicaDeferredToken, ProfileReplicaLogoutPending, ProfileReplicaPreflight, ProfileReplicaPurge } from "@tinycloud/sdk-services/kv/replication";
-import { composeManifestRequest, ownerFullAccess } from "@tinycloud/sdk-core";
+import { composeManifestRequest, ownerFullAccess, type SignInResult } from "@tinycloud/sdk-core";
 import { invokeOperation } from "@tinycloud/operations";
 import { createProfileRegistryCacheStore, createProfileRegistrySequenceStore, namedProfilePath, profilePath } from "@tinycloud/operations/state";
 import { principalHashOf, readGateSnapshot, REPLICA_DENY_FLOOR_FILE } from "@tinycloud/replica/profile-gate";
@@ -34,6 +34,7 @@ import {
 } from "../output/formatter.js";
 import { handleError, CLIError, cliErrorFromService } from "../output/errors.js";
 import { recordRegistryFallbackWarning } from "../output/warnings.js";
+import { safeInline } from "../output/safe-text.js";
 import { ExitCode, CLI_DEFAULT_SESSION_EXPIRY_MS, DEFAULT_CHAIN_ID, DEFAULT_HOST, DEFAULT_OPENKEY_HOST, DEFAULT_SHARE_ORIGIN } from "../config/constants.js";
 import {
   resolveProfileOperatorType,
@@ -2720,9 +2721,15 @@ async function handleOpenKeyAuth(
   host: string,
   options: OpenKeyLoginOptions = {},
 ): Promise<boolean> {
-  const { profile, delegationData, declined, legacyNested } = await refreshOpenKeySession(profileName, host, options);
+  const { profile, delegationData, declined, legacyNested, warnings } = await refreshOpenKeySession(profileName, host, options);
 
   reportDeclined(declined, legacyNested);
+  for (const warning of warnings ?? []) {
+    process.stderr.write(
+      `${theme.warn("Warning:")} This node does not advertise ${warning.feature}. Sign-in continued without:\n` +
+      `${warning.resources.map((resource) => `  ${safeInline(resource)}`).join("\n")}\nDetails: TC-3975\n`,
+    );
+  }
   await ensureSpaceSetup({ profile: profileName, host }, delegationData, delegationData.permissions as PermissionEntry[] | undefined);
   outputJson({
     authenticated: true,
@@ -2731,6 +2738,7 @@ async function handleOpenKeyAuth(
     spaceId: delegationData.spaceId,
     ownerDid: profile.ownerDid ?? null,
     authMethod: "openkey",
+    ...(warnings === undefined ? {} : { warnings }),
     ...(options.permissions
       ? {
           scoped: true,
@@ -2777,6 +2785,13 @@ function writeReplicationSecretsWarning(): void {
   process.stderr.write(`${theme.warn("Warning:")} replication copies encrypted secret material to this device. The allow-secrets option does not grant decrypt.\n`);
 }
 
+type OpenKeyLoginResult = SignInResult & {
+  profile: ProfileConfig;
+  delegationData: Record<string, unknown>;
+  declined: PermissionEntry[];
+  legacyNested: PermissionEntry[];
+};
+
 interface OpenKeyLoginOptions {
   paste?: boolean;
   noPopup?: boolean;
@@ -2815,7 +2830,7 @@ async function refreshPreparedOpenKeySession(params: {
   permissions: PermissionEntry[] | undefined;
   expectedOwner: string | undefined;
   expiry: RequestedExpiry | undefined;
-}): Promise<{ profile: ProfileConfig; delegationData: Record<string, unknown>; declined: PermissionEntry[]; legacyNested: PermissionEntry[] }> {
+}): Promise<OpenKeyLoginResult> {
   const { profileName, host, profile, snapshot, options, replication, permissions, expectedOwner, expiry } = params;
   assertNoCaveatLimits(permissions);
   const storedOwner = snapshot.session && snapshot.key && profile.sessionDid
@@ -2860,7 +2875,7 @@ async function refreshPreparedOpenKeySession(params: {
     .then((gate) => gate !== undefined && gate.principalHash !== null, () => true);
   try {
     if (namedKeys !== undefined) process.stderr.write(KEYS_APPROVAL_NOTE(namedKeys.prefix));
-    await node.signInWithOpenKey(async (prepared) => {
+    const { warnings } = await node.signInWithOpenKey(async (prepared) => {
       preparedDid = prepared.verificationMethod;
       handoff = await startPreparedOpenKeyHandoff({
         prepared, openKeyHost: resolveOpenKeyHost(profile),
@@ -2914,10 +2929,13 @@ async function refreshPreparedOpenKeySession(params: {
       if (grant === "both") await readyNamedKeysNetwork(node);
       else process.stderr.write(keysNotGrantedAfterLogin(profileName));
     }
+    const proposed = warnings === undefined ? permissions : permissions.filter((permission) =>
+      !isVerifiedRawEncryptionPermission(permission) || !warnings.some((warning) => warning.resources.includes(permission.path)));
     return {
       profile: updatedProfile, delegationData: session,
-      declined: declinedPermissions(permissions, session.permissions as PermissionEntry[], owner),
+      declined: declinedPermissions(proposed, session.permissions as PermissionEntry[], owner),
       legacyNested: verified.legacyNested,
+      ...(warnings === undefined ? {} : { warnings }),
     };
   } catch (error) {
     await handoff?.complete(false);
@@ -2976,7 +2994,7 @@ async function refreshPreparedKeysSession(params: {
   options: OpenKeyLoginOptions;
   expectedOwner: string | undefined;
   expiry: RequestedExpiry | undefined;
-}): Promise<{ profile: ProfileConfig; delegationData: Record<string, unknown>; declined: PermissionEntry[]; legacyNested: PermissionEntry[] }> {
+}): Promise<OpenKeyLoginResult> {
   const { profileName, host, profile, snapshot, options, expectedOwner, expiry } = params;
   const storedOwner = snapshot.session && snapshot.key && profile.sessionDid
     ? verifySignedSession(snapshot.session, snapshot.key, profile.sessionDid).ownerDid
@@ -3101,7 +3119,7 @@ export async function refreshOpenKeySession(
   profileName: string,
   host: string,
   options: OpenKeyLoginOptions = {},
-): Promise<{ profile: ProfileConfig; delegationData: Record<string, unknown>; declined: PermissionEntry[]; legacyNested: PermissionEntry[] }> {
+): Promise<OpenKeyLoginResult> {
   await recoverPendingLogout(profileName);
   // Acquisition must reuse a matching pending result before save-then-ACK retires it.
   const snapshot = await readProfileSnapshot(profileName);
