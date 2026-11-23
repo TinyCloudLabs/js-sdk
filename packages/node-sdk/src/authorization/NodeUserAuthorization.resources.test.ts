@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { SiweMessage } from "siwe";
-import { BOOTSTRAP_SESSION_REQUESTS, extractRecapAttenuations, type SiweConfig } from "@tinycloud/sdk-core";
+import { BOOTSTRAP_SESSION_REQUESTS, extractRecapAttenuations, withSiweDelegationMode, type SiweConfig } from "@tinycloud/sdk-core";
 import { NodeUserAuthorization } from "./NodeUserAuthorization";
 import { NodeWasmBindings } from "../NodeWasmBindings";
 import { PrivateKeySigner } from "../signers/PrivateKeySigner";
@@ -58,8 +58,9 @@ function fixture(siweConfig?: SiweConfig, preparedSiwe?: (siwe: string) => strin
 }
 
 function checkInsertion(original: string, actual: string) {
-  const recapLine = original.split("\n").find((line) => line.startsWith("- urn:recap:"))!;
-  expect(actual).toBe(original.replace(recapLine, [...metadata.map((uri) => `- ${uri}`), recapLine].join("\n")));
+  const withMode = withSiweDelegationMode(original, "attenuable");
+  const recapLine = withMode.split("\n").find((line) => line.startsWith("- urn:recap:"))!;
+  expect(actual).toBe(withMode.replace(recapLine, [...metadata.map((uri) => `- ${uri}`), recapLine].join("\n")));
   expect(new SiweMessage(actual).resources).toEqual([...metadata, recapLine.slice(2)]);
 }
 
@@ -103,7 +104,7 @@ test("absent and empty resource options leave every prepared byte unchanged", as
   for (const config of [undefined, { resources: [] }]) {
     const f = fixture(config);
     const session = await f.auth.signIn();
-    expect(session.siwe).toBe(f.originals[0]);
+    expect(session.siwe).toBe(withSiweDelegationMode(f.originals[0], "attenuable"));
   }
 });
 
@@ -155,7 +156,7 @@ test("insertion preserves original metadata, statement, caveats and proofs byte-
       .replace("Resources:\n", "Resources:\n- urn:existing:metadata\n");
   });
   const p = await f.auth.prepareSessionForSigning();
-  const original = f.originals[0];
+  const original = withSiweDelegationMode(f.originals[0], "attenuable");
   const recapLine = original.split("\n").find((line) => line.startsWith("- urn:recap:"))!;
   expect(p.prepared.siwe).toBe(original.replace(recapLine, [...metadata.map((uri) => `- ${uri}`), recapLine].join("\n")));
   expect(new SiweMessage(p.prepared.siwe).resources).toEqual(["urn:existing:metadata", ...metadata, recapLine.slice(2)]);

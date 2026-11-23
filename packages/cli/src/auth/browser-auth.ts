@@ -1,5 +1,5 @@
 import type { PermissionEntry } from "@tinycloud/node-sdk";
-import { publicJwk } from "@tinycloud/sdk-core";
+import { publicJwk, type DelegationMode } from "@tinycloud/sdk-core";
 import type { ShareInvitationApprovalContext } from "@tinycloud/share-envelope/links";
 import { createInterface } from "node:readline";
 import { DEFAULT_OPENKEY_HOST, DEFAULT_OPENKEY_DEVICE_API_HOST, ExitCode } from "../config/constants.js";
@@ -82,6 +82,11 @@ export interface AuthFlowOptions {
    * approval-request path only (see `renewalLeaseFor`); a paste link or device login never carries one.
    */
   renewalLeaseSeconds?: number;
+  /**
+   * Declared delegation mode for the plain `/delegate` link (`"terminal"` | `"attenuable"`).
+   * Ignored on `/a/` approval requests (OpenKey's live `share-envelope` schema is strict until step 4).
+   */
+  delegationMode?: DelegationMode;
 }
 
 /** Default: durable remote approval and automatic result discovery. `--paste` remains explicit. */
@@ -135,6 +140,9 @@ export function buildAuthUrl(did: string, options: AuthFlowOptions & { callback?
   // holds the signed result to its own bound (see `expiryChangeable` in SignedSessionExpectations).
   if (options.expiryChangeable === true) {
     params.set("expiryChangeable", "true");
+  }
+  if (options.delegationMode !== undefined) {
+    params.set("delegationMode", options.delegationMode);
   }
   // Announce the negotiated authorization protocol so OpenKey can pick the
   // right widget copy. Older OpenKey builds ignore unknown params.

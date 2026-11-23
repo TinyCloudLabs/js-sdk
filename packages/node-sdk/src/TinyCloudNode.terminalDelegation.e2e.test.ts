@@ -201,12 +201,69 @@ describe.skipIf(!nodeBinary)(
         path: "terminal-wallet/",
         actions: ["tinycloud.kv/get"],
       };
-      await expect(
-        owner.delegateTo(delegate, [entry], {
-          forceWalletSign: true,
-          disableSubDelegation: true,
-        }),
-      ).rejects.toThrow("disableSubDelegation requires a session-key delegation");
+      const holder = new TinyCloudNode({
+        host,
+        tinycloudRegistryUrl: registry.url.origin,
+        wasmBindings: new NodeWasmBindings(),
+        autoBootstrapAccount: false,
+      });
+      const holderDid = holder.did.split("#")[0]!;
+      expect((await owner.kv.put("terminal-wallet/message", "direct-ok")).ok).toBe(true);
+      const issued = await owner.delegateTo(holderDid, [entry], {
+        forceWalletSign: true,
+        disableSubDelegation: true,
+      });
+      expect(issued.prompted).toBe(true);
+      expect(issued.delegation.disableSubDelegation).toBe(true);
+      const { decodeCanonicalDagCbor } = await import("../../sdk-core/src/delegations/cacao");
+      const cacao = decodeCanonicalDagCbor(
+        new Uint8Array(Buffer.from(issued.delegation.delegationHeader.Authorization.replace(/=+$/, ""), "base64url")),
+      ) as { p: { exp?: string; resources?: string[] } };
+      const recapResource = cacao.p.resources?.at(-1);
+      expect(recapResource?.startsWith("urn:recap:")).toBe(true);
+      const recapJson = JSON.parse(
+        Buffer.from(recapResource!.slice("urn:recap:".length), "base64url").toString("utf8"),
+      ) as Record<string, unknown>;
+      expect(recapJson["xyz.tinycloud.policy/delegationMode"]).toBe("terminal");
+
+      const access = await holder.useDelegation(issued.delegation);
+      const read = await access.kv.get("message");
+      expect(read.ok, JSON.stringify(read.ok ? undefined : read.error)).toBe(true);
+      expect(read.ok && read.data.data).toBe("direct-ok");
+
+      const jwk: unknown = Reflect.get(holder, "sessionKeyJwk");
+      if (!jwk || typeof jwk !== "object" || !("x" in jwk) || typeof jwk.x !== "string") {
+        throw new Error("delegate has no in-memory session key");
+      }
+      const grandchild = new TinyCloudNode({
+        host,
+        tinycloudRegistryUrl: registry.url.origin,
+        wasmBindings: new NodeWasmBindings(),
+        autoBootstrapAccount: false,
+      }).did.split("#")[0]!;
+      const header = {
+        alg: "EdDSA",
+        jwk: { kty: "OKP", crv: "Ed25519", x: jwk.x },
+        typ: "JWT",
+        ucv: "0.10.0",
+      };
+      const payload = {
+        iss: `${holderDid}#${holderDid.slice("did:key:".length)}`,
+        aud: grandchild,
+        exp: Math.floor(Date.parse(cacao.p.exp!) / 1000) - 60,
+        nbf: Math.floor(Date.now() / 1000) - 5,
+        nnc: `urn:uuid:${randomUUID()}`,
+        prf: [issued.delegation.cid],
+        att: recapJson.att,
+      };
+      const input = `${b64u(Buffer.from(JSON.stringify(header)))}.${b64u(Buffer.from(JSON.stringify(payload)))}`;
+      const signature = sign(null, Buffer.from(input), createPrivateKey({ key: jwk, format: "jwk" }));
+      const child = await fetch(`${host}/delegate`, {
+        method: "POST",
+        headers: { Authorization: `${input}.${b64u(signature)}` },
+      });
+      expect(child.status).toBe(401);
+      expect(await child.text()).toContain("terminal-parent-cannot-redelegate");
 
       const parent = await owner.delegateTo(delegate, [entry], { forceWalletSign: true });
       await expect(

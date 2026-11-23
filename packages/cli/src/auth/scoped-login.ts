@@ -1,4 +1,4 @@
-import { technicalExpiryRefusal } from "@tinycloud/sdk-core";
+import { extractSiweDelegationMode, isCompatibleSignedDelegationMode, technicalExpiryRefusal, type DelegationMode } from "@tinycloud/sdk-core";
 import { NodeWasmBindings, signedCompactUcanExpiry, type PermissionEntry } from "@tinycloud/node-sdk";
 import { isLocalOwnerProfile, liveStoredLease, ownerSessionLacksProof } from "@tinycloud/operations/profile";
 import { CLI_NAME } from "@tinycloud/operations/cli-name";
@@ -475,6 +475,12 @@ export interface SignedSessionExpectations {
   exactApproval?: boolean;
   /** The named-key folder row this login asked for; the only encryption folder row a signed grant may carry. */
   namedKeyRow?: ProfileNamedKeys;
+  /**
+   * Declared delegation mode sent on a path OpenKey reads (`/delegate?delegationMode=` or `/api/device-authorizations`).
+   * A declared `"terminal"` must come back `"terminal"` (absent or `"attenuable"` is refused).
+   * Absent stays accepted when `"attenuable"` or nothing was declared; flipped modes are always refused.
+   */
+  delegationMode?: DelegationMode;
 }
 
 /** What the WASM verifier returns (its binding is untyped). Caveats arrive as `Map`s. */
@@ -506,6 +512,7 @@ export function verifySignedSession(
   const notStored = expected.purpose === "grant" ? "No grant was stored." : "No session was saved.";
   let permissions: PermissionEntry[];
   let expiresAt: string;
+  let signedDelegationMode: DelegationMode | undefined;
   try {
     if (typeof data.siwe !== "string" || typeof data.signature !== "string" ||
       typeof data.address !== "string" || !Number.isSafeInteger(data.chainId) ||
@@ -520,6 +527,7 @@ export function verifySignedSession(
       siwe: data.siwe, signature: data.signature,
     });
     if (!proof.verifiedRecap?.length || !proof.expiresAt || !Number.isFinite(Date.parse(proof.expiresAt))) throw new Error();
+    signedDelegationMode = extractSiweDelegationMode(data.siwe);
     // One entry per signed action, with its caveats. Dropping them would
     // record a restricted action as unrestricted.
     permissions = proof.verifiedRecap.map((entry) => {
@@ -561,6 +569,19 @@ export function verifySignedSession(
   const ownerDid = `did:pkh:eip155:${data.chainId}:${data.address}`;
   if (expected.expectedOwner && normalizePkhIdentifier(expected.expectedOwner) !== normalizePkhIdentifier(ownerDid)) {
     throw new CLIError("OPENKEY_OWNER_MISMATCH", `The approved signing identity differs from this profile's owner. ${notStored} Use a new profile for another account.`, ExitCode.PERMISSION_DENIED);
+  }
+  if (expected.delegationMode !== undefined && !isCompatibleSignedDelegationMode(expected.delegationMode, signedDelegationMode)) {
+    const actual =
+      signedDelegationMode === undefined
+        ? "an undeclared"
+        : signedDelegationMode === "attenuable"
+          ? "an attenuable"
+          : `a ${signedDelegationMode}`;
+    throw new CLIError(
+      "OPENKEY_DELEGATION_MODE_MISMATCH",
+      `OpenKey returned ${actual} grant when ${expected.delegationMode} was requested. ${notStored}`,
+      ExitCode.PERMISSION_DENIED,
+    );
   }
   return { ownerDid, permissions, expiresAt };
 }

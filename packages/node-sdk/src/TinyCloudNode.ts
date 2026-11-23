@@ -170,6 +170,9 @@ import {
   ENCRYPTION,
   EXPIRY,
   parseSignedSiweCacao,
+  TERMINAL_REDELEGATION_REFUSED_MESSAGE,
+  isTerminalParentRefusal,
+  withSiweDelegationMode,
   type RenewalNodeIdentity,
   type RenewalStampHistoryEntry,
   assertExpiryWithinTechnicalLimit,
@@ -777,6 +780,12 @@ function assertDelegationActivated(result: SpaceHostResult, delegation: Portable
     ? (delegation.resources?.map((r) => r.space) ?? [delegation.spaceId]).filter((space) => result.skipped?.includes(space))
     : [];
   if (result.success && skipped.length === 0) return;
+  if (!result.success && isTerminalParentRefusal(result)) {
+    throw Object.assign(new Error(TERMINAL_REDELEGATION_REFUSED_MESSAGE), {
+      code: "TERMINAL_PARENT_CANNOT_REDELEGATE",
+      cause: result,
+    });
+  }
   const detail = result.success
     ? `the node skipped ${[...new Set(skipped)].join(", ")} (space not hosted on the node)`
     : describeHostFailure(result);
@@ -8342,6 +8351,7 @@ export class TinyCloudNode {
         canonicalizeAddress,
         parseSpaceUri,
         verifySignature: verifyEip191MessageSignature,
+        withSiweDelegationMode,
         expiryMs: resolveExpiryMs,
         wholeSecond: wholeSecondExpiry,
         assertExpiry: assertExpiryWithinTechnicalLimit,
@@ -8524,7 +8534,7 @@ export class TinyCloudNode {
     const expiryMs = EXPIRY.EPHEMERAL_MS;
     const expirationTime = new Date(now.getTime() + expiryMs);
 
-    const prepared = this.wasmBindings.prepareSession({
+    const rawPrepared = this.wasmBindings.prepareSession({
       abilities,
       address: this.wasmBindings.ensureEip55(this.session.address),
       chainId: this.session.chainId,
@@ -8535,6 +8545,9 @@ export class TinyCloudNode {
       jwk: this.session.jwk,
       parents: [this.session.delegationCid],
     });
+    const prepared = /(?:^|\r?\n)- urn:recap:/i.test(rawPrepared.siwe)
+      ? { ...rawPrepared, siwe: withSiweDelegationMode(rawPrepared.siwe, "attenuable") }
+      : rawPrepared;
 
     const signature = await this.signer.signMessage(prepared.siwe);
     graph.assertActive();
@@ -8809,9 +8822,6 @@ export class TinyCloudNode {
     //    them via the legacy `createDelegation` which loops internally
     //    (or just not pass `forceWalletSign: true`).
     if (options?.forceWalletSign) {
-      if (options.disableSubDelegation) {
-        throw new Error(TERMINAL_DELEGATION_REQUIRES_SESSION_KEY);
-      }
       if (expandedEntries.length > 1) {
         throw new Error(
           "delegateTo with forceWalletSign=true supports at most one " +
@@ -10206,9 +10216,6 @@ export class TinyCloudNode {
   }): Promise<PortableDelegation> {
     const graph = this._serviceGraph;
     graph.assertActive();
-    if (params.disableSubDelegation) {
-      throw new Error(TERMINAL_DELEGATION_REQUIRES_SESSION_KEY);
-    }
     if (!this.signer) {
       throw new Error("Cannot createDelegation() in session-only mode. Requires wallet mode.");
     }
@@ -10240,7 +10247,8 @@ export class TinyCloudNode {
     // Prepare the delegation session with:
     // - delegateUri: target the recipient's DID directly (for user-to-user delegation)
     // - parents: reference our session CID for chain validation
-    const prepared = this.wasmBindings.prepareSession({
+    // Third-party wallet-signed CACAOs always mint terminal (TC-3810).
+    const rawPrepared = this.wasmBindings.prepareSession({
       abilities,
       address: this.wasmBindings.ensureEip55(session.address),
       chainId: session.chainId,
@@ -10251,6 +10259,9 @@ export class TinyCloudNode {
       delegateUri: params.delegateDID,
       parents: [session.delegationCid],
     });
+    const prepared = /(?:^|\r?\n)- urn:recap:/i.test(rawPrepared.siwe)
+      ? { ...rawPrepared, siwe: withSiweDelegationMode(rawPrepared.siwe, "terminal") }
+      : rawPrepared;
 
     // Sign the SIWE message with this user's signer
     const signature = await this.signer.signMessage(prepared.siwe);
@@ -10267,6 +10278,12 @@ export class TinyCloudNode {
     graph.assertActive();
 
     if (!activateResult.success) {
+      if (isTerminalParentRefusal(activateResult)) {
+        throw Object.assign(new Error(TERMINAL_REDELEGATION_REFUSED_MESSAGE), {
+          code: "TERMINAL_PARENT_CANNOT_REDELEGATE",
+          cause: activateResult,
+        });
+      }
       throw Object.assign(
         new Error(`Failed to activate delegation: ${describeHostFailure(activateResult)}`),
         { cause: activateResult },
@@ -10279,7 +10296,7 @@ export class TinyCloudNode {
       spaceId: params.spaceIdOverride ?? session.spaceId,
       path: params.path,
       actions: params.actions,
-      disableSubDelegation: false,
+      disableSubDelegation: true,
       expiry: expirationTime,
       delegateDID: params.delegateDID,
       ownerAddress: session.address,
@@ -10296,7 +10313,7 @@ export class TinyCloudNode {
       const publicAbilities: Record<string, Record<string, string[]>> = {
         kv: { "": [KV.GET, KV.PUT, KV.METADATA] },
       };
-      const publicPrepared = this.wasmBindings.prepareSession({
+      const rawPublicPrepared = this.wasmBindings.prepareSession({
         abilities: publicAbilities,
         address: this.wasmBindings.ensureEip55(session.address),
         chainId: session.chainId,
@@ -10307,6 +10324,9 @@ export class TinyCloudNode {
         delegateUri: params.delegateDID,
         parents: [session.delegationCid],
       });
+      const publicPrepared = /(?:^|\r?\n)- urn:recap:/i.test(rawPublicPrepared.siwe)
+        ? { ...rawPublicPrepared, siwe: withSiweDelegationMode(rawPublicPrepared.siwe, "terminal") }
+        : rawPublicPrepared;
       const publicSignature = await this.signer.signMessage(publicPrepared.siwe);
       graph.assertActive();
       const publicSession = this.wasmBindings.completeSessionSetup({
@@ -10324,7 +10344,7 @@ export class TinyCloudNode {
           spaceId: publicSpaceId,
           path: "",
           actions: [KV.GET, KV.PUT, KV.METADATA],
-          disableSubDelegation: false,
+          disableSubDelegation: true,
           expiry: expirationTime,
           delegateDID: params.delegateDID,
           ownerAddress: session.address,
@@ -10520,6 +10540,12 @@ export class TinyCloudNode {
     });
 
     if (!activateResult.success) {
+      if (isTerminalParentRefusal(activateResult)) {
+        throw Object.assign(new Error(TERMINAL_REDELEGATION_REFUSED_MESSAGE), {
+          code: "TERMINAL_PARENT_CANNOT_REDELEGATE",
+          cause: activateResult,
+        });
+      }
       throw Object.assign(
         new Error(`Failed to activate delegated session: ${describeHostFailure(activateResult)}`),
         { cause: activateResult },
@@ -10617,11 +10643,11 @@ export class TinyCloudNode {
     }
 
     // Validate sub-delegation is allowed
-    if (parentDelegation.disableSubDelegation) {
-      throw new Error("Parent delegation does not allow sub-delegation");
-    }
     if (params.disableSubDelegation) {
       throw new Error(TERMINAL_DELEGATION_REQUIRES_SESSION_KEY);
+    }
+    if (parentDelegation.disableSubDelegation) {
+      throw new Error("Parent delegation does not allow sub-delegation");
     }
 
     const parentResources = parentDelegation.resources ?? [{
@@ -10709,6 +10735,12 @@ export class TinyCloudNode {
     graph.assertActive();
 
     if (!activateResult.success) {
+      if (isTerminalParentRefusal(activateResult)) {
+        throw Object.assign(new Error(TERMINAL_REDELEGATION_REFUSED_MESSAGE), {
+          code: "TERMINAL_PARENT_CANNOT_REDELEGATE",
+          cause: activateResult,
+        });
+      }
       throw Object.assign(
         new Error(`Failed to activate sub-delegation: ${describeHostFailure(activateResult)}`),
         { cause: activateResult },

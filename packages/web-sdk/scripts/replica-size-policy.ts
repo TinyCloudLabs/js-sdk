@@ -501,6 +501,7 @@ export type Ledger = {
   tc3549KeptApprovalsRoot?: LogoutRatchet;
   tc3617HostedMcpLeaseRoot?: LogoutRatchet;
   tc3947ReplicaRevokeRoot?: LogoutRatchet & { worker: { delta: number; ceiling: number }; replicaWorker: { delta: number; ceiling: number } };
+  tc3810DelegationModeRoot?: LogoutRatchet;
   tc2773LazyRestoreReplicaWorker?: Omit<WorkerRatchet, "worker"> & { replicaWorker: { delta: number; ceiling: number } };
 };
 
@@ -1156,6 +1157,7 @@ export function ancestryPins(root: Ledger, hasGatedOnly: boolean): Array<{ row: 
   if (root.tc3549KeptApprovalsRoot !== undefined) pins.push({ row: "tc3549KeptApprovalsRoot", pin: root.tc3549KeptApprovalsRoot.sourceCommits.at(-1)! });
   if (root.tc3617HostedMcpLeaseRoot !== undefined) pins.push({ row: "tc3617HostedMcpLeaseRoot", pin: root.tc3617HostedMcpLeaseRoot.sourceCommits.at(-1)! });
   if (root.tc3947ReplicaRevokeRoot !== undefined) pins.push({ row: "tc3947ReplicaRevokeRoot", pin: root.tc3947ReplicaRevokeRoot.sourceCommits.at(-1)! });
+  if (root.tc3810DelegationModeRoot !== undefined) pins.push({ row: "tc3810DelegationModeRoot", pin: root.tc3810DelegationModeRoot.sourceCommits.at(-1)! });
   if (hasGatedOnly) pins.push({ row: "gatedOnlyRatchet", pin: approvedGatedOnlyRatchet.sourceCommit });
   return pins;
 }
@@ -1281,6 +1283,7 @@ export function rootCeilings(root: Ledger): Array<{ row: string; ceiling: GzipSi
     ["tc3549KeptApprovalsRoot", root.tc3549KeptApprovalsRoot?.root.ceiling],
     ["tc3617HostedMcpLeaseRoot", root.tc3617HostedMcpLeaseRoot?.root.ceiling],
     ["tc3947ReplicaRevokeRoot", root.tc3947ReplicaRevokeRoot?.root.ceiling],
+    ["tc3810DelegationModeRoot", root.tc3810DelegationModeRoot?.root.ceiling],
   ];
   return rows.flatMap(([row, ceiling]) => ceiling === undefined ? [] : [{ row, ceiling }]);
 }
@@ -3997,6 +4000,26 @@ export const approvedTc3947ReplicaRevokeRoot: NonNullable<Ledger["tc3947ReplicaR
   "reason": "KVService.changes and the replica transport read the node's JSON revocation refusal ({\"code\", \"error\"}, nodes 1.25.17 and later) as a revocation before matching the revocation text; sdk-services is bundled into the web-sdk root and, with the replica transport, into the replica and kv-storage workers. Canonical Node 22/Bun 1.3.14 CI on #1138 (d79271d3, master 3ad8bb80) measured index.mjs 1535546 and index.cjs 1466953 gzip -9 bytes: +62 and +50 over the tc3617HostedMcpLeaseRoot ceilings 1535484 and 1466903; kv-storage worker 781191 and replica worker 774920: +234 and +238 over the tc3443SessionRetireRoot ceilings 780957 and 774682. No other ceiling moves. Details: TC-3947"
 };
 
+/** The exact TC-3810 step 2 delegationMode root allowance from canonical CI. */
+export const approvedTc3810DelegationModeRoot: LogoutRatchet = {
+  "label": "wallet-signed ReCap delegationMode declaration and strict parser validation (TC-3810)",
+  "ruling": "size-ruling: TC-3810 step 2 (Naomi 06:36Z): +1,230 B mjs / +1,958 B cjs over tc3947ReplicaRevokeRoot for delegationMode parse/validate code; filled from canonical CI. Details: TC-3810",
+  "base": "7f6a8871de0759b95f16e3acfc377331df3b0fbb",
+  "sourceCommits": ["ee1b448de9b925641f6e68325b2af025ced7981a"],
+  "canonicalCI": {
+    "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45123859871",
+    "jobs": [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45123859871/job/137523596428",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45123859871/job/137523596694"
+    ]
+  },
+  "root": {
+    "delta": { "index.mjs": 1230, "index.cjs": 1958 },
+    "ceiling": { "index.mjs": 1536776, "index.cjs": 1468911 }
+  },
+  "reason": "Wallet-signed ReCap delegationMode declaration, strict duplicate-key and value validation in sdk-core and share-sdk, OpenKey verification and terminal-parent refusal mapping in node-sdk; sdk-core, share-sdk and node-sdk are bundled into the web-sdk root. size-ruling: TC-3810 step 2 (Naomi 06:36Z): +1,230 B mjs / +1,958 B cjs over tc3947ReplicaRevokeRoot for delegationMode parse/validate code; filled from canonical CI. Canonical Node 22/Bun 1.3.14 CI on #1140 (ee1b448d, master 7f6a8871) measured index.mjs 1536776 and index.cjs 1468911 gzip -9 bytes: +1230 and +1958 over the tc3947ReplicaRevokeRoot ceilings 1535546 and 1466953. No other ceiling moves. Details: TC-3810"
+};
+
 export const approvedLedgerRows: Record<string, unknown> = {
   phase2Ratchet: approvedPhase2,
   fixRequiredRatchet: approvedFixRequiredRatchet,
@@ -4119,6 +4142,7 @@ export const approvedLedgerRows: Record<string, unknown> = {
   tc3549KeptApprovalsRoot: approvedTc3549KeptApprovalsRoot,
   tc3617HostedMcpLeaseRoot: approvedTc3617HostedMcpLeaseRoot,
   tc3947ReplicaRevokeRoot: approvedTc3947ReplicaRevokeRoot,
+  tc3810DelegationModeRoot: approvedTc3810DelegationModeRoot,
 };
 
 /** Only a git merge-base ledger may retain the pre-correction toolchain. */
@@ -4687,6 +4711,11 @@ export function validateLedger(value: Ledger, historicalBase = false): void {
       (!value.tc3617HostedMcpLeaseRoot ||
         JSON.stringify(value.tc3947ReplicaRevokeRoot) !== JSON.stringify(approvedTc3947ReplicaRevokeRoot))) {
     throw new Error("Only the exact TC-3947 root admission is approved.");
+  }
+  if (value.tc3810DelegationModeRoot !== undefined &&
+      (!value.tc3947ReplicaRevokeRoot ||
+        JSON.stringify(value.tc3810DelegationModeRoot) !== JSON.stringify(approvedTc3810DelegationModeRoot))) {
+    throw new Error("Only the exact TC-3810 root admission is approved.");
   }
 }
 
@@ -5740,5 +5769,13 @@ export function validateTc3947ReplicaRevokeRootTransition(base?: LogoutRatchet, 
   if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc3947ReplicaRevokeRoot) ||
       base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
     throw new Error("The TC-3947 root admission may be introduced once and cannot change later.");
+  }
+}
+
+/** The exact TC-3810 step 2 delegationMode root admission is introduced once and immutable. */
+export function validateTc3810DelegationModeRootTransition(base?: LogoutRatchet, current?: LogoutRatchet): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc3810DelegationModeRoot) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The TC-3810 root admission may be introduced once and cannot change later.");
   }
 }

@@ -14,7 +14,7 @@
 // by hand — the wire shape it enforces exactly mirrors what OpenKey
 // emits and what `signInWithOpenKeyResult` accepts.
 
-import { publicJwk, type CapabilityPresentationEnvelopeV1 } from "@tinycloud/sdk-core";
+import { publicJwk, type CapabilityPresentationEnvelopeV1, type DelegationMode } from "@tinycloud/sdk-core";
 
 /**
  * Structural shape of the OpenKey SDK's `authorizeTinyCloud()` method.
@@ -66,6 +66,8 @@ export interface OpenKeyAuthorizeTinyCloud {
      * forwards it; 0.12.x ignores it.
      */
     expiryChangeable?: boolean;
+    /** Declared ReCap delegation mode (`"terminal"` | `"attenuable"`). */
+    delegationMode?: DelegationMode;
   }, opts?: { mode?: "iframe" | "popup" | "redirect" }): Promise<{
     protocolVersion: 1;
     address: string;
@@ -105,6 +107,8 @@ export interface OpenKeyBridgeInput {
    * carried this flag, and then uses the SIGNED expiry.
    */
   expiryChangeable?: boolean;
+  /** Declared ReCap delegation mode (`"terminal"` | `"attenuable"`). */
+  delegationMode?: DelegationMode;
 }
 
 export type NodeUserAuthorizationAuthorizeFn = (
@@ -157,6 +161,7 @@ export function wireOpenKeyAuthorize(
       presentation: input.presentation,
       // Sent only when true, so a request without it keeps its prior shape.
       ...(input.expiryChangeable === true ? { expiryChangeable: true } : {}),
+      ...(input.delegationMode !== undefined ? { delegationMode: input.delegationMode } : {}),
     }, opts);
     if (result.protocolVersion !== 1) {
       throw new Error(

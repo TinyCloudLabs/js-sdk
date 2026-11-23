@@ -228,8 +228,15 @@ export type {
 } from "./delegations";
 export { parseSignedSiweCacao, type SignedSiweCacao } from "./delegations/cacao";
 export {
+  DELEGATION_MODE_KEY,
   TERMINAL_DELEGATION_FACT,
+  TERMINAL_REDELEGATION_REFUSED_MESSAGE,
+  extractSiweDelegationMode,
+  isCompatibleSignedDelegationMode,
+  isTerminalParentRefusal,
   markDelegationTerminal,
+  withSiweDelegationMode,
+  type DelegationMode,
   type TerminalDelegationSigningKey,
 } from "./delegations/terminal";
 

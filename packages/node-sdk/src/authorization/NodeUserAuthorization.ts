@@ -69,8 +69,12 @@ import {
   diffImmutableSiweFields,
   checkChangedExpiration,
   extractRecapAttenuations,
+  extractSiweDelegationMode,
+  isCompatibleSignedDelegationMode,
   unauthorizedRecapCapabilities,
   parseCanonicalRecapResource,
+  withSiweDelegationMode,
+  type DelegationMode,
   ACCOUNT_REGISTRY_SPACE,
   ACCOUNT_MANIFEST_PERMISSIONS,
   KV,
@@ -1510,13 +1514,17 @@ export class NodeUserAuthorization implements IUserAuthorization {
 
   private prepareSessionWithResources(
     params: Record<string, unknown>,
+    delegationMode?: DelegationMode,
   ) {
     const resources = this.siweConfig?.resources;
     if (resources?.some(resource => typeof resource !== "string" ||
       !/^urn:tinycloud:recipients:[A-Za-z0-9_-]+$/.test(resource))) {
       throw new Error("SIWE metadata resources must be base64url recipients URIs");
     }
-    const prepared = this.wasm.prepareSession(params);
+    const rawPrepared = this.wasm.prepareSession(params);
+    const prepared = delegationMode !== undefined && /(?:^|\r?\n)- urn:recap:/i.test(rawPrepared.siwe)
+      ? { ...rawPrepared, siwe: withSiweDelegationMode(rawPrepared.siwe, delegationMode) }
+      : rawPrepared;
     if (!resources?.length) return prepared;
 
     const recapLines = /^- urn:recap:[^\r\n]+$/gim;
@@ -1909,7 +1917,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
       spaceId: options.spaceId,
       jwk,
       ...this.buildSiweOverrides(),
-    });
+    }, "attenuable");
     const signature = await this.requestSignature({
       address,
       chainId,
@@ -2045,7 +2053,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
       spaceId,
       jwk,
       ...this.buildSiweOverrides(options),
-    });
+    }, "attenuable");
 
     // Sign the SIWE message from prepareSession (NOT a separately generated SIWE)
     const signature = await this.requestSignature({
@@ -2194,7 +2202,10 @@ export class NodeUserAuthorization implements IUserAuthorization {
    * const session = await auth.signInWithPreparedSession(prepared, signature, keyId, jwk);
    * ```
    */
-  async prepareSessionForSigning(identity?: OpenKeySignInIdentity): Promise<{
+  async prepareSessionForSigning(
+    identity?: OpenKeySignInIdentity,
+    delegationMode: DelegationMode = "attenuable",
+  ): Promise<{
     prepared: {
       siwe: string;
       jwk: Record<string, unknown>;
@@ -2254,7 +2265,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
       jwk,
       ...this.buildSiweOverrides(),
       ...(identity ? { uri: this.sessionManager.getDID(keyId) } : {}),
-    });
+    }, delegationMode);
 
     return {
       prepared,
@@ -2436,6 +2447,8 @@ export class NodeUserAuthorization implements IUserAuthorization {
        * expiry is then the session's expiry.
        */
       expiryChangeable?: boolean;
+      /** Declared ReCap delegation mode (default: `"attenuable"` for normal owner sign-in). */
+      delegationMode?: DelegationMode;
       /**
        * The latest signed expiry the caller will accept, used only with `expiryChangeable`: a signed expiry beyond it
        * is refused before any session is built, stored or activated. Epoch MILLISECONDS or a `Date`; a function is
@@ -2493,7 +2506,8 @@ export class NodeUserAuthorization implements IUserAuthorization {
     this.assertSignInCurrent(generation);
 
     // 1. Prepare — this creates a SIWE bound to a fresh session key.
-    const { prepared, keyId, jwk, address, chainId } = await this.prepareSessionForSigning(identity);
+    const delegationMode: DelegationMode = options?.delegationMode ?? "attenuable";
+    const { prepared, keyId, jwk, address, chainId } = await this.prepareSessionForSigning(identity, delegationMode);
     this.assertSignInCurrent(generation);
 
     // 2. Build the presentation envelope from the instance manifest (if
@@ -2523,6 +2537,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
       host: hostHint,
       keyId: identity?.keyId ?? options?.openkeyKeyId,
       presentation,
+      delegationMode,
       // Present only when set, so the default request shape is unchanged.
       ...(options?.expiryChangeable === true ? { expiryChangeable: true } : {}),
     };
@@ -2878,6 +2893,23 @@ export class NodeUserAuthorization implements IUserAuthorization {
       throw new Error(
         `OpenKey signedMessage broadened authorization beyond the original request: ${preview}${overflow}`,
       );
+    }
+    if (originalHasRecap) {
+      let originalMode: DelegationMode | undefined;
+      let signedMode: DelegationMode | undefined;
+      try {
+        originalMode = extractSiweDelegationMode(prepared.siwe);
+        signedMode = extractSiweDelegationMode(result.signedMessage);
+      } catch (err) {
+        throw new Error(
+          `OpenKey signedMessage has an invalid ReCap delegation mode: ${(err as Error).message}`,
+        );
+      }
+      if (!isCompatibleSignedDelegationMode(originalMode, signedMode)) {
+        throw new Error(
+          `OpenKey signedMessage altered the ReCap delegation mode (expected ${originalMode ?? "absent"}, got ${signedMode ?? "absent"})`,
+        );
+      }
     }
 
     // Structural check: the signed SIWE must reference the expected spaceId.
