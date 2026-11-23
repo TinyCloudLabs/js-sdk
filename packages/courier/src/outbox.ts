@@ -332,7 +332,7 @@ function nodeSender(): (profile: Profile, peerHandle: string, input: SendInput) 
   let node: Promise<TinyCloudNode> | undefined;
   return async (profile, peerHandle, input) => {
     node ??= courierNode(profile);
-    return sendMessage(await node, profile, getPeer(profile, peerHandle), input);
+    return sendMessage(await node, profile, peerHandle, getPeer(profile, peerHandle), input);
   };
 }
 

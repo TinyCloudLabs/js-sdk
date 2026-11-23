@@ -32,7 +32,6 @@ export async function publishMessage(
   if (peer.interim?.latchedAt || peer.interim?.inboundRefusedAt) {
     throw new CourierError('peer-revoked', `Sharing with ${oneLine(handle)} was revoked. A new pairing is required.`);
   }
-  if (peer.status !== 'paired') throw new CourierError('not-paired', 'Finish pairing before sending a message.');
   if (peer.sessionId && (which === 'new' || threadId !== peer.sessionId)) {
     throw new CourierError('session-mismatch', 'This pairing permits only its invited session. Start or select another session explicitly.');
   }

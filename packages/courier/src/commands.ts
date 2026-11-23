@@ -554,8 +554,9 @@ export async function cmdRevoke(args: ParsedArgs) {
 // ---------- send ----------
 
 /** Writes one outbound message (and thread meta for a new thread) to the peer's mirror. Shared by `courier send` and the outbox. */
-export async function sendMessage(node: TinyCloudNode, profile: Profile, peer: StoredPeer, input: SendInput): Promise<CourierMessage> {
-  return publishMessage(node.kv, { owner: profile.ownerDid!, agent: profile.courierDid, label: profile.label }, peer, input, {
+export async function sendMessage(node: TinyCloudNode, profile: Profile, peerHandle: string, peer: StoredPeer, input: SendInput): Promise<CourierMessage> {
+  // Mailbox keys follow the profile handle, as before the shared builder.
+  return publishMessage(node.kv, { owner: profile.ownerDid!, agent: profile.courierDid, label: profile.label }, { ...peer, handle: peerHandle }, input, {
     peerKv: () => peerKv(node, profile, peer),
     onWrite: key => recordOwnerSpaceWrite(profile.courierDid, profile.spaceId, input.threadId, key),
   });
@@ -572,7 +573,7 @@ export async function cmdSend(args: ParsedArgs) {
   if (!INTENTS.includes(intentRaw as Intent)) fail('usage', `--intent must be one of: ${INTENTS.join(', ')}`);
   const text = readTextArg(args, '--text or --file is required (or pipe the body on stdin)');
   if (text.length > 256 * 1024) fail('too-large', 'Message body exceeds the 256 KB inline limit (§4) — put it under files/ instead.');
-  const msg = await sendMessage(node, profile, peer, {
+  const msg = await sendMessage(node, profile, peerHandle, peer, {
     which: which === 'new' ? 'new' : 'thread', threadId, subject, text, intent: intentRaw as Intent,
     asks: args.all('ask').map((title, i) => ({ id: `a${i + 1}`, title })),
     constraints: args.all('constraint'),
