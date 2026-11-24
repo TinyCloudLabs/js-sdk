@@ -300,6 +300,10 @@ call is answered with 500 `server_error`.
 The account owner can see the hosted MCP's delegation, and revoke it, on the
 account site at https://account.tinycloud.xyz/delegations.
 
+The OpenAI plugin portal's domain-verification token is public. `TC_MCP_OPENAI_APPS_CHALLENGE` holds it and the
+hosted address serves it as plain text at `/.well-known/openai-apps-challenge`; unset or blank, that path answers 404.
+To set it in production, add it as a literal line in `docker-compose.phala.yml`. It doesn't need a workflow secret.
+
 Standalone defaults are `TC_MCP_DELEGATION_EXPIRY=1h` and
 `TC_MCP_APPROVAL_TTL_SECONDS=300`. Production `docker-compose.phala.yml`
 explicitly overrides these to `30d` and `900`; the container command above

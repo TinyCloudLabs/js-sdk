@@ -56,6 +56,11 @@ export interface HostedMcpConfig extends RemoteStoreConfig {
    * signed token claims are checked.
    */
   readonly introspection?: Omit<TokenStatusConfig, "resourceUrl">;
+  /**
+   * The OpenAI plugin portal's domain-verification token (`TC_MCP_OPENAI_APPS_CHALLENGE`), served as plain text at
+   * `/.well-known/openai-apps-challenge`. Unset or blank: that path answers 404.
+   */
+  readonly openaiAppsChallenge?: string;
 }
 
 export interface HostedMcpApp {
@@ -323,6 +328,13 @@ function createHostedSurface(
           request.method === "HEAD" ? new Response(null, { status: response.status, headers: response.headers }) : response,
           request,
         );
+      }
+      if (url.pathname === "/.well-known/openai-apps-challenge" && surface === "hosted") {
+        const token = config.openaiAppsChallenge?.trim();
+        if (token === undefined || token === "") return new Response("Not found", { status: 404 });
+        if (request.method !== "GET" && request.method !== "HEAD") return methodNotAllowed("GET, HEAD");
+        const response = publicText(token, "text/plain; charset=utf-8");
+        return request.method === "HEAD" ? new Response(null, { status: 200, headers: response.headers }) : response;
       }
       if (url.pathname === "/robots.txt" && surface === "hosted") {
         return request.method === "GET"
