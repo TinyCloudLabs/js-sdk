@@ -1,14 +1,10 @@
 /**
  * The Release identity check against real npm provenance (TC-4276 F1), verified offline with sigstore's own verifier
- * and a pinned trust root. The identity is compared by exact equality: sigstore's SAN policy is an unanchored regex.
- *
- * Sigstore runs in a Node child, the CLI's runtime (`bin/tinycloud` is `#!/usr/bin/env node`): Bun before 1.4 has no
- * default digest for ECDSA, so sigstore's Rekor SET check fails under it and a genuine release would not verify.
+ * (in a Node child; see offline-sigstore.ts) and a pinned trust root. The identity is compared by exact equality:
+ * sigstore's SAN policy is an unanchored regex.
  */
 import { describe, expect, test } from "bun:test";
-import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
+import { BUNDLES, COURIER, SIGSTORE, offlineVerifier } from "../test-support/offline-sigstore.js";
 import { FakeRegistry, derUtf8 } from "../test-support/self-update-fakes.js";
 import {
   ProvenanceUnavailableError,
@@ -19,30 +15,6 @@ import {
   type BundleVerifier,
   type SignerIdentity,
 } from "./provenance.js";
-
-const fixture = (name: string): unknown => JSON.parse(readFileSync(new URL(`../test-support/fixtures/sigstore/${name}`, import.meta.url), "utf8"));
-const COURIER = { name: "@tinycloud/courier", version: "0.8.2", integrity: "sha512-LU2djD/HkQiNZECfRVUoCkvGqqQILKkwV4yAO4WovFI9iJg3+0H1R7Uiw6CVWllNdLOcMyR9ThcJgHUsM88MZA==" };
-const SIGSTORE = { name: "sigstore", version: "4.1.1", integrity: "sha512-endqECJkfhozrXMK5ngu/UAA0xVcVEFdnHJCElGaExypjW+HK5i6zu3NteLoaX/iFbRUbC3+DjttQs0GARr+5w==" };
-const BUNDLES = new Map<string, unknown>([
-  [`${COURIER.name}@${COURIER.version}`, fixture("courier-0.8.2.provenance.json")],
-  [`${SIGSTORE.name}@${SIGSTORE.version}`, fixture("sigstore-4.1.1.provenance.json")],
-]);
-
-/** sigstore's verifier (the modules the pinned `sigstore` uses), with no identity policy and an offline trust root. */
-const offlineVerifier: BundleVerifier = async (bundle) => {
-  const helper = fileURLToPath(new URL("../test-support/sigstore-verify.cjs", import.meta.url));
-  const child = spawnSync(process.env.NODE_BINARY ?? "node", [helper], { input: JSON.stringify(bundle), encoding: "utf8", timeout: 60_000 });
-  if (child.status !== 0) throw new Error(`sigstore-verify.cjs exited ${child.status}: ${child.stderr}`);
-  const result = JSON.parse(child.stdout) as {
-    runtime: string;
-    error?: string;
-    identity?: { subjectAlternativeName?: string; extensions?: { issuer?: string }; oids: { oid?: { id: number[] }; value: string }[] };
-  };
-  if (!result.runtime.startsWith("node ")) throw new Error(`sigstore ran under ${result.runtime}, not Node`);
-  if (result.error !== undefined) throw new Error(`${result.error} (${result.runtime})`);
-  const identity = result.identity!;
-  return { ...identity, oids: identity.oids.map((entry) => ({ oid: entry.oid, value: new Uint8Array(Buffer.from(entry.value, "base64")) })) };
-};
 
 function registryWith(pkg: { name: string; version: string; integrity: string }): FakeRegistry {
   const registry = new FakeRegistry();

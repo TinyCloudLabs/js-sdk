@@ -27,6 +27,8 @@ export interface Pointer {
   /** Set by `upgrade --to`; the background updater leaves a pinned install alone. */
   pinned: boolean;
   previous?: string;
+  /** The last version `tinycloud upgrade` switched to: a follow-down never goes below it (Naomi, TC-4276 D2 (a)). */
+  floor?: string;
 }
 
 export interface Lease { pid: number; version: string; courier: boolean }
@@ -62,7 +64,8 @@ export function readPointer(root: string): Pointer | null {
     const value = JSON.parse(readFileSync(join(root, "current.json"), "utf8")) as Record<string, unknown>;
     if (!isVersion(value.version) || !isVersion(value.base) || typeof value.auto !== "boolean" || typeof value.pinned !== "boolean") return null;
     if (value.previous !== undefined && !isVersion(value.previous)) return null;
-    return { version: value.version, base: value.base, auto: value.auto, pinned: value.pinned, ...(value.previous ? { previous: value.previous } : {}) };
+    if (value.floor !== undefined && !isVersion(value.floor)) return null;
+    return { version: value.version, base: value.base, auto: value.auto, pinned: value.pinned, ...(value.previous ? { previous: value.previous } : {}), ...(value.floor ? { floor: value.floor } : {}) };
   } catch {
     return null;
   }

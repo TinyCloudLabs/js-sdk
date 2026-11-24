@@ -4,12 +4,17 @@ import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSy
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { requireReleaseProvenance } from "../src/lib/provenance.js";
+import { BUNDLES, COURIER, offlineVerifier } from "../src/test-support/offline-sigstore.js";
+import { FakeRegistry, integrityOf } from "../src/test-support/self-update-fakes.js";
 import {
   bunRuntimeTree,
   checkShrinkwrap,
   generateShrinkwrap,
   parseBunLock,
   registryTarball,
+  releaseRunVersions,
+  sameRunAttestationProblems,
   versionsWithoutShrinkwrap,
   yarnLockFor,
 } from "./release-shrinkwrap.mjs";
@@ -322,4 +327,87 @@ test("versionsWithoutShrinkwrap flags each published CLI version npm does not ma
     "@tinycloud/cli@1.3.2 (registry answered 404)",
   ]);
   expect(requested).toEqual(Object.keys(docs));
+});
+
+describe("@tinycloud versions this release publishes need the Release workflow's provenance (D1)", () => {
+  const courier = `${COURIER.name}@${COURIER.version}`;
+  // The prepack's check (requireReleaseProvenance: the updater's Release identity) on real npm provenance: courier
+  // 0.8.2 is Release-attested, sdk-core 3.15.0 has no attestation, share-envelope 1.6.0 was on npm before, unattested.
+  function setup() {
+    const registry = new FakeRegistry();
+    registry.integrity = (name: string, version: string) => (name === COURIER.name ? COURIER.integrity : integrityOf(name, version));
+    registry.publish(COURIER.name, COURIER.version);
+    registry.attestationsById.set(courier, [{ predicateType: "https://slsa.dev/provenance/v1", bundle: BUNDLES.get(courier) }]);
+    registry.publish("@tinycloud/sdk-core", "3.15.0", { attested: false });
+    registry.publish("@tinycloud/share-envelope", "1.6.0", { attested: false });
+    const verified: string[] = [];
+    const verify = (name: string, version: string) => {
+      verified.push(`${name}@${version}`);
+      return requireReleaseProvenance(registry, offlineVerifier, name, version);
+    };
+    const lock = {
+      lockfileVersion: 3,
+      packages: {
+        "": { name: "@tinycloud/cli", version: "1.10.0" },
+        "node_modules/@tinycloud/courier": { version: COURIER.version },
+        "node_modules/@tinycloud/sdk-core": { version: "3.15.0" },
+        "node_modules/@tinycloud/share-envelope": { version: "1.6.0" },
+        "node_modules/chalk": { version: "5.3.0" },
+      },
+    };
+    return { verify, verified, lock };
+  }
+
+  test("a version from this run without the attestation fails the publish", async () => {
+    const { verify, lock } = setup();
+    expect(await sameRunAttestationProblems(lock, new Set([courier, "@tinycloud/sdk-core@3.15.0"]), verify)).toEqual({
+      problems: [
+        "@tinycloud/sdk-core@3.15.0 is published by this release but lacks the Release workflow's provenance: PROVENANCE_MISSING: @tinycloud/sdk-core@3.15.0: no provenance attestation",
+      ],
+      checked: [courier, "@tinycloud/sdk-core@3.15.0"],
+    });
+  });
+
+  test("a version from this run with a valid Release attestation passes", async () => {
+    const { verify, verified, lock } = setup();
+    expect(await sameRunAttestationProblems(lock, new Set([courier]), verify)).toEqual({ problems: [], checked: [courier] });
+    expect(verified).toEqual([courier]);
+  });
+
+  test("an unattested version that was on npm before this run is pinned as it is", async () => {
+    const { verify, verified, lock } = setup();
+    expect(await sameRunAttestationProblems(lock, new Set(["@tinycloud/cli@1.10.0"]), verify)).toEqual({ problems: [], checked: [] });
+    expect(verified).toEqual([]);
+  });
+
+  test("the run's versions are the release-scope packages HEAD's version commit changed; without a scope file the publish fails", async () => {
+    const repo = mkdtempSync(join(tmpdir(), "release-shrinkwrap-run-"));
+    const git = (...args: string[]) => {
+      const result = spawnSync("git", ["-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false", ...args], { cwd: repo, encoding: "utf8" });
+      expect(result.status).toBe(0);
+    };
+    const manifest = (dir: string, value: object) => {
+      mkdirSync(join(repo, dir), { recursive: true });
+      writeFileSync(join(repo, dir, "package.json"), JSON.stringify(value));
+    };
+    try {
+      git("init", "-q");
+      manifest(".", { name: "root", private: true, workspaces: ["packages/*"] });
+      manifest("packages/sdk-core", { name: "@tinycloud/sdk-core", version: "3.14.0" });
+      manifest("packages/share-envelope", { name: "@tinycloud/share-envelope", version: "1.6.0" });
+      manifest("packages/held", { name: "@tinycloud/held", version: "0.1.0" });
+      git("add", ".");
+      git("commit", "-qm", "base");
+      // The version commit bumps sdk-core and a package outside the release scope.
+      manifest("packages/sdk-core", { name: "@tinycloud/sdk-core", version: "3.15.0" });
+      manifest("packages/held", { name: "@tinycloud/held", version: "0.2.0" });
+      writeFileSync(join(repo, "scope.json"), JSON.stringify({ packages: ["@tinycloud/sdk-core", "@tinycloud/share-envelope"] }));
+      git("add", ".");
+      git("commit", "-qm", "Version Packages");
+      expect(await releaseRunVersions(repo, "scope.json")).toEqual(new Set(["@tinycloud/sdk-core@3.15.0"]));
+      await expect(releaseRunVersions(repo, "")).rejects.toThrow("RELEASE_SCOPE_FILE is not set");
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
 });

@@ -751,8 +751,8 @@ function report(failures, mode, problems) {
 // With RELEASE_SCOPE_FILE (.github/release-scope.json), pre-publish and post-publish judge only the packages that
 // file lists AND whose version HEAD's version commit changed. Versions staged earlier from another commit (the
 // Courier 0.8.0 set) and packages that are held back are not this release's business.
-export function releaseScope(repo) {
-  const path = process.env.RELEASE_SCOPE_FILE;
+// `path` defaults to RELEASE_SCOPE_FILE; the CLI's prepack passes it resolved against the repository root.
+export function releaseScope(repo, path = process.env.RELEASE_SCOPE_FILE) {
   if (!path) return undefined;
   const names = parseJson(readFileSync(path, "utf8"))?.packages;
   if (!Array.isArray(names) || names.length === 0) throw new Error(`${path} lists no packages`);

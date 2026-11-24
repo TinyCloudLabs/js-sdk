@@ -73,26 +73,52 @@ describe("install lock", () => {
   test("of many processes racing for a stale lock, exactly one wins", async () => {
     const dir = root();
     leftover(dir, 7, { pid: 2 ** 22 + 7, startedAt: Date.now() - 1000 });
-    const startAt = Date.now() + 500;
     const script = `
       import { acquireInstallLock } from ${JSON.stringify(join(import.meta.dir, "install-lock.ts"))};
-      while (Date.now() < ${startAt}) {}
+      // A racer that never gets its turn exits, so the test fails on its missing answer instead of hanging.
+      setTimeout(() => process.exit(2), 20_000).unref();
+      const input = process.stdin[Symbol.asyncIterator]();
+      const next = async () => (await input.next()).done ? null : "line";
+      process.stdout.write("ready\\n");
+      if ((await next()) === null) process.exit(3);
       const lock = acquireInstallLock(${JSON.stringify(dir)}, { alive: (pid) => pid !== ${2 ** 22 + 7} });
       process.stdout.write(lock ? "won\\n" : "lost\\n");
-      // The winner holds the lock until the test has every answer.
-      if (lock) for await (const _ of process.stdin) {}
+      // Every racer, the winner with its lock, waits until the test has every answer.
+      while ((await next()) !== null) {}
     `;
-    const children = Array.from({ length: 8 }, () => spawn(process.execPath, ["-e", script], { stdio: ["pipe", "pipe", "inherit"] }));
-    const answers = await Promise.all(children.map((child) => new Promise<string>((resolve) => {
-      let out = "";
-      child.stdout.on("data", (chunk) => {
-        out += chunk;
-        if (out.includes("\n")) resolve(out.trim());
-      });
-    })));
-    for (const child of children) child.stdin.end();
-    await Promise.all(children.map((child) => new Promise((resolve) => child.on("close", resolve))));
+    const racers = Array.from({ length: 8 }, () => racer(script));
+    // The barrier: every racer is loaded and waiting before any of them goes, however slowly they were spawned.
+    expect(await Promise.all(racers.map((r) => r.line(0)))).toEqual(Array(8).fill("ready"));
+    for (const r of racers) r.child.stdin.write("go\n");
+    const answers = await Promise.all(racers.map((r) => r.line(1)));
+    for (const r of racers) r.child.stdin.end();
+    expect(await Promise.all(racers.map((r) => r.closed))).toEqual(Array(8).fill(0));
     expect(answers.filter((answer) => answer === "won")).toHaveLength(1);
     expect(answers.filter((answer) => answer === "lost")).toHaveLength(7);
   }, 30_000);
 });
+
+/**
+ * A child process whose stdout lines the test reads in order. Its exit is recorded from the moment it is spawned (a
+ * `close` listener added later misses a child that already exited), and a line it exits without reads as such.
+ */
+function racer(script: string) {
+  const child = spawn(process.execPath, ["-e", script], { stdio: ["pipe", "pipe", "inherit"] });
+  let out = "";
+  let exit: string | undefined;
+  let wake = () => {};
+  const closed = new Promise<number | null>((resolve) => child.on("close", (code) => {
+    exit = `exited (${code}) before this line`;
+    wake();
+    resolve(code);
+  }));
+  child.stdout.on("data", (chunk) => {
+    out += chunk;
+    wake();
+  });
+  const line = async (index: number): Promise<string> => {
+    while (out.split("\n").length <= index + 1 && exit === undefined) await new Promise<void>((resolve) => { wake = resolve; });
+    return out.split("\n").length > index + 1 ? out.split("\n")[index]! : exit!;
+  };
+  return { child, closed, line };
+}

@@ -7,7 +7,7 @@ import { FakeRegistry, OTHER_IDENTITY, fakeUpdater, fakeVerifier, lockfileFor, t
 import {
   autoUpdateCovers,
   autoUpdateOffReason,
-  FIRST_RUN_NOTICE,
+  firstRunNotice,
   pendingSwitch,
   productionDeps,
   runAutoUpdate,
@@ -302,6 +302,28 @@ describe("following the tag down", () => {
     expect(await runAutoUpdate(major.deps)).toEqual({ action: "none" });
     expect(major.active()).toBe("2.0.1");
   });
+
+  test("a follow-down never goes below the last tinycloud upgrade target, even after an automatic update above it", async () => {
+    const fake = fakeUpdater("1.10.0", registryWith("1.10.1", "1.10.3", "1.10.4"));
+    expect(await runManualUpgrade(fake.deps, { installKind: "npm-global", to: "1.10.3" })).toMatchObject({ status: "ok", to: "1.10.3" });
+    expect(readPointer(fake.deps.root)).toMatchObject({ version: "1.10.3", pinned: true, floor: "1.10.3" });
+    // A plain upgrade ends the pin; then the updater moves up on its own.
+    fake.registry.tags.latest = "1.10.3";
+    expect(await runManualUpgrade(fake.deps, { installKind: "npm-global" })).toMatchObject({ status: "ok", changed: false });
+    expect(await releaseAndSoak(fake, "1.10.4")).toMatchObject({ action: "switched", version: "1.10.4" });
+    expect(readPointer(fake.deps.root)).toMatchObject({ version: "1.10.4", auto: true, floor: "1.10.3" });
+
+    // The channel moves back to 1.10.1: above the global install (1.10.0), below the upgrade target.
+    fake.registry.tags.latest = "1.10.1";
+    expect(await runAutoUpdate(fake.deps)).toEqual({ action: "none" });
+    fake.clock.now += SOAK_MS * 10;
+    expect(await runAutoUpdate(fake.deps)).toEqual({ action: "none" });
+    expect(fake.active()).toBe("1.10.4");
+    expect(fake.staged).toEqual(["1.10.3", "1.10.4"]);
+
+    // Down to the target itself is allowed.
+    expect(await rollBackAndSoak(fake, "1.10.3")).toEqual({ action: "followed-down", version: "1.10.3", from: "1.10.4" });
+  });
 });
 
 describe("manual upgrade", () => {
@@ -341,6 +363,22 @@ describe("manual upgrade", () => {
     expect(await runManualUpgrade(fake.deps, { installKind: "npm-global", confirm: async () => false })).toMatchObject({ status: "refused", reason: "DECLINED" });
     expect(fake.staged).toEqual([]);
     expect(readPointer(fake.deps.root)).toBeNull();
+  });
+
+  test("under Bun older than 1.4 nothing is fetched or staged: UNSUPPORTED_RUNTIME, in the background too", async () => {
+    const fake = fakeUpdater("1.10.0", registryWith("1.10.1"));
+    fake.registry.tags.latest = "1.10.1";
+    fake.deps.bunVersion = "1.3.14";
+    const refusal = { status: "refused", reason: "UNSUPPORTED_RUNTIME", from: "1.10.0", detail: "Bun 1.3.14" } as const;
+    expect(await runManualUpgrade(fake.deps, { installKind: "bun-global", to: "1.10.1" })).toEqual(refusal);
+    fake.clock.now += SOAK_MS * 10;
+    expect(await runAutoUpdate(fake.deps)).toEqual({ action: "refused", result: refusal });
+    expect(fake.staged).toEqual([]);
+    expect(readPointer(fake.deps.root)).toBeNull();
+    expect(readdirSync(fake.deps.root).filter((name) => /^\d/.test(name) || name.startsWith(".staging-"))).toEqual([]);
+
+    fake.deps.bunVersion = "1.4.0";
+    expect(await runManualUpgrade(fake.deps, { installKind: "bun-global", to: "1.10.1" })).toMatchObject({ status: "ok", to: "1.10.1" });
   });
 });
 
@@ -414,12 +452,18 @@ describe("unexpected errors", () => {
 });
 
 describe("telling the user", () => {
-  test("the first-run notice shows once, and only where automatic updates are on", () => {
+  test("the first-run notice shows once, only where automatic updates are on, and names the real versions directory", () => {
     const fake = fakeUpdater("1.10.0");
     mkdirSync(fake.deps.root, { recursive: true });
-    expect(takeAutoUpdateNotices(fake.deps.root, "1.10.0", false)).toEqual([]);
-    expect(takeAutoUpdateNotices(fake.deps.root, "1.10.0", true)).toEqual(FIRST_RUN_NOTICE);
-    expect(takeAutoUpdateNotices(fake.deps.root, "1.10.0", true)).toEqual([]);
+    expect(takeAutoUpdateNotices(fake.deps.root, "1.10.0", false, fake.dir)).toEqual([]);
+    expect(takeAutoUpdateNotices(fake.deps.root, "1.10.0", true, fake.dir)).toEqual([
+      "TinyCloud CLI updates itself: it installs verified patch and minor releases of your channel in the background, 6 hours after your CLI first sees each one on your channel, and moves back if your channel moves back. Major releases are never installed automatically. Log: ~/versions/auto-update.log",
+      "To turn this off, set \"autoUpdate\": false in ~/.tinycloud/config.json, or set TC_NO_AUTO_UPDATE=1.",
+    ]);
+    expect(takeAutoUpdateNotices(fake.deps.root, "1.10.0", true, fake.dir)).toEqual([]);
+    // A TC_VERSIONS_DIR outside the home directory is shown as it is.
+    expect(firstRunNotice("/srv/tinycloud/versions", "/home/someone")[0]).toEndWith(" Log: /srv/tinycloud/versions/auto-update.log");
+    expect(firstRunNotice("/home/someone-else/versions", "/home/someone")[0]).toEndWith(" Log: /home/someone-else/versions/auto-update.log");
   });
 
   test("an automatic switch, and a follow-down, are each reported once by the version switched to; a manual upgrade clears it", async () => {

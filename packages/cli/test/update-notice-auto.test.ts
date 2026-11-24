@@ -4,7 +4,7 @@ import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSyn
 import { tmpdir } from "node:os";
 import { delimiter, join, resolve } from "node:path";
 import { recordInstallKind } from "../src/lib/install-kind.js";
-import { FIRST_RUN_NOTICE } from "../src/lib/self-update.js";
+import { firstRunNotice } from "../src/lib/self-update.js";
 
 // TC-4276 (Naomi's ruling): a patch or minor the background updater installs itself gets no "update available"
 // notice; a major, or an install with automatic updates off, keeps it. Runs the built CLI as an npm global install.
@@ -42,6 +42,8 @@ function npmGlobalInstall() {
   writeFileSync(join(versions, "next-check.json"), nextCheck);
   const { TC_PROFILE: _profile, TC_HOST: _host, TC_HOME: _home, TC_PRIVATE_KEY: _key, ...ambient } = process.env;
   return {
+    /** The first-run notice this install shows: its versions directory is `~/versions` under HOME. */
+    firstRun: firstRunNotice(versions, dir),
     /** What the background job records once `npm root -g` confirms this is the npm global install. */
     verified() {
       recordInstallKind(versions, packageDir, installed, "npm-global");
@@ -109,15 +111,17 @@ describe.skipIf(process.platform !== "linux")("update notice with automatic upda
     const cli = npmGlobalInstall();
     cli.verified();
     const first = cli.noticeFor(installed);
-    for (const line of FIRST_RUN_NOTICE) expect(first).toContain(line);
-    expect(cli.noticeFor(installed)).not.toContain(FIRST_RUN_NOTICE[0]);
+    expect(cli.firstRun[0]).toContain("Log: ~/versions/auto-update.log");
+    for (const line of cli.firstRun) expect(first).toContain(line);
+    expect(cli.noticeFor(installed)).not.toContain(cli.firstRun[0]);
   });
 
   test("no first-run notice where automatic updates are off, or before the install is verified", () => {
     const off = npmGlobalInstall();
     off.verified();
     off.config({ autoUpdate: false });
-    expect(off.noticeFor(installed)).not.toContain(FIRST_RUN_NOTICE[0]);
-    expect(npmGlobalInstall().noticeFor(installed)).not.toContain(FIRST_RUN_NOTICE[0]);
+    expect(off.noticeFor(installed)).not.toContain(off.firstRun[0]);
+    const unverified = npmGlobalInstall();
+    expect(unverified.noticeFor(installed)).not.toContain(unverified.firstRun[0]);
   });
 });

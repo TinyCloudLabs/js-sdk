@@ -12,6 +12,7 @@ import {
   defaultUpdater,
   MIN_TARGET_VERSION,
   runManualUpgrade,
+  runtimeRefusal,
   systemGlobalRoots,
   type FailureReason,
   type UpgradeResult,
@@ -78,6 +79,8 @@ function refusalLine(result: Extract<UpgradeResult, { status: "refused" }>, manu
     case "TARGET_TOO_OLD": return `${CLI_NAME} upgrade can't install versions before ${MIN_TARGET_VERSION}. To install ${to} anyway, run: npm install -g ${CLI_PACKAGE}@${to}`;
     case "REGISTRY_UNAVAILABLE": return "Couldn't reach the npm registry. Retry in a few minutes.";
     case "COURIER_RUNNING": return `Courier is running, so ${to} was downloaded and verified but not switched on. Stop Courier, rerun ${CLI_NAME} upgrade, then start Courier.`;
+    // Monica (TC-4276, 21:06Z), verbatim; detail is "Bun <version>".
+    case "UNSUPPORTED_RUNTIME": return `TinyCloud CLI can't verify updates under ${result.detail}; it needs Node or Bun 1.4 or newer. Nothing was installed. Run ${CLI_NAME} with Node (without \`bun --bun\`).`;
     case "PROVENANCE_MISSING": return `TinyCloud CLI ${to} has no provenance record, so it can't be verified and wasn't installed.`;
     case "PROVENANCE_INVALID": return `TinyCloud CLI ${to} failed the provenance check, so it wasn't installed.`;
     case "SIGNATURE_INVALID": return `A package in TinyCloud CLI ${to} failed npm's signature check, so it wasn't installed.`;
@@ -120,8 +123,11 @@ export function registerUpgradeCommand(program: Command): void {
       const deps = defaultUpdater(base, (line) => appendUpdateLog(base.root, line));
       const mode = confirmation(options.yes === true, Boolean(process.stdin.isTTY), process.env);
       let result: UpgradeResult;
-      // An install upgrade can't manage gets its manual command, which --yes wouldn't change.
-      if (mode === "refuse" && verifiedKind) {
+      const unsupported = runtimeRefusal(deps);
+      if (unsupported) {
+        result = unsupported;
+      } else if (mode === "refuse" && verifiedKind) {
+        // An install upgrade can't manage gets its manual command, which --yes wouldn't change.
         result = { status: "refused", reason: "NEEDS_YES", from: deps.base.version };
       } else {
         if (!json) process.stderr.write(theme.muted("Checking for a verified update…") + "\n");

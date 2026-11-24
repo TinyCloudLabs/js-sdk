@@ -3,7 +3,8 @@ import { spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { confirmation } from "./upgrade.js";
+import { CLI_NAME } from "@tinycloud/operations/cli-name";
+import { confirmation, resultLines } from "./upgrade.js";
 
 const PACKAGE_DIR = resolve(import.meta.dir, "../..");
 
@@ -15,6 +16,12 @@ describe("tinycloud upgrade", () => {
     expect(confirmation(false, true, { CI: "1" })).toBe("refuse");
     expect(confirmation(false, true, { CI: "false" })).toBe("ask");
     expect(confirmation(false, true, { CI: "0" })).toBe("ask");
+  });
+
+  test("under Bun older than 1.4 it says why nothing was installed and how to run it", () => {
+    expect(resultLines({ status: "refused", reason: "UNSUPPORTED_RUNTIME", from: "1.10.0", detail: "Bun 1.3.14" }, {})).toEqual([
+      `TinyCloud CLI can't verify updates under Bun 1.3.14; it needs Node or Bun 1.4 or newer. Nothing was installed. Run ${CLI_NAME} with Node (without \`bun --bun\`).`,
+    ]);
   });
 
   test("an install it can't manage exits 12 with the command that updates it", () => {

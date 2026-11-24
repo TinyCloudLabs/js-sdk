@@ -182,6 +182,16 @@ export async function verifyProvenance(registry: ReleaseRegistry, verifyBundle: 
   return true;
 }
 
+/**
+ * `name@version` must carry provenance from the Release workflow: `PROVENANCE_MISSING` without any. For the CLI's
+ * prepack, a @tinycloud package published in the same Release run (TC-4276 D1).
+ */
+export async function requireReleaseProvenance(registry: ReleaseRegistry, verifyBundle: BundleVerifier, name: string, version: string): Promise<void> {
+  if (!await verifyProvenance(registry, verifyBundle, await registry.manifest(name, version))) {
+    throw new VerificationError("PROVENANCE_MISSING", `${name}@${version}`, "no provenance attestation");
+  }
+}
+
 function dsseStatement(bundle: unknown): { subject?: { name?: unknown; digest?: { sha512?: unknown } }[] } | null {
   if (!bundle || typeof bundle !== "object" || !("dsseEnvelope" in bundle)) return null;
   const envelope = bundle.dsseEnvelope;

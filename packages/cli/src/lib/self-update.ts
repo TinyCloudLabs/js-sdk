@@ -9,7 +9,7 @@
 import { spawn } from "node:child_process";
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, truncateSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { CONFIG_FILE } from "../config/constants.js";
 import { checkForUpdate, compareVersionStrings, isAutoUpdateEnabled, selectUpdateVersion, type InstallKind } from "./auto-update.js";
@@ -79,6 +79,17 @@ const SPAWN_CLAIM_MS = 15 * 60 * 1000;
  * `upgrade`. This must move if the launcher release ships under another version.
  */
 export const MIN_TARGET_VERSION = "1.10.0";
+/**
+ * The first Bun that can verify release signatures. Before 1.4, Bun's crypto has no default digest for ECDSA, so
+ * sigstore's checks of a genuine release (its trust root, its log entry) fail; the updater refuses up front instead.
+ */
+export const MIN_BUN_VERSION = "1.4.0";
+
+/** `UNSUPPORTED_RUNTIME` when Bun older than 1.4 runs the updater; null under Node and newer Bun. */
+export function runtimeRefusal(deps: UpdaterDeps): Extract<UpgradeResult, { status: "refused" }> | null {
+  if (deps.bunVersion === undefined || (compareVersionStrings(deps.bunVersion, MIN_BUN_VERSION) ?? -1) >= 0) return null;
+  return { status: "refused", reason: "UNSUPPORTED_RUNTIME", from: current(deps), detail: `Bun ${deps.bunVersion}` };
+}
 
 export type RefusalReason =
   | "UNSUPPORTED_INSTALL"
@@ -91,6 +102,7 @@ export type RefusalReason =
   | "TARGET_TOO_OLD"
   | "REGISTRY_UNAVAILABLE"
   | "COURIER_RUNNING"
+  | "UNSUPPORTED_RUNTIME"
   | VerificationCode;
 export type FailureReason = "INSTALL_FAILED" | "SMOKE_FAILED" | "SWITCH_FAILED";
 
@@ -105,7 +117,8 @@ export type AutoOutcome =
   | { action: "soaking"; version: string; dueAt: number }
   | { action: "deferred"; version: string }
   | { action: "switched" | "followed-down"; version: string; from: string }
-  | { action: "failed"; version: string; result: UpgradeResult };
+  | { action: "failed"; version: string; result: UpgradeResult }
+  | { action: "refused"; result: Extract<UpgradeResult, { status: "refused" }> };
 
 export interface BaseInstall {
   /** The global package's version (the launcher's own build). */
@@ -131,6 +144,8 @@ export interface UpdaterDeps {
   /** Run `node <bin> ...args` with automatic updates off; resolve its exit code and stdout. */
   run(bin: string, args: string[]): Promise<{ code: number | null; stdout: string }>;
   log(line: string): void;
+  /** The Bun version running the updater (`process.versions.bun`); undefined under Node. */
+  bunVersion?: string;
   alive?(pid: number): boolean;
   /** The install lock this pass holds; set by `withLock`. */
   lock?: InstallLock;
@@ -315,10 +330,12 @@ function discard(root: string, directory: string): void {
 export async function switchTo(deps: UpdaterDeps, version: string, flags: { auto: boolean; pinned: boolean }): Promise<UpgradeResult> {
   const from = current(deps);
   const before = readPointer(deps.root);
+  // A manual switch sets the follow-down floor; an automatic one keeps the live pointer's.
+  const floor = flags.auto ? livePointer(deps)?.floor : version;
   const failure = (detail: string): Promise<UpgradeResult> => restore(deps, before, from, version, detail);
   if (!holdsLock(deps)) return { status: "refused", reason: "LOCKED", from, to: version };
   try {
-    writePointer(deps.root, { version, base: deps.base.version, ...flags, ...(from !== version ? { previous: from } : before?.previous ? { previous: before.previous } : {}) });
+    writePointer(deps.root, { version, base: deps.base.version, ...flags, ...(from !== version ? { previous: from } : before?.previous ? { previous: before.previous } : {}), ...(floor ? { floor } : {}) });
   } catch (error) {
     return failure((error as Error).message);
   }
@@ -415,6 +432,11 @@ async function autoUpdateLocked(deps: UpdaterDeps, attempt: { to?: string }): Pr
   const state = readState(deps.root);
   const next = (at: number) => writeNextCheck(deps.root, at);
   const pointer = livePointer(deps);
+  const unsupported = runtimeRefusal(deps);
+  if (unsupported) {
+    next(now + DAY_MS);
+    return { action: "refused", result: unsupported };
+  }
   const active = current(deps);
   if (pointer?.pinned) {
     next(now + DAY_MS);
@@ -443,8 +465,10 @@ async function autoUpdateLocked(deps: UpdaterDeps, attempt: { to?: string }): Pr
     target = tag;
   } else if (isVersion(tag) && pointer?.auto && channelOf(tag) === channel && majorOf(tag) === majorOf(active) &&
              (compareVersionStrings(tag, active) ?? 0) < 0 &&
-             // Never below the version installed by hand: that's the floor the user chose.
-             (compareVersionStrings(tag, deps.base.version) ?? -1) >= 0) {
+             // Never below the version installed by hand, nor below the last `tinycloud upgrade` target: the floor
+             // the user chose (Naomi, TC-4276 D2 (a)).
+             (compareVersionStrings(tag, deps.base.version) ?? -1) >= 0 &&
+             (pointer.floor === undefined || (compareVersionStrings(tag, pointer.floor) ?? -1) >= 0)) {
     target = tag;
     followDown = true;
   } else {
@@ -501,6 +525,8 @@ export interface ManualOptions {
 /** `tinycloud upgrade`: no soak, majors allowed, `--to` pins (and may go down). */
 export async function runManualUpgrade(deps: UpdaterDeps, options: ManualOptions): Promise<UpgradeResult> {
   const from = current(deps);
+  const unsupported = runtimeRefusal(deps);
+  if (unsupported) return unsupported;
   if (options.installKind !== "npm-global" && options.installKind !== "bun-global") return { status: "refused", reason: "UNSUPPORTED_INSTALL", from };
   if (options.to !== undefined && !isVersion(options.to)) return { status: "refused", reason: "INVALID_VERSION", from, to: options.to };
   if (options.to !== undefined && (compareVersionStrings(options.to, MIN_TARGET_VERSION) ?? -1) < 0) {
@@ -538,7 +564,7 @@ async function manualLocked(deps: UpdaterDeps, options: ManualOptions, from: str
     target = tag;
   }
   if (target === from) {
-    if (options.to !== undefined && holdsLock(deps)) writePointer(deps.root, { version: from, base: deps.base.version, auto: false, pinned: true, ...(pointer?.previous ? { previous: pointer.previous } : {}) });
+    if (options.to !== undefined && holdsLock(deps)) writePointer(deps.root, { version: from, base: deps.base.version, auto: false, pinned: true, ...(pointer?.previous ? { previous: pointer.previous } : {}), floor: from });
     return { status: "ok", from, to: from, changed: false };
   }
   if (options.confirm && !await options.confirm(from, target)) return { status: "refused", reason: "DECLINED", from, to: target };
@@ -657,11 +683,19 @@ const LAST_SWITCH_FILE = "last-switch.json";
 /** Written once the first-run notice has been shown for this versions root. */
 const FIRST_RUN_FILE = "first-run-notice.json";
 
-// User-facing copy: TC-4276, Monica (20:28Z; first line 20:39Z), verbatim.
-export const FIRST_RUN_NOTICE = [
-  "TinyCloud CLI updates itself: it installs verified patch and minor releases of your channel in the background, 6 hours after your CLI first sees each one on your channel. Major releases are never installed automatically. Log: ~/.tinycloud/versions/auto-update.log",
-  "To turn this off, set \"autoUpdate\": false in ~/.tinycloud/config.json, or set TC_NO_AUTO_UPDATE=1.",
-];
+/**
+ * The first-run notice for the versions directory `root`, shown as `~/…` when it is under `home`.
+ * User-facing copy: TC-4276, Monica (21:06Z), verbatim.
+ */
+export function firstRunNotice(root: string, home: string = homedir()): string[] {
+  const below = relative(home, root);
+  const outside = below === ".." || below.startsWith(`..${sep}`) || isAbsolute(below);
+  const versionsDir = below === "" ? "~" : outside ? root : `~/${below}`;
+  return [
+    `TinyCloud CLI updates itself: it installs verified patch and minor releases of your channel in the background, 6 hours after your CLI first sees each one on your channel, and moves back if your channel moves back. Major releases are never installed automatically. Log: ${versionsDir}/auto-update.log`,
+    "To turn this off, set \"autoUpdate\": false in ~/.tinycloud/config.json, or set TC_NO_AUTO_UPDATE=1.",
+  ];
+}
 
 function switchedLine(from: string, to: string, down: boolean): string {
   return down
@@ -674,11 +708,11 @@ function switchedLine(from: string, to: string, down: boolean): string {
  * updates are on for a verified install; the caller checks), then the line for an automatic switch to `running`.
  * Marks them shown.
  */
-export function takeAutoUpdateNotices(root: string, running: string, autoUpdating: boolean): string[] {
+export function takeAutoUpdateNotices(root: string, running: string, autoUpdating: boolean, home: string = homedir()): string[] {
   const lines: string[] = [];
   if (autoUpdating && !existsSync(join(root, FIRST_RUN_FILE))) {
     writeFileAtomic(join(root, FIRST_RUN_FILE), `${JSON.stringify({ shown: running })}\n`);
-    lines.push(...FIRST_RUN_NOTICE);
+    lines.push(...firstRunNotice(root, home));
   }
   const last = readJson(join(root, LAST_SWITCH_FILE));
   if (last && typeof last === "object" && "to" in last && last.to === running && "from" in last && isVersion(last.from)) {
@@ -740,7 +774,9 @@ export function systemGlobalRoots(env: NodeJS.ProcessEnv = process.env): GlobalR
 /** The production updater for the global install `install`, its versions root included. */
 export function defaultUpdater(install: BaseInstall & { root: string }, log: (line: string) => void, fetchedTags?: Record<string, string>): UpdaterDeps {
   const { root, ...base } = install;
-  return productionDeps(root, base, npmRegistry(), sigstoreVerifier(join(root, ".tuf")), log, fetchedTags);
+  const deps = productionDeps(root, base, npmRegistry(), sigstoreVerifier(join(root, ".tuf")), log, fetchedTags);
+  // sigstore needs a runtime that can verify its signatures (runtimeRefusal).
+  return process.versions.bun !== undefined ? { ...deps, bunVersion: process.versions.bun } : deps;
 }
 
 function stringEntries(value: unknown): Record<string, string> | undefined {
