@@ -86,7 +86,7 @@ test("the default manifest, a 404 registry and a failed post-consent read end in
     ui: false,
   });
 
-  await expect(web.signIn()).rejects.toMatchObject({ code: "ACCOUNT_SETUP_REQUIRED", setupUrl: "https://tinycloud.one/" });
+  await expect(web.signIn()).rejects.toMatchObject({ code: "ACCOUNT_SETUP_REQUIRED", setupUrl: "https://tinycloud.one/?finish-setup=registry" });
 
   expect(signed).toBe(1);
   expect(requests.filter((request) => request === `POST ${DEFAULT_NODE}/delegate`)).toHaveLength(1);
