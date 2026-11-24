@@ -20,7 +20,7 @@ import { revokePeer } from './revoke.js';
 import { courierNode, peerKv, currentInbound, assertInboundLive, renewalBinding } from './node.js';
 import { REVOKE_URL } from './grant-refusal.js';
 import { courierGrantRequest, grantFromInput, installRefusing, isShortCode, noSpaceError, pendingSpaceError, receiveGrant, resumeAwaitingGrant, resumeGrant } from './grant.js';
-import { completeApproval, DEFAULT_WAIT_MS, MAX_WAIT_MS, renewalLeaseFor, requestApproval, waitApproval } from './grant-request.js';
+import { assertWaitKeepsSaved, completeApproval, DEFAULT_WAIT_MS, MAX_WAIT_MS, renewalLeaseFor, requestApproval, waitApproval } from './grant-request.js';
 import { approvalPhase, assertPendingReadable, clearPending, holdsApproval, loadPending, readApprovalEntry, stageOf } from './approval-phase.js';
 import {
   artifactA, artifactWithDelegation, parseArtifact, peerRecordBody, validateArtifactIdentity,
@@ -192,6 +192,8 @@ export async function cmdInit(args: ParsedArgs) {
   profile.label = labelFlag ?? profile.label;
   if (handleFlag) profile.selfHandle = handleFlag;
   profile.courierDid = bareDid(key.did);
+  // `--wait` never replaces a saved request: one made with other terms or settings is refused before this run's flags are saved.
+  if (args.has('wait') && prior) assertWaitKeepsSaved(profile, key, args.get('expiry'), { openkeyApiHost: apiHostFlag, renew: renewFlag });
   if (rotate) {
     profile.peers = {};
     profile.ownerDid = undefined;

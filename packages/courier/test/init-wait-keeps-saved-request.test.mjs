@@ -2,8 +2,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { fakeTime, homeFile, readHome, scenario } from './support/approval-fixture.mjs';
 
-// TC-4264: `init --wait` collects the request `init --request` saved, with the lifetime and renewal it was made with. The owner
-// may already have approved it, so --wait never replaces it: an --expiry or --renew that differs from the saved terms is refused.
+// TC-4264: `init --wait` collects the request `init --request` saved, as it was made. The owner may already have approved it, so
+// --wait never replaces it: an --expiry, --renew or setting that differs from the saved request is refused.
 
 const savedFiles = () => ({ pending: fs.readFileSync(homeFile('approval-pending.json')), key: fs.readFileSync(homeFile('key.json')) });
 
@@ -74,3 +74,22 @@ scenario('(e) with no saved request, --wait creates one from its flags and the d
   assert.equal(named.grantLifetimeSeconds, 86_400);
   assert.equal(named.renewal, undefined);
 });
+
+const MOVED = 'https://moved.fixture.test';
+for (const [label, change, item] of [
+  ['(f) --openkey-api-host', () => ['--openkey-api-host', MOVED], (saved) => `OpenKey API host: saved ${saved.apiOrigin}, this run ${MOVED}`],
+  ['(f) COURIER_OPENKEY_API_HOST', () => { process.env.COURIER_OPENKEY_API_HOST = MOVED; return []; }, (saved) => `OpenKey API host: saved ${saved.apiOrigin}, this run ${MOVED}`],
+  ['(g) TC_LINKS_API_ORIGIN', () => { process.env.TC_LINKS_API_ORIGIN = MOVED; return []; }, (saved) => `links API host: saved ${saved.linkApiOrigin}, this run ${MOVED}`],
+  ['(h) --host', () => ['--host', MOVED], (saved) => `node host: saved ${saved.request.nodeOrigin}, this run ${MOVED}`],
+]) {
+  scenario(`${label} differs from the saved request: --wait is refused, naming the setting, and no file changes`, async ({ t, fx, request, courier }) => {
+    const { saved, files } = await savedOneDay(t, request);
+    const profile = fs.readFileSync(homeFile('profile.json'));
+    const run = await courier('--wait', '--timeout', '5s', ...change());
+    assert.equal(run.code, 2, run.stderr);
+    assert.ok(run.stderr.includes(`Approval request ${saved.requestId} was made with different settings: ${item(saved)}.`), run.stderr);
+    assert.equal(run.stdout, '');
+    assertUnchanged(fx, files);
+    assert.ok(fs.readFileSync(homeFile('profile.json')).equals(profile), 'profile.json is byte-identical');
+  });
+}

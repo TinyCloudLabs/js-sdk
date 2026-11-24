@@ -121,15 +121,26 @@ function requestSpec(profile: Profile, want: WantedRequest): Omit<OpenKeyApprova
   };
 }
 
-/** The same canonical request (permissions, target, reason, host) and origins; the lifetime and the lease are not compared. */
-function sameAsk(pending: PendingGrantRequest, profile: Profile, want: WantedRequest): boolean {
-  const { resultEncryptionPublicJwk: _relay, grantLifetimeSeconds: _lifetime, renewal: _renewal, ...saved } = pending.request;
-  return canonicalJson(saved) === canonicalJson(requestSpec(profile, want))
-    && pending.openkeyOrigin === want.openkeyOrigin && pending.apiOrigin === want.apiOrigin && pending.linkApiOrigin === want.linkApiOrigin;
+/**
+ * How the saved request's ask differs from this run's, one item per setting (saved value first); empty when it is the same ask.
+ * The lifetime and the lease are not compared here.
+ */
+function settingsDiff(pending: PendingGrantRequest, profile: Profile, want: WantedRequest): string[] {
+  const { resultEncryptionPublicJwk: _relay, grantLifetimeSeconds: _lifetime, renewal: _renewal, nodeOrigin, ...saved } = pending.request;
+  const { nodeOrigin: nodeNow, ...spec } = requestSpec(profile, want);
+  const items: string[] = [];
+  const compare = (label: string, was: string, now: string) => { if (was !== now) items.push(`${label}: saved ${was}, this run ${now}`); };
+  compare('node host', nodeOrigin, nodeNow);
+  compare('OpenKey host', pending.openkeyOrigin, want.openkeyOrigin);
+  compare('OpenKey API host', pending.apiOrigin, want.apiOrigin);
+  compare('links API host', pending.linkApiOrigin, want.linkApiOrigin);
+  // Permissions, reason and target: the target is this key (the issuer is checked first), so a difference is a Courier version's grant.
+  if (canonicalJson(saved) !== canonicalJson(spec)) items.push('permissions: this version of Courier asks for different ones');
+  return items;
 }
 
 /**
- * The saved request is the one this run would make: the same ask (see sameAsk) and the same renewal ask. A saved request without a
+ * The saved request is the one this run would make: the same settings (see settingsDiff) and the same renewal ask. A saved request without a
  * lease never answers an ask for one, and one with a lease never answers an ask for none; its lease length must match only a named
  * `--renew`, as its lifetime must match only a named `--expiry`.
  */
@@ -138,7 +149,7 @@ function matches(pending: PendingGrantRequest, profile: Profile, want: WantedReq
   const sameLease = want.lease === null
     ? renewal === undefined
     : renewal !== undefined && (!want.explicitLease || renewal.leaseLifetimeSeconds === want.lease);
-  return sameAsk(pending, profile, want) && sameLease && (!want.explicitLifetime || grantLifetimeSeconds === want.lifetime);
+  return settingsDiff(pending, profile, want).length === 0 && sameLease && (!want.explicitLifetime || grantLifetimeSeconds === want.lifetime);
 }
 
 function durationText(seconds: number): string {
@@ -149,15 +160,31 @@ function durationText(seconds: number): string {
 }
 
 /**
- * `init --wait` only collects the saved request: an `--expiry` or `--renew` (`off` too) given to it must equal the saved terms, or the
- * run is refused and nothing is replaced. Unrepeated flags are not compared: the saved lifetime and lease stand.
+ * `init --wait` only collects the saved, unapproved request; it never replaces it, since the owner may have approved it already.
+ * An `--expiry` or `--renew` (`off` too) given to it must equal the saved terms (unrepeated ones are not compared: the saved lifetime
+ * and lease stand), and this run's settings must be the ones it was made with. Otherwise the run is refused and nothing is replaced.
  */
-function assertSavedTerms(pending: PendingGrantRequest, want: WantedRequest, renewGiven: boolean): void {
+function assertKeepsSaved(pending: PendingGrantRequest, profile: Profile, want: WantedRequest, renewGiven: boolean): void {
   const { grantLifetimeSeconds, renewal } = pending.request;
   const savedLease = renewal?.leaseLifetimeSeconds ?? null;
-  if ((!want.explicitLifetime || grantLifetimeSeconds === want.lifetime) && (!renewGiven || savedLease === want.lease)) return;
-  const saved = `--expiry ${durationText(grantLifetimeSeconds)} --renew ${savedLease === null ? 'off' : durationText(savedLease)}`;
-  throw new CourierError('usage', `Approval request ${pending.requestId} is saved with ${saved}. \`${cmd('init --wait')}\` collects that request as it was made and takes no other --expiry or --renew; nothing was changed. Run \`${cmd('init --wait')}\` without them. To ask the owner for other terms, run \`${cmd('init --request')}\` with the new flags and send the owner the new link.`);
+  if ((want.explicitLifetime && grantLifetimeSeconds !== want.lifetime) || (renewGiven && savedLease !== want.lease)) {
+    const saved = `--expiry ${durationText(grantLifetimeSeconds)} --renew ${savedLease === null ? 'off' : durationText(savedLease)}`;
+    throw new CourierError('usage', `Approval request ${pending.requestId} is saved with ${saved}. \`${cmd('init --wait')}\` collects that request as it was made and takes no other --expiry or --renew; nothing was changed. Run \`${cmd('init --wait')}\` without them. To ask the owner for other terms, run \`${cmd('init --request')}\` with the new flags and send the owner the new link.`);
+  }
+  const diffs = settingsDiff(pending, profile, want);
+  if (diffs.length > 0) {
+    throw new CourierError('usage', `Approval request ${pending.requestId} was made with different settings: ${diffs.join('; ')}. \`${cmd('init --wait')}\` collects that request as it was made; nothing was changed. Run \`${cmd('init --wait')}\` with the settings it was made with, or run \`${cmd('init --request')}\` with the new settings and send the owner the new link.`);
+  }
+}
+
+/**
+ * Run by `init --wait` before it saves any profile change from its flags, so a refusal leaves every file as it was. waitApproval checks
+ * again inside its transaction.
+ */
+export function assertWaitKeepsSaved(profile: Profile, key: AgentKey, expiry: string | undefined, options: ApprovalAsk = {}): void {
+  const existing = withProfileLock(() => loadPendingForWrite());
+  if (!existing || existing.request.issuer !== bareDid(key.did) || holdsApproval(existing)) return;
+  assertKeepsSaved(existing, profile, wanted(profile, key, expiry, options.openkeyApiHost, options.renew), options.renew !== undefined);
 }
 
 /**
@@ -276,11 +303,10 @@ function expiredError(): CourierError {
 }
 
 /**
- * `init --wait`: resumes the saved request for this key, or makes one when none is saved. A request that holds an approval is resumed
- * whatever flags this run has. An unapproved one is resumed with its own lifetime and lease: an `--expiry` or `--renew` that differs
- * from them is refused (asking for other terms is `init --request`'s job), never answered with a new request, since the owner may have
- * approved the saved one already. It is replaced only when the ask itself (permissions, host, origins) changed. A lapsed unapproved
- * request is asked about once (see settleLapsed) and dropped and reported only when OpenKey too says it is expired.
+ * `init --wait`: resumes the saved request for this key, or makes one only when none is saved. A request that holds an approval is
+ * resumed whatever flags this run has. An unapproved one is resumed as it was made (see assertKeepsSaved): a different `--expiry`,
+ * `--renew` or setting is refused, never answered with a new request; asking for other terms is `init --request`'s job. A lapsed
+ * unapproved request is asked about once (see settleLapsed) and dropped and reported only when OpenKey too says it is expired.
  */
 export async function waitApproval(profile: Profile, key: AgentKey, expiry: string | undefined, options: ApprovalAsk = {}): Promise<{ pending: PendingGrantRequest; resumed: boolean }> {
   return withProfileTransaction(async current => {
@@ -289,16 +315,14 @@ export async function waitApproval(profile: Profile, key: AgentKey, expiry: stri
     const existing = withProfileLock(() => loadPendingForWrite());
     if (existing && existing.request.issuer === want.signer.did) {
       if (holdsApproval(existing)) return { pending: existing, resumed: true };
-      assertSavedTerms(existing, want, options.renew !== undefined);
-      if (sameAsk(existing, current, want)) {
-        if (requestLapsed(existing)) {
-          if (await settleLapsed(existing, key) === 'expired') {
-            clearPending(existing);
-            throw expiredError();
-          }
+      assertKeepsSaved(existing, current, want, options.renew !== undefined);
+      if (requestLapsed(existing)) {
+        if (await settleLapsed(existing, key) === 'expired') {
+          clearPending(existing);
+          throw expiredError();
         }
-        return { pending: existing, resumed: true };
       }
+      return { pending: existing, resumed: true };
     }
     return { pending: await createPending(current, want, existing), resumed: false };
   });
