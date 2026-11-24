@@ -219,12 +219,9 @@ if (argv[0] === "courier") {
     process.stdin.unref?.();
     if (await closeReplication()) {
       process.exitCode = 0;
-      const stdoutFlushed = Promise.withResolvers<void>();
-      process.stdout.write("", () => stdoutFlushed.resolve());
-      await stdoutFlushed.promise;
-      const stderrFlushed = Promise.withResolvers<void>();
-      process.stderr.write("", () => stderrFlushed.resolve());
-      await stderrFlushed.promise;
+      // Executor form: the CLI supports Node 20, which lacks Promise.withResolvers (TC-4279).
+      await new Promise<void>((resolve) => process.stdout.write("", () => resolve()));
+      await new Promise<void>((resolve) => process.stderr.write("", () => resolve()));
       process.exit();
     }
   } catch (error) {
