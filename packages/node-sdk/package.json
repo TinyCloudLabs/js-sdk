@@ -155,6 +155,11 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/tinycloudlabs/web-sdk"
+    "url": "https://github.com/TinyCloudLabs/js-sdk.git",
+    "directory": "packages/node-sdk"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
   }
 }
