@@ -18,7 +18,7 @@ import { courierVersion } from './version.js';
 import { cmdStart } from './guided.js';
 import { cmdStatus } from './status.js';
 import { cmdInvite, cmdJoin } from './invitation.js';
-import { COURIER_DEFAULT_LEASE_SECONDS } from './keys.js';
+import { COURIER_DEFAULT_LEASE_SECONDS, COURIER_MAX_LEASE_SECONDS } from './keys.js';
 
 const startUsage = 'start [--new <subject> | --session <id> [--peer p] | --link <invitation> --consent]';
 const inviteUsage = 'invite --session <id> --mode same-owner|anyone|named [--recipient <did:key|peer>] --consent [--peer p] [--wait 1]';
@@ -84,7 +84,7 @@ Courier setup (humans run these):
                                    owner (send it to the owner only, privately), and exits. --wait then collects the
                                    approval (no code to paste): it polls, installs the grant, and acknowledges it.
                                    With --request or --wait the link also asks the owner to let the grant renew
-                                   itself for up to the --renew duration after approval (default ${COURIER_DEFAULT_LEASE_SECONDS / 86_400}d, at most 365d,
+                                   itself for up to the --renew duration after approval (default ${COURIER_DEFAULT_LEASE_SECONDS / 86_400}d, at most ${COURIER_MAX_LEASE_SECONDS / 86_400}d,
                                    longer than --expiry). The owner can approve it without renewal. --renew off asks for none.
                                    --timeout (default 60s, at most 9m) ends the wait with exit 8 and, on stdout,
                                    {"pending":{"step":1,"of":1,"approvalUrl","expiresAt"}}.
