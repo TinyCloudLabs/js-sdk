@@ -262,11 +262,6 @@ const lazyLoaderExternals = (type, ext) => ({ context, request }, callback) => {
     callback(null, `${type} ./registry-verdict-cache.${ext}`);
     return;
   }
-  // The owner's registry record publish (TC-3891): its own file, loaded when TinyCloud One asks to publish.
-  if (request === "../registry-publish" && context === path.resolve(__dirname, "src/modules")) {
-    callback(null, `${type} ./registry-publish.${ext}`);
-    return;
-  }
   if (request === "@tinycloud/sdk-core/share-placement" && context === path.resolve(__dirname, "../node-sdk/dist")) {
     callback(null, `${type} ./share-placement.${ext}`);
     return;
@@ -346,7 +341,6 @@ const lazyEntries = {
   "secret-read": "./src/secret-read-entry.ts",
   "session-retire": "./src/session-retire-entry.ts",
   "registry-verdict-cache": "./src/registry-verdict-cache-entry.ts",
-  "registry-publish": "./src/registry-publish.ts",
   "delegations-issued": "./src/delegations-issued-entry.ts",
   "delegations-renewal": "./src/delegations-renewal-entry.ts",
 };
