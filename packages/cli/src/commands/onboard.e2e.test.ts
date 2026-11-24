@@ -501,7 +501,7 @@ globalThis.fetch = ((input: Parameters<typeof fetch>[0], init?: Parameters<typeo
     expect(first.links).toEqual([pending.approvalUrl]);
     const approval = first.offered[0]!;
     expect(approval.request).toMatchObject({
-      reason: "Set up TinyCloud on this computer: use your apps and see your spaces, for 7 days, renewing for up to 30 days.",
+      reason: "Set up TinyCloud on this computer: use your apps and see your spaces, for 7 days. You can let it renew for up to 30 days.",
     });
     expect(approval.request!.reason).not.toMatch(/tinycloud\.[a-z0-9_-]+:/i);
     assertSevenDaysRenewing(approval);
@@ -616,7 +616,7 @@ globalThis.fetch = ((input: Parameters<typeof fetch>[0], init?: Parameters<typeo
     expect(onboarded.exitCode, onboarded.stderr).toBe(0);
     expect(onboarded.offered).toHaveLength(1);
     const approval = onboarded.offered[0]!;
-    expect(approval.request).toMatchObject({ reason: "Set up TinyCloud on this computer: use your Feed, for 7 days, renewing for up to 30 days." });
+    expect(approval.request).toMatchObject({ reason: "Set up TinyCloud on this computer: use your Feed, for 7 days. You can let it renew for up to 30 days." });
     expect(spacesOf(approval.request!)).toEqual(["applications"]);
     expect(approval.request!.permissions.map(permission => [permission.service, permission.path])).toEqual([
       ["tinycloud.capabilities", ""],
@@ -668,8 +668,8 @@ globalThis.fetch = ((input: Parameters<typeof fetch>[0], init?: Parameters<typeo
       expect(onboarded.offered[0]!.request!.renewal).toEqual({ version: 1, leaseLifetimeSeconds: THIRTY_DAYS_S });
       expect(onboarded.stderr).not.toContain("without renewal");
       expect(JSON.parse(onboarded.stdout).granted.map((granted: { asks: string }) => granted.asks)).toEqual([
-        "Set up TinyCloud on this computer: use your apps and see your spaces, for 7 days, renewing for up to 30 days.",
-        "Set up TinyCloud on this computer: use your apps and see your spaces, for 7 days, renewing for up to 30 days.",
+        "Set up TinyCloud on this computer: use your apps and see your spaces, for 7 days. You can let it renew for up to 30 days.",
+        "Set up TinyCloud on this computer: use your apps and see your spaces, for 7 days. You can let it renew for up to 30 days.",
       ]);
       const { session } = await savedState("leased");
       expect(session?.renewal).toMatchObject({ approvedLeaseLifetimeSeconds: THIRTY_DAYS_S, receipt: { originalCid: session?.delegationCid } });

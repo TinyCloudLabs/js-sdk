@@ -72,9 +72,11 @@ export function onboardingPlan(selector = "apps", expiryOption?: unknown): {
       ? "use your apps and your Feed, and see your spaces"
       : "use your apps and see your spaces";
   const line = (words: string) => `Set up TinyCloud on this computer: ${what}, for ${words}`;
+  const renewalDays = renewalLeaseSeconds === undefined ? undefined : renewalLeaseSeconds / 86_400;
   return {
     permissions: entries.sort((a, b) => `${a.space}\0${a.service}\0${a.path}`.localeCompare(`${b.space}\0${b.service}\0${b.path}`)),
-    asks: `${line(lifetime)}${renewalLeaseSeconds === undefined ? "" : `, renewing for up to ${renewalLeaseSeconds / 86_400} days`}.`,
+    // The renewal is the owner's choice in OpenKey, so the reason offers it rather than promising it (TC-4247).
+    asks: `${line(lifetime)}.${renewalDays === undefined ? "" : ` You can let it renew for up to ${renewalDays} ${renewalDays === 1 ? "day" : "days"}.`}`,
     finiteAsks: `${line(lifetime)}.`,
     expiry,
     ...(renewalLeaseSeconds === undefined ? {} : { renewalLeaseSeconds }),
