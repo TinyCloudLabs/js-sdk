@@ -152,14 +152,17 @@ describe("migrateSecrets with a key approval", () => {
     ]);
   });
 
-  test("nothing left to move asks for nothing", async () => {
+  test("nothing left to move asks for nothing and, on a dry run, previews nothing", async () => {
     const v = vault({ "secrets/DONE_KEY": 2, "secrets/LEGACY_KEY": "datavault" });
     let asked = 0;
+    const ask = async () => { asked += 1; };
 
-    const result = await migrateSecrets(v.secrets, { authorizeKeys: async () => { asked += 1; } });
+    const result = await migrateSecrets(v.secrets, { authorizeKeys: ask });
+    const dry = await migrateSecrets(v.secrets, { dryRun: true, authorizeKeys: ask, previewKeys: ask });
 
     expect(asked).toBe(0);
     expect(result).toMatchObject({ ok: true, data: { moved: 0, already: 1, skipped: { read_failed: 1 } } });
+    expect(dry).toMatchObject({ ok: true, data: { moved: 0, already: 1, skipped: { read_failed: 1 } } });
   });
 
   test("a dry run previews the keys an approval would name and never asks", async () => {

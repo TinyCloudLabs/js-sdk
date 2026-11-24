@@ -24,7 +24,7 @@ export interface SecretMigrateOptions {
    * only for the rest.
    */
   authorizeKeys?: (keyPaths: readonly string[]) => Promise<void>;
-  /** Called once on a dry run with the key paths `authorizeKeys` would get, so a caller can plan the approvals. */
+  /** Called once on a dry run with the key paths `authorizeKeys` would get (never with none), so a caller can plan the approvals. */
   previewKeys?: (keyPaths: readonly string[]) => Promise<void>;
 }
 
@@ -121,7 +121,7 @@ export async function migrateSecrets(
       count(result);
     }
     if (dryRun) {
-      await options.previewKeys?.(pending.map((move) => move.keyPath));
+      if (pending.length > 0) await options.previewKeys?.(pending.map((move) => move.keyPath));
       return { ok: true, data: report };
     }
     if (pending.length === 0) return { ok: true, data: report };
