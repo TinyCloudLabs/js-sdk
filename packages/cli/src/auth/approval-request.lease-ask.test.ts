@@ -11,7 +11,7 @@ import { SiweMessage } from "siwe";
 import { Command } from "commander";
 import { NodeWasmBindings, PrivateKeySigner } from "@tinycloud/node-sdk";
 import { parseSignedSiweCacao } from "@tinycloud/sdk-core";
-import { buildShortLink, MAX_APPROVAL_LEASE_SECONDS, prepareLinkRecord, signerFromJwk, type Ed25519PrivateJwk } from "@tinycloud/share-envelope/links";
+import { buildShortLink, prepareLinkRecord, signerFromJwk, type Ed25519PrivateJwk } from "@tinycloud/share-envelope/links";
 import { encodeDagCbor } from "../../../sdk-core/src/delegations/cacao.js";
 
 // TC-3522: OpenKey sign-in through an approval link asks the owner for a renewal lease by default. Synthetic owner, agent
@@ -30,7 +30,7 @@ const { acquireApprovalRequest } = await import("./approval-request.js");
 const { refreshOpenKeySession } = await import("../commands/auth.js");
 const { registerStatusCommand } = await import("../commands/status.js");
 const { relayPublicJwkOf } = await import("./device-auth.js");
-const { DEFAULT_RENEWAL_LEASE_SECONDS, parseRenewOption, renewalLeaseFor } = await import("./renewal-lease.js");
+const { DEFAULT_RENEWAL_LEASE_SECONDS, MAX_RENEWAL_LEASE_SECONDS, parseRenewOption, renewalLeaseFor } = await import("./renewal-lease.js");
 function restoreEnvironment(): void {
   for (const [name, value] of Object.entries(original)) {
     if (value === undefined) delete process.env[name]; else process.env[name] = value;
@@ -199,9 +199,9 @@ afterAll(async () => {
   await rm(home, { recursive: true, force: true });
 });
 
-test("--renew accepts a duration up to the approval lease maximum and refuses anything else", () => {
-  expect(parseRenewOption(`${MAX_APPROVAL_LEASE_SECONDS / DAY}d`)).toBe(MAX_APPROVAL_LEASE_SECONDS);
-  expect(() => parseRenewOption(`${MAX_APPROVAL_LEASE_SECONDS / DAY + 1}d`)).toThrow(expect.objectContaining({ code: "INVALID_RENEW" }));
+test("--renew accepts a duration up to the 90-day renewal maximum and refuses anything else", () => {
+  expect(parseRenewOption(`${MAX_RENEWAL_LEASE_SECONDS / DAY}d`)).toBe(MAX_RENEWAL_LEASE_SECONDS);
+  expect(() => parseRenewOption(`${MAX_RENEWAL_LEASE_SECONDS / DAY + 1}d`)).toThrow(expect.objectContaining({ code: "INVALID_RENEW" }));
   expect(() => parseRenewOption("soon")).toThrow(expect.objectContaining({ code: "INVALID_RENEW" }));
 });
 
@@ -305,7 +305,7 @@ test.each([
   ["--device", ["--device", "--renew", "30d"]],
   ["--paste", ["--paste", "--renew", "30d"]],
   ["--method local", ["--method", "local", "--renew", "30d"]],
-  ["a lease over the maximum", ["--renew", `${MAX_APPROVAL_LEASE_SECONDS / DAY + 1}d`]],
+  ["a lease over the maximum", ["--renew", `${MAX_RENEWAL_LEASE_SECONDS / DAY + 1}d`]],
 ])("auth login refuses --renew with %s before any sign-in starts", async (_label, flags) => {
   const script = `
     import { Command } from "commander";
