@@ -509,6 +509,7 @@ export type Ledger = {
   tc3522InvocationRefusalRoot?: LogoutRatchet;
   tc3810ReaderRoot?: LogoutRatchet;
   tc3975NamedKeyWarningRoot?: LogoutRatchet;
+  tc4082HostedOwnerRoot?: LogoutRatchet;
   tc3522InvocationRefusalKvWorker?: WorkerRatchet;
   tc3522InvocationRefusalReplicaWorker?: Omit<WorkerRatchet, "worker"> & { replicaWorker: { delta: number; ceiling: number } };
   tc2773LazyRestoreReplicaWorker?: Omit<WorkerRatchet, "worker"> & { replicaWorker: { delta: number; ceiling: number } };
@@ -1174,6 +1175,7 @@ export function ancestryPins(root: Ledger, hasGatedOnly: boolean): Array<{ row: 
   if (root.tc3522InvocationRefusalRoot !== undefined) pins.push({ row: "tc3522InvocationRefusalRoot", pin: root.tc3522InvocationRefusalRoot.sourceCommits.at(-1)! });
   if (root.tc3810ReaderRoot !== undefined) pins.push({ row: "tc3810ReaderRoot", pin: root.tc3810ReaderRoot.sourceCommits.at(-1)! });
   if (root.tc3975NamedKeyWarningRoot !== undefined) pins.push({ row: "tc3975NamedKeyWarningRoot", pin: root.tc3975NamedKeyWarningRoot.sourceCommits.at(-1)! });
+  if (root.tc4082HostedOwnerRoot !== undefined) pins.push({ row: "tc4082HostedOwnerRoot", pin: root.tc4082HostedOwnerRoot.sourceCommits.at(-1)! });
   if (root.tc3522InvocationRefusalKvWorker !== undefined) pins.push({ row: "tc3522InvocationRefusalKvWorker", pin: root.tc3522InvocationRefusalKvWorker.sourceCommits.at(-1)! });
   if (root.tc3522InvocationRefusalReplicaWorker !== undefined) pins.push({ row: "tc3522InvocationRefusalReplicaWorker", pin: root.tc3522InvocationRefusalReplicaWorker.sourceCommits.at(-1)! });
   if (hasGatedOnly) pins.push({ row: "gatedOnlyRatchet", pin: approvedGatedOnlyRatchet.sourceCommit });
@@ -1309,6 +1311,7 @@ export function rootCeilings(root: Ledger): Array<{ row: string; ceiling: GzipSi
     ["tc3522InvocationRefusalRoot", root.tc3522InvocationRefusalRoot?.root.ceiling],
     ["tc3810ReaderRoot", root.tc3810ReaderRoot?.root.ceiling],
     ["tc3975NamedKeyWarningRoot", root.tc3975NamedKeyWarningRoot?.root.ceiling],
+    ["tc4082HostedOwnerRoot", root.tc4082HostedOwnerRoot?.root.ceiling],
   ];
   return rows.flatMap(([row, ceiling]) => ceiling === undefined ? [] : [{ row, ceiling }]);
 }
@@ -4224,6 +4227,39 @@ export const approvedTc3975NamedKeyWarningRoot: LogoutRatchet = {
   "reason": "Both canonical jobs (SQLite and Postgres, run 45285882988, head 7a6d21ed8 after the master merge) measured 1540164/1471056 gzip bytes, 149/193 over the TC-3810 ceilings of 1540015/1470863. Run 45177867274 at e11cfa27 before the merge measured 167/152 over the then-newest TC-3802 ceilings; the difference is minifier drift, source unchanged. The bytes are the Web SDK root's sign-in warning for secret key resources omitted when the node lacks encryption-named-keys-v1. Details: TC-3975"
 };
 
+export const approvedTc4082HostedOwnerRoot: LogoutRatchet = {
+  "label": "sign in a hosted owner with no registry record (TC-4082)",
+  "ruling": "Naomi 2026-11-24 00:37:34Z: re-grant tc4082HostedOwnerRoot to exactly 1542306/1472943 (+2291/+2080 over tc3810ReaderRoot). Earlier grant, 2026-11-23 22:50:03Z: up to +2139/+1916 for the sign-in proof alone. Re-based onto tc3975NamedKeyWarningRoot after #1144 merged (Naomi 01:17Z: may move only by master's movement): the same +2291/+2080 now sits over tc3975NamedKeyWarningRoot's 1540164/1471056, so the ceilings are 1542455/1473136; CI decides. Naomi R2 2026-11-24 01:45:37Z: set tc4082HostedOwnerRoot to exactly 1542479/1473127 (+2315/+2071 over tc3975NamedKeyWarningRoot), ledger + policy only.",
+  "base": "878291c9f6e36812ba5785deb398a4117700c628",
+  "sourceCommits": [
+    "98f7a2e4932a40c5d56273177f50d5e0443a436a",
+    "952c889d8eedf252352bea7bf706a06a54c39c87",
+    "79534a0bc6e83e1e9489a5658b814086e3a09185",
+    "dc3282e0e9496e4089656c83d72d4064928fca91",
+    "bd7ce999c1d81017baa3cc20bd9c00e93ace96ad",
+    "d3ff712f8b2ca63b2fac3da31c9c40a833c8648a",
+    "63dfefb58a1384dc9b66faaf1e772e5edcecf75f"
+  ],
+  "canonicalCI": {
+    "run": "45305691554",
+    "jobs": [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45305691554/job/138148858055",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45305691554/job/138148858149"
+    ]
+  },
+  "root": {
+    "delta": {
+      "index.mjs": 2315,
+      "index.cjs": 2071
+    },
+    "ceiling": {
+      "index.mjs": 1542479,
+      "index.cjs": 1473127
+    }
+  },
+  "reason": "5 reviewed TC-4082 commits + no-read fix 63dfefb58; Naomi 00:38Z. Both canonical jobs (SQLite and Postgres, run 45296681183 at debfa194e) measured 1542306/1472943 gzip bytes, 2291/2080 over tc3810ReaderRoot's 1540015/1470863. The Web SDK root carries the hosted-owner proof: the proof state in NodeUserAuthorization (begin, confirm, fail, restore candidate and adoption, proven-space routing, per-proof landed state), the TinyCloudNode restore, retire-on-failed-proof and sign-in handling around it, and one allowHostedOwnerProof line in TinyCloudWeb. The assess and read helpers load from the lazy space-hosting chunk, not the root. Details: TC-4082 Re-based onto tc3975NamedKeyWarningRoot after #1144 merged (Naomi 01:17Z: may move only by master's movement): the same +2291/+2080 now sits over tc3975NamedKeyWarningRoot's 1540164/1471056, so the ceilings are 1542455/1473136; CI decides. Run 45305691554 at 6ad3a0f2f (master 878291c9f merged) measured 1542479/1473127 on both SQLite and Postgres (the SQLite job 138148858055, the Postgres job 138148858149), +2315/+2071 over tc3975NamedKeyWarningRoot's 1540164/1471056: gzip non-additivity after the #1144 merge, source unchanged; Naomi 01:46Z"
+};
+
 export const approvedLedgerRows: Record<string, unknown> = {
   phase2Ratchet: approvedPhase2,
   fixRequiredRatchet: approvedFixRequiredRatchet,
@@ -4354,6 +4390,7 @@ export const approvedLedgerRows: Record<string, unknown> = {
   tc3522InvocationRefusalRoot: approvedTc3522InvocationRefusalRoot,
   tc3810ReaderRoot: approvedTc3810ReaderRoot,
   tc3975NamedKeyWarningRoot: approvedTc3975NamedKeyWarningRoot,
+  tc4082HostedOwnerRoot: approvedTc4082HostedOwnerRoot,
   tc3522InvocationRefusalKvWorker: approvedTc3522InvocationRefusalKvWorker,
   tc3522InvocationRefusalReplicaWorker: approvedTc3522InvocationRefusalReplicaWorker,
 };
@@ -4964,6 +5001,11 @@ export function validateLedger(value: Ledger, historicalBase = false): void {
       (!value.tc3810ReaderRoot ||
         JSON.stringify(value.tc3975NamedKeyWarningRoot) !== JSON.stringify(approvedTc3975NamedKeyWarningRoot))) {
     throw new Error("Only the exact TC-3975 named-key warning root admission is approved.");
+  }
+  if (value.tc4082HostedOwnerRoot !== undefined &&
+      (!value.tc3810ReaderRoot ||
+        JSON.stringify(value.tc4082HostedOwnerRoot) !== JSON.stringify(approvedTc4082HostedOwnerRoot))) {
+    throw new Error("Only the exact TC-4082 hosted-owner root admission is approved.");
   }
   if (value.tc3522InvocationRefusalKvWorker !== undefined || value.tc3522InvocationRefusalReplicaWorker !== undefined) {
     if (!value.tc3947ReplicaRevokeRoot ||

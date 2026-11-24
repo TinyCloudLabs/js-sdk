@@ -85,7 +85,7 @@ type Web = { signIn(): Promise<unknown>; _node: { capabilityRequest?: { manifest
 
 const sharedFolderLines = () => warn.mock.calls.filter(([message]: unknown[]) => String(message).startsWith("TinyCloud: this app has no domain"));
 const appIds = (web: Web) => web._node.capabilityRequest?.manifests.map((manifest) => manifest.app_id);
-const signIn = (web: Web) => expect(web.signIn()).rejects.toMatchObject({ code: "ACCOUNT_SETUP_REQUIRED" });
+const signIn = (web: Web) => expect(web.signIn()).rejects.toThrow("Unexpected wallet method: personal_sign");
 
 test("without a window, a domain or a manifest, sign-in asks for the shared folder and says so once", async () => {
   const web: Web = await create();

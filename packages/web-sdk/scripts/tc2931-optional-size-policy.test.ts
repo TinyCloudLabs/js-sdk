@@ -14,6 +14,7 @@ delete root.tc3862ExplorerOriginRoot;
 delete root.tc3522InvocationRefusalRoot;
 delete root.tc3810ReaderRoot;
 delete root.tc3975NamedKeyWarningRoot;
+delete root.tc4082HostedOwnerRoot;
 delete root.tc3947ReplicaRevokeRoot;
 delete root.tc3522InvocationRefusalKvWorker;
 delete root.tc3522InvocationRefusalReplicaWorker;

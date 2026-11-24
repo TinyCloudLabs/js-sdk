@@ -562,6 +562,7 @@ describe("TC-2481 Web routing exact optional admission", () => {
     delete root.tc3802SecretKeyCapRoot;
     delete root.tc3810ReaderRoot;
     delete root.tc3975NamedKeyWarningRoot;
+    delete root.tc4082HostedOwnerRoot;
     delete root.tc3947ReplicaRevokeRoot;
     delete root.tc3030FirstPartyOriginsRoot;
     delete root.tc2937SharePlacementRoot;
@@ -772,6 +773,7 @@ describe("TC-2481 final3e0 optional accounting admission", () => {
     delete root.tc3522InvocationRefusalRoot;
     delete root.tc3810ReaderRoot;
     delete root.tc3975NamedKeyWarningRoot;
+    delete root.tc4082HostedOwnerRoot;
     delete root.tc3947ReplicaRevokeRoot;
     delete root.tc3030FirstPartyOriginsRoot;
     delete root.tc2937SharePlacementRoot;

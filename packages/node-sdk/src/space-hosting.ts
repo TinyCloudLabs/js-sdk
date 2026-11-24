@@ -3,7 +3,7 @@
  * creates a primary space that is not hosted. Both are loaded on first use, so
  * browser bundles carry them as a separate file rather than in their root.
  */
-import type { ISpaceCreationHandler, SpaceCreationContext, SpaceHostResult } from "@tinycloud/sdk-core";
+import type { AbilitiesMap, ISpaceCreationHandler, SpaceCreationContext, SpaceHostResult } from "@tinycloud/sdk-core";
 import type { FetchFunction, InvokeAnyEntry, ServiceHeaders } from "@tinycloud/sdk-services";
 import type { SpaceHosting } from "./authorization/NodeUserAuthorization";
 
@@ -144,6 +144,130 @@ export async function askSpaceHosting(ports: SpaceHostingPorts): Promise<SpaceHo
   }
   if (outcome === "hosted") hostedBy.set(ports.scope, (hostedBy.get(ports.scope) ?? new Set<string>()).add(key));
   return outcome === "refused" ? "unknown" : outcome;
+}
+
+/** The address in a space id is case-insensitive; the rest of it is not. */
+export function sameSpaceId(a: string, b: string): boolean {
+  const fold = (id: string) => id.replace(/^(tinycloud:pkh:eip155:\d+:)(0x[0-9a-fA-F]{40})/, (_, prefix: string, address: string) => prefix + address.toLowerCase());
+  return fold(a) === fold(b);
+}
+
+/** An operation of a request or a signed recap, as the hosted-owner proof reads it. */
+export interface HostedOwnerOperation {
+  spaceId?: string;
+  resource?: string;
+  service: string;
+  path: string;
+  action: string;
+  caveats?: readonly unknown[];
+}
+
+/** The one signed read that can prove the owner's space is hosted (TC-4082). */
+export interface HostedOwnerRead {
+  service: string;
+  path: string;
+  action: string;
+  headers?: Record<string, string>;
+  body?: string;
+}
+
+const SPACE_ACTION_PREFIX = "tinycloud.space/";
+
+/** A request's abilities as operations, for the check that runs before anything is signed. */
+export function hostedOwnerPlanOperations(plan: {
+  abilities: AbilitiesMap;
+  spaceId: string;
+  spaceAbilities?: Record<string, AbilitiesMap>;
+  rawAbilities?: Record<string, string[]>;
+}): HostedOwnerOperation[] {
+  const operations: HostedOwnerOperation[] = [];
+  const add = (spaceId: string, map: AbilitiesMap) => {
+    for (const [service, paths] of Object.entries(map)) {
+      for (const [path, actions] of Object.entries(paths)) {
+        // `kv` + `get` is `tinycloud.kv/get`; a full action is kept.
+        for (const action of actions) operations.push({ spaceId, service, path, action: action.includes("/") ? action : `tinycloud.${service}/${action}` });
+      }
+    }
+  };
+  add(plan.spaceId, plan.abilities);
+  for (const [spaceId, map] of Object.entries(plan.spaceAbilities ?? {})) add(spaceId, map);
+  for (const [resource, actions] of Object.entries(plan.rawAbilities ?? {})) {
+    for (const action of actions) operations.push({ resource, service: "encryption", path: resource, action });
+  }
+  return operations;
+}
+
+/**
+ * The one read a hosted-owner proof may use, from what `operations` hold on exactly `spaceId`: an uncaveated
+ * `tinycloud.kv/list` (limit 1), else an uncaveated `tinycloud.space/info`. Never get, never metadata.
+ */
+export function selectHostedOwnerRead(operations: readonly HostedOwnerOperation[], spaceId: string): HostedOwnerRead | undefined {
+  const held = operations.filter((operation) =>
+    operation.resource === undefined && operation.spaceId !== undefined && sameSpaceId(operation.spaceId, spaceId) && !operation.caveats?.length);
+  const list = held.find((operation) => operation.service === "kv" && operation.action === KV_LIST_ACTION);
+  if (list) {
+    return {
+      service: "kv",
+      path: isPrefix(list.path) ? prefixOf(list.path) : list.path,
+      action: KV_LIST_ACTION,
+      headers: { "x-tinycloud-limit": "1" },
+    };
+  }
+  if (held.some((operation) => operation.service === "space" && operation.action === SPACE_INFO_ACTION)) {
+    return { service: "space", path: "", action: SPACE_INFO_ACTION, body: "{}" };
+  }
+  return undefined;
+}
+
+/**
+ * The read that may prove the owner's space is hosted for a sign-in, or `undefined` when the request does not
+ * qualify (TC-4082). A request qualifies only when every operation is on exactly `spaceId`, none is caveated, none
+ * hosts or creates anything (`tinycloud.space/*` other than `info`, or any `create` ability), and it already holds
+ * a read {@link selectHostedOwnerRead} accepts. Checked on the request before signing and on the signed recap after.
+ */
+export function assessHostedOwnerRecap(operations: readonly HostedOwnerOperation[], spaceId: string): HostedOwnerRead | undefined {
+  for (const operation of operations) {
+    if (operation.resource !== undefined || operation.spaceId === undefined || !sameSpaceId(operation.spaceId, spaceId)) return undefined;
+    if (operation.caveats?.length) return undefined;
+    if (operation.action.startsWith(SPACE_ACTION_PREFIX) && operation.action !== SPACE_INFO_ACTION) return undefined;
+    if (/[./]create$/.test(operation.action)) return undefined;
+  }
+  return selectHostedOwnerRead(operations, spaceId);
+}
+
+export interface HostedOwnerReadPorts {
+  spaceId: string;
+  /** The literal host the proof is pinned to. */
+  host: string;
+  read: HostedOwnerRead;
+  /** A transport that does not route by resource: the host is the one given. */
+  fetch: FetchFunction;
+  /** Sign an invocation for exactly these entries. */
+  sign(entries: InvokeAnyEntry[]): ServiceHeaders;
+}
+
+/**
+ * One signed read, once, and nothing else (TC-4082): `positive` only for an
+ * actual 2xx; `refused` for any other 4xx or a status the node does not use for
+ * success; `unreachable` for a network failure, redirect, timeout or 5xx. No
+ * registration, no retry, no reading of the body, and no inference from a 404.
+ */
+export async function readHostedOwnerSpace(ports: HostedOwnerReadPorts): Promise<"positive" | "refused" | "unreachable"> {
+  const { spaceId, read } = ports;
+  try {
+    const response = await ports.fetch(`${ports.host}/invoke`, {
+      method: "POST",
+      headers: { ...ports.sign([{ spaceId, service: read.service, path: read.path, action: read.action }]), ...read.headers },
+      body: read.body,
+      redirect: "error",
+      signal: AbortSignal.timeout(TIMEOUT_MS),
+    });
+    if (response.body instanceof ReadableStream) await response.body.cancel().catch(() => undefined);
+    if (response.status >= 200 && response.status < 300) return "positive";
+    return response.status >= 500 ? "unreachable" : "refused";
+  } catch {
+    return "unreachable";
+  }
 }
 
 type PrimarySpaceIdentity = Pick<SpaceCreationContext, "address" | "chainId" | "spaceId">;

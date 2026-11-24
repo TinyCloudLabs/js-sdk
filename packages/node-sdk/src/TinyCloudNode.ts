@@ -183,6 +183,7 @@ import {
   resolveRegistryResource,
   warnRegistryDefaultNode,
   NodeNotFoundError,
+  AccountSetupRequiredError,
   isKnownTinyCloudNode,
   exactHttpOrigin,
   createInMemoryRegistrySequenceStore,
@@ -1018,6 +1019,12 @@ export interface TinyCloudNodeConfig {
   autoBootstrapAccount?: boolean;
   /** @internal Browser apps outside first-party origins must finish account setup first. */
   requireExistingAccount?: boolean;
+  /**
+   * @internal Only for a signer that provisions nothing before the signature (a wallet or local key, or OpenKey with its
+   * no-provision guard for third-party origins). With `requireExistingAccount`, an owner with no registry record may
+   * then sign in when the default node already hosts their own `applications` space (TC-4082).
+   */
+  allowHostedOwnerProof?: boolean;
   /** Default-off service telemetry. */
   telemetry?: TelemetryConfig;
   /** Retry of node busy/timeout answers; `{ maxAttempts: 1 }` disables it. See {@link RetryPolicy}. */
@@ -1907,6 +1914,80 @@ export class TinyCloudNode {
     return this.auth ? this.auth.spaceHosting : this._restoredSpaceHosting;
   }
 
+  private hostedOwnerRestore?: { epoch: number; result: Promise<boolean> };
+
+  /** One strict read per session epoch for a restored owner with no registry record. No `/delegate`, no retry. */
+  private restoreHostedOwnerProof(): Promise<boolean> {
+    // A sign-in since then may have proven this session: the cached answer belongs to the epoch, the proof to the session.
+    if (this.auth?.activeHostedOwnerProof()?.status === "proven") return Promise.resolve(true);
+    const attempt = this.hostedOwnerRestore;
+    if (attempt?.epoch === this.sessionEpoch) return attempt.result;
+    const auth = this.auth;
+    const candidate = auth?.restoredHostedOwnerCandidate();
+    if (!auth || !candidate) return Promise.resolve(false);
+    const epoch = this.sessionEpoch;
+    const result = (async () => {
+      const outcome = await this.readHostedOwner(candidate.host, candidate.spaceId, false);
+      // A session replaced while the read was in flight owns no answer; a read that did not answer is asked again later.
+      if (epoch !== this.sessionEpoch || this.auth !== auth) return false;
+      if (outcome === "unreachable" && this.hostedOwnerRestore?.epoch === epoch) this.hostedOwnerRestore = undefined;
+      if (outcome === "refused") {
+        // The refused session is not kept: only its own stored record goes, and never a newer sign-in's (compared by signature).
+        await auth.discardRefusedRestoredSession(candidate).catch(() => undefined);
+        return false;
+      }
+      if (outcome !== "positive") return false;
+      auth.adoptRestoredHostedOwnerProof(candidate);
+      return true;
+    })();
+    this.hostedOwnerRestore = { epoch, result };
+    return result;
+  }
+
+  /**
+   * The one signed read a hosted-owner proof rests on (TC-4082): the read the session's own recap already holds, sent to
+   * the pinned host with a transport that does not route by resource.
+   */
+  private async readHostedOwner(host: string, spaceId: string, signedRequest: boolean): Promise<"positive" | "refused" | "unreachable" | "no-read"> {
+    const session = this._serviceContext?.session;
+    const primary = this.currentTinyCloudSession();
+    if (!session || !primary) return "no-read";
+    const graph = this._serviceGraph;
+    // Not a static import on purpose: web-sdk's root size budget has no room for the proof, so bundlers ship it as its own file.
+    const { assessHostedOwnerRecap, selectHostedOwnerRead, readHostedOwnerSpace } = await import("./space-hosting.js");
+    // A fresh sign-in checks everything the signer actually signed; a restore only picks the read it already holds.
+    const operations = this.recapOperationsFromSession(primary);
+    const read = signedRequest ? assessHostedOwnerRecap(operations, spaceId) : selectHostedOwnerRead(operations, spaceId);
+    if (!read) return "no-read";
+    return readHostedOwnerSpace({
+      spaceId,
+      host,
+      read,
+      fetch: globalThis.fetch.bind(globalThis),
+      sign: (entries) => {
+        graph.assertActive();
+        return graph.invokeAny({ ...session, spaceId }, entries);
+      },
+    });
+  }
+
+  /** A pending proof is confirmed by that read, or the sign-in is refused; nothing past this point runs for a failed proof. */
+  private async confirmHostedOwnerProof(epoch: number): Promise<void> {
+    const auth = this.auth;
+    const proof = auth?.hostedOwnerProof;
+    if (!auth || proof?.status !== "pending") return;
+    const outcome = await this.readHostedOwner(proof.host, proof.spaceId, true);
+    this.assertSessionEpoch(epoch, "Sign-in");
+    if (outcome === "positive") {
+      if (!auth.markHostedOwnerProven(proof)) throw new Error("Sign-in was replaced before the hosted-space check finished.");
+      return;
+    }
+    auth.failHostedOwnerProof(proof, true);
+    throw outcome === "refused" || outcome === "no-read"
+      ? new AccountSetupRequiredError()
+      : new NodeNotRespondingError([proof.host], new Error("The hosted-space check did not answer."));
+  }
+
   private async probeSpaceHosting(space: string | undefined): Promise<SpaceHosting> {
     const context = this._serviceContext;
     const session = context?.session;
@@ -2353,6 +2434,7 @@ export class TinyCloudNode {
         : config.includeAccountRegistryPermissions,
       includeImplicitCapabilitiesRead: config.autoBootstrapAccount !== false,
       requireExistingAccount: config.requireExistingAccount,
+      allowHostedOwnerProof: config.allowHostedOwnerProof === true,
       // Sign-in needs only the entry inputs (prefixes + secrets opt-in);
       // storage and scheduling never leave TinyCloudNode.
       replication: config.replication?.enabled === true
@@ -2449,7 +2531,15 @@ export class TinyCloudNode {
     if (session) this.refreshRegistryOwner(pkhDid(session.address, session.chainId));
     // Auth receives constructor-trusted hosts separately and may accept an
     // explicit code-supplied sign-in override, never a restored host list.
-    if (this.auth) return this.auth.resolveResourceDestinations(resource, access, noEntryHosts, dataRead);
+    if (this.auth) {
+      try {
+        return await this.auth.resolveResourceDestinations(resource, access, noEntryHosts, dataRead);
+      } catch (error) {
+        // A restored session whose owner has no registry record routes to the default node only once a read confirms it.
+        if (!(error instanceof AccountSetupRequiredError) || !(await this.restoreHostedOwnerProof())) throw error;
+        return this.auth.resolveResourceDestinations(resource, access, noEntryHosts, dataRead);
+      }
+    }
     const candidates = noEntryHosts ?? this.trustedNoEntryHosts;
     const subject = owner.startsWith("did:pkh:") ? pkhDid(owner.slice(owner.lastIndexOf(":") + 1), this.config.registryChainId ?? 1) : owner;
     const resolved = await resolveRegistryResource(subject, resource, access, {
@@ -3209,7 +3299,7 @@ export class TinyCloudNode {
     return loading;
   }
 
-  private endSession(): Promise<void> {
+  private endSession(options?: { retireAtNodes?: boolean }): Promise<void> {
     if (this.signOutResult) return this.signOutResult;
     let resolveResult!: () => void;
     let rejectResult!: (error: unknown) => void;
@@ -3225,6 +3315,10 @@ export class TinyCloudNode {
     // A throw here never stops local sign-out; every host it knew of is then reported unconfirmed.
     let retire: LeavingSession | undefined;
     try {
+      // A hosted-owner proof that was refused before any `/delegate` could have landed is discarded locally: the retire request carries session roots, so it would write.
+      if (options?.retireAtNodes === false) throw new Error("The session was refused before a delegation reached a node, so no node is asked to retire it.");
+      // Otherwise the current session is retired wherever it is held, even while a newer sign-in or proof is pending:
+      // a sign-out before the first session exists has no key to retire, and one after the proof's /delegate is cleaned up.
       retire = this.leavingSessionRetire();
     } catch (error) {
       let hosts: string[] = [];
@@ -3598,6 +3692,17 @@ export class TinyCloudNode {
       // unless a newer sign-in or restore has started since.
       if (epoch !== this.sessionEpoch && attempt === this.latestSessionAttempt) {
         await this.endSession();
+      } else if (this.auth?.hostedOwnerProofFailed && attempt === this.latestSessionAttempt) {
+        // The proof failed. A `/delegate` the node may hold (accepted, or sent with an unknown outcome) is retired for the
+        // CURRENT session at the pinned host; a refused or never-sent one is only discarded locally. Under overlapping
+        // sign-ins this is best effort: endSession retires whichever session is current and the landed flag can be
+        // misattributed (TC-4154). The proof's own failure is what the caller gets: a teardown or retire problem never
+        // replaces it (a retire that fails is in nodeSignOutStatus()).
+        const retireAtNodes = this.auth.hostedOwnerDelegateMayHaveLanded;
+        await this.endSession({ retireAtNodes }).catch(() => undefined);
+      } else if (attempt === this.latestSessionAttempt && this.config.allowHostedOwnerProof === true) {
+        // A cancelled wallet or a refused prepared request leaves no half-made proof for a later restore to trip over.
+        this.auth?.discardPendingHostedOwnerProof();
       }
       throw error;
     }
@@ -3726,6 +3831,9 @@ export class TinyCloudNode {
       this.registerPrimarySessionGrant(primarySession);
       this.refreshRegistryOwner(pkhDid(primarySession.address, primarySession.chainId));
       this.refreshRegistryForCapabilities(this.getVerifiedSessionCapabilities());
+      if (this.auth?.hostedOwnerProof?.status === "pending") {
+        await this.confirmHostedOwnerProof(epoch);
+      }
       // The activation says nothing about the primary space when both of its
       // lists are empty: ask the node with a read the session holds.
       if (this.auth?.spaceHosting === "unknown") {
@@ -3745,14 +3853,14 @@ export class TinyCloudNode {
     );
     if (primarySession) this.registerPrimarySessionGrant(primarySession);
 
-    await this.ensureRequestedEncryptionNetworks();
+    if (!this.auth?.hostedOwnerProof) await this.ensureRequestedEncryptionNetworks();
     this.assertSessionEpoch(epoch, "Sign-in");
 
     this._keysUnavailable = this.auth?.unavailableKeyPaths ?? [];
     if (this._keysUnavailable.length > 0) {
       this.notificationHandler.warning(`Named keys unavailable: ${this._keysUnavailable.join(", ")}`);
     }
-    if (this.nodeFeatures.includes("encryption-named-keys-v1")) {
+    if (this.nodeFeatures.includes("encryption-named-keys-v1") && !this.auth?.hostedOwnerProof) {
       for (const manifest of this.auth?.capabilityRequest?.manifests ?? []) {
         for (const declaration of manifest.keys ?? []) {
           if ("path" in declaration && declaration.abilities.includes("key.create") &&
@@ -3773,7 +3881,7 @@ export class TinyCloudNode {
     }
 
     if (
-      !bootstrapped &&
+      !bootstrapped && !this.auth?.hostedOwnerProof &&
       this.config.manifest === undefined &&
       this.config.capabilityRequest === undefined
     ) {
@@ -3784,7 +3892,7 @@ export class TinyCloudNode {
     }
     this.assertSessionEpoch(epoch, "Sign-in");
 
-    if (!bootstrapped) {
+    if (!bootstrapped && !this.auth?.hostedOwnerProof) {
       // Best-effort and off the critical path (TC-998); callers that need the
       // registry written await waitForAccountRegistrySync().
       this.scheduleAccountRegistrySync();
@@ -3824,6 +3932,11 @@ export class TinyCloudNode {
       return false;
     }
     if (!this.auth || !this._address) {
+      return false;
+    }
+    // A hosted-owner proof is not an account: nothing is provisioned for it.
+    if (this.auth.hostedOwnerProof) {
+      this._bootstrapStatus = { skipped: true, reason: "registry-scope-limited" };
       return false;
     }
 
