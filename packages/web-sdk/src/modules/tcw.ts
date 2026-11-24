@@ -1524,12 +1524,13 @@ export class TinyCloudWeb {
   };
 
   /**
-   * Publish the owner's registry location record when the registry has none. TinyCloud One
-   * calls it after a sign-in and from its `finish-setup=registry` link. The owner's wallet or
-   * OpenKey signature prompt is the consent: one signature, only when a record is missing.
+   * Publish the owner's registry location record when the registry has none. The host app
+   * calls it, for example from TinyCloud One's `finish-setup=registry` link. The owner's
+   * wallet or OpenKey signature prompt is the consent: one signature, only when a record is
+   * missing.
    *
-   * Only TinyCloud One and Home can publish; OpenKey refuses to sign a registry record
-   * for any other origin. On any other host, or when OpenKey refuses, an owner who has no
+   * Only TinyCloud One and Home publish; elsewhere the SDK asks for no signature. On any
+   * other host, or when OpenKey refuses, an owner who has no
    * record gets `"needs-one"`: send them to `AccountSetupRequiredError.setupUrl`
    * (`https://tinycloud.one/?finish-setup=registry`) and have them sign in to the app
    * again. A record is only ever created, never overwritten.
@@ -1549,9 +1550,10 @@ export class TinyCloudWeb {
     const subject = node.did;
     if (!subject.startsWith("did:pkh:")) return "already-current";
     // Capture the sign-out generation and the owner address at entry. The helper calls
-    // `assertCurrent()` after every await; a sign-out or account switch during the flow
-    // throws before the registry PUT, so a stale call can never sign a record with the
-    // old account's key.
+    // `assertCurrent()` after each of its awaits and last in `onPrepared`, before the
+    // signature prompt. A sign-out or account switch by then throws: nothing is signed or
+    // PUT, and the call returns "unavailable". One during the signature prompt or the PUT
+    // is not stopped; the PUT goes ahead and the check after it returns "unavailable".
     const signOutsAtEntry = this.signOutCount;
     const addressAtEntry = session.address;
     const assertCurrent = () => {

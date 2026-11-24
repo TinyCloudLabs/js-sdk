@@ -27,8 +27,10 @@ import { publishLocationRecordV2 } from "@tinycloud/sdk-core/registry-publicatio
 import type { TinyCloudNode } from "@tinycloud/node-sdk";
 
 /**
- * Origins that may publish the owner's record. OpenKey refuses a registry-record
- * signature for any other origin, so the SDK does not ask.
+ * Origins that may publish the owner's record: TinyCloud One and Home. OpenKey's
+ * registry-record allowlist also signs for secrets.tinycloud.xyz and share.tinycloud.xyz,
+ * but the SDK publishes only from these two and returns `"needs-one"` elsewhere without
+ * asking for a signature.
  */
 export const REGISTRY_PUBLISH_ORIGINS: readonly string[] = [
   "https://tinycloud.one",

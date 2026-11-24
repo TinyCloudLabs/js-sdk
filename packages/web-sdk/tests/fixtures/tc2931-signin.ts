@@ -22,6 +22,8 @@ for (const config of [
   { name: "third-party cannot opt in", origin: "https://notes.example", rows: 1, autoBootstrapAccount: true, includeAccountRegistryPermissions: true },
   { name: "domain override cannot opt in", origin: "https://notes.example", rows: 1, domain: "home.tinycloud.xyz" },
   { name: "first-party unchanged", origin: "https://home.tinycloud.xyz", rows: 8 },
+  { name: "Explorer can sign in without a registry record", origin: "https://explorer.tinycloud.xyz", rows: 8, registered: false },
+  { name: "Explorer lookalike cannot opt in", origin: "https://explorer.tinycloud.xyz.evil.example", autoBootstrapAccount: true, includeAccountRegistryPermissions: true, domain: "explorer.tinycloud.xyz", error: "ACCOUNT_SETUP_REQUIRED", registered: false },
   { name: "first-party explicit opt out", origin: "https://home.tinycloud.xyz", rows: 1, autoBootstrapAccount: false, includeAccountRegistryPermissions: true },
   { name: "direct node explicit opt out", origin: "https://home.tinycloud.xyz", rows: 1, directNode: true, autoBootstrapAccount: false, includeAccountRegistryPermissions: true },
   { name: "unregistered without a fallback needs setup", origin: "https://notes.example", error: "ACCOUNT_SETUP_REQUIRED", registered: false, noHost: true },
