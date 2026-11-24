@@ -37,8 +37,9 @@ permissions:
   packages: read
 
 env:
-  # tinycloud-node 1.26.21, the first release with per-secret keys (encryption-named-keys-v1), pinned by digest (TC-3801).
-  TINYCLOUD_NODE_IMAGE: ghcr.io/tinycloudlabs/tinycloud-node:1.26.21@sha256:fc9fd4efa884be75d05fe61dd55ffa6559a48df824647ce8c10739c7553afc26
+  # tinycloud-node 1.26.22, pinned by digest: per-secret keys (encryption-named-keys-v1, since 1.26.21, TC-3801)
+  # and the signed delegationMode field (TC-3810).
+  TINYCLOUD_NODE_IMAGE: ghcr.io/tinycloudlabs/tinycloud-node:1.26.22@sha256:03ea20ea9136b47cf6cf1f6b05ebae262dadda297d23d568c98fccf9c86f0c62
   # tinycloud-node v1.20.6, the last release without per-secret keys (encryption-named-keys-v1), pinned by digest.
   # Only the legacy-node-e2e job runs it: secrets against a node that cannot parent a grant on a secret's own key (TC-3801).
   TINYCLOUD_LEGACY_NODE_IMAGE: ghcr.io/tinycloudlabs/tinycloud-node:1.20.6@sha256:41667d3d133aaa12290a2f3a744afacd838988327552d159c60f04466e66f86f
