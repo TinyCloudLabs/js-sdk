@@ -95,6 +95,7 @@ import {
   type IStorageService,
 } from "@tinycloud/sdk-core";
 import { routingFailure } from "@tinycloud/sdk-services";
+import type { RegistryPublishOutcome } from "../registry-publish";
 import { closeActiveModal, showPermissionRequestModal } from "../notifications/lazy-prompts";
 import { applyLegacyNotificationKeys } from "../notifications/legacy-config";
 import {
@@ -317,6 +318,13 @@ export interface Config extends ClientConfig {
   shareReceiver?: ShareReceiverServiceOptions;
   /** Floating button, panel, and toasts. `false` creates no host, button, toasts, or listeners. See {@link UiConfig}. */
   ui?: UiConfig | false;
+
+  /**
+   * Notified on every error from {@link TinyCloudWeb.ensureOwnerRegistryRecord} (verdict
+   * lookup, signer resolution, registry 4xx/5xx). Hosts can fold it into their own
+   * telemetry. The method's return value carries the outcome.
+   */
+  onRegistryPublishError?: (error: unknown) => void;
 }
 
 /**
@@ -1514,6 +1522,99 @@ export class TinyCloudWeb {
       ...(warnings === undefined ? {} : { warnings }),
     };
   };
+
+  /**
+   * Publish the owner's registry location record when the registry has none. The host app
+   * calls it, for example from TinyCloud One's `finish-setup=registry` link. The owner's
+   * wallet or OpenKey signature prompt is the consent: one signature, only when a record is
+   * missing.
+   *
+   * Only TinyCloud One and Home publish; elsewhere the SDK asks for no signature. On any
+   * other host, or when OpenKey refuses, an owner who has no
+   * record gets `"needs-one"`: send them to `AccountSetupRequiredError.setupUrl`
+   * (`https://tinycloud.one/?finish-setup=registry`) and have them sign in to the app
+   * again. A record is only ever created, never overwritten.
+   *
+   * On TinyCloud One or Home, the page that reads the `finish-setup=registry` intent must
+   * set `frame-ancestors 'self'` (or equivalent) so no outside origin can clickjack the
+   * tap, and must strip the query with `history.replaceState` after reading it so a reload
+   * or shared link does not keep reopening the prompt.
+   *
+   * Returns `"published"`, `"already-current"`, `"needs-one"` or `"unavailable"`.
+   * This method never throws.
+   */
+  async ensureOwnerRegistryRecord(): Promise<RegistryPublishOutcome> {
+    const node = this._node;
+    const session = node?.session;
+    if (!node || !session || !session.address) return "already-current";
+    const subject = node.did;
+    if (!subject.startsWith("did:pkh:")) return "already-current";
+    // Capture the sign-out generation and the owner address at entry. The helper calls
+    // `assertCurrent()` after each of its awaits and last in `onPrepared`, before the
+    // signature prompt. A sign-out or account switch by then throws: nothing is signed or
+    // PUT, and the call returns "unavailable". One during the signature prompt or the PUT
+    // is not stopped; the PUT goes ahead and the check after it returns "unavailable".
+    const signOutsAtEntry = this.signOutCount;
+    const addressAtEntry = session.address;
+    const assertCurrent = () => {
+      if (this.signOutCount !== signOutsAtEntry || this.signOutInFlight > 0) {
+        throw new Error("Session signed out during registry publish; aborting.");
+      }
+      if (this._node?.session?.address !== addressAtEntry) {
+        throw new Error("Owner address changed during registry publish; aborting.");
+      }
+    };
+    const walletSigner = this.walletSigner;
+    const openkey = this.config.openkey;
+    // tcw.ts stays clear of a static import on `@tinycloud/sdk-core`; the OpenKey client wears
+    // the library's OpenKeyAuthorizeTinyCloud type, and the owner-message `signMessage` entry
+    // is structurally present on the hosted client but not visible through that type. The same
+    // intersection-cast pattern is already used at the runtime-signer boundary above.
+    const openkeyMessageClient: (OpenKeyAuthorizeTinyCloud & OpenKeyMessageSigner) | undefined =
+      openkey ? openkey.client as (OpenKeyAuthorizeTinyCloud & OpenKeyMessageSigner) : undefined;
+    const onError = this.config.onRegistryPublishError;
+    try {
+      // The root build pins one chunk, so this import is merged into the root; its bytes are the
+      // tc3891OwnerRegistryRecordRoot TC-858 row. A lazy entry would carry all of sdk-core.
+      const { ensureOwnerRegistryRecord } = await import("../registry-publish");
+      return await ensureOwnerRegistryRecord({
+        node,
+        subject,
+        ...(this.config.tinycloudRegistryUrl !== undefined ? { registryUrl: this.config.tinycloudRegistryUrl } : {}),
+        ...(this.config.registryChainId !== undefined ? { registryChainId: this.config.registryChainId } : {}),
+        ...(this.config.registrySequenceStore ? { registrySequenceStore: this.config.registrySequenceStore } : {}),
+        ...(this.config.registryCacheStore ? { registryCacheStore: this.config.registryCacheStore } : {}),
+        origin: typeof window === "undefined" ? undefined : window.location?.origin,
+        ...(onError ? { onError } : {}),
+        assertCurrent,
+        resolveSigner: async () => {
+          if (walletSigner) {
+            return {
+              subject,
+              signMessage: (message) => walletSigner.signMessage(message),
+            };
+          }
+          if (openkeyMessageClient && typeof openkeyMessageClient.signMessage === "function") {
+            const account = node.address;
+            if (!account) return undefined;
+            const mode = openkey?.mode ?? "popup";
+            const keyId = await resolveOpenKeySigningKey(openkeyMessageClient, account, mode, assertCurrent);
+            return {
+              subject,
+              signMessage: async (message) => {
+                const { signature } = await openkeyMessageClient.signMessage!({ message, keyId }, { mode });
+                return signature;
+              },
+            };
+          }
+          return undefined;
+        },
+      });
+    } catch (error) {
+      onError?.(error);
+      return "unavailable";
+    }
+  }
 
   /**
    * Sign out: end the session on this instance and clear the persisted
