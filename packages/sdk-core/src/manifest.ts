@@ -17,8 +17,8 @@
 
 import ms from "ms";
 import { ACCOUNT_MANIFEST_PERMISSIONS } from "@tinycloud/bootstrap";
-import { resolveSecretPath, SECRET_NAME_RE, parseNetworkId } from "@tinycloud/sdk-services";
-import { parseEncryptionResource } from "@tinycloud/sdk-services/encryption/resource";
+import { isReservedSecretSpaceKeyPath, resolveSecretPath, SECRET_NAME_RE, parseNetworkId, parseSecretCatalogKey } from "@tinycloud/sdk-services";
+import { formatKeyResource, parseEncryptionResource } from "@tinycloud/sdk-services/encryption/resource";
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -126,7 +126,7 @@ export interface Manifest {
   icon?: string;
   /** App version string. Optional. */
   appVersion?: string;
-  /** Default expiry for permissions. ms-format ("30d", "2h", "1y"). Default "30d". */
+  /** Default expiry for permissions. ms-format ("7d", "2h", "1y"). Default "7d". */
   expiry?: string;
   /** Space name or full space URI. Optional, defaults to "applications". */
   space?: string;
@@ -187,7 +187,7 @@ export interface ResolvedDelegate {
   did: string;
   /** Informational display name. Optional. */
   name?: string;
-  /** Expiry in milliseconds (per-delegation > manifest default > 30 days). */
+  /** Expiry in milliseconds (per-delegation > manifest default > 7 days). */
   expiryMs: number;
   /** Fully resolved permissions. */
   permissions: ResourceCapability[];
@@ -256,20 +256,85 @@ export class ManifestValidationError extends Error {
   }
 }
 
+/**
+ * The token an app writes in `permissions[].path` of a manifest it publishes at
+ * `/.well-known/openkey-manifest.json` where the path carries the signed-in
+ * owner, for example `urn:tinycloud:encryption:{owner}:default`. The digest OpenKey
+ * checks covers the manifest with the token in place; the SDK replaces it with the
+ * owner's `did:pkh:eip155:<chain>:<EIP-55 address>` only when it composes the request.
+ */
+export const MANIFEST_OWNER_PLACEHOLDER = "{owner}";
+
+/** Where the token sits when it is in a place that is not a path (a string value or an object key), else undefined. */
+function ownerTokenPlace(value: unknown): string | undefined {
+  if (typeof value === "string") {
+    return value.includes(MANIFEST_OWNER_PLACEHOLDER) ? "a string value" : undefined;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const found = ownerTokenPlace(item);
+      if (found !== undefined) return found;
+    }
+    return undefined;
+  }
+  if (value !== null && typeof value === "object") {
+    for (const [key, item] of Object.entries(value)) {
+      if (key.includes(MANIFEST_OWNER_PLACEHOLDER)) return "an object key";
+      const found = ownerTokenPlace(item);
+      if (found !== undefined) return found;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * True when the manifest holds {@link MANIFEST_OWNER_PLACEHOLDER} anywhere: in a path, a
+ * value or an object key. {@link resolveManifestOwner} then decides whether the place is allowed.
+ */
+export function manifestUsesOwnerPlaceholder(manifest: Manifest): boolean {
+  return JSON.stringify(manifest).includes(MANIFEST_OWNER_PLACEHOLDER);
+}
+
+/**
+ * The manifest with {@link MANIFEST_OWNER_PLACEHOLDER} replaced by `ownerDid` in every
+ * `permissions[].path`. A manifest without the token comes back as the same object.
+ * The token anywhere else (another value, an object key, an additional delegate's
+ * permissions) throws: OpenKey refuses such a manifest too, so the sign-in fails here, early.
+ */
+export function resolveManifestOwner(manifest: Manifest, ownerDid: string): Manifest {
+  const { permissions, ...rest } = manifest;
+  const elsewhere = ownerTokenPlace(rest);
+  if (elsewhere !== undefined) {
+    throw new ManifestValidationError(`${MANIFEST_OWNER_PLACEHOLDER} is only allowed in permissions[].path, found in ${elsewhere}`);
+  }
+  if (permissions === undefined) return manifest;
+  for (const entry of permissions) {
+    const found = ownerTokenPlace({ ...entry, path: "" });
+    if (found !== undefined) {
+      throw new ManifestValidationError(`${MANIFEST_OWNER_PLACEHOLDER} is only allowed in permissions[].path, found in ${found}`);
+    }
+  }
+  if (!permissions.some((entry) => entry.path.includes(MANIFEST_OWNER_PLACEHOLDER))) return manifest;
+  return {
+    ...manifest,
+    permissions: permissions.map((entry) => ({ ...entry, path: entry.path.split(MANIFEST_OWNER_PLACEHOLDER).join(ownerDid) })),
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
 
 /**
  * Default expiry when neither the manifest, delegation, nor permission
- * specifies one. APP tier — see `expiry.ts`. Spec: 30 days.
+ * specifies one. APP tier — see `expiry.ts`. 7 days.
  *
  * Kept as an ms-format string because the manifest schema stores expiry
  * as a string and the parser is shared between this default and
  * caller-provided values; converting `EXPIRY.APP_MS` back to a string
- * here would duplicate that same `30d` literal in another form.
+ * here would duplicate that same `7d` literal in another form.
  */
-export const DEFAULT_EXPIRY = "30d";
+export const DEFAULT_EXPIRY = "7d";
 
 /**
  * Default `defaults` value when the manifest omits it. Spec: standard tier.
@@ -496,7 +561,8 @@ export function expandPermissionEntry(entry: PermissionEntry): PermissionEntry[]
  * Expand a `tinycloud.encryption` manifest entry.
  *
  * - `path` MUST be a networkId URN (`urn:tinycloud:encryption:...`),
- *   except the default network's `share/` decrypt prefix.
+ *   except the default network's `share/` decrypt prefix and the exact
+ *   per-secret keys (see {@link expandSecretKeyPermissionEntry}).
  *   The manifest prefix is always skipped — network ids are top-level
  *   owner-scoped resources, not space-scoped paths.
  * - `actions` must be `decrypt`, `network.create`, or `network.revoke`
@@ -520,8 +586,9 @@ function expandEncryptionPermissionEntry(
     );
   }
   const sharePrefix = entry.path.endsWith("/share/");
-  if (entry.path.includes("/") && !sharePrefix) {
-    throw new ManifestValidationError("named keys go in manifest.keys");
+  const slash = entry.path.indexOf("/");
+  if (slash !== -1 && !sharePrefix) {
+    return [expandSecretKeyPermissionEntry(entry, entry.path.slice(0, slash), entry.path.slice(slash + 1))];
   }
   try {
     const network = parseNetworkId(sharePrefix ? entry.path.slice(0, -"/share/".length) : entry.path);
@@ -589,6 +656,73 @@ function expandEncryptionPermissionEntry(
   ];
 }
 
+/** The lower-cased secret name a key path ends in (secret names are at most 64 characters). */
+const SECRET_KEY_NAME_SEGMENT = /^[a-z][a-z0-9_]{0,63}$/;
+
+/**
+ * Whether `keyPath` is the key of exactly one secret: `secrets/<lower NAME>`
+ * or `secrets/scoped/<scope>/<lower NAME>`, the secret's catalog key with its
+ * name lower-cased. A name or scope over 64 characters has no key of its own.
+ */
+export function isSecretKeyPath(keyPath: string): boolean {
+  const segments = keyPath.split("/");
+  const name = segments[segments.length - 1]!;
+  if (segments.length < 2 || segments[0] !== "secrets" || !SECRET_KEY_NAME_SEGMENT.test(name)) return false;
+  if (segments.some((segment) => segment.length > 64)) return false;
+  return parseSecretCatalogKey([...segments.slice(1, -1), name.toUpperCase()].join("/")) !== undefined;
+}
+
+/**
+ * Expand decrypt and/or key.create on exactly one secret's key or the reserved
+ * bot-history key on the owner's `default` network. Every other named key or
+ * prefix is refused. The resource uses the owner's EIP-55 spelling required
+ * for a key ID.
+ */
+function expandSecretKeyPermissionEntry(
+  entry: PermissionEntry,
+  networkUrn: string,
+  keyPath: string,
+): PermissionEntry {
+  if (!isReservedSecretSpaceKeyPath(keyPath) && !isSecretKeyPath(keyPath)) {
+    if (keyPath === "secrets" || keyPath.startsWith("secrets/")) {
+      throw new ManifestValidationError(
+        "secret keys must be exact: secrets/<name> or secrets/scoped/<scope>/<name>, with the name in lower case",
+      );
+    }
+    throw new ManifestValidationError("named keys go in manifest.keys");
+  }
+  let resource: string;
+  try {
+    const network = parseEncryptionResource(networkUrn);
+    if (network.kind !== "network" || network.network !== "default") throw new Error("not the default network");
+    resource = formatKeyResource(network.networkId, keyPath);
+  } catch {
+    throw new ManifestValidationError("secret key entries require the owner's default network");
+  }
+  const actions: string[] = [];
+  for (const action of entry.actions) {
+    const full = action.startsWith("tinycloud.encryption/") ? action : `tinycloud.encryption/${action}`;
+    if (full !== "tinycloud.encryption/decrypt" && full !== "tinycloud.encryption/key.create") {
+      throw new ManifestValidationError(
+        `unknown secret key action ${JSON.stringify(action)}; expected decrypt or key.create`,
+      );
+    }
+    if (!actions.includes(full)) actions.push(full);
+  }
+  if (actions.length === 0) {
+    throw new ManifestValidationError("secret key entries need decrypt or key.create");
+  }
+  return {
+    service: ENCRYPTION_PERMISSION_SERVICE,
+    space: ENCRYPTION_MANIFEST_SPACE,
+    path: resource,
+    actions,
+    skipPrefix: true,
+    ...(entry.expiry !== undefined ? { expiry: entry.expiry } : {}),
+    ...(entry.description !== undefined ? { description: entry.description } : {}),
+  };
+}
+
 /**
  * Expand a list of permission entries using {@link expandPermissionEntry}.
  */
@@ -616,6 +750,13 @@ export function expandDelegationPermissionEntries(
     if (resource.kind !== "key" || !Array.isArray(entry.actions) || entry.actions.length === 0 ||
       entry.actions.some((action) => action !== "decrypt" && action !== "tinycloud.encryption/decrypt")) {
       throw new ManifestValidationError("named-key delegation requires an exact key and decrypt only");
+    }
+    // Under `secrets`, only one secret's own key: never the bare `secrets` key,
+    // which screens read as every secret (TC-3801).
+    if ((resource.path === "secrets" || resource.path.startsWith("secrets/")) && !isSecretKeyPath(resource.path)) {
+      throw new ManifestValidationError(
+        "secret keys must be exact: secrets/<name> or secrets/scoped/<scope>/<name>, with the name in lower case",
+      );
     }
     return [{
       ...entry,

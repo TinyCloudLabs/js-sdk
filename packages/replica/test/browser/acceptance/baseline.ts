@@ -22,6 +22,15 @@ const api = {
       autoCreateSpace: true,
       persistSession: true,
       sessionStorageKeyPrefix: "tc858-acceptance",
+      // The same manifest the replication page declares for the flag-off scenario's "notes/" prefix.
+      manifest: {
+        app_id: "tc858-acceptance",
+        name: "TC-858 acceptance",
+        defaults: false,
+        includePublicSpace: false,
+        prefix: "",
+        permissions: [{ service: "tinycloud.kv", space: "default", path: "notes/", actions: ["get", "put", "del", "list", "metadata"] }],
+      },
     });
   },
   async signIn(): Promise<{ address: string }> {

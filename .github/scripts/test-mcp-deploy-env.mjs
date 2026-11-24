@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { realpathSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -33,6 +33,7 @@ const fixture = {
   TC_MCP_INTROSPECTION_CLIENT_ID: "client id #= unchanged",
   TC_MCP_INTROSPECTION_CLIENT_SECRET: `${"b".repeat(24)}'${"c".repeat(18)} # \"`,
   TC_MCP_NATIVE_SERVICE_CREDENTIAL: `${"d".repeat(20)}'${"e".repeat(18)} `,
+  BETTERSTACK_SOURCE_TOKEN: "t".repeat(24),
   CERTBOT_EMAIL: "ops@tinycloud.xyz",
 };
 
@@ -47,9 +48,16 @@ const written = run("bash", ["-c", writerScript], env);
 if (written.status !== 0) fail("The complete MCP deploy environment file writer is not implemented.");
 const envFile = written.stdout.trim().split("\n").at(-1);
 if (!envFile || !envFile.startsWith(envDir)) fail("The complete deploy environment file was not created under RUNNER_TEMP.");
+const omitted = run("bash", ["-c", writerScript], { ...env, BETTERSTACK_SOURCE_TOKEN: "" });
+if (omitted.status !== 0) fail("A missing optional log shipping token blocked the deploy environment file.");
+const omittedFile = omitted.stdout.trim().split("\n").at(-1);
+if ((await readFile(omittedFile, "utf8")).includes("BETTERSTACK_SOURCE_TOKEN")) fail("A missing log shipping token was written to the environment file.");
+await rm(omittedFile, { force: true });
 let mergeAllowedEnvKeys;
+let missingRequiredEnvKeys;
+let extraEnvKeys;
 try {
-  ({ mergeAllowedEnvKeys } = await import("./mcp-sync-allowed-envs.mjs"));
+  ({ mergeAllowedEnvKeys, missingRequiredEnvKeys, extraEnvKeys } = await import("./mcp-sync-allowed-envs.mjs"));
 } catch {
   fail("The MCP allowed_envs synchronization helper is not implemented.");
 }
@@ -59,6 +67,11 @@ const nextAllowed = mergeAllowedEnvKeys(currentAllowed, deployKeys);
 const expectedAllowed = [...new Set([...currentAllowed, ...deployKeys])];
 if (JSON.stringify(nextAllowed) !== JSON.stringify(expectedAllowed)) {
   fail("Allowed-env merge did not preserve existing names and add each deploy key once.");
+}
+const withoutToken = Object.keys(fixture).filter((key) => key !== "BETTERSTACK_SOURCE_TOKEN");
+if (missingRequiredEnvKeys(withoutToken).length !== 0) fail("The allowlist sync helper required the optional log shipping token.");
+if (missingRequiredEnvKeys(withoutToken.filter((key) => key !== "CERTBOT_EMAIL")).join(",") !== "CERTBOT_EMAIL") {
+  fail("The allowlist sync helper did not report a missing required key.");
 }
 const withheldKey = "test-value-must-not-be-logged";
 const missingSyncConfig = run("node", [join(root, ".github/scripts/mcp-sync-allowed-envs.mjs")], {
@@ -70,6 +83,16 @@ if (missingSyncConfig.status === 0 || !missingSyncConfig.stderr.includes("MCP al
   fail("The allowlist sync helper did not fail closed when required configuration was missing.");
 }
 if (missingSyncConfig.stderr.includes(withheldKey)) fail("The allowlist sync helper exposed a credential in its error output.");
+// Names the CVM allowlist holds that no deploy key covers. The optional token name is a deploy key, with or without it.
+if (extraEnvKeys(deployKeys).length !== 0 || extraEnvKeys(withoutToken).length !== 0) {
+  fail("The extra-name check reported a deploy key as unexpected.");
+}
+if (extraEnvKeys([...deployKeys, "ZED_UNEXPECTED", "ALPHA_UNEXPECTED", "ALPHA_UNEXPECTED"]).join(",") !== "ALPHA_UNEXPECTED,ZED_UNEXPECTED") {
+  fail("The extra-name check did not report each unexpected name once, in order.");
+}
+if (extraEnvKeys([...deployKeys, "has space=value", "x\ny", 42]).join(",") !== "<not an environment name>") {
+  fail("The extra-name check echoed an entry that is not an environment name.");
+}
 
 const bin = process.env.PHALA_BIN ?? "phala";
 const version = run(bin, ["--version"]);
@@ -85,6 +108,54 @@ const { x25519 } = await import(pathToFileURL(noblePath).href);
 const receiverSecret = Uint8Array.from({ length: 32 }, (_, index) => index + 1);
 const receiverPublic = x25519.getPublicKey(receiverSecret);
 const apiPrefix = "http://phala-test.invalid/api/v1";
+
+// The check mode of the helper, run from a copy beside the pinned tools (as the workflow does) against a stub of the
+// compose endpoint. Only the extra names may be printed: never the compose text, a response body or the key.
+const checkToolsDir = join(testRoot, "check-tools");
+await mkdir(checkToolsDir);
+await copyFile(join(root, ".github/scripts/mcp-sync-allowed-envs.mjs"), join(checkToolsDir, "mcp-sync-allowed-envs.mjs"));
+await symlink(resolve(phalaPath.stdout.trim(), "../.."), join(checkToolsDir, "node_modules"));
+const composeShimPath = join(testRoot, "compose-fetch-shim.mjs");
+await writeFile(composeShimPath, `
+const apiPrefix = new URL(process.env.PHALA_CLOUD_API_PREFIX);
+globalThis.fetch = async (input) => {
+  const url = new URL(typeof input === "string" ? input : input.url);
+  if (url.origin !== apiPrefix.origin || url.pathname !== \`\${apiPrefix.pathname}/cvms/test-cvm/compose_file\`) {
+    throw new Error("Phala test attempted an unexpected request");
+  }
+  const status = Number(process.env.COMPOSE_STATUS);
+  const body = status === 200
+    ? { docker_compose_file: "compose-text-must-not-be-logged", ...JSON.parse(process.env.COMPOSE_FIELDS) }
+    : { error: "body-must-not-be-logged" };
+  return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+};
+`);
+const checkExtras = (status, fields = {}) => run("node", [join(checkToolsDir, "mcp-sync-allowed-envs.mjs"), "check-extras"], {
+  PHALA_CLOUD_API_KEY: "test-only-key-must-not-be-logged",
+  PHALA_CVM_ID: "test-cvm",
+  PHALA_CLOUD_API_PREFIX: apiPrefix,
+  COMPOSE_STATUS: String(status),
+  COMPOSE_FIELDS: JSON.stringify(fields),
+  NODE_OPTIONS: [process.env.NODE_OPTIONS, `--import=${pathToFileURL(composeShimPath).href}`].filter(Boolean).join(" "),
+});
+const checkLeaks = (result) => ["compose-text-must-not-be-logged", "body-must-not-be-logged", "test-only-key-must-not-be-logged"]
+  .some((text) => result.stdout.includes(text) || result.stderr.includes(text));
+const noExtras = checkExtras(200, { allowed_envs: Object.keys(fixture) });
+if (noExtras.status !== 0 || noExtras.stdout !== "extras: none\n" || checkLeaks(noExtras)) {
+  fail("The extra-name check did not print only 'extras: none' for an allowlist that holds only deploy keys.");
+}
+const oneExtra = checkExtras(200, { allowed_envs: [...withoutToken, "ZED_UNEXPECTED", "ALPHA_UNEXPECTED"] });
+if (oneExtra.status === 0 || oneExtra.stdout !== "extras: ALPHA_UNEXPECTED,ZED_UNEXPECTED\n" || checkLeaks(oneExtra)) {
+  fail("The extra-name check did not stop and print only the unexpected names.");
+}
+const noAllowlist = checkExtras(200, {});
+if (noAllowlist.status === 0 || noAllowlist.stdout !== "" || !noAllowlist.stderr.includes("MCP environment name check failed") || checkLeaks(noAllowlist)) {
+  fail("The extra-name check did not fail closed when the allowlist was missing from the response.");
+}
+const unreadable = checkExtras(401);
+if (unreadable.status === 0 || unreadable.stdout !== "" || !unreadable.stderr.includes("MCP environment name check failed") || checkLeaks(unreadable)) {
+  fail("The extra-name check did not fail closed when the allowlist could not be read.");
+}
 const shimPath = join(testRoot, "phala-fetch-shim.mjs");
 const cvmFixture = {
   id: "test-cvm",

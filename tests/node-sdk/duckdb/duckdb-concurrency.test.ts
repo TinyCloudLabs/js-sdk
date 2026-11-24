@@ -97,20 +97,6 @@ describe("DuckDB Concurrency", () => {
 
   // PART 3: Parallel Batch Operations
   describe("Parallel Batch Operations", () => {
-    test("5 concurrent batch operations all succeed", async () => {
-      const promises = Array.from({ length: 5 }, (_, batchIdx) =>
-        alice.duckdb.batch([
-          { sql: `INSERT INTO ${TABLE} VALUES (${200 + batchIdx * 3}, 'batch_${batchIdx}_0')` },
-          { sql: `INSERT INTO ${TABLE} VALUES (${201 + batchIdx * 3}, 'batch_${batchIdx}_1')` },
-          { sql: `INSERT INTO ${TABLE} VALUES (${202 + batchIdx * 3}, 'batch_${batchIdx}_2')` },
-        ])
-      );
-      const results = await Promise.all(promises);
-      for (const result of results) {
-        expect(result.ok).toBe(true);
-      }
-    }, 30000);
-
     test("all batch results have correct changes counts", async () => {
       const promises = Array.from({ length: 5 }, (_, batchIdx) =>
         alice.duckdb.batch([

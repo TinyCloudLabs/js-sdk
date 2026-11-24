@@ -94,7 +94,7 @@ function fullAccount(options: { grantsSpaceInfo?: boolean; grantsOtherSpaceInfo?
   const recap = [
     { service: "kv", space: SPACE_URI, path: "", actions: ["tinycloud.kv/get", "tinycloud.kv/put"] },
     // Registry sync runs only for a session that can read the account index.
-    { service: "sql", space: `tinycloud:pkh:eip155:1:${ADDRESS}:account`, path: "account", actions: ["tinycloud.sql/read", "tinycloud.sql/write"] },
+    { service: "sql", space: `tinycloud:pkh:eip155:1:${ADDRESS}:account`, path: "account", actions: ["tinycloud.sql/read", "tinycloud.sql/write", "tinycloud.sql/schema"] },
     ...(options.grantsSpaceInfo === false
       ? []
       : [{ service: "space", space: SPACE_URI, path: "", actions: [SPACE_INFO] }]),

@@ -1,5 +1,135 @@
 # @tinycloudlabs/sdk-services
 
+## 3.14.0-beta.20
+
+### Patch Changes
+
+- f2ce056: `courier watch` and `tc courier watch` now use a verified extension of the owner's grant without restarting. Running watchers can renew existing peer access before the original grants expire, without changing what either peer can read.
+
+  Automatic renewal shortens its cooldown when the owner grant limits a peer grant to a short lifetime. Manual renewal and artifact export retain their existing cooldown.
+
+  Overlapping watch checks no longer treat a peer grant that is being renewed as an orphan and revoke it.
+
+  Installing a successor immediately switches the watcher's hook and read checks to the new grant. A refusal from a superseded grant no longer stops access under its successor.
+
+  Watchers retry a rejected invocation once if it was signed before a suspend or cannot establish which grant was refused. Only a refusal of the installed peer grant stops access; a denial of an expired invocation does not mark a peer as revoked.
+
+  After the original owner deadline, Courier confirms a still-signed-live successor by its exact delegation CID when the node's issued listing does not account for renewal. Missing or revoked authority still fails closed.
+
+  After a sibling grant is revoked, Courier also confirms and revokes any live successor that the issued listing incorrectly reports as expired.
+
+  Details: TC-3522
+
+## 3.14.0-beta.19
+
+### Patch Changes
+
+- Updated dependencies [71da2dd]
+  - @tinycloud/bootstrap@2.10.0-beta.1
+
+## 3.14.0-beta.18
+
+### Minor Changes
+
+- 532d5eb: Manifest permissions can name one secret's own key (`urn:tinycloud:encryption:<owner>:default/secrets/<name>`) with `decrypt` or `key.create`. Any `secrets/` prefix is still refused, and so is a key path of more than 64 segments. `--keys` refuses folders under `secrets/`.
+
+  A `secrets:` block in a manifest asks for the network decrypt and for each secret's own key, so secrets not yet migrated stay readable.
+
+  `tc secrets migrate [NAME…] [--scope] [--dry-run]` and `migrateSecrets()` (from `@tinycloud/sdk-services/secrets/migrate`, not the package root) move secrets in the older format onto each secret's own key. A secret moves only after its new copy decrypts to the same bytes and only if nothing wrote it in between; anything else leaves the old copy. A name over 64 characters has no key of its own: it is counted as staying in the older format, and the others still move. The output gives counts only. The command asks the owner twice: once to read the older format, then for exactly the keys of the secrets being moved. `migrateSecrets()` takes an `authorizeKeys(keyPaths)` callback for that second step. A dry run asks only to list and read.
+
+  `tinycloud.secrets.get` reports `SECRET_LEGACY_ENVELOPE` for a secret still in the older format, with the network decrypt to approve.
+
+  With `TC_SECRETS_NAMED_KEY_WRITES=1`, `tc secrets put` asks to save and read that secret and to create and decrypt only its own key, so saving and then reading it takes one approval. Without it, `put` keeps saving in the older format.
+
+  `tc secrets network grant` signs the grant with the owner's wallet, so `tc account delegations revoke <cid>` can end it. It lasts 1 hour unless `--expiry` asks for longer, at most 7 days (longer values are cut to 7 days), and its output gives the grant's `expiresAt`. A profile that signs in through OpenKey is refused with the steps for a wallet key (`TC_PRIVATE_KEY`, or `tc init --key-only` then `tc auth login --method local`).
+
+  `tc auth grant` can now approve an agent's request for one secret's own key. With a local key, the owner's wallet signs a one-use session that holds exactly the requested keys, cuts the grant from it (1 hour unless the request asks for longer, at most 7 days) and ends it; the stored session is unchanged. With an OpenKey owner, the request may carry decrypt on one exact `secrets/<name>` key; a `secrets/` prefix, the whole network and key creation are still refused.
+
+  `tc secrets list` shows a secret whose name or scope is over 64 characters with a note that this version can't read or delete it and which CLI version can (`unreadable` in the JSON output); nothing is hidden. `migrateSecrets()` refuses a vault that cannot move secrets before asking for any key.
+
+  TinyChat's bot-history key and data live under a reserved scope. `tc secrets list`, `delete`, `put`, `migrate`, `request` and `manage` refuse that scope, in any spelling that canonicalises to it, before they sign in or ask; `migrateSecrets()` neither counts nor reseals anything under it; and the `tinycloud.secrets.get` and `tinycloud.secrets.status` operations and Secret Manager links refuse it.
+
+  `tc auth grant` also refuses an agent request that names a key in that reserved scope, in any letter case, for a local-key owner and an OpenKey owner, before it prints the scope, contacts anything, signs or stores a grant.
+
+  Fixed: approving a secret command from an OpenKey owner profile failed with "invalid approval request", because the request carried a local-only `skipPrefix` field. The approval request now leaves it out.
+
+  Details: TC-3802
+
+## 3.14.0-beta.17
+
+### Minor Changes
+
+- 52f7d4c: `keys.encrypt` accepts a caller-verified public key descriptor for a named key and seals to it without contacting the node. The descriptor must match the network and key path. Seeded keys need a descriptor marked active and deletable. The caller verifies its origin and freshness. `descriptor` cannot be used with `ensureKey: true`.
+
+  `BOT_HISTORY_KEY_PATH` is reserved for TinyChat bot history. The `tinychat-bot-history` scope cannot hold secrets. A runtime permission request can grant decrypt or key creation on that exact key, and the web SDK keeps an approved grant for that key across reloads in the same session.
+
+  Details: TC-3823
+
+## 3.14.0-beta.15
+
+### Minor Changes
+
+- 171a7b3: Opted-in writes seal each secret to its own key, `secrets/<name>` (or `secrets/scoped/<scope>/<name>`), so one secret can be shared without the others. The content key is wrapped once, to that key only. Pass `{ namedKey: true }` to SDK `secrets.put`, or set `TC_SECRETS_NAMED_KEY_WRITES=1` for `tc secrets put`. Without opt-in, writes seal to the network key. Node support alone does not change the write format. Readers open both formats with the corresponding grant, including network-wrapped secrets written without AAD. A reader holding only one secret's key gets `legacy_envelope` / `LEGACY_ENVELOPE` for a network-wrapped copy. `secretKeyPath`, `parseSecretKeyPath` and `secretReadPermissions` build the exact key and grant.
+
+  `vault.resealToKey(key, keyPath, { dryRun })` moves one record onto its own key: it seals a new copy, checks it opens to the same bytes, and overwrites only if the record is unchanged (`ifMatch`). Any failure keeps the old copy.
+
+  Upgrading (node-sdk): `secrets.get` and `secrets.getEntry` ask the wallet for missing authority only with `requestPermission: true`. Pass it for a read the user started. Without a live grant on the secret's own key the read is `DECRYPT_DENIED` with `permissionHint` naming that key, and a node refusing that key gives the same code. `namedKeyOnly: true` opens only a copy sealed to the secret's own key. Both are on the new `SecretGetOptions`. `put`, `delete` and `list` ask without the flag.
+
+  web-sdk keeps approved grants for one secret's own key across reloads, like panel grants. In web-sdk, `secrets.get` and `secrets.getEntry` with `requestPermission: true` ask the page's permission prompt for exactly that key on the space's own network, then read once more. That prompt always shows, even after "don't ask for 30 days". A declined or closed prompt returns `PERMISSION_DENIED`, and the next opted-in read shows the prompt. Without the flag they never ask. A node-sdk node restored without a signer reports that it can't ask for authority.
+
+  A runtime grant or a `delegateTo` delegation on a secret's own key (or keys under `secrets`) lasts 1 hour unless an expiry is asked, is capped at 7 days, and ends no later than the session; the returned `delegation.expiry` is the expiry signed. Other `delegateTo` delegations, network-root decrypt included, keep the 7-day default. node-sdk exports the limits as `SECRET_KEY_GRANT_DEFAULT_MS` and `SECRET_KEY_GRANT_MAX_MS`, and `secretKeyGrantExpiryMs(expiry)` applies them. Secret names and scopes are limited to 64 characters (`MAX_SECRET_NAME_LENGTH`, `MAX_SECRET_SCOPE_LENGTH`); a longer one is `INVALID_INPUT`. `resealToKey` throws unless `keyPath` is the record's own secret key.
+
+  `delegateTo` of a secret's key needs that key in the signed session: sign in with an explicit `capabilityRequest` that includes `<network>/secrets/` (decrypt, key.create). The default sign-in does not include it. `delegateTo` refuses any `secrets` path that is not one secret's exact key.
+
+  An opted-in write to a node without `encryption-named-keys-v1` returns `NAMED_KEYS_UNSUPPORTED` (`service: "secrets"`) before any secret permission request, grant or write. An expired session's sign-in may run first. `tc secrets put` exits 11 for that code. Default network-wrapped writes and reads of existing secrets do not require the feature. `NAMED_KEYS_UNSUPPORTED`, `NAMED_KEYS_UNSUPPORTED_MESSAGE` and `namedKeysUnsupportedResult()` are exported from sdk-services and sdk-core, and `TinyCloudNode.namedKeysSupported()` reports the node's answer. A node without the feature receives a sign-in request without per-secret key entries; that request retains its other entries, including bare-network decrypt. Sign-in checks `/info` once before building a request that names secret keys.
+
+  When the node's features can't be checked, an opted-in write returns `NAMED_KEYS_CHECK_FAILED` (`service: "secrets"`, `meta.retryable: true`) before any secret permission request, grant or write. An expired session's sign-in may run first. `tc secrets put` exits 6 for that code. `NAMED_KEYS_CHECK_FAILED`, `NAMED_KEYS_CHECK_FAILED_MESSAGE` and `namedKeysPutRefusal(supported)` are exported from sdk-services and sdk-core.
+
+  Upgrading: a secret stored under a name or scope longer than 64 characters can't be read, written or deleted through `get`, `put` or `delete`. It is not hidden: `listAll()` returns it with `nameTooLong: true` and/or `scopeTooLong: true` (the scope as stored), and `list()` includes its name. A `put` of a name over 64 characters returns `INVALID_INPUT` ("This secret wasn't saved: its name is N characters, and names can be at most 64. Choose a shorter name.") before any secret permission request, grant or write, and `tc secrets put` prints the same words with exit 2. `parseStoredSecretCatalogKey`, `secretNameTooLongMessage` and `secretNameTooLongRefusal(name)` are exported from sdk-services and sdk-core; `parseSecretCatalogKey` returns nothing for such a key. Self-hosted owners who hold such a secret can rename it with the previous CLI first.
+
+  The unscoped secret name `SCOPED` is reserved: its key, `secrets/scoped`, is the parent of every scoped key, so `secretKeyPath`, `resolveSecretPath` and the calls built on them throw `Secret name "SCOPED" is reserved.` and the services return `INVALID_INPUT`. Upgrading: a secret stored under the unscoped name `SCOPED` can't be read, written or deleted through `get`, `put` or `delete`. A secret named `SCOPED` inside a scope is not affected.
+
+  Details: TC-3801
+
+## 3.14.0-beta.14
+
+### Patch Changes
+
+- 979145a: A replica reads a revoked grant from the node's JSON refusal (`{"code": "delegation_revoked", "error": "delegation-revoked: <cid>"}`, sent by nodes 1.25.17 and later) as well as from the plain-text refusal of earlier nodes. A sync or a read under a revoked grant raises `GRANT_REVOKED`, and the replica clears its local copy. `KVService.changes` reports the JSON refusal as `AUTH_DELEGATION_REVOKED` or `AUTH_DELEGATION_ANCESTOR_REVOKED`. Only the whole envelope is opened: a body whose code is not a revocation code, or whose `error` is not exactly the node's revocation text, is `GRANT_UNAUTHORIZED` (replica) or `AUTH_UNAUTHORIZED` (`KVService`).
+
+  Details: TC-3947
+
+## 3.14.0-beta.5
+
+### Patch Changes
+
+- Updated dependencies [2cb453f]
+  - @tinycloud/bootstrap@2.10.0-beta.0
+
+## 3.13.0
+
+### Minor Changes
+
+- 0490f71: `feed card-md` prints the owner's card.md (`{text, version, updatedAt}`). When the owner hasn't set one, it prints the default (`{text, version, default: true}`). `feed publish` adds `cardMd: {version}` to its JSON, with `default: true` while it is the default, and `feed publish` and `feed watch` print the text once on stderr when its version differs from the last one this profile saw for that agent. `feed connect` copies the owner's card.md into the new agent's response database, or the default when the owner hasn't set one. An agent connected before card.md existed reads it with the same grant, without reconnecting. `@tinycloud/sdk-services` adds `readFeedCardMd` and an optional `onWake` callback on `listenFeedResponses`, run at the start of every drain.
+
+  Details: TC-3345
+
+- 400cf7f: A secret can carry an optional type: `secret` (the default), `totp`, `username` or `password`. `secrets.put(name, value, { type })` stores the type inside the encrypted secret. The new `secrets.getEntry(name)` returns `{ value, type, createdAt, updatedAt }`; a secret with no stored type, or with a type the client doesn't know, reads as `secret`.
+
+  `secrets.get` is unchanged, and older clients still read typed secrets, since they only need `value`. Storing `secret`, or no type, writes the same payload as before.
+
+  `@tinycloud/sdk-services/secrets/totp` (not exported from the package root) adds `parseTotpSeed` (an `otpauth://totp/` link or a bare base32 seed), `generateTotp` (RFC 6238, SHA1/SHA256/SHA512) and `totpSecondsRemaining`.
+
+  `tinycloud secrets put --type <secret|totp|username|password>` sets the type. For `totp`, the value must be a valid seed: an `otpauth://totp/` link or a bare base32 seed.
+
+  Details: TC-3285
+
+### Patch Changes
+
+- 7399b14: Vault and secrets requests to the production node now go to its dedicated address, including listings of the whole key space. So do grants that name or cover vault data, and sessions that name vault entries. Self-hosted nodes are unchanged.
+
+  Details: TC-2944
+
 ## 3.13.0-beta.8
 
 ### Patch Changes

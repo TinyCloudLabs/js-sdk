@@ -43,7 +43,7 @@ async function exitWithin(child: { exited: Promise<number>; kill(signal?: number
  * One prepared OpenKey login. With `priorHome`, it re-logs into that home's existing profile
  * (and its live session) instead of a fresh one; a failed attempt must leave both unchanged.
  */
-async function preparedLogin(transport: "callback" | "paste", behavior: Behavior = "success", priorHome?: string) {
+async function preparedLogin(transport: "callback" | "paste", behavior: Behavior = "success", priorHome?: string, requestExactKey = false) {
   const home = priorHome ?? await mkdtemp(join(tmpdir(), `tc858-prepared-${transport}-`));
   if (!priorHome) homes.push(home);
   const requests: string[] = [];
@@ -77,6 +77,14 @@ async function preparedLogin(transport: "callback" | "paste", behavior: Behavior
   const tty = behavior === "cancel-tty";
   const signer = new PrivateKeySigner(OWNER_KEY);
   const ownerDid = `did:pkh:eip155:1:${await signer.getAddress()}`;
+  const keyResource = `urn:tinycloud:encryption:${ownerDid}:default/secrets/api_key`;
+  const manifest = join(home, "warning-manifest.json");
+  if (requestExactKey) await writeFile(manifest, JSON.stringify({
+    app_id: "qa", space: "default", permissions: [
+      { service: "tinycloud.kv", path: "notes/", skipPrefix: true, actions: ["get"] },
+      { service: "tinycloud.encryption", path: keyResource, actions: ["decrypt"] },
+    ],
+  }));
   const directory = await withTinyCloudStateRoot(home, async () => {
     if (!priorHome) {
       await writeJsonAtomic(profileConfigPath(PROFILE), {
@@ -106,6 +114,7 @@ async function preparedLogin(transport: "callback" | "paste", behavior: Behavior
     "--quiet", "--json", "--profile", PROFILE,
     "auth", "login", "--method", "openkey", "--replication-prefix", "notes/", "--owner", ownerDid,
     ...(priorHome ? ["--replace-session"] : []),
+    ...(requestExactKey ? ["--manifest", manifest] : []),
     ...(transport === "paste" ? ["--paste"] : ["--no-popup"])];
   // `script` gives the CLI a real terminal, so Ctrl-C reaches readline as a keypress.
   const child = Bun.spawn(tty ? ["script", "-qefc", argv.map((arg) => `'${arg}'`).join(" "), "/dev/null"] : argv, {
@@ -214,7 +223,13 @@ async function preparedLogin(transport: "callback" | "paste", behavior: Behavior
     child.stdin.end();
   }
   const [stdout, exitCode] = await Promise.all([new Response(child.stdout).text(), exitWithin(child, 15_000)]);
-  await reader.cancel().catch(() => undefined);
+  if (requestExactKey) {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      stderr += new TextDecoder().decode(value);
+    }
+  } else await reader.cancel().catch(() => undefined);
   if (behavior === "invalid-signature" || behavior === "commit-failure") {
     expect(exitCode).not.toBe(0);
     expect(exitCode).not.toBe("timeout");
@@ -244,6 +259,16 @@ async function preparedLogin(transport: "callback" | "paste", behavior: Behavior
   expect(storedProfile.sessionDid).toBe(payload.request.sessionDid);
   expect(storedProfile.replication.prefixes).toEqual(["notes/"]);
   expect(JSON.parse(stdout).authenticated).toBe(true);
+  if (requestExactKey) {
+    const output = JSON.parse(stdout);
+    expect(output.declined).toEqual([]);
+    expect(output.warnings).toEqual([{
+      code: "NODE_FEATURE_UNAVAILABLE", feature: "encryption-named-keys-v1", resources: [keyResource],
+    }]);
+    expect(stderr).toContain("This node does not advertise encryption-named-keys-v1");
+    expect(stderr).toContain(keyResource);
+    expect(Object.hasOwn(extractRecapAttenuations(payload.request.siwe), keyResource)).toBe(false);
+  }
   expect(requests).toContain("/delegate");
   // The prepared session holds no account-space authority, so registry sync
   // must not even try it (TC-1287: a deterministic 401 per login).
@@ -253,6 +278,7 @@ async function preparedLogin(transport: "callback" | "paste", behavior: Behavior
 
 test("prepared OpenKey callback ACK follows verified SDK sign-in and durable stamped CLI commit", () => preparedLogin("callback"), 30_000);
 test("prepared OpenKey paste accepts the same signed envelope and persists verified stamp", () => preparedLogin("paste"), 30_000);
+test("prepared CLI sign-in reports exact keys omitted on a legacy node", () => preparedLogin("paste", "success", undefined, true), 30_000);
 test("invalid signed callback receives no ACK and leaves the previous profile and key unchanged", () => preparedLogin("callback", "invalid-signature"), 30_000);
 test("preclaim non-TTY SIGINT cancels the handoff, exits CANCELLED 130 and rejects a late signed callback", () => preparedLogin("callback", "cancel"), 30_000);
 test("preclaim terminal Ctrl-C takes the same cancellation path and exit code", () => preparedLogin("callback", "cancel-tty"), 30_000);

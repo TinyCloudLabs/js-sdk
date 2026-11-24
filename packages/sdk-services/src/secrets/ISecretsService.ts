@@ -2,7 +2,7 @@ import type { IDataVaultService } from "../vault/IDataVaultService";
 import type { VaultError } from "../vault/types";
 import type { Result, ServiceError } from "../types";
 import type { SecretType } from "./secretTypes";
-import type { SecretPutOptions, SecretScopeOptions } from "./paths";
+import type { SecretGetOptions, SecretPutOptions, SecretScopeOptions } from "./paths";
 
 export interface SecretPayload {
   value: string;
@@ -26,6 +26,10 @@ export interface SecretCatalogEntry {
   name: string;
   /** Omitted for the global secret namespace. */
   scope?: string;
+  /** Set when the name is over 64 characters (stored before the limit): listed, but `get`, `put` and `delete` refuse it. */
+  nameTooLong?: true;
+  /** Set when the scope is over 64 characters (stored before the limit): listed under its stored scope, but `get`, `put` and `delete` refuse it. */
+  scopeTooLong?: true;
 }
 
 export type SecretsError = VaultError | ServiceError;
@@ -37,12 +41,12 @@ export interface ISecretsService {
   readonly isUnlocked: boolean;
   get(
     name: string,
-    options?: SecretScopeOptions,
+    options?: SecretGetOptions,
   ): Promise<Result<string, SecretsError>>;
   /** Like `get`, with the secret's type and timestamps. */
   getEntry(
     name: string,
-    options?: SecretScopeOptions,
+    options?: SecretGetOptions,
   ): Promise<Result<SecretEntry, SecretsError>>;
   put(
     name: string,

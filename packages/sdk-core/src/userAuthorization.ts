@@ -5,7 +5,7 @@ import { SignStrategy, ISpaceCreationHandler } from "./authorization";
 // Re-export platform-agnostic types from client-types (canonical definitions)
 export { ClientSession, EnsData, SiweConfig, SiweMessage } from "./client-types";
 
-import type { ClientSession, SiweConfig } from "./client-types";
+import type { ClientSession, ClientSignInResult, SiweConfig } from "./client-types";
 
 /**
  * Interface for an extension to TCW.
@@ -69,7 +69,7 @@ export interface IUserAuthorization {
    * Per-call options override constructor defaults for this sign-in only.
    * @returns The new session
    */
-  signIn(options?: SignInOptions): Promise<ClientSession>;
+  signIn(options?: SignInOptions): Promise<ClientSignInResult>;
 
   /**
    * Sign out and clear the current session.

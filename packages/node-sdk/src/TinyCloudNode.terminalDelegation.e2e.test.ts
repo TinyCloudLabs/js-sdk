@@ -8,6 +8,7 @@ import { NodeWasmBindings } from "./NodeWasmBindings";
 import { PrivateKeySigner } from "./signers/PrivateKeySigner";
 import "./replication/node-loader";
 import { TinyCloudNode } from "./TinyCloudNode";
+import { ownerFullAccess } from "@tinycloud/sdk-core";
 import { startUnregisteredLocationRegistry, type UnregisteredLocationRegistry } from "./test-support/unregistered-location-registry";
 
 const nodeBinary = process.env.TC_TERMINAL_DELEGATION_E2E_NODE_BIN;
@@ -139,6 +140,7 @@ describe.skipIf(!nodeBinary)(
         autoCreateSpace: true,
         autoBootstrapAccount: false,
         enablePublicSpace: false,
+        ...ownerFullAccess(),
       });
       await owner.signIn();
       return owner;

@@ -1,17 +1,21 @@
 import type { TinyCloudNode } from '@tinycloud/node-sdk';
-import { CourierError, errInfo, isAuthorizationRefusal, isNotFoundError } from './errors.js';
+import { CourierError, errInfo, isAuthorizationRefusal, isInvocationTimeRefusal, isNotFoundError, refusedInvocationCid } from './errors.js';
 import { cmd } from './program.js';
 import { stateKeys } from './keys.js';
 import { oneLine } from './a2a.js';
-import { loadGrant, loadProfile, withProfileTransaction } from './profile.js';
+import { loadGrant, loadProfile, saveProfile, withProfileLock, withProfileTransaction } from './profile.js';
 import type { StoredPeer } from './profile.js';
 import { courierNode, peerKv } from './node.js';
 import { clearLocalCaches } from './thread.js';
 import { maintainOutbound } from './interim-renewal.js';
-import { markOwnerRefused, preflightOwner } from './interim-owner.js';
+import { markOwnerRefused, preflightOwner, type OwnerPreflight } from './interim-owner.js';
 
-export async function prepareOwnerAccess(request = false) {
-  const result = await preflightOwner({ request });
+function ownerAuthorityRefused(): CourierError {
+  return new CourierError('owner-authority-refused', `Courier's access was refused, so automatic renewal has stopped. Run \`${cmd('init --request')}\` to request new approval.`);
+}
+
+function requireOwnerAccess(result: OwnerPreflight) {
+  if (result.state === 'authority-inactive') throw ownerAuthorityRefused();
   if (result.state === 'revoked') throw new CourierError('owner-revoked', `Courier access was revoked. Run \`${cmd('init --request')}\` to request new approval.`);
   if (result.state === 'approval-required') {
     throw new CourierError('approval-required', result.approvalUrl
@@ -24,19 +28,35 @@ export async function prepareOwnerAccess(request = false) {
   return result;
 }
 
+export async function prepareOwnerAccess(request = false) {
+  return requireOwnerAccess(await preflightOwner({ request }));
+}
+
+// A marker hook can check the same peer while housekeeping is between activation and
+// receipt. Take a fresh profile snapshot after the previous outbound check finishes.
+const outboundChecks = new Map<string, Promise<void>>();
+function checkOutboundInOrder(handle: string, check: () => Promise<void>): Promise<void> {
+  const prior = outboundChecks.get(handle);
+  const pending = prior ? prior.then(check, check) : check();
+  outboundChecks.set(handle, pending);
+  return pending.finally(() => {
+    if (outboundChecks.get(handle) === pending) outboundChecks.delete(handle);
+  });
+}
+
 /**
  * Explicit and automatic paths use the same profile transaction and the same issuance policy. `strict` (the watcher,
  * before acting for `target`): unless that peer's check gave a positive verdict (our grant live or just renewed, and,
  * with `collect`, its grant to us readable), throw `authority-unverified` so the action fails closed and stays queued.
  * A peer that is no longer eligible is not an error: the caller drops its work.
  */
-export async function maintainPeerSet(node: TinyCloudNode, target?: string, collect = false, strict = false): Promise<void> {
+export async function maintainPeerSet(node: TinyCloudNode, target?: string, collect = false, strict = false, onRenewed?: (peer: StoredPeer) => void): Promise<void> {
   const handles = Object.values(loadProfile().peers).filter(peer => peer.status === 'paired' && (!target || peer.handle === target)).map(peer => peer.handle);
   let canRequestApproval = true;
   const verdicts = new Map<string, string>();
   for (const handle of handles) {
     try {
-      await withProfileTransaction(async (profile, save) => {
+      const checkOutbound = () => checkOutboundInOrder(handle, () => withProfileTransaction(async (profile, save) => {
         const peer = profile.peers[handle];
         if (!peer || !watchPeerEligible(peer)) { verdicts.set(handle, 'ineligible'); return; }
         if (node.credentialHolderDid !== profile.courierDid) { canRequestApproval = false; verdicts.set(handle, 'holder-mismatch'); return; }
@@ -53,6 +73,11 @@ export async function maintainPeerSet(node: TinyCloudNode, target?: string, coll
             }
           } else if (peer.interim?.unavailableAt) { delete peer.interim.unavailableAt; save(); }
         } catch (error) {
+          if (isInvocationTimeRefusal(error)) {
+            canRequestApproval = false;
+            verdicts.set(handle, 'error: authority-unverified');
+            return; // No outbound verdict; do not record a refusal or change an existing marker.
+          }
           if (isAuthorizationRefusal(error) || (error instanceof CourierError && error.code === 'owner-authority-refused')) throw error;
           canRequestApproval = false;
           verdicts.set(handle, `error: ${errInfo(error).code ?? 'unknown'}`);
@@ -60,23 +85,46 @@ export async function maintainPeerSet(node: TinyCloudNode, target?: string, coll
           peer.interim.unavailableAt ??= new Date().toISOString();
           profile.version = 4; save();
         }
-      });
+      }));
+      await checkOutbound();
       if (collect) {
-        const current = loadProfile();
-        const peer = current.peers[handle];
-        if (peer && watchPeerEligible(peer)) {
-          try { await peerKv(node, current, peer); }
-          catch (error) {
-            if (isAuthorizationRefusal(error)) { await recordAuthorityRefusal(`peer:${handle}`); verdicts.set(handle, 'ineligible'); }
-            else if (!(error instanceof CourierError)) throw error;
-            else verdicts.set(handle, `error: ${error.code}`);
+        let refreshFrom: string | undefined;
+        let recheckOutbound = false;
+        for (let attempt = 0; attempt < 2; attempt++) {
+          const current = loadProfile();
+          const peer = current.peers[handle];
+          if (!peer || !watchPeerEligible(peer)) { verdicts.set(handle, 'ineligible'); break; }
+          try {
+            await peerKv(node, current, peer, onRenewed ? { onRenewed } : undefined);
+            if (refreshFrom !== undefined && refreshFrom !== peer.inbound?.cid) onRenewed?.(peer);
+            recheckOutbound = attempt !== 0 && !!loadProfile().peers[handle]?.interim?.unavailableAt;
+            break;
+          } catch (error) {
+            if (!isAuthorizationRefusal(error)) {
+              if (!(error instanceof CourierError)) throw error;
+              verdicts.set(handle, `error: ${error.code}`);
+              break;
+            }
+            const refused = refusedInvocationCid(error);
+            if (refused !== undefined && loadProfile().peers[handle]?.inbound?.cid === refused) {
+              await recordAuthorityRefusal(`peer:${handle}`, refused);
+            }
+            const latest = loadProfile().peers[handle];
+            if (!latest || !watchPeerEligible(latest)) { verdicts.set(handle, 'ineligible'); break; }
+            if (attempt === 0 && latest.inbound?.cid !== refused) {
+              refreshFrom = peer.inbound!.cid;
+              continue; // Fresh binding/signature, not a verdict about the peer.
+            }
+            verdicts.set(handle, 'error: authority-unverified');
+            break;
           }
-        } else verdicts.set(handle, 'ineligible');
+        }
+        if (recheckOutbound) await checkOutbound();
       }
     } catch (error) {
       if (isAuthorizationRefusal(error) || (error instanceof CourierError && error.code === 'owner-authority-refused')) {
         await markOwnerRefused();
-        throw new CourierError('owner-authority-refused', `Courier's access was refused, so automatic renewal has stopped. Run \`${cmd('init --request')}\` to request new approval.`);
+        throw ownerAuthorityRefused();
       }
       if (!(error instanceof CourierError)) throw error;
       canRequestApproval = false;
@@ -91,13 +139,16 @@ export async function maintainPeerSet(node: TinyCloudNode, target?: string, coll
     let authenticated = false;
     try {
       // This agent's own watch.json: a read only, and never another agent's state.
-      const read = await node.kv.get(stateKeys(loadProfile().courierDid).watch, { prefix: '' });
+      let read = await node.kv.get(stateKeys(loadProfile().courierDid).watch, { prefix: '' });
+      if (!read.ok && isInvocationTimeRefusal(read.error)) {
+        read = await node.kv.get(stateKeys(loadProfile().courierDid).watch, { prefix: '' });
+      }
       if (!read.ok && !isNotFoundError(read.error)) throw read.error;
       authenticated = true; // A signed, authorized 404 also proves the read was accepted.
     } catch (error) {
-      if (isAuthorizationRefusal(error)) {
+      if (isAuthorizationRefusal(error) && !isInvocationTimeRefusal(error)) {
         await markOwnerRefused();
-        throw new CourierError('owner-authority-refused', `Courier's access was refused, so automatic renewal has stopped. Run \`${cmd('init --request')}\` to request new approval.`);
+        throw ownerAuthorityRefused();
       }
       // Unknown and transient results cannot authorize an automatic request.
     }
@@ -117,16 +168,18 @@ export function watchPeerEligible(peer: StoredPeer, now = Date.now()): boolean {
     && !peer.interim?.latchedAt && !peer.interim?.inboundRefusedAt;
 }
 
-export async function recordAuthorityRefusal(source: string): Promise<void> {
+export async function recordAuthorityRefusal(source: string, inboundCid?: string): Promise<void> {
   clearLocalCaches();
   if (!source.startsWith('peer:')) { await markOwnerRefused(); return; }
-  const handle = source.split(':')[1];
-  await withProfileTransaction(async (profile, save) => {
+  const [, handle] = source.split(':');
+  withProfileLock(() => {
+    const profile = loadProfile();
     const peer = profile.peers[handle];
-    if (!peer) return;
+    // A late refusal from a retired hook or read says nothing about the installed successor.
+    if (!peer || inboundCid === undefined || peer.inbound?.cid !== inboundCid) return;
     peer.interim ??= { cleanup: {} };
     peer.interim.inboundRefusedAt ??= new Date().toISOString();
-    profile.version = 4; save();
+    profile.version = 4; saveProfile(profile);
   });
 }
 
@@ -139,15 +192,19 @@ export async function createRuntimeNode(): Promise<TinyCloudNode> {
   }
 }
 
-/** Local only: owner access state, and a changed owner grant restarts a service so every captured SDK service uses the verified new session. */
-export async function watchOwnerPreflight(node: TinyCloudNode): Promise<void> {
-  await prepareOwnerAccess();
-  if (loadGrant()?.delegationCid !== node.restorableSession?.delegationCid) {
+/** A changed CID still needs a restart; a verified extension of the same grant swaps in the new SDK node. */
+export async function watchOwnerPreflight(node: TinyCloudNode): Promise<TinyCloudNode> {
+  const { node: verified } = requireOwnerAccess(await preflightOwner({ watchSession: true }));
+  const cid = node.restorableSession?.delegationCid;
+  if (loadGrant()?.delegationCid !== cid || (verified && verified.restorableSession?.delegationCid !== cid)) {
     throw new CourierError('owner-grant-changed', `Your approval for Courier changed. Run your \`${cmd('watch')}\` command again to use it.`);
   }
+  const end = node.sessionEnd?.getTime() ?? 0;
+  if (verified && (verified.sessionEnd?.getTime() ?? 0) > end) return verified;
+  if (end <= Date.now()) requireOwnerAccess({ state: 'approval-required' });
+  return node;
 }
 
 export async function watchPreflight(node: TinyCloudNode): Promise<void> {
-  await watchOwnerPreflight(node);
-  await maintainPeerSet(node);
+  await maintainPeerSet(await watchOwnerPreflight(node));
 }

@@ -1,5 +1,246 @@
 # @tinycloud/mcp
 
+## 0.12.0-beta.20
+
+### Patch Changes
+
+- Updated dependencies [03d49fe]
+  - @tinycloud/sdk-core@3.14.0-beta.21
+  - @tinycloud/node-sdk@3.14.0-beta.21
+  - @tinycloud/operations@0.10.0-beta.20
+
+## 0.12.0-beta.19
+
+### Patch Changes
+
+- Updated dependencies [f2ce056]
+- Updated dependencies [f2ce056]
+  - @tinycloud/sdk-core@3.14.0-beta.20
+  - @tinycloud/node-sdk@3.14.0-beta.20
+  - @tinycloud/operations@0.10.0-beta.19
+
+## 0.12.0-beta.18
+
+### Patch Changes
+
+- @tinycloud/sdk-core@3.14.0-beta.19
+- @tinycloud/node-sdk@3.14.0-beta.19
+- @tinycloud/operations@0.10.0-beta.18
+
+## 0.12.0-beta.17
+
+### Patch Changes
+
+- Updated dependencies [60e7682]
+  - @tinycloud/operations@0.10.0-beta.17
+
+## 0.12.0-beta.16
+
+### Patch Changes
+
+- Updated dependencies [532d5eb]
+  - @tinycloud/sdk-core@3.14.0-beta.18
+  - @tinycloud/operations@0.10.0-beta.16
+  - @tinycloud/node-sdk@3.14.0-beta.18
+
+## 0.12.0-beta.15
+
+### Patch Changes
+
+- Updated dependencies [52f7d4c]
+  - @tinycloud/sdk-core@3.14.0-beta.17
+  - @tinycloud/node-sdk@3.14.0-beta.17
+  - @tinycloud/operations@0.9.2-beta.15
+
+## 0.12.0-beta.14
+
+### Patch Changes
+
+- Updated dependencies [9919d97]
+- Updated dependencies [9919d97]
+  - @tinycloud/node-sdk@3.14.0-beta.16
+  - @tinycloud/operations@0.9.2-beta.14
+
+## 0.12.0-beta.13
+
+### Patch Changes
+
+- Updated dependencies [171a7b3]
+  - @tinycloud/sdk-core@3.14.0-beta.15
+  - @tinycloud/node-sdk@3.14.0-beta.15
+  - @tinycloud/operations@0.9.2-beta.13
+
+## 0.12.0-beta.12
+
+### Patch Changes
+
+- @tinycloud/node-sdk@3.14.0-beta.14
+- @tinycloud/operations@0.9.2-beta.12
+- @tinycloud/sdk-core@3.14.0-beta.14
+
+## 0.12.0-beta.11
+
+### Minor Changes
+
+- 3d5cd63: The hosted MCP asks OpenKey for approval with a signed approval request and collects the approved delegation from OpenKey's result API. Opening a `/connect` link creates the request, signed by the tenant's own key, and redirects to its OpenKey link. The server collects the result in the background (every 2 seconds for the first minute, then every 10 seconds) and before each call from that account, stores it once and acknowledges it. A refused approval leaves the same link usable for a new attempt; the refusal is logged as `approval result rejected:` with its stage and code. Results are fetched only from the configured OpenKey API origin, `TC_OPENKEY_API_HOST` (default `https://api.openkey.so` for `https://openkey.so`). `TC_LINKS_API_ORIGIN` sets the links service that holds the request. The `/connect/callback` routes are removed. When OpenKey cannot create the request, the link answers `503` with a page asking the person to try again in a minute.
+
+  Details: TC-3617
+
+- 3d5cd63: The hosted MCP's connection approval asks the owner for a 90-day renewal lease. An approved lease is checked against the signed grant and admitted at the node before the session is stored, and the session keeps it, so the node renews the account grant until the lease ends. A lease that does not match the grant, was issued to a renewer the node replaced or comes with a grant ending within 15 minutes is refused and logged with stage `renewal`; a node that cannot admit the lease yet leaves the approval for the next collection. Past the grant's signed end, a session whose lease has ended or whose renewer changed starts a fresh connection approval, and a node that cannot answer reports the account unavailable.
+
+  Collection waits at most 3 seconds per call in total, reads at most 256 KiB of each OpenKey result reply, recovers a claimed result by the time recorded in the claim, collects for at most 10 minutes after a request ends and opens a new request when a stored one names other OpenKey origins.
+
+  Details: TC-3617
+
+### Patch Changes
+
+- Updated dependencies [3d5cd63]
+  - @tinycloud/sdk-core@3.14.0-beta.13
+  - @tinycloud/node-sdk@3.14.0-beta.13
+  - @tinycloud/operations@0.9.2-beta.11
+
+## 0.11.1-beta.10
+
+### Patch Changes
+
+- Updated dependencies [2790836]
+  - @tinycloud/node-sdk@3.14.0-beta.12
+  - @tinycloud/operations@0.9.2-beta.10
+
+## 0.11.1-beta.9
+
+### Patch Changes
+
+- Updated dependencies [acb3dd2]
+  - @tinycloud/sdk-core@3.14.0-beta.11
+  - @tinycloud/node-sdk@3.14.0-beta.11
+  - @tinycloud/operations@0.9.2-beta.9
+
+## 0.11.1-beta.8
+
+### Patch Changes
+
+- Updated dependencies [778e1e2]
+  - @tinycloud/sdk-core@3.14.0-beta.10
+  - @tinycloud/node-sdk@3.14.0-beta.10
+  - @tinycloud/operations@0.9.2-beta.8
+
+## 0.11.1-beta.7
+
+### Patch Changes
+
+- Updated dependencies [fbdbaa7]
+- Updated dependencies [fbdbaa7]
+  - @tinycloud/node-sdk@3.14.0-beta.8
+  - @tinycloud/sdk-core@3.14.0-beta.8
+  - @tinycloud/operations@0.9.2-beta.7
+
+## 0.11.1-beta.6
+
+### Patch Changes
+
+- Updated dependencies [d382af8]
+- Updated dependencies [d382af8]
+  - @tinycloud/node-sdk@3.14.0-beta.7
+  - @tinycloud/sdk-core@3.14.0-beta.7
+  - @tinycloud/node-sdk-wasm@1.8.0-beta.0
+  - @tinycloud/operations@0.9.2-beta.6
+
+## 0.11.1-beta.5
+
+### Patch Changes
+
+- Updated dependencies [7d438ee]
+  - @tinycloud/sdk-core@3.14.0-beta.6
+  - @tinycloud/node-sdk@3.14.0-beta.6
+  - @tinycloud/operations@0.9.2-beta.5
+
+## 0.11.1-beta.4
+
+### Patch Changes
+
+- 2cb453f: A login, grant or decrypt grant made through the CLI, `@tinycloud/operations` or the MCP server without an expiry still lasts 30 days. The SDK's default for the same requests is 7 days.
+
+  Details: TC-3443
+
+- Updated dependencies [2cb453f]
+- Updated dependencies [2cb453f]
+  - @tinycloud/operations@0.9.2-beta.4
+  - @tinycloud/sdk-core@3.14.0-beta.5
+  - @tinycloud/node-sdk@3.14.0-beta.5
+
+## 0.11.1-beta.3
+
+### Patch Changes
+
+- Updated dependencies [4e4d845]
+  - @tinycloud/node-sdk@3.14.0-beta.4
+  - @tinycloud/operations@0.9.2-beta.3
+
+## 0.11.1-beta.2
+
+### Patch Changes
+
+- Updated dependencies [628be3c]
+  - @tinycloud/sdk-core@3.14.0-beta.3
+  - @tinycloud/node-sdk@3.14.0-beta.3
+  - @tinycloud/operations@0.9.2-beta.2
+
+## 0.11.1-beta.1
+
+### Patch Changes
+
+- Updated dependencies [18a0e38]
+- Updated dependencies [81884ce]
+  - @tinycloud/sdk-core@3.14.0-beta.2
+  - @tinycloud/node-sdk@3.14.0-beta.2
+  - @tinycloud/operations@0.9.2-beta.1
+
+## 0.11.1-beta.0
+
+### Patch Changes
+
+- Updated dependencies
+  - @tinycloud/node-sdk@3.14.0-beta.1
+  - @tinycloud/operations@0.9.2-beta.0
+
+## 0.11.0
+
+### Minor Changes
+
+- 0e8e37a: The hosted HTTP server publishes more agent discovery. `/.well-known/api-catalog` is an RFC 9727 linkset for `/mcp` (server card, documentation, `/healthz`), and the landing page links it with `rel="api-catalog"`. `/.well-known/agent-skills/index.json` lists the shipped `tinycloud-delegated-secrets` skill, served at `/.well-known/agent-skills/tinycloud-delegated-secrets/SKILL.md` with its SHA-256 digest; the skill now starts with `name` and `description` frontmatter. `/.well-known/agent-card.json` redirects to TinyCloud's A2A discovery agent card on tinycloud.xyz, because this server does not speak A2A. The landing page loads `/webmcp.js`, which registers one read-only WebMCP tool, `get_tinycloud_mcp_connection`, returning the endpoint, OAuth discovery, documentation and local stdio alternative the page shows; its CSP now allows same-origin scripts. `robots.txt` declares the same Content Signals as tinycloud.xyz.
+
+  Details: TC-3336
+
+- 0576031: The CLI, the hosted MCP server and Courier now use `https://node.tinycloud.xyz` as the default TinyCloud node, in place of `https://tee.node.tinycloud.xyz`. Profiles that already store a host keep it. To choose a node: for the CLI, pass `--host <url>`, set `TC_HOST` or create a profile with `tinycloud profile create <name> --host <url>`; for the MCP server, set `TC_HOST`; for Courier, pass `--host <url>` or set `COURIER_HOST`.
+
+  Details: TC-2923
+
+### Patch Changes
+
+- Updated dependencies [9f3ca26]
+- Updated dependencies [2395340]
+- Updated dependencies [0576031]
+- Updated dependencies [634753d]
+- Updated dependencies [b758e71]
+- Updated dependencies [df0de7e]
+- Updated dependencies [c7741ab]
+- Updated dependencies [9f3ca26]
+- Updated dependencies [1f961e4]
+- Updated dependencies [ca8ae20]
+- Updated dependencies [400cf7f]
+- Updated dependencies [7399b14]
+  - @tinycloud/node-sdk@3.13.0
+  - @tinycloud/sdk-core@3.13.0
+  - @tinycloud/operations@0.9.1
+
+## 0.11.0-beta.11
+
+### Patch Changes
+
+- Updated dependencies [df0de7e]
+  - @tinycloud/operations@0.9.1-beta.11
+
 ## 0.11.0-beta.10
 
 ### Patch Changes

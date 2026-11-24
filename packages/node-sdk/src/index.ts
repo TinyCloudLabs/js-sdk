@@ -49,6 +49,9 @@ export type {
   ISessionStorage,
   IUserAuthorization,
   ClientSession,
+  ClientSignInResult,
+  SignInResult,
+  SignInWarning,
   Extension,
   SignInOptions,
   PersistedSessionData,
@@ -216,6 +219,7 @@ export {
   type DelegateToOptions,
   type DelegateToResult,
   type RuntimePermissionGrantOptions,
+  type RuntimePermissionCheckOptions,
   type EnsureEncryptionNetworkOptions,
   type CreateOwnerDelegationParams,
   type OwnerDelegationReceipt,
@@ -232,7 +236,13 @@ export {
   BOOTSTRAP_COMPLETION_MARKER_VERSION,
   ACCEPTED_MARKER_VERSIONS,
 } from "./TinyCloudNode";
-export { extractSiweExpiration } from "./delegateToHelpers";
+export {
+  extractSiweExpiration,
+  SECRET_KEY_GRANT_DEFAULT_MS,
+  SECRET_KEY_GRANT_MAX_MS,
+  secretKeyGrantExpiryMs,
+} from "./delegateToHelpers";
+export type { NodeSignOutFailure, NodeSignOutStatus } from "./sessionRetire";
 export type { OwnerDelegationPermission } from "@tinycloud/sdk-core";
 
 export { AccountService } from "./account/AccountService";
@@ -276,6 +286,7 @@ export {
   PermissionNotInManifestError,
   SessionExpiredError,
   ManifestValidationError,
+  ownerFullAccess,
   composeManifestRequest,
   resolveManifest,
   validateManifest,
@@ -425,6 +436,7 @@ export type {
   ParsedSecretCatalogKey,
   SecretScopeOptions,
   SecretPutOptions,
+  SecretGetOptions,
 } from "@tinycloud/sdk-core";
 
 // Re-export encryption service values and helpers

@@ -8,6 +8,11 @@ export const DEFAULT_HOST = 'https://node.tinycloud.xyz';
 /** Must equal @tinycloud/bootstrap AGENTS_SPACE; created at TinyCloud onboarding, never by Courier. */
 export const COURIER_SPACE = 'agents';
 export const AGENT_GRANT_EXPIRY = '30d';
+/**
+ * The renewal lease `init --request` asks the owner for unless `--renew` names one, in seconds. A lease counts from the
+ * owner's approval, so it must outlast the AGENT_GRANT_EXPIRY grant to add any time; OpenKey allows at most one year.
+ */
+export const COURIER_DEFAULT_LEASE_SECONDS = 90 * 86_400;
 
 const kv = (path: string, actions: string[]): PermissionEntry => ({
   service: 'tinycloud.kv',

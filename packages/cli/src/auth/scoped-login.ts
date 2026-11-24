@@ -1,9 +1,9 @@
-import { EXPIRY, technicalExpiryRefusal } from "@tinycloud/sdk-core";
+import { technicalExpiryRefusal } from "@tinycloud/sdk-core";
 import { NodeWasmBindings, signedCompactUcanExpiry, type PermissionEntry } from "@tinycloud/node-sdk";
 import { isLocalOwnerProfile, liveStoredLease, ownerSessionLacksProof } from "@tinycloud/operations/profile";
 import { CLI_NAME } from "@tinycloud/operations/cli-name";
 import { CLIError } from "../output/errors.js";
-import { ExitCode } from "../config/constants.js";
+import { CLI_DEFAULT_SESSION_EXPIRY_DAYS, CLI_DEFAULT_SESSION_EXPIRY_MS, ExitCode } from "../config/constants.js";
 import type { ProfileConfig } from "../config/types.js";
 import { parseDuration } from "../lib/duration.js";
 import { normalizePkhIdentifier } from "../lib/space.js";
@@ -66,11 +66,11 @@ export function expiryLimit(expiry: RequestedExpiry): number {
 }
 
 /**
- * Latest signed expiry when no `--expiry` was given: the SDK's default session request (`EXPIRY.SESSION_MS`, 30 days)
- * from now, plus the same clock-skew allowance, evaluated when the approval arrives.
+ * Latest signed expiry when no `--expiry` was given: the CLI's default login lifetime (`CLI_DEFAULT_SESSION_EXPIRY_MS`,
+ * 30 days) from now, plus the same clock-skew allowance, evaluated when the approval arrives.
  */
 export function defaultExpiryLimit(): number {
-  return Date.now() + EXPIRY.SESSION_MS + CLOCK_SKEW_MS;
+  return Date.now() + CLI_DEFAULT_SESSION_EXPIRY_MS + CLOCK_SKEW_MS;
 }
 
 /**
@@ -94,7 +94,7 @@ export function sdkMaxExpiryRefusal(error: unknown, defaultRequest = false): CLI
   const match = /^OpenKey signedMessage expiry is later than the maximum for this request \(the latest allowed is ([^)]+)\)(?:; choose an earlier expiry)?$/.exec(message);
   if (match === null) return undefined;
   const requested = defaultRequest
-    ? `the default ${EXPIRY.SESSION_MS / 86_400_000} day lifetime this login requested`
+    ? `the default ${CLI_DEFAULT_SESSION_EXPIRY_DAYS} day lifetime this login requested`
     : "the requested --expiry";
   return Object.assign(
     new CLIError("OPENKEY_EXPIRY_EXCEEDED", `The signed session outlives ${requested} (the latest allowed is ${match[1]}). Choose an earlier lifetime in OpenKey, or re-run with a longer --expiry. No session was saved.`, ExitCode.PERMISSION_DENIED),
@@ -382,7 +382,7 @@ export function declinedPermissions(requested: readonly PermissionEntry[], signe
 }
 
 /**
- * A first-login scope: one TinyCloud space, plus optional raw encryption
+ * A first-login scope: named TinyCloud spaces, plus optional raw encryption
  * network entries (`space: "encryption"`), which are not a second space.
  */
 export function validateLoginPermissions(permissions: PermissionEntry[]): void {
@@ -394,8 +394,8 @@ export function validateLoginPermissions(permissions: PermissionEntry[]): void {
       : !p.space.startsWith("tinycloud:") && !/^[A-Za-z0-9_-]+$/.test(p.space)) ||
     typeof p.path !== "string" || !p.actions?.length ||
     p.actions.some((action) => !action.startsWith(`${p.service}/`)),
-  ) || new Set(spaced.map((p) => normalizePkhIdentifier(p.space ?? ""))).size !== 1) {
-    throw new CLIError("INVALID_LOGIN_SCOPE", "First login requires non-empty permissions in one TinyCloud space (raw tinycloud.encryption network entries may accompany them). Request additional spaces after login.", ExitCode.USAGE_ERROR);
+  )) {
+    throw new CLIError("INVALID_LOGIN_SCOPE", "Sign-in needs permissions in at least one named TinyCloud space (encryption network entries can be included too).", ExitCode.USAGE_ERROR);
   }
 }
 
@@ -406,8 +406,8 @@ export function validateLoginPermissions(permissions: PermissionEntry[]): void {
  */
 export function scopedLoginPermissions(permissions: PermissionEntry[]): PermissionEntry[] {
   assertNoCaveatLimits(permissions);
-  // Validation guarantees one non-raw entry with a non-empty space.
-  return withCapabilitiesRead(permissions, permissions.find((p) => !isRawEncryptionPermission(p))!.space ?? "");
+  const spaces = [...new Set(permissions.filter(p => !isRawEncryptionPermission(p) && !isRawCidRevocationPermission(p)).map(p => p.space!))].sort();
+  return canonicalSpaceOrder(spaces.reduce((entries, space) => withCapabilitiesRead(entries, space), permissions));
 }
 
 /**
@@ -427,7 +427,21 @@ export function grantRequestPermissions(group: PermissionEntry[], anchorSpace: s
   const capabilitySpace = request.find((permission) =>
     !isRawEncryptionPermission(permission) && !isRawCidRevocationPermission(permission)
   )?.space ?? anchorSpace;
-  return withCapabilitiesRead(request, capabilitySpace);
+  const spaces = [...new Set(request.filter(p => !isRawEncryptionPermission(p) && !isRawCidRevocationPermission(p)).map(p => p.space!))].sort();
+  return canonicalSpaceOrder((spaces.length ? spaces : [capabilitySpace]).reduce((entries, space) => withCapabilitiesRead(entries, space), request));
+}
+
+function canonicalSpaceOrder(permissions: PermissionEntry[]): PermissionEntry[] {
+  const spaces = new Set(permissions.filter(p => !isRawEncryptionPermission(p) && !isRawCidRevocationPermission(p))
+    .map(p => (p.space ?? "").split(":").at(-1)));
+  if (spaces.size <= 1) return permissions;
+  return [...permissions].sort((a, b) => {
+    // OpenKey accepts qualified spaces only for the selected signing account.
+    // Compare their names so mixed logical/qualified spellings use the same route.
+    const left = (a.space ?? "").split(":").at(-1)!;
+    const right = (b.space ?? "").split(":").at(-1)!;
+    return left < right ? -1 : left > right ? 1 : 0;
+  });
 }
 
 function withCapabilitiesRead(permissions: PermissionEntry[], space: string): PermissionEntry[] {
@@ -457,7 +471,7 @@ export interface SignedSessionExpectations {
   expiryChangeable?: boolean;
   /** Grant escalation stores a portable delegation, not a login session. */
   purpose?: "grant";
-  /** Agent grant: the approval must cover every requested action, or no grant is stored. */
+  /** Agent grant: cover every requested action; additional owner-signed authority is allowed. */
   exactApproval?: boolean;
   /** The named-key folder row this login asked for; the only encryption folder row a signed grant may carry. */
   namedKeyRow?: ProfileNamedKeys;
@@ -585,7 +599,7 @@ function withoutRequestedKeyRow(
   return rest;
 }
 
-/** Verify signed authority, and that it stays inside the requested manifest, before a scoped login saves anything. */
+/** Verify signed authority against the whole-request grant or legacy narrowed-manifest contract before saving. */
 export function verifyScopedLogin(
   data: Record<string, unknown>,
   key: object,
@@ -594,6 +608,7 @@ export function verifyScopedLogin(
   expected: SignedSessionExpectations = {},
 ): { session: VerifiedScopedSession; legacyNested: PermissionEntry[] } {
   const notStored = expected.purpose === "grant" ? "No grant was stored." : "No scoped session was saved.";
+  const soNotStored = expected.purpose === "grant" ? "so no grant was stored." : "so no session was saved.";
   let signed: SignedSession;
   try {
     signed = verifySignedSession(data, key, sessionDid, expected);
@@ -612,10 +627,24 @@ export function verifyScopedLogin(
     throw error;
   }
   const spaceId = data.spaceId as string;
-  for (const permission of requested) {
-    if (isRawEncryptionPermission(permission) || isRawCidRevocationPermission(permission)) continue;
-    if (normalizePkhIdentifier(ownerSpaceId(permission.space ?? "", signed.ownerDid)) !== normalizePkhIdentifier(spaceId)) {
-      throw new CLIError("OPENKEY_SCOPE_MISMATCH", `The approved space differs from the requested space. ${notStored}`, ExitCode.PERMISSION_DENIED);
+  const spaces = [...new Set(requested.filter(p => !isRawEncryptionPermission(p) && !isRawCidRevocationPermission(p))
+    .map(p => normalizePkhIdentifier(ownerSpaceId(p.space ?? "", signed.ownerDid))))].sort();
+  const primary = spaces.find(space => space.endsWith(":applications")) ?? spaces[0];
+  if (primary && normalizePkhIdentifier(spaceId) !== primary) {
+    throw new CLIError("OPENKEY_SCOPE_MISMATCH", `OpenKey approved a different space than the one requested, ${soNotStored}`, ExitCode.PERMISSION_DENIED);
+  }
+  if (spaces.length > 1 || data.requestedSpaces !== undefined) {
+    const entries = data.requestedSpaces;
+    if (!Array.isArray(entries) || entries.length !== spaces.length ||
+      new Set(entries.map(entry => typeof entry?.spaceId === "string" ? normalizePkhIdentifier(entry.spaceId) : entry?.spaceId)).size !== spaces.length || entries.some(entry =>
+        !entry || typeof entry.space !== "string" || typeof entry.spaceId !== "string" ||
+        !spaces.includes(normalizePkhIdentifier(entry.spaceId)) ||
+        normalizePkhIdentifier(ownerSpaceId(entry.space, signed.ownerDid)) !== normalizePkhIdentifier(entry.spaceId) ||
+        ![true, false, null].includes(entry.spaceReady) ||
+        (entry.spacePending !== undefined && entry.spacePending !== true) ||
+        (entry.spaceError !== undefined && typeof entry.spaceError !== "string")) ||
+      (data.spaceReady === true) !== entries.every(entry => entry.spaceReady === true)) {
+      throw new CLIError("OPENKEY_SCOPE_MISMATCH", `OpenKey's approval doesn't match the requested spaces, ${soNotStored}`, ExitCode.PERMISSION_DENIED);
     }
   }
   // Old OpenKey signs requested decrypt inside the session space rather than
@@ -635,18 +664,28 @@ export function verifyScopedLogin(
       throw new CLIError("OPENKEY_SCOPE_MISMATCH", `OpenKey signed decrypt for a network not owned by the approving identity. ${notStored}`, ExitCode.PERMISSION_DENIED);
     }
   }
-  // A signed action is inside the request when a requested one covers it: the
-  // same action, unrestricted or with the same caveats (OpenKey may narrow).
-  if (!scopeCovers(requested, approved, signed.ownerDid)) {
+  // Legacy manifest login may narrow the request, but cannot add authority.
+  // A whole-request grant may carry additional authority approved by the signer.
+  if (!expected.exactApproval && !scopeCovers(requested, approved, signed.ownerDid)) {
     throw new CLIError("OPENKEY_GRANT_BROADENED", `The signed grant contains authority beyond the requested ${expected.purpose === "grant" ? "grant" : "manifest"}. ${notStored}`, ExitCode.PERMISSION_DENIED);
   }
-  // An agent grant stands for the whole request. An action the owner unchecked
-  // is not granted, and the grant must not be recorded as if it were.
-  if (expected.exactApproval && !scopeCovers(approved, requested, signed.ownerDid)) {
-    throw new CLIError("OPENKEY_APPROVAL_NARROWER", `The approval was narrower than the request. Approve all of it, or ask the agent to request less. ${notStored}`, ExitCode.PERMISSION_DENIED);
+  // An agent grant stands for the whole request. An action or space the owner
+  // unchecked is not granted, and the request must not be recorded as if it were.
+  if ((expected.exactApproval || spaces.length > 1) && !scopeCovers(approved, requested, signed.ownerDid)) {
+    const approvedSpaces = new Set(approved
+      .filter(permission => !isRawEncryptionPermission(permission) && !isRawCidRevocationPermission(permission))
+      .map(permission => normalizePkhIdentifier(ownerSpaceId(permission.space ?? "default", signed.ownerDid))));
+    const missingSpaces = [...new Set(requested
+      .filter(permission => !isRawEncryptionPermission(permission) && !isRawCidRevocationPermission(permission))
+      .filter(permission => !approvedSpaces.has(normalizePkhIdentifier(ownerSpaceId(permission.space ?? "default", signed.ownerDid))))
+      .map(permission => permission.space ?? "default"))];
+    const message = missingSpaces.length > 0
+      ? `The owner didn't approve access to ${missingSpaces.map(space => `"${space}"`).join(", ")}, and this task needs every requested space, ${soNotStored}`
+      : `The approval was narrower than the request, ${soNotStored}`;
+    throw new CLIError("OPENKEY_APPROVAL_NARROWER", message, ExitCode.PERMISSION_DENIED);
   }
-  // The SIWE proof stays intact for validation/diagnostics. Only effective,
-  // requested authority is recorded as approved and compared on renewals.
+  // The SIWE proof stays intact for validation/diagnostics. Record only verified,
+  // effective authority, including signed extras in a whole-request grant.
   const session = withVerifiedAuthority({ ...data, jwk: key }, { ...signed, permissions: approved });
   return { session, legacyNested };
 }

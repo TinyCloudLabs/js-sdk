@@ -119,6 +119,7 @@ mock.module("../config/profiles.js", () => ({
       return directory;
     },
     getKey: async () => key,
+    getStoredKey: async () => key,
   },
 }));
 

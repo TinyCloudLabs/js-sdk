@@ -3,7 +3,7 @@ import { z } from "zod";
 import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { grantAuthRequest, NodeWasmBindings, PrivateKeySigner, TinyCloudNode } from "@tinycloud/node-sdk";
+import { grantAuthRequest, NodeWasmBindings, ownerFullAccess, PrivateKeySigner, TinyCloudNode } from "@tinycloud/node-sdk";
 import type { AuthRequestArtifact } from "@tinycloud/node-sdk";
 import { signLocationRecordV2 } from "@tinycloud/sdk-core";
 import type { PermissionEntry, RegistryCacheEntry } from "@tinycloud/sdk-core";
@@ -94,7 +94,7 @@ test("source CLI persists exact signed routing and reads after a client-only reg
       expect((await cli(["--profile", profile, "auth", "request", "--permission", permissionsPath, "--expiry", "10m", "--emit", requestPath])).code).toBe(0);
       const request = JSON.parse(await readFile(requestPath, "utf8")) as AuthRequestArtifact;
       const owner = new TinyCloudNode({ signer, wasmBindings: new NodeWasmBindings(), host: encOrigin, tinycloudRegistryUrl: registryOrigin,
-        autoCreateSpace: false, autoBootstrapAccount: false, includeAccountRegistryPermissions: false, enablePublicSpace: false });
+        autoCreateSpace: false, autoBootstrapAccount: false, includeAccountRegistryPermissions: false, enablePublicSpace: false, ...ownerFullAccess() });
       await owner.restoreSession(fixture.ownerRestorableSession);
       await owner.grantRuntimePermissions(request.requested, { expiry: "10m" });
       const grant = await grantAuthRequest(owner, request);

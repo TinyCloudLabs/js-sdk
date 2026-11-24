@@ -69,7 +69,7 @@ export function registerFeedCommand(program: Command): void {
     .addHelpText("after", `
 Owner connection provisions separate output and response databases and activates one
 bundled delegation. Agent labels and tokens select resources, never confer authority.
-Home's owner grant uses ${FEED_PREFIX}/ (trailing slash namespace); agent grants
+TinyCloud One's owner grant uses ${FEED_PREFIX}/ (trailing slash namespace); agent grants
 name exact output, response and response-hook resources. No agent schema or response write.
 
 publish/respond/message/handling read JSON files carrying full card/revision/issuance

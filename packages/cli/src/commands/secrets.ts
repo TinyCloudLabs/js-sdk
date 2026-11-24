@@ -8,7 +8,9 @@ import {
   type PortableDelegation,
   type TinyCloudNode,
 } from "@tinycloud/node-sdk";
-import { appSecretScope, SECRET_TYPES } from "@tinycloud/sdk-core";
+// Namespace-shaped so tests that mock @tinycloud/node-sdk partially still load this module.
+import * as nodeSdk from "@tinycloud/node-sdk";
+import { appSecretScope, MAX_SECRET_NAME_LENGTH, SECRET_TYPES, secretNameTooLongRefusal } from "@tinycloud/sdk-core";
 import { invokeOperation } from "@tinycloud/operations";
 import { isLocalOwnerProfile, liveStoredLease, ownerSessionLacksProof } from "@tinycloud/operations/profile";
 import {
@@ -41,7 +43,7 @@ import {
 import { theme } from "../output/theme.js";
 import { handleError, CLIError, cliErrorFromService, wrapError } from "../output/errors.js";
 import { mergeWarnings } from "../output/warnings.js";
-import { ExitCode } from "../config/constants.js";
+import { CLI_DEFAULT_SESSION_EXPIRY_MS, ExitCode } from "../config/constants.js";
 import { validatePrivateOutput, writePrivateOutput } from "../lib/private-output.js";
 import { ensureAuthenticated } from "../lib/sdk.js";
 import { closeReplication } from "../lib/replication-registry.js";
@@ -54,6 +56,9 @@ import { runProbeChild, type ProbeRequest } from "../lib/probe-child.js";
 import { runCommand, type CommandOutcome } from "../lib/run-command.js";
 import { safeInline } from "../output/safe-text.js";
 import { abortableSleep, DEFAULT_WAIT_TIMEOUT, parseWaitTimeout, runSecretsWait } from "../lib/secrets-wait.js";
+import { isBotHistoryScope, secretKeyResource, secretKeyResourceForVaultPath, isOverlongStoredScope, unreadableSecretNote } from "../lib/secret-keys.js";
+import { canonicalNetworkUrn } from "../lib/owner-did.js";
+import { migrateSecrets } from "@tinycloud/sdk-services/secrets/migrate";
 import { resolveProfilePosture, type CLIContext, type ProfileConfig } from "../config/types.js";
 import {
   ensureDelegationAuthority,
@@ -130,6 +135,10 @@ async function readStdin(): Promise<Buffer> {
   return Buffer.concat(chunks);
 }
 
+/** Monica S2j (TC-3284): `secrets network grant` from an OpenKey profile, which has no wallet key to sign with. */
+export const NETWORK_GRANT_NEEDS_WALLET_KEY =
+  "This profile signs in through OpenKey, and `secrets network grant` needs your wallet's own key to sign the grant. Set `TC_PRIVATE_KEY` and rerun it, or use a profile set up with `tc init --key-only` and `tc auth login --method local`.";
+
 function authOptions(options: { privateKey?: string }): { privateKey?: string } | undefined {
   const privateKey = options.privateKey || process.env.TC_PRIVATE_KEY;
   return privateKey ? { privateKey } : undefined;
@@ -184,6 +193,15 @@ function resolveSecretScope(options: { scope?: string }): { scope?: string } | u
   return options.scope ? { scope: options.scope } : undefined;
 }
 
+/**
+ * Refuses TinyChat's reserved bot-history scope (and the other reserved scopes) before anything is signed in, asked,
+ * read, written or deleted: every list, put, delete and migrate starts here. Compares the canonical scope, so a case
+ * variant or a spaced spelling is the same scope.
+ */
+function refuseReservedSecretScope(options: { scope?: string }): void {
+  canonicalizeSecretScope(resolveSecretScope(options)?.scope);
+}
+
 async function resolveSecretSpace(
   input: string | undefined,
   profileName: string,
@@ -227,7 +245,7 @@ function canonicalizeSecretScope(scope: string | undefined): string | undefined 
     );
   }
 
-  if (RESERVED_SECRET_SCOPES.has(canonical)) {
+  if (RESERVED_SECRET_SCOPES.has(canonical) || isBotHistoryScope(canonical)) {
     throw new CLIError(
       "INVALID_SECRET_SCOPE",
       `Secret scope ${JSON.stringify(scope)} is reserved; omit scope for global secrets.`,
@@ -319,6 +337,15 @@ async function ensureSecretsNode(
   return ensureAuthenticated(ctx, auth);
 }
 
+function secretCommandReason(action: SecretAction, name?: string): string {
+  switch (action) {
+    case "list": return "See the names of your secrets.";
+    case "get": return name ? `Read the secret ${name}.` : "Read your secrets.";
+    case "put": return name ? `Save the secret ${name}.` : "Save secrets.";
+    case "del": return name ? `Delete the secret ${name}.` : "Delete secrets.";
+  }
+}
+
 async function runSecretOperation<T>(params: {
   ctx: CLIContext;
   node: TinyCloudNode;
@@ -328,6 +355,8 @@ async function runSecretOperation<T>(params: {
   space?: string;
   label: string;
   operation: () => Promise<SecretResult<T>>;
+  /** The write seals the secret to a key of its own (TC-3801). */
+  namedKey?: boolean;
   /** Test seam for the owner OpenKey acquisition boundary. */
   openKeyAcquisition?: OpenKeyAcquisition;
 }): Promise<SecretResult<T>> {
@@ -348,6 +377,7 @@ async function runSecretOperation<T>(params: {
     options: params.scopeOptions,
     space: params.space,
     node: params.node,
+    namedKey: params.namedKey,
   });
   await withSpinner("Requesting secret permissions...", () =>
     ensureDelegationAuthority({
@@ -356,6 +386,7 @@ async function runSecretOperation<T>(params: {
       node: params.node,
       requested,
       expiryOption: undefined,
+      reason: secretCommandReason(params.action, params.name),
       force: true,
       anchorSpace: params.space ?? SECRETS_SPACE,
       openKeyAcquisition: params.openKeyAcquisition,
@@ -390,6 +421,14 @@ function assertOwnerApprovalPossible(profileName: string, profile: ProfileConfig
 
 function scopedSecretLoginHint(profileName: string): string {
   return `Have the owner approve a scoped login whose manifest names the secret: ${CLI_NAME} --profile ${profileName} auth login --method openkey --paste --manifest <manifest.json>. Pass the owner's code on stdin, newline-terminated.`;
+}
+
+/** What a network grant lets the recipient do, printed once the grant is made; `expiry` is the signed end, when the node-sdk reports one. */
+function networkGrantNotice(recipientDid: string, networkName: string, expiry: Date | undefined): string {
+  const until = expiry instanceof Date && Number.isFinite(expiry.getTime())
+    ? `until ${expiry.toISOString().slice(0, 16).replace("T", " ")} UTC`
+    : "for as long as this grant lasts";
+  return `${safeInline(recipientDid)} can read every secret in the "${safeInline(networkName)}" network, including secrets added later, ${until}.`;
 }
 
 
@@ -504,37 +543,74 @@ async function canonicalSecretGet(
       first = await invoke();
     }
   }
-  if (first.status !== "authority_required") return first;
   // The operations-owned explicit-key path should never return an authority
   // request. Keep this guard for the legacy no-key path only.
   if (auth?.privateKey !== undefined) return first;
-  if (first.context.posture !== "owner-openkey" && first.context.posture !== "local-owner-key") {
-    return first;
+
+  // An owner approves what the read still lacks: first the plan (the secret's own key, TC-3284), then at most one
+  // more, the network decrypt for a secret still in the older format or the key for a network-only session. A read
+  // that still lacks what was just approved is not asked for again.
+  let result = first;
+  let approved: string | undefined;
+  for (let approvals = 0; approvals < 2; approvals++) {
+    const approval = ownerSecretApproval(result, params.name);
+    if (approval === undefined) return result;
+    const asked = JSON.stringify(approval.missing);
+    if (asked === approved) return result;
+    approved = asked;
+    if (result.context.posture !== "owner-openkey" && result.context.posture !== "local-owner-key") {
+      return result;
+    }
+
+    const profile = await ProfileManager.getProfile(params.ctx.profile);
+    if (!canRequestOwnerPermissions(profile)) return result;
+    assertOwnerApprovalPossible(params.ctx.profile, profile, "get", params.name, approval.missing);
+    const node = params.node ?? ownerNode ?? await ensureSecretsNode(
+      params.ctx,
+      params.options,
+      params.openKeyAcquisition,
+    );
+    ownerNode ??= node;
+
+    await withSpinner("Requesting secret permissions...", () =>
+      ensureDelegationAuthority({
+        ctx: params.ctx,
+        profile,
+        node,
+        requested: approval.missing as PermissionEntry[],
+        expiryOption: undefined,
+        reason: approval.reason,
+        force: true,
+        anchorSpace: params.space ?? SECRETS_SPACE,
+        openKeyAcquisition: params.openKeyAcquisition,
+      }),
+    );
+    result = await invoke();
   }
+  return result;
+}
 
-  const profile = await ProfileManager.getProfile(params.ctx.profile);
-  if (!canRequestOwnerPermissions(profile)) return first;
-  assertOwnerApprovalPossible(params.ctx.profile, profile, "get", params.name, first.missing);
-  const node = params.node ?? ownerNode ?? await ensureSecretsNode(
-    params.ctx,
-    params.options,
-    params.openKeyAcquisition,
-  );
-
-  await withSpinner("Requesting secret permissions...", () =>
-    ensureDelegationAuthority({
-      ctx: params.ctx,
-      profile,
-      node,
-      requested: first.missing as PermissionEntry[],
-      expiryOption: undefined,
-      force: true,
-      anchorSpace: params.space ?? SECRETS_SPACE,
-      openKeyAcquisition: params.openKeyAcquisition,
-    }),
-  );
-
-  return invoke();
+/**
+ * What an owner would approve so a read can go on: the operation's own authority request, or the one decrypt a
+ * per-secret-key outcome names (TC-3284).
+ */
+function ownerSecretApproval(
+  result: CanonicalSecretGetResult,
+  name: string,
+): { missing: readonly Readonly<Record<string, unknown>>[]; reason: string } | undefined {
+  if (result.status === "authority_required") {
+    return { missing: result.missing, reason: secretCommandReason("get", name) };
+  }
+  if (result.status !== "error") return undefined;
+  const { code, details } = result.error;
+  if (code !== "SECRET_LEGACY_ENVELOPE" || typeof details?.decrypt !== "string") {
+    return undefined;
+  }
+  return {
+    // The operation may name the network with a lowercase owner; ask in the EIP-55 spelling every other entry uses.
+    missing: [{ service: "tinycloud.encryption", path: canonicalNetworkUrn(details.decrypt), actions: [SECRET_DECRYPT_CAPABILITY] }],
+    reason: `Read the secret ${name}. It's stored in the older format, so reading it needs access to all your encrypted data. Running \`${CLI_NAME} secrets migrate\` gives it its own key, and then this wider access isn't needed.`,
+  };
 }
 
 /** Return the canonical envelope produced by the Commander projection before rendering. */
@@ -1101,38 +1177,98 @@ function secretKvAbility(action: SecretAction): SecretKvAbility {
   return SECRET_KV_ABILITIES[action];
 }
 
-function secretPermissionEntries(params: {
+/**
+ * What an owner approves for one secret command. A read decrypts with the network. A write that opts in to a key of the
+ * secret's own (`namedKey`, TC-3801) asks to create it (the key's descriptor carries the public key the value is sealed
+ * to) and, so the owner's put→get round trip needs one approval, to read that same secret and decrypt that same key.
+ * `resolveSecretPath` refuses a name or scope over 64 characters, so no key is built for one. Never a `secrets/` prefix.
+ */
+export function secretPermissionEntries(params: {
   action: SecretAction;
   name?: string;
   options?: SecretScopeOptions;
   space?: string;
   node: TinyCloudNode;
+  namedKey?: boolean;
 }): PermissionEntry[] {
   const path = params.action === "list"
     ? resolveSecretListPrefix(params.options)
     : resolveSecretPath(params.name ?? "", params.options).permissionPaths.vault;
+  const namedKeyPut = params.action === "put" && params.namedKey === true;
   const permissions: PermissionEntry[] = [{
     service: "tinycloud.kv",
     space: params.space ?? SECRETS_SPACE,
     path,
-    actions: [secretKvAbility(params.action)],
+    actions: namedKeyPut ? [secretKvAbility("put"), secretKvAbility("get")] : [secretKvAbility(params.action)],
     skipPrefix: true,
   }];
+  if (params.action !== "get" && !namedKeyPut) return permissions;
 
+  const networkId = "getEncryptionNetworkIdForSpace" in params.node &&
+    typeof params.node.getEncryptionNetworkIdForSpace === "function"
+    ? params.node.getEncryptionNetworkIdForSpace(params.space ?? SECRETS_SPACE)
+    : params.node.getDefaultEncryptionNetworkId();
   if (params.action === "get") {
-    const networkId = "getEncryptionNetworkIdForSpace" in params.node &&
-      typeof params.node.getEncryptionNetworkIdForSpace === "function"
-      ? params.node.getEncryptionNetworkIdForSpace(params.space ?? SECRETS_SPACE)
-      : params.node.getDefaultEncryptionNetworkId();
     permissions.push({
       service: "tinycloud.encryption",
       path: networkId,
       actions: [SECRET_DECRYPT_CAPABILITY],
       skipPrefix: true,
     });
+    return permissions;
   }
-
+  const key = networkId.endsWith(":default") ? secretKeyResourceForVaultPath(networkId, path) : undefined;
+  if (key !== undefined) {
+    permissions.push({
+      service: "tinycloud.encryption",
+      path: key,
+      actions: [SECRET_KEY_CREATE_CAPABILITY, SECRET_DECRYPT_CAPABILITY],
+      skipPrefix: true,
+    });
+  }
   return permissions;
+}
+
+const SECRET_KEY_CREATE_CAPABILITY = "tinycloud.encryption/key.create";
+
+/** The default encryption network of `space`: the only one whose secrets have keys of their own. */
+function secretMigrateNetworkId(node: TinyCloudNode, space: string | undefined): string {
+  const networkId = node.getEncryptionNetworkIdForSpace(space ?? SECRETS_SPACE);
+  if (!networkId.endsWith(":default")) {
+    throw new CLIError(
+      "USAGE_ERROR",
+      "Only secrets on the default encryption network can have their own key, so there's nothing to migrate here.",
+      ExitCode.USAGE_ERROR,
+    );
+  }
+  return networkId;
+}
+
+/**
+ * An owner `secrets migrate` asks first for list, read and write on every secret in the space and decrypt with the
+ * network (secrets in the older format); a dry run asks only to list and read. Never a `secrets/` key prefix.
+ */
+export function secretMigratePermissions(space: string | undefined, networkId: string, dryRun: boolean): PermissionEntry[] {
+  const kv: PermissionEntry = {
+    service: "tinycloud.kv",
+    space: space ?? SECRETS_SPACE,
+    path: resolveSecretListPrefix(),
+    actions: [secretKvAbility("list"), secretKvAbility("get"), ...(dryRun ? [] : [secretKvAbility("put")])],
+    skipPrefix: true,
+  };
+  return dryRun
+    ? [kv]
+    : [kv, { service: "tinycloud.encryption", path: networkId, actions: [SECRET_DECRYPT_CAPABILITY], skipPrefix: true }];
+}
+
+/** Then decrypt and key creation on exactly the own key of each secret it moves (TC-3284). */
+export function secretMigrateKeyPermissions(networkId: string, keyPaths: readonly string[]): PermissionEntry[] {
+  return keyPaths.map((keyPath) => ({
+    service: "tinycloud.encryption",
+    path: secretKeyResource(networkId, keyPath),
+    actions: [SECRET_DECRYPT_CAPABILITY, SECRET_KEY_CREATE_CAPABILITY],
+    skipPrefix: true,
+  }));
 }
 
 function formatSecretScopeFlag(options: SecretScopeOptions | undefined): string {
@@ -1462,7 +1598,7 @@ export function registerSecretsCommand(
       try {
         const globalOpts = cmd.optsWithGlobals();
         const ctx = await ProfileManager.resolveContext(globalOpts);
-        const node = await ensureSecretsNode(ctx, options);
+        const node = await ensureSecretsNode(ctx, options, openKeyAcquisition);
         const networkName = options.network ?? "default";
         const networkId = networkName.startsWith("urn:tinycloud:encryption:")
           ? networkName
@@ -1494,13 +1630,15 @@ export function registerSecretsCommand(
           const resolved = resolveSecretPath(name, scopeOptions);
           const result = await runSecretOperation({
             ctx,
+            openKeyAcquisition,
             node,
             action: "get",
             name,
             scopeOptions,
             space: spaceUri,
             label: `Checking secret ${name}...`,
-            operation: () => secrets.get(name, { ...scopeOptions, source: "network" }),
+            // The user ran doctor on this secret: a missing read grant is asked for, as for `secrets get` (TC-3801).
+            operation: () => secrets.get(name, { ...scopeOptions, source: "network", requestPermission: true }),
           });
 
           if (result.ok) {
@@ -1571,14 +1709,16 @@ export function registerSecretsCommand(
     .option("--private-key <hex>", "Ethereum private key (or set TC_PRIVATE_KEY)")
     .action(async (options, cmd) => {
       try {
+        refuseReservedSecretScope(options);
         const globalOpts = cmd.optsWithGlobals();
         const ctx = await ProfileManager.resolveContext(globalOpts);
-        const node = await ensureSecretsNode(ctx, options);
+        const node = await ensureSecretsNode(ctx, options, openKeyAcquisition);
         const scopeOptions = resolveSecretScope(options);
         const spaceUri = await resolveSecretSpace(options.space, ctx.profile);
         const secrets = secretsServiceForSpace(node, spaceUri);
         const result = await runSecretOperation({
           ctx,
+          openKeyAcquisition,
           node,
           action: "list",
           scopeOptions,
@@ -1592,10 +1732,18 @@ export function registerSecretsCommand(
         }
 
         const secretNames = Array.isArray(result.data) ? result.data : [];
+        // A name or scope stored before the 64-character cap is listed, never hidden, with a note that says why this
+        // version can't read or delete it.
+        const scopeTooLong = isOverlongStoredScope(scopeOptions?.scope);
+        const unreadable = secretNames.flatMap((name) => {
+          const note = unreadableSecretNote({ nameTooLong: name.length > MAX_SECRET_NAME_LENGTH, scopeTooLong });
+          return note === undefined ? [] : [{ name, note }];
+        });
 
         outputJson({
           secrets: secretNames,
           count: secretNames.length,
+          ...(unreadable.length > 0 ? { unreadable } : {}),
           ...(options.scope ? { scope: options.scope } : {}),
           ...(spaceUri ? { space: spaceUri } : {}),
         });
@@ -1727,9 +1875,14 @@ export function registerSecretsCommand(
     .action(async (name: string, value: string | undefined, options, cmd) => {
       try {
         const secretType = parseSecretTypeOption(options.type);
+        // A name that only fails on length gets the SDK's words, before any sign-in or prompt. A name that fails the
+        // pattern keeps the pattern message from `resolveSecretPath`.
+        const tooLong = SECRET_NAME_RE.test(name.trim()) ? secretNameTooLongRefusal(name) : undefined;
+        if (tooLong) throw new CLIError("INVALID_SECRET_NAME", tooLong.error.message, ExitCode.USAGE_ERROR);
+        refuseReservedSecretScope(options);
         const globalOpts = cmd.optsWithGlobals();
         const ctx = await ProfileManager.resolveContext(globalOpts);
-        const node = await ensureSecretsNode(ctx, options);
+        const node = await ensureSecretsNode(ctx, options, openKeyAcquisition);
         const spaceUri = await resolveSecretSpace(options.space, ctx.profile);
         const secrets = secretsServiceForSpace(node, spaceUri);
 
@@ -1754,14 +1907,17 @@ export function registerSecretsCommand(
 
         const scopeOptions = resolveSecretScope(options);
         assertSecretValueMatchesType(secretType, secretValue);
-        const putOptions = secretType === undefined
+        const namedKey = process.env.TC_SECRETS_NAMED_KEY_WRITES === "1";
+        const putOptions = secretType === undefined && !namedKey
           ? scopeOptions
-          : { ...scopeOptions, type: secretType };
+          : { ...scopeOptions, ...(secretType === undefined ? {} : { type: secretType }), ...(namedKey ? { namedKey: true } : {}) };
         const result = await runSecretOperation({
           ctx,
+          openKeyAcquisition,
           node,
           action: "put",
           name,
+          namedKey,
           scopeOptions,
           space: spaceUri,
           label: `Storing secret ${name}...`,
@@ -1787,14 +1943,16 @@ export function registerSecretsCommand(
     .option("--private-key <hex>", "Ethereum private key (or set TC_PRIVATE_KEY)")
     .action(async (name: string, options, cmd) => {
       try {
+        refuseReservedSecretScope(options);
         const globalOpts = cmd.optsWithGlobals();
         const ctx = await ProfileManager.resolveContext(globalOpts);
-        const node = await ensureSecretsNode(ctx, options);
+        const node = await ensureSecretsNode(ctx, options, openKeyAcquisition);
         const scopeOptions = resolveSecretScope(options);
         const spaceUri = await resolveSecretSpace(options.space, ctx.profile);
         const secrets = secretsServiceForSpace(node, spaceUri);
         const result = await runSecretOperation({
           ctx,
+          openKeyAcquisition,
           node,
           action: "del",
           name,
@@ -1815,13 +1973,24 @@ export function registerSecretsCommand(
     });
 
   network
-    .command("grant <recipientDid> [name]")
-    .description("Grant decrypt permission for a secrets encryption network")
+    .command("grant")
+    .argument("<recipientDid>")
+    .argument("[name]", "network name (default: default)")
+    .description("Let someone read every secret in an encryption network")
+    .option("--expiry <duration>", "How long the grant lasts, for example 30m, 1h or 2d. Default 1h, at most 7d; longer values are cut to 7d.")
     .option("--private-key <hex>", "Ethereum private key override (or set TC_PRIVATE_KEY)")
     .action(async (recipientDid: string, name: string | undefined, options, cmd) => {
       try {
+        // The same lifetime as a grant on a secret's key (N1): 1 h by default, capped at 7 d. Parsed before anything
+        // is signed; delegateTo also caps it at the session's end, and the output shows the expiry signed.
+        const expiryMs = nodeSdk.secretKeyGrantExpiryMs(options.expiry);
         const globalOpts = cmd.optsWithGlobals();
         const ctx = await ProfileManager.resolveContext(globalOpts);
+        // The wallet signs the grant (below), and an OpenKey profile holds no wallet key: refuse before any network call.
+        const profile = await ProfileManager.getProfile(ctx.profile).catch(() => null);
+        if (profile?.authMethod === "openkey" && !effectiveLocal(profile, options)) {
+          throw new CLIError("AUTH_REQUIRED", NETWORK_GRANT_NEEDS_WALLET_KEY, ExitCode.AUTH_REQUIRED);
+        }
         const node = await ensureAuthenticated(ctx, authOptions(options));
         const networkName = name ?? "default";
         const descriptor = await withSpinner(
@@ -1833,10 +2002,13 @@ export function registerSecretsCommand(
           path: descriptor.networkId,
           actions: ["decrypt"],
         };
+        // Wallet-signed, so its delegator is the owner and `account revoke` can end it: the node lets an owner revoke
+        // an encryption-only delegation only when the owner signed it (TC-3284).
         const result = await withSpinner(
-          `Granting decrypt permission to ${recipientDid}...`,
-          () => node.delegateTo(recipientDid, [permission]),
+          `Granting ${safeInline(recipientDid)} access to read secrets...`,
+          () => node.delegateTo(recipientDid, [permission], { expiry: expiryMs, forceWalletSign: true }),
         );
+        process.stderr.write(networkGrantNotice(recipientDid, networkName, result.delegation.expiry) + "\n");
 
         outputJson({
           networkId: descriptor.networkId,
@@ -1845,7 +2017,73 @@ export function registerSecretsCommand(
           prompted: result.prompted,
           path: result.delegation.path,
           actions: result.delegation.actions,
+          scope: "whole-network",
+          ...(result.delegation.expiry === undefined ? {} : { expiresAt: result.delegation.expiry.toISOString() }),
         });
+      } catch (error) {
+        return handleError(error);
+      }
+    });
+
+  // tc secrets migrate [names...]
+  secrets
+    .command("migrate [names...]")
+    .description("Move secrets in the older format onto each secret's own key (counts only, never values)")
+    .option("--scope <scope>", "Only secrets in this logical scope")
+    .option("--space <name|uri>", "Target a non-default secrets space (short name or full URI)")
+    .option("--dry-run", "Count what would move without changing anything")
+    .option("--private-key <hex>", "Ethereum private key (or set TC_PRIVATE_KEY)")
+    .action(async (names: string[], options, cmd) => {
+      try {
+        refuseReservedSecretScope(options);
+        const globalOpts = cmd.optsWithGlobals();
+        const ctx = await ProfileManager.resolveContext(globalOpts);
+        const node = await ensureSecretsNode(ctx, options);
+        const spaceUri = await resolveSecretSpace(options.space, ctx.profile);
+        const networkId = secretMigrateNetworkId(node, spaceUri);
+        const dryRun = options.dryRun === true;
+        let authorizeKeys: ((keyPaths: readonly string[]) => Promise<void>) | undefined;
+        if (!authOptions(options)?.privateKey) {
+          const profile = await ProfileManager.getProfile(ctx.profile);
+          if (!canRequestOwnerPermissions(profile)) {
+            throw new CLIError(
+              "PERMISSION_DENIED",
+              `Only the owner can migrate secrets, and profile "${ctx.profile}" isn't an owner profile. Run this from your owner profile.`,
+              ExitCode.PERMISSION_DENIED,
+            );
+          }
+          const approve = (requested: PermissionEntry[], reason: string) => withSpinner("Requesting secret permissions...", () =>
+            ensureDelegationAuthority({
+              ctx,
+              profile,
+              node,
+              requested,
+              expiryOption: undefined,
+              reason,
+              anchorSpace: spaceUri ?? SECRETS_SPACE,
+            }));
+          await approve(
+            secretMigratePermissions(spaceUri, networkId, dryRun),
+            dryRun
+              ? secretCommandReason("list")
+              : "Give each of your older-format secrets its own key. This needs access to all your encrypted data, because only that access can read the older format.",
+          );
+          // Each secret's own key, named one by one once the list is known: never the whole `secrets/` prefix.
+          authorizeKeys = async (keyPaths) => {
+            await approve(secretMigrateKeyPermissions(networkId, keyPaths), "Give each secret being moved its own key. This reaches only those secrets, not the rest of your encrypted data.");
+          };
+        }
+        // No spinner around the run: the key approval inside it may open a browser and print to stderr.
+        const result = await migrateSecrets(secretsServiceForSpace(node, spaceUri), {
+          ...(names.length > 0 ? { names } : {}),
+          ...(options.scope ? { scope: options.scope } : {}),
+          dryRun,
+          ...(authorizeKeys === undefined ? {} : { authorizeKeys }),
+        });
+        if (!result.ok) {
+          throw cliErrorFromService(result.error);
+        }
+        outputJson({ ...result.data, ...(spaceUri ? { space: spaceUri } : {}) });
       } catch (error) {
         return handleError(error);
       }

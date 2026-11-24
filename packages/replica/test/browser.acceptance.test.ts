@@ -18,7 +18,7 @@
  * `test/browser/acceptance`. Install Chromium with `bunx playwright install chromium`.
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { TinyCloudNode } from "@tinycloud/node-sdk";
+import { TinyCloudNode, ownerFullAccess } from "@tinycloud/node-sdk";
 import { bootstrapSteps, signLocationRecordV2, verifyLocationRecordV2, type LocationRecordV2Payload } from "@tinycloud/sdk-core";
 import { privateKeyToAccount } from "viem/accounts";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
@@ -274,12 +274,12 @@ describe.skipIf(NODE_BIN === undefined)("TC-858 browser replication acceptance (
       },
     });
 
-    owner = new TinyCloudNode({ privateKey: WALLET_KEY, host, tinycloudRegistryUrl: registry.url.origin, autoCreateSpace: true });
+    owner = new TinyCloudNode({ privateKey: WALLET_KEY, host, tinycloudRegistryUrl: registry.url.origin, autoCreateSpace: true, ...ownerFullAccess() });
     await owner.signIn();
     await kvPut("notes/a", "alpha note");
     await kvPut("notes/b", "beta note");
     await kvPut("notes-secret/x", "OUT-OF-SCOPE-SECRET");
-    const ownerB = new TinyCloudNode({ privateKey: ACCOUNT_B_KEY, host, tinycloudRegistryUrl: registry.url.origin, autoCreateSpace: true });
+    const ownerB = new TinyCloudNode({ privateKey: ACCOUNT_B_KEY, host, tinycloudRegistryUrl: registry.url.origin, autoCreateSpace: true, ...ownerFullAccess() });
     await ownerB.signIn();
     const putB = await ownerB.kv.put("notes/b-only", new TextEncoder().encode("belongs to B"));
     if (!putB.ok) throw new Error(`account B seed failed: ${JSON.stringify(putB.error)}`);

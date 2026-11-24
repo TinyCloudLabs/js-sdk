@@ -1,5 +1,6 @@
 /*
- * Runtime grants requested from the panel, kept across a page reload. They are stored beside the session record
+ * Runtime grants requested from the panel, and an app's grants of its owner's secrets' own keys, kept across a page
+ * reload. They are stored beside the session record
  * (`BrowserSessionStorage.saveRuntimeGrants`), with the same lifecycle: a new sign-in, a sign-out and the session's
  * expiry remove them. A restore activates each one again through the SDK's validated activation, which recomputes the
  * CID from the signed bytes and reads expiry, audience and abilities from the signed grant, not from stored fields.
@@ -7,6 +8,7 @@
  */
 import type { PermissionEntry } from "@tinycloud/sdk-core";
 import type { PortableDelegation } from "@tinycloud/node-sdk/core";
+import { isReservedSecretSpaceKeyPath, parseSecretKeyPath } from "@tinycloud/sdk-services";
 
 import { TAB_PERMISSION } from "../ui/data/authority";
 
@@ -76,9 +78,42 @@ export function isPanelGrant(grant: PortableDelegation, address: string): boolea
   );
 }
 
+const SECRET_KEY_ACTIONS = ["tinycloud.encryption/decrypt", "tinycloud.encryption/key.create"];
+
 /**
- * Stores the panel's own grants among `grants` for `address`, replacing a stored grant with the same cid. Other
- * delegations (an app's larger grant that already covered the request) are never stored.
+ * Matches exact secret keys on the owner's default network, or the reserved bot-history
+ * key by itself. Only decrypt and/or key.create, and no caveats.
+ */
+export function isSecretKeyResourceSet(
+  resources: readonly Resource[],
+  owner: { readonly address: string; readonly chainId: number },
+): boolean {
+  const network = `urn:tinycloud:encryption:did:pkh:eip155:${owner.chainId}:${owner.address}:default/`.toLowerCase();
+  return resources.length > 0 && resources.every((resource) => {
+    const keyPath = resource.path.slice(network.length);
+    return longService(resource.service) === "tinycloud.encryption" &&
+      (resource.space === "encryption" || resource.space === "") &&
+      (resource.caveats?.length ?? 0) === 0 &&
+      resource.path.slice(0, network.length).toLowerCase() === network &&
+      (parseSecretKeyPath(keyPath) !== undefined ||
+        (resources.length === 1 && isReservedSecretSpaceKeyPath(keyPath))) &&
+      resource.actions.length > 0 &&
+      resource.actions.every((action) => SECRET_KEY_ACTIONS.includes(action));
+  });
+}
+
+/** True when `grant` is exactly a grant of the session owner's own secrets' keys (see `isSecretKeyResourceSet`). */
+export function isSecretKeyGrant(grant: PortableDelegation, address: string): boolean {
+  return (
+    grant.ownerAddress.toLowerCase() === address.toLowerCase() &&
+    grant.resources !== undefined &&
+    isSecretKeyResourceSet(grant.resources, { address: grant.ownerAddress, chainId: grant.chainId })
+  );
+}
+
+/**
+ * Stores the panel's own grants and the owner's secret-key grants among `grants` for `address`, replacing a stored
+ * grant with the same cid. Other delegations (an app's larger grant that already covered the request) are never stored.
  */
 export async function rememberRuntimeGrants(
   store: RuntimeGrantStore,
@@ -86,7 +121,7 @@ export async function rememberRuntimeGrants(
   grants: readonly PortableDelegation[],
   isCurrent: () => boolean = () => true,
 ): Promise<void> {
-  const own = grants.filter((grant) => isPanelGrant(grant, address));
+  const own = grants.filter((grant) => isPanelGrant(grant, address) || isSecretKeyGrant(grant, address));
   if (own.length === 0) return;
   await serializeRuntimeGrantMutation(store, async () => {
     const known = await store.loadRuntimeGrants(address);
@@ -144,4 +179,100 @@ export async function reuseRuntimeGrants(
     void work.finally(() => clearTimeout(timer));
   });
   await Promise.race([work, budget]);
+}
+
+/** A stored grant. `askedBy` names the apps it was approved for (the `onBehalfOf` of each approving request). */
+export type StoredRuntimeGrant = PortableDelegation & { readonly askedBy?: readonly string[] };
+
+/** The apps a stored grant was approved for; anything else in the field is ignored. */
+export function storedGrantAskers(grant: PortableDelegation): readonly string[] {
+  const askedBy = (grant as StoredRuntimeGrant).askedBy;
+  return Array.isArray(askedBy) ? askedBy.filter((asker): asker is string => typeof asker === "string" && asker !== "") : [];
+}
+
+/** The services this module knows. A service not listed here is elevated. */
+const KNOWN_SERVICES: ReadonlySet<string> = new Set(["tinycloud.kv", "tinycloud.sql", "tinycloud.vfs", "tinycloud.delegation"]);
+
+/** The known services whose non-elevated grants are kept across a reload. `tinycloud.delegation` is not: its one kept entry is the panel's own (see `isPanelResourceSet`). */
+const REMEMBERED_SERVICES: ReadonlySet<string> = new Set(["tinycloud.kv", "tinycloud.sql", "tinycloud.vfs"]);
+
+/** The space that holds secrets. Anything in it is elevated. */
+const SECRETS_SPACE = "secrets";
+
+/** The name of a space given as a full id (`tinycloud:pkh:eip155:1:0x…:name`) or as a bare name; `applications` when absent. */
+function spaceName(space: string | undefined): string {
+  if (space === undefined || space === "") return "applications";
+  return (space.startsWith("tinycloud:") ? space.slice(space.lastIndexOf(":") + 1) : space).toLowerCase();
+}
+
+/**
+ * True when a grant entry is elevated: any service this module does not know (decrypt and key creation among them),
+ * anything in the secrets space, or a caveat of any shape. Failing closed: an entry this function cannot classify is
+ * elevated, and an elevated grant is never written to storage.
+ */
+export function isElevatedResource(resource: {
+  readonly service: string;
+  readonly space?: string | undefined;
+  readonly caveats?: unknown;
+}): boolean {
+  if (!KNOWN_SERVICES.has(longService(resource.service))) return true;
+  const caveats = resource.caveats;
+  if (caveats !== undefined && !(Array.isArray(caveats) && caveats.length === 0)) return true;
+  return spaceName(resource.space) === SECRETS_SPACE;
+}
+
+/** True when `space` is a full space id of this owner on this chain. */
+function isOwnedSpace(space: string, owner: { readonly address: string; readonly chainId: number }): boolean {
+  return space.toLowerCase().startsWith(`tinycloud:pkh:eip155:${owner.chainId}:${owner.address}:`.toLowerCase());
+}
+
+/** True when every resource is in a space the owner owns and none is elevated. An empty set is not rememberable. */
+export function isRememberableResourceSet(
+  resources: readonly Resource[],
+  owner: { readonly address: string; readonly chainId: number },
+): boolean {
+  return (
+    resources.length > 0 &&
+    resources.every((resource) => isOwnedSpace(resource.space, owner) && !isElevatedResource(resource) && REMEMBERED_SERVICES.has(longService(resource.service)))
+  );
+}
+
+/** True when `grant` is an unexpired, non-elevated grant of the session owned by `address`. */
+export function isRememberableGrant(grant: PortableDelegation, address: string): boolean {
+  return (
+    grant.ownerAddress.toLowerCase() === address.toLowerCase() &&
+    grant.expiry.getTime() > Date.now() &&
+    grant.resources !== undefined &&
+    isRememberableResourceSet(grant.resources, { address: grant.ownerAddress, chainId: grant.chainId })
+  );
+}
+
+/**
+ * Stores the non-elevated grants among `grants` for `address`, with `asker` added to the apps each was approved for,
+ * replacing a stored grant with the same cid. An elevated grant is never stored. A signed grant that spans several
+ * spaces arrives as several delegations with one cid; it is not stored, because a restore rebuilds its resources from
+ * the signed bytes, not from the delegation. A stored grant keeps its own signed expiry.
+ */
+export async function rememberAskedGrants(
+  store: RuntimeGrantStore,
+  address: string,
+  grants: readonly PortableDelegation[],
+  asker: string | undefined,
+  isCurrent: () => boolean = () => true,
+): Promise<void> {
+  const byCid = new Map<string, PortableDelegation[]>();
+  for (const grant of grants) byCid.set(grant.cid, [...(byCid.get(grant.cid) ?? []), grant]);
+  const eligible = [...byCid.values()].flatMap((group) => (group.length === 1 && isRememberableGrant(group[0]!, address) ? group : []));
+  if (eligible.length === 0) return;
+  await serializeRuntimeGrantMutation(store, async () => {
+    const known = await store.loadRuntimeGrants(address);
+    if (!isCurrent()) return;
+    const added = new Set(eligible.map((grant) => grant.cid));
+    const stored = eligible.map((grant): StoredRuntimeGrant => {
+      const prior = known.find((entry) => entry.cid === grant.cid);
+      const askers = [...new Set([...(prior === undefined ? [] : storedGrantAskers(prior)), ...storedGrantAskers(grant), ...(asker === undefined ? [] : [asker])])];
+      return askers.length === 0 ? grant : { ...grant, askedBy: askers };
+    });
+    await store.saveRuntimeGrants(address, [...known.filter((grant) => !added.has(grant.cid)), ...stored]);
+  });
 }

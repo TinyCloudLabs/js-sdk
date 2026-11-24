@@ -190,13 +190,13 @@ export function processIdentityRecord(pid: number, nonce: string, here: { machin
 export type Liveness = 'alive' | 'dead' | 'unknown';
 
 /**
- * Whether the process that wrote `record` still runs. A holder is `dead` in exactly two cases, and `unknown` (the lock is kept) in every other:
+ * Whether the process that wrote `record` still runs. A successful pid probe is `alive`; a holder is `dead` in exactly two cases:
  *   (a) a different true boot id of the same kind on the same machine and host: no process survives a reboot; or
  *   (b) its pid is absent (`ESRCH`).
  * Before either, the record must name this machine (machine-id) and this host (another machine, a cloned machine-id, a renamed host, an old
  * pid-only record, or an identity this process cannot read is never judged), and on Linux the same pid namespace as this process: a reader in
- * another pid namespace sees a live holder's pid as absent. A pid that exists is never `dead`, whatever its start time, state or owner: a
- * crashed holder whose pid was reused needs the manual recovery line.
+ * another pid namespace sees a live holder's pid as absent. Unproven identity and other probe errors are `unknown`, so the lock is kept.
+ * A pid that exists is never `dead`, whatever its start time, state or owner, including a crashed holder whose pid was reused.
  */
 export function recordLiveness(record: LockRecord, here: { machine?: string; boot?: string } = currentIdentity()): Liveness {
   if (record.machine === undefined || here.machine === undefined || record.machine !== here.machine) return 'unknown';
@@ -211,13 +211,13 @@ export function recordLiveness(record: LockRecord, here: { machine?: string; boo
   } catch (error) {
     return (error as NodeJS.ErrnoException).code === 'ESRCH' ? 'dead' : 'unknown';
   }
-  return 'unknown';
+  return 'alive';
 }
 
-/** Why a lock was refused: shown by the caller as one line naming the file, the holder and the safe manual way out. */
+/** Why a lock was refused: shown by the caller as one line naming the file, the holder and safe next steps. */
 export interface LockRefusal {
   file: string;
-  /** `alive`: a running holder; `unknown`: its death cannot be established; `corrupt`: the record cannot be read; `contended`: another command is already breaking a dead lock. */
+  /** `alive`: a running holder; `unknown`: its death cannot be established; `corrupt`: the record cannot be read; `contended`: another command may be changing the holder. */
   reason: 'alive' | 'unknown' | 'corrupt' | 'contended';
   pid?: number;
   host?: string;
@@ -234,7 +234,7 @@ export interface LockOptions {
   afterObserve?: () => void;
   /** This machine's identity. Default: `machineIdentity()`. */
   identity?: () => { machine?: string; boot?: string };
-  /** The error message for a refusal. Default: `lockRefusal`, one line naming the lock, its holder and the safe manual command. */
+  /** The error message for a refusal. Default: `lockRefusal`, one line naming the lock, its holder and safe next steps. */
   refusal?: (info: LockRefusal) => string;
 }
 
@@ -248,16 +248,25 @@ export function formatRemovalCommand(file: string, platform: NodeJS.Platform = p
     : `rm -f -- '${file.replace(/'/g, `'\\''`)}'`;
 }
 
-/** The one line a refused lock prints: what holds it, and the only safe way out. The lock itself is never removed on doubt. */
+/** The one line a refused lock prints. A refusal never proves the current holder dead, so it never offers a removal command. */
 export function lockRefusal({ file, reason, pid, host, record }: LockRefusal, platform: NodeJS.Platform = process.platform): string {
   // Text from a lock record is data, not words: JSON-quoted so a hostile host name cannot add lines or terminal escapes.
-  const holder = pid === undefined ? 'a holder that cannot be read' : `pid ${pid}${host === undefined ? '' : ` on host ${JSON.stringify(host)}`}`;
+  const holder = `${pid === undefined ? 'a holder whose pid is unknown' : `pid ${pid}`}${host === undefined ? '' : ` on host ${JSON.stringify(host)}`}`;
   const why = reason === 'alive' ? `is held by a running Courier command (${holder})`
     : reason === 'corrupt' ? 'has a record Courier cannot read'
       : reason === 'unknown' ? `is held by ${holder}, and Courier cannot tell whether that process is still running`
-        : `is held by ${holder}, and another Courier command is already working on clearing it`;
-  const remove = formatRemovalCommand(file, platform);
-  return `${file} ${why}${record === undefined ? '' : ` (record ${record})`}; the lock was left in place. Try again; only after confirming no Courier command is running anywhere that uses this lock, clear it with: ${remove}`;
+        : `is contended${pid === undefined ? '' : ` (last observed holder: ${holder})`}; another Courier command may be changing its holder`;
+  // The file's age is diagnostic only, never evidence that its holder has died.
+  let age = '';
+  if (reason === 'unknown') {
+    try { age = ` (lock file age ${Math.max(0, Math.floor((Date.now() - fs.statSync(file).mtimeMs) / 1000))}s)`; } catch { /* age unavailable */ }
+  }
+  const probe = reason !== 'unknown' || pid === undefined ? '' : ` with: ${platform === 'win32' ? `Get-Process -Id ${pid}` : `ps -p ${pid} -o pid=,comm=`}`;
+  const advice = reason === 'alive' ? 'Wait for that Courier command to finish, then try again.'
+    : reason === 'contended' ? 'Try again after the other Courier command finishes; the holder may have changed.'
+      : reason === 'corrupt' ? 'Inspect the lock record and identify its owning Courier command; leave the lock in place while its holder is uncertain.'
+        : `Inspect the lock record, then check the holder on its recorded host and in its pid namespace${probe}. Keep the lock in place and contact its owner if its status remains uncertain.`;
+  return `${file} ${why}${record === undefined ? '' : ` (record ${record})`}${age}; the lock was left in place. ${advice}`;
 }
 
 /**
