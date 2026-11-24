@@ -394,13 +394,13 @@ export class ShareRecipientClient {
         if (portableDelegation !== undefined && kv !== undefined) {
           const result = await kv.head(resolvedPath);
           if (!result.ok) throw result.error;
-          return { metadata: { "content-type": result.data.headers.contentType ?? "application/octet-stream", "content-length": String(result.data.headers.contentLength ?? ""), ...(result.data.headers.lastModified === undefined ? {} : { "last-modified": result.data.headers.lastModified }) }, etag: result.data.headers.etag, contentType: result.data.headers.contentType, size: result.data.headers.contentLength };
+          return { metadata: { "content-type": result.data.headers.contentType ?? "application/octet-stream", ...(result.data.headers.contentLength === undefined ? {} : { "content-length": String(result.data.headers.contentLength) }), ...(result.data.headers.lastModified === undefined ? {} : { "last-modified": result.data.headers.lastModified }) }, etag: result.data.headers.etag, contentType: result.data.headers.contentType, size: result.data.headers.contentLength };
         }
         if (policySession !== undefined) return this.nativeMetadata(envelope, policySession, resolvedPath);
         if (kv === undefined) throw new ShareAccessError("SHARE_SESSION_REQUIRED");
         const result = await kv.head(resolvedPath);
         if (!result.ok) throw result.error;
-        return { metadata: { "content-type": result.data.headers.contentType ?? "application/octet-stream", "content-length": String(result.data.headers.contentLength ?? ""), ...(result.data.headers.lastModified === undefined ? {} : { "last-modified": result.data.headers.lastModified }) }, etag: result.data.headers.etag, contentType: result.data.headers.contentType, size: result.data.headers.contentLength };
+        return { metadata: { "content-type": result.data.headers.contentType ?? "application/octet-stream", ...(result.data.headers.contentLength === undefined ? {} : { "content-length": String(result.data.headers.contentLength) }), ...(result.data.headers.lastModified === undefined ? {} : { "last-modified": result.data.headers.lastModified }) }, etag: result.data.headers.etag, contentType: result.data.headers.contentType, size: result.data.headers.contentLength };
       };
 
       return { kind: "share-v2", envelope, location: { ...location, key: undefined }, resource: envelope.resource, actions: envelope.actions, expiresAt: new Date(envelope.expiresAt), kv, portableDelegation, get, listChildren, save, metadata };

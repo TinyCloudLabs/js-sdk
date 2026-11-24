@@ -2,7 +2,7 @@ import { Command } from "commander";
 import { readFile } from "node:fs/promises";
 import { writePrivateOutput } from "../lib/private-output.js";
 import { ProfileManager } from "../config/profiles.js";
-import { outputJson, withSpinner, shouldOutputJson, formatTable } from "../output/formatter.js";
+import { outputJson, withSpinner, shouldOutputJson, formatTable, formatBytes, formatTimeAgo } from "../output/formatter.js";
 import { handleError, CLIError, cliErrorFromService } from "../output/errors.js";
 import { ExitCode } from "../config/constants.js";
 import { ensureAuthenticated } from "../lib/sdk.js";
@@ -252,7 +252,10 @@ export function registerKvCommand(program: Command): void {
         const node = await ensureAuthenticated(ctx);
 
         const { kv, spaceUri } = await kvHandle(node, options.space, ctx.profile);
+        // The table shows each key's size and modified time; JSON output stays keys only.
+        const table = !shouldOutputJson();
         const keyList: string[] = [];
+        const details = new Map<string, { size?: number; updatedAt?: string }>();
         let cursor: string | undefined = options.cursor;
         let truncated: boolean | undefined;
         const seenCursors = new Set<string>();
@@ -261,6 +264,7 @@ export function registerKvCommand(program: Command): void {
             ...(options.prefix ? { prefix: options.prefix } : {}),
             ...(limit === undefined ? {} : { limit }),
             ...(cursor === undefined ? {} : { cursor }),
+            ...(table ? { entries: true } : {}),
           }));
           if (!result.ok) {
             // The SDK labels every non-auth HTTP failure NETWORK_ERROR; a 400 for a request that
@@ -278,6 +282,7 @@ export function registerKvCommand(program: Command): void {
           }
           // One push per key: spreading a very large page overflows the call stack.
           for (const key of result.data.keys) keyList.push(key);
+          for (const entry of result.data.entries ?? []) details.set(entry.key, entry);
           truncated = result.data.truncated;
           cursor = truncated === true ? result.data.nextCursor : undefined;
           if (options.all && truncated === true && cursor === undefined) {
@@ -304,7 +309,14 @@ export function registerKvCommand(program: Command): void {
           if (keyList.length === 0) {
             process.stdout.write(theme.muted("No keys found.") + "\n");
           } else {
-            const rows = keyList.map((key) => [key, "—", "—"]);
+            const rows = keyList.map((key) => {
+              const entry = details.get(key);
+              return [
+                key,
+                entry?.size === undefined ? "—" : formatBytes(entry.size),
+                entry?.updatedAt === undefined ? "—" : formatTimeAgo(entry.updatedAt),
+              ];
+            });
             process.stdout.write(formatTable(["Key", "Size", "Updated"], rows) + "\n");
           }
           if (cursor !== undefined) {
