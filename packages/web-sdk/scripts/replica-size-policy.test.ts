@@ -4887,7 +4887,7 @@ const finalTransportLedger = () => {
   delete ledger.tc2234InvitationPolicyRoot;
   delete ledger.tc2773LazyRestoreRoot;
   ledger.allowance = { "index.mjs": 391, "index.cjs": 861 };
-  ledger.entries = ledger.entries.filter((entry) => entry.pr !== "#873");
+  ledger.entries = ledger.entries.filter((entry) => entry.pr !== "#873" && entry.pr !== "#1180");
   ledger.entries.push({
     pr: "#873", ticket: "TC-2481", "index.mjs": 99, "index.cjs": 104,
     note: "Naomi, TC-2523, 2026-11-08: #873 registry_unavailable refusal plus offline mapping, +99/+104 root (base e21 → 3e0d9322)",
