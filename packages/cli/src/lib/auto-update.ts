@@ -113,8 +113,14 @@ export async function checkForUpdate({
   }
 }
 
+/** `CI` set to anything but `false` or `0` (any case). One rule for the notice, auto-install and `upgrade --yes`. */
+export function isCI(env: NodeJS.ProcessEnv): boolean {
+  const value = env.CI?.trim().toLowerCase();
+  return Boolean(value) && value !== "false" && value !== "0";
+}
+
 export function isAutoUpdateEnabled(env: NodeJS.ProcessEnv): boolean {
-  return env.TC_NO_AUTO_UPDATE !== "1" && env.CI?.toLowerCase() !== "true";
+  return env.TC_NO_AUTO_UPDATE !== "1" && !isCI(env);
 }
 
 export function detectInstallKind(packagePath: string, workingDirectory: string, homeDirectory: string): InstallKind {
@@ -183,7 +189,7 @@ async function writeCache(cachePath: string, value: UpdateCache): Promise<void> 
   }
 }
 
-export async function acquireLock(lockPath: string): Promise<(() => Promise<void>) | null> {
+async function acquireLock(lockPath: string): Promise<(() => Promise<void>) | null> {
   await mkdir(dirname(lockPath), { recursive: true, mode: 0o700 });
   try {
     const handle = await open(lockPath, "wx", 0o600);

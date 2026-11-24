@@ -9,8 +9,17 @@ import {
   registerUpdateNoticeFinalizer,
   updateNotice,
 } from "./lib/auto-update.js";
-import { autoUpdateOffReason, baseInstall, pendingSwitch, readGlobalConfig, startAutoUpdateIfDue } from "./lib/self-update.js";
-import { writeLease } from "./lib/versions.js";
+import {
+  autoUpdateCovers,
+  autoUpdateOffReason,
+  baseInstall,
+  onPath,
+  pendingSwitch,
+  readGlobalConfig,
+  startAutoUpdateIfDue,
+} from "./lib/self-update.js";
+import { recordedInstallKind } from "./lib/install-kind.js";
+import { readPointer, writeLease } from "./lib/versions.js";
 import { TC_OPTIONS_BEFORE_COURIER } from "./commands/courier.js";
 import { readFileSync } from "node:fs";
 import { CLI_NAME } from "@tinycloud/operations/cli-name";
@@ -33,9 +42,9 @@ const installKind = detectInstallKind(base.packageDir, process.cwd(), homedir())
 const selfUpdating = installKind === "npm-global" || installKind === "bun-global";
 
 registerUpdateNoticeFinalizer(async () => {
+  const offReason = selfUpdating ? autoUpdateOffReason(process.env, readGlobalConfig()) : null;
   // The background updater starts after any command, quiet or failed ones included; it never prints.
-  if (selfUpdating && commandToken !== "upgrade" && commandToken !== "__auto-update" &&
-      autoUpdateOffReason(process.env, readGlobalConfig()) === null) {
+  if (selfUpdating && commandToken !== "upgrade" && commandToken !== "__auto-update" && offReason === null) {
     startAutoUpdateIfDue(base.root, Date.now(), () => {
       const job = spawn(process.execPath, [base.bin, "--quiet", "__auto-update"], { detached: true, stdio: "ignore" });
       job.on("error", () => undefined);
@@ -45,7 +54,18 @@ registerUpdateNoticeFinalizer(async () => {
   // Only a command that finished cleanly gets the notice: a failing command's stderr is a structured JSON error
   // that callers parse, so nothing is appended to it.
   if (program.opts().quiet === true || Number(process.exitCode ?? 0) !== 0) return;
-  const available = await updateCheck;
+  const latest = await updateCheck;
+  // A release the background updater installs itself gets no notice (TC-4276). Only an install the updater has
+  // verified counts; `detectInstallKind` is a path guess.
+  const pointer = selfUpdating ? readPointer(base.root) : null;
+  const available = latest && !autoUpdateCovers({
+    installKind: (selfUpdating && recordedInstallKind(base.root, base.packageDir, base.version)) || "unknown",
+    current: version,
+    available: latest,
+    offReason,
+    npmOnPath: selfUpdating && onPath("npm"),
+    pinned: pointer?.base === base.version && pointer.pinned,
+  }) ? latest : null;
   const pending = selfUpdating ? pendingSwitch(base.root, version) : null;
   if (!available && !pending) return;
   await new Promise<void>((resolve) => process.stdout.write("", () => resolve()));

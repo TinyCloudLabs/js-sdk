@@ -80,8 +80,8 @@ describe("off switches", () => {
   const home = homedir();
   test("TC_NO_AUTO_UPDATE, CI and the config setting each turn automatic updates off", () => {
     expect(autoUpdateOffReason({ TC_NO_AUTO_UPDATE: "1" }, undefined, home)).toBe("env");
-    expect(autoUpdateOffReason({ CI: "1" }, undefined, home)).toBe("ci");
-    expect(autoUpdateOffReason({ CI: "true" }, undefined, home)).toBe("ci");
+    for (const CI of ["1", "true", "TRUE", "yes", "github"]) expect(autoUpdateOffReason({ CI }, undefined, home)).toBe("ci");
+    for (const CI of ["", "false", "False", "0"]) expect(autoUpdateOffReason({ CI }, undefined, home)).toBeNull();
     expect(autoUpdateOffReason({}, { defaultProfile: "default", version: 1, autoUpdate: false }, home)).toBe("config");
     expect(autoUpdateOffReason({}, { defaultProfile: "default", version: 1 }, home)).toBeNull();
     expect(autoUpdateOffReason({}, undefined, home)).toBeNull();
@@ -90,7 +90,7 @@ describe("off switches", () => {
   test("a sandboxed TC_HOME turns them off unless TC_VERSIONS_DIR is set too", () => {
     expect(autoUpdateOffReason({ TC_HOME: "/tmp/qa-home" }, undefined, home)).toBe("sandbox");
     expect(autoUpdateOffReason({ TC_HOME: "/tmp/qa-home", TC_VERSIONS_DIR: "/tmp/qa-versions" }, undefined, home)).toBeNull();
-    expect(autoUpdateOffReason({ TC_HOME: join(home, ".tinycloud") }, undefined, home)).toBeNull();
+    expect(autoUpdateOffReason({ TC_HOME: home }, undefined, home)).toBeNull();
   });
 });
 

@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { CLI_NAME } from "@tinycloud/operations/cli-name";
 import { ExitCode } from "../config/constants.js";
-import { detectInstallKind, type InstallKind } from "../lib/auto-update.js";
+import { detectInstallKind, isCI, type InstallKind } from "../lib/auto-update.js";
 import { npmRegistry, sigstoreVerifier } from "../lib/provenance.js";
 import {
   appendUpdateLog,
@@ -16,9 +16,11 @@ import {
   readGlobalConfig,
   runAutoUpdate,
   runManualUpgrade,
+  systemGlobalRoots,
   type FailureReason,
   type UpgradeResult,
 } from "../lib/self-update.js";
+import { recordInstallKind, verifyInstallKind } from "../lib/install-kind.js";
 import { CLI_PACKAGE } from "../lib/versions.js";
 import { outputJson, shouldOutputJson } from "../output/formatter.js";
 import { theme } from "../output/theme.js";
@@ -76,7 +78,7 @@ function refusalLine(result: Extract<UpgradeResult, { status: "refused" }>, manu
   const to = result.to ?? "the new version";
   switch (result.reason) {
     case "UNSUPPORTED_INSTALL": return `This TinyCloud CLI wasn't installed globally with npm or bun, so ${CLI_NAME} upgrade can't update it. Update it with: ${manual}`;
-    case "NEEDS_YES": return `${CLI_NAME} upgrade needs --yes when it doesn't run in a terminal or when CI is set.`;
+    case "NEEDS_YES": return `${CLI_NAME} upgrade needs --yes when it doesn't run in a terminal or when CI is set to anything but false or 0.`;
     case "DECLINED": return "Nothing was changed.";
     case "LOCKED": return "Another TinyCloud CLI update is running. Retry in a few minutes.";
     case "NPM_NOT_FOUND": return `${CLI_NAME} upgrade needs npm to download and verify ${to}, and npm isn't on your PATH.`;
@@ -103,7 +105,7 @@ async function confirmInTerminal(from: string, to: string): Promise<boolean> {
 /** How `tinycloud upgrade` confirms a switch: `--yes` skips the question, a terminal asks it, anything else refuses. */
 export function confirmation(yes: boolean, stdinIsTTY: boolean, env: NodeJS.ProcessEnv): "skip" | "ask" | "refuse" {
   if (yes) return "skip";
-  return stdinIsTTY && !env.CI ? "ask" : "refuse";
+  return stdinIsTTY && !isCI(env) ? "ask" : "refuse";
 }
 
 export function registerUpgradeCommand(program: Command): void {
@@ -115,17 +117,20 @@ export function registerUpgradeCommand(program: Command): void {
     .action(async (options: { to?: string; yes?: boolean }) => {
       const json = shouldOutputJson();
       const base = baseInstall();
-      const installKind = detectInstallKind(base.packageDir, process.cwd(), homedir());
+      // The path-based guess only words the manual command; updating needs a verified global install.
+      const guessedKind = detectInstallKind(base.packageDir, process.cwd(), homedir());
+      const verifiedKind = await verifyInstallKind(base.packageDir, systemGlobalRoots());
+      if (verifiedKind) recordInstallKind(base.root, base.packageDir, base.version, verifiedKind);
       const deps = updater((line) => appendUpdateLog(base.root, line));
       const mode = confirmation(options.yes === true, Boolean(process.stdin.isTTY), process.env);
       let result: UpgradeResult;
       // An install upgrade can't manage gets its manual command, which --yes wouldn't change.
-      if (mode === "refuse" && (installKind === "npm-global" || installKind === "bun-global")) {
+      if (mode === "refuse" && verifiedKind) {
         result = { status: "refused", reason: "NEEDS_YES", from: deps.base.version };
       } else {
         if (!json) process.stderr.write(theme.muted("Checking for a verified update…") + "\n");
         result = await runManualUpgrade(deps, {
-          installKind,
+          installKind: verifiedKind ?? "unknown",
           ...(options.to !== undefined ? { to: options.to } : {}),
           ...(mode === "ask" ? { confirm: confirmInTerminal } : {}),
         });
@@ -134,7 +139,7 @@ export function registerUpgradeCommand(program: Command): void {
       if (result.status === "refused" && result.reason === "UNSUPPORTED_INSTALL") {
         const channel = channelOf(result.from);
         const target = options.to ?? (await deps.registry.distTags().catch(() => ({} as Record<string, string>)))[channel] ?? channel;
-        extra.manualCommand = manualCommand(installKind, target);
+        extra.manualCommand = manualCommand(guessedKind, target);
       }
       if (result.status === "failed-not-rolled-back") extra.recoveryCommand = `rm "${join(base.root, "current.json")}"`;
       if (json) {
@@ -153,6 +158,10 @@ export function registerUpgradeCommand(program: Command): void {
     .action(async () => {
       const base = baseInstall();
       if (autoUpdateOffReason(process.env, readGlobalConfig()) !== null) return;
+      // Only a verified npm or bun global install updates itself; the record lets the foreground drop the notice.
+      const kind = await verifyInstallKind(base.packageDir, systemGlobalRoots());
+      recordInstallKind(base.root, base.packageDir, base.version, kind);
+      if (!kind) return;
       const outcome = await runAutoUpdate(updater((line) => appendUpdateLog(base.root, line)));
       if (outcome.action !== "none" && outcome.action !== "locked") appendUpdateLog(base.root, JSON.stringify(outcome));
     });

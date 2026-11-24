@@ -7,12 +7,14 @@
  * `tinycloud upgrade` run through here, under one cross-process lock.
  */
 import { spawn } from "node:child_process";
-import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, truncateSync } from "node:fs";
+import { accessSync, appendFileSync, constants, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, truncateSync } from "node:fs";
 import { homedir } from "node:os";
-import { join, resolve } from "node:path";
+import { delimiter, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { CONFIG_FILE } from "../config/constants.js";
-import { acquireLock, compareVersionStrings, selectUpdateVersion, type InstallKind } from "./auto-update.js";
+import { compareVersionStrings, isAutoUpdateEnabled, selectUpdateVersion, type InstallKind } from "./auto-update.js";
+import { acquireInstallLock, type InstallLock } from "./install-lock.js";
+import { bunGlobalModules, type GlobalRoots } from "./install-kind.js";
 import {
   lockedPackages,
   packageUrlPath,
@@ -117,6 +119,8 @@ export interface UpdaterDeps {
   run(bin: string, args: string[]): Promise<{ code: number | null; stdout: string }>;
   log(line: string): void;
   alive?(pid: number): boolean;
+  /** The install lock this pass holds; set by `withLock`. */
+  lock?: InstallLock;
 }
 
 interface UpdaterState {
@@ -231,6 +235,7 @@ export async function prepareVersion(deps: UpdaterDeps, version: string, from: s
     if (courier.code !== 0) throw failed("SMOKE_FAILED", `staged courier --version exited ${courier.code}`);
     markVerified(staging, version, manifest.dist.integrity);
     const final = join(deps.root, version);
+    if (!holdsLock(deps)) throw new UpdateStop({ status: "refused", reason: "LOCKED", from, to: version });
     if (existsSync(final)) discard(deps.root, final);
     renameSync(staging, final);
     return unattested;
@@ -251,6 +256,7 @@ export async function switchTo(deps: UpdaterDeps, version: string, flags: { auto
   const from = current(deps);
   const before = readPointer(deps.root);
   const failure = (detail: string): Promise<UpgradeResult> => restore(deps, before, from, version, detail);
+  if (!holdsLock(deps)) return { status: "refused", reason: "LOCKED", from, to: version };
   try {
     writePointer(deps.root, { version, base: deps.base.version, ...flags, ...(from !== version ? { previous: from } : before?.previous ? { previous: before.previous } : {}) });
   } catch (error) {
@@ -263,6 +269,8 @@ export async function switchTo(deps: UpdaterDeps, version: string, flags: { auto
 
 async function restore(deps: UpdaterDeps, before: Pointer | null, from: string, to: string, detail: string): Promise<UpgradeResult> {
   try {
+    // Lost the lock: another updater may be switching now, so the pointer is left to it.
+    if (!holdsLock(deps)) return { status: "failed-not-rolled-back", reason: "SWITCH_FAILED", from, to, detail };
     if (before) writePointer(deps.root, before);
     else removePointer(deps.root);
     const check = await deps.run(deps.base.bin, ["--version"]);
@@ -275,6 +283,7 @@ async function restore(deps: UpdaterDeps, before: Pointer | null, from: string, 
 
 /** Delete versions no pointer, global install or live process uses, plus leftovers of interrupted runs. Lock held. */
 export function prune(deps: UpdaterDeps): void {
+  if (!holdsLock(deps)) return;
   const pointer = readPointer(deps.root);
   const keep = new Set([deps.base.version, current(deps), pointer?.version, pointer?.previous, readState(deps.root).pending]);
   for (const lease of liveLeases(deps.root, deps.alive ?? processAlive)) keep.add(lease.version);
@@ -292,20 +301,25 @@ export function prune(deps: UpdaterDeps): void {
   }
 }
 
-async function withLock<T>(root: string, locked: () => Promise<T>, busy: () => T): Promise<T> {
-  mkdirSync(root, { recursive: true, mode: 0o700 });
-  const release = await acquireLock(join(root, ".update-lock"));
-  if (!release) return busy();
+async function withLock<T>(deps: UpdaterDeps, locked: (deps: UpdaterDeps) => Promise<T>, busy: () => T): Promise<T> {
+  mkdirSync(deps.root, { recursive: true, mode: 0o700 });
+  const lock = acquireInstallLock(deps.root, deps.alive ? { alive: deps.alive } : {});
+  if (!lock) return busy();
   try {
-    return await locked();
+    return await locked({ ...deps, lock });
   } finally {
-    await release();
+    lock.release();
   }
+}
+
+/** False once this pass lost the install lock (it ran into the lock's age cap): it must change nothing more. */
+function holdsLock(deps: UpdaterDeps): boolean {
+  return deps.lock === undefined || deps.lock.valid();
 }
 
 /** The background updater: one pass, under the lock. */
 export async function runAutoUpdate(deps: UpdaterDeps): Promise<AutoOutcome> {
-  return withLock(deps.root, () => autoUpdateLocked(deps), () => ({ action: "locked" }));
+  return withLock(deps, autoUpdateLocked, () => ({ action: "locked" }));
 }
 
 async function autoUpdateLocked(deps: UpdaterDeps): Promise<AutoOutcome> {
@@ -398,9 +412,9 @@ export async function runManualUpgrade(deps: UpdaterDeps, options: ManualOptions
   if (options.to !== undefined && (compareVersionStrings(options.to, MIN_TARGET_VERSION) ?? -1) < 0) {
     return { status: "refused", reason: "TARGET_TOO_OLD", from, to: options.to };
   }
-  return withLock(deps.root, async () => {
+  return withLock<UpgradeResult>(deps, async (locked) => {
     try {
-      return await manualLocked(deps, options, from);
+      return await manualLocked(locked, options, from);
     } catch (error) {
       if (error instanceof UpdateStop) return error.result;
       throw error;
@@ -422,13 +436,13 @@ async function manualLocked(deps: UpdaterDeps, options: ManualOptions, from: str
     const tag = tags[channel];
     if (!isVersion(tag) || selectUpdateVersion(from, { [channel]: tag }) !== tag) {
       // Already current. A plain `upgrade` also ends a `--to` pin.
-      if (pointer?.pinned) writePointer(deps.root, { ...pointer, pinned: false });
+      if (pointer?.pinned && holdsLock(deps)) writePointer(deps.root, { ...pointer, pinned: false });
       return { status: "ok", from, to: from, changed: false };
     }
     target = tag;
   }
   if (target === from) {
-    if (options.to !== undefined) writePointer(deps.root, { version: from, base: deps.base.version, auto: false, pinned: true, ...(pointer?.previous ? { previous: pointer.previous } : {}) });
+    if (options.to !== undefined && holdsLock(deps)) writePointer(deps.root, { version: from, base: deps.base.version, auto: false, pinned: true, ...(pointer?.previous ? { previous: pointer.previous } : {}) });
     return { status: "ok", from, to: from, changed: false };
   }
   if (options.confirm && !await options.confirm(from, target)) return { status: "refused", reason: "DECLINED", from, to: target };
@@ -445,11 +459,43 @@ async function manualLocked(deps: UpdaterDeps, options: ManualOptions, from: str
 
 /** Why automatic updates are off, or null when they are on. The notice and manual `upgrade` work either way. */
 export function autoUpdateOffReason(env: NodeJS.ProcessEnv, config: unknown, home: string = homedir()): "env" | "ci" | "config" | "sandbox" | null {
-  if (env.TC_NO_AUTO_UPDATE === "1") return "env";
-  if (env.CI) return "ci";
+  // The notice's rule (TC_NO_AUTO_UPDATE=1, or CI set to anything but false or 0), so the two can't drift.
+  if (!isAutoUpdateEnabled(env)) return env.TC_NO_AUTO_UPDATE === "1" ? "env" : "ci";
   if (config && typeof config === "object" && "autoUpdate" in config && config.autoUpdate === false) return "config";
-  if (env.TC_HOME && resolve(env.TC_HOME) !== join(home, ".tinycloud") && !env.TC_VERSIONS_DIR) return "sandbox";
+  // TC_HOME names a home directory (operations' tinycloudHomePath); another one is a sandbox, which shares this
+  // machine's ~/.tinycloud/versions unless TC_VERSIONS_DIR gives it its own.
+  if (env.TC_HOME && resolve(env.TC_HOME) !== resolve(home) && !env.TC_VERSIONS_DIR) return "sandbox";
   return null;
+}
+
+/**
+ * Whether the background updater installs `available` itself, so the "update available" notice is left out
+ * (Naomi, TC-4276): a patch or minor for an npm or bun global install with auto-update on, npm on PATH, and no pin.
+ * Majors, other installs, and installs with auto-update off keep the notice.
+ */
+export function autoUpdateCovers(input: {
+  installKind: InstallKind;
+  current: string;
+  available: string;
+  offReason: string | null;
+  npmOnPath: boolean;
+  pinned: boolean;
+}): boolean {
+  return (input.installKind === "npm-global" || input.installKind === "bun-global") &&
+    input.offReason === null && input.npmOnPath && !input.pinned && majorOf(input.available) === majorOf(input.current);
+}
+
+/** Whether an executable named `command` is on PATH, as the updater's `npm` lookup would find it. */
+export function onPath(command: string, env: NodeJS.ProcessEnv = process.env): boolean {
+  const names = process.platform === "win32" ? [`${command}.cmd`, `${command}.exe`] : [command];
+  return (env.PATH ?? "").split(delimiter).some((directory) => directory !== "" && names.some((name) => {
+    try {
+      accessSync(join(directory, name), constants.X_OK);
+      return statSync(join(directory, name)).isFile();
+    } catch {
+      return false;
+    }
+  }));
 }
 
 /**
@@ -495,6 +541,21 @@ function runProcess(command: string, args: string[], env: NodeJS.ProcessEnv, tim
     child.on("error", reject);
     child.on("close", (code) => done({ code, stdout, stderr }));
   });
+}
+
+/** npm's and bun's global `node_modules` on this machine, for `verifyInstallKind`. */
+export function systemGlobalRoots(env: NodeJS.ProcessEnv = process.env): GlobalRoots {
+  return {
+    async npm() {
+      try {
+        const result = await runProcess("npm", ["root", "-g"], env, 30_000);
+        return result.code === 0 && result.stdout.trim() ? result.stdout.trim() : null;
+      } catch {
+        return null;
+      }
+    },
+    bun: () => bunGlobalModules(env),
+  };
 }
 
 /** The real registry, npm and node behind `UpdaterDeps`. */

@@ -13,6 +13,8 @@ describe("tinycloud upgrade", () => {
     expect(confirmation(false, true, {})).toBe("ask");
     expect(confirmation(false, false, {})).toBe("refuse");
     expect(confirmation(false, true, { CI: "1" })).toBe("refuse");
+    expect(confirmation(false, true, { CI: "false" })).toBe("ask");
+    expect(confirmation(false, true, { CI: "0" })).toBe("ask");
   });
 
   test("an install it can't manage exits 12 with the command that updates it", () => {
