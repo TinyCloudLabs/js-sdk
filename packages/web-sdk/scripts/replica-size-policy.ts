@@ -511,6 +511,7 @@ export type Ledger = {
   tc3975NamedKeyWarningRoot?: LogoutRatchet;
   tc4082HostedOwnerRoot?: LogoutRatchet;
   tc3891OwnerRegistryRecordRoot?: LogoutRatchet;
+  tc4222PermissionLineRoot?: LogoutRatchet;
   tc3522InvocationRefusalKvWorker?: WorkerRatchet;
   tc3522InvocationRefusalReplicaWorker?: Omit<WorkerRatchet, "worker"> & { replicaWorker: { delta: number; ceiling: number } };
   tc2773LazyRestoreReplicaWorker?: Omit<WorkerRatchet, "worker"> & { replicaWorker: { delta: number; ceiling: number } };
@@ -1178,6 +1179,7 @@ export function ancestryPins(root: Ledger, hasGatedOnly: boolean): Array<{ row: 
   if (root.tc3975NamedKeyWarningRoot !== undefined) pins.push({ row: "tc3975NamedKeyWarningRoot", pin: root.tc3975NamedKeyWarningRoot.sourceCommits.at(-1)! });
   if (root.tc4082HostedOwnerRoot !== undefined) pins.push({ row: "tc4082HostedOwnerRoot", pin: root.tc4082HostedOwnerRoot.sourceCommits.at(-1)! });
   if (root.tc3891OwnerRegistryRecordRoot !== undefined) pins.push({ row: "tc3891OwnerRegistryRecordRoot", pin: root.tc3891OwnerRegistryRecordRoot.sourceCommits.at(-1)! });
+  if (root.tc4222PermissionLineRoot !== undefined) pins.push({ row: "tc4222PermissionLineRoot", pin: root.tc4222PermissionLineRoot.sourceCommits.at(-1)! });
   if (root.tc3522InvocationRefusalKvWorker !== undefined) pins.push({ row: "tc3522InvocationRefusalKvWorker", pin: root.tc3522InvocationRefusalKvWorker.sourceCommits.at(-1)! });
   if (root.tc3522InvocationRefusalReplicaWorker !== undefined) pins.push({ row: "tc3522InvocationRefusalReplicaWorker", pin: root.tc3522InvocationRefusalReplicaWorker.sourceCommits.at(-1)! });
   if (hasGatedOnly) pins.push({ row: "gatedOnlyRatchet", pin: approvedGatedOnlyRatchet.sourceCommit });
@@ -1315,6 +1317,7 @@ export function rootCeilings(root: Ledger): Array<{ row: string; ceiling: GzipSi
     ["tc3975NamedKeyWarningRoot", root.tc3975NamedKeyWarningRoot?.root.ceiling],
     ["tc4082HostedOwnerRoot", root.tc4082HostedOwnerRoot?.root.ceiling],
     ["tc3891OwnerRegistryRecordRoot", root.tc3891OwnerRegistryRecordRoot?.root.ceiling],
+    ["tc4222PermissionLineRoot", root.tc4222PermissionLineRoot?.root.ceiling],
   ];
   return rows.flatMap(([row, ceiling]) => ceiling === undefined ? [] : [{ row, ceiling }]);
 }
@@ -4292,6 +4295,37 @@ export const approvedTc3891OwnerRegistryRecordRoot: LogoutRatchet = {
   "reason": "Both canonical jobs (SQLite and Postgres, run 45367645133 at cc3792132, merged with master cd5b9826d) measured 1501514/1487555 gzip bytes against tc4082HostedOwnerRoot's 1542479/1473127. The Web SDK root carries TinyCloudWeb.ensureOwnerRegistryRecord and the registry-publish module it imports: the create-only owner-signed v2 location record publish (publishLocationRecordV2 from @tinycloud/sdk-core/registry-publication), the TinyCloud One and Home origin gate, and the OpenKey or wallet signer. The import() is merged into the root because the web build pins LimitChunkCountPlugin({ maxChunks: 1 }); with it webpack stops concatenating sdk-core into index.mjs, which is why index.mjs fell by 40965 bytes with the same 243 exports. Not taken: a lazy entry, because @tinycloud/sdk-core/registry-publication imports the sdk-core root, so the chunk carried all of sdk-core (about 297 KB gzip) plus the links and issued-delegation async chunks, and its computed chunk import broke the openkey-example build. Details: TC-3891"
 };
 
+export const approvedTc4222PermissionLineRoot: LogoutRatchet = {
+  "label": "permission dialog states exactly what a request grants (TC-4222)",
+  "ruling": "test-ruling: TC-4222 (13:06Z) - size ledger row tc4222PermissionLineRoot: web-sdk root cjs ceiling 1487555→1487567 (+12, CI a31ed78c, both jobs), mjs unchanged; scripts/*size-policy*.test.ts add the row beside every tc3891OwnerRegistryRecordRoot delete/undefined, and the replica-size-policy.test.ts filter gains it; no assertion value changes.",
+  "base": "ba48c9aa24b3a81665bbb29bbd139f4258984ca9",
+  "sourceCommits": [
+    "e2eb5662991f91caba3cbcbb73aed0bd6da401a7",
+    "625ca01a3bf5b4fd99b875686cb91073523a122f",
+    "9f57c0662087e8eb8157117aa1e31d488cea2883",
+    "b370dccc3aa88f0188c3c5536b705ba8c50827cf",
+    "a31ed78c89381164877789cbd3e86787786a7ac9"
+  ],
+  "canonicalCI": {
+    "run": "45397431219",
+    "jobs": [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45397431219/job/138456809591",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45397431219/job/138456809184"
+    ]
+  },
+  "root": {
+    "delta": {
+      "index.mjs": 0,
+      "index.cjs": 12
+    },
+    "ceiling": {
+      "index.mjs": 1542479,
+      "index.cjs": 1487567
+    }
+  },
+  "reason": "Both canonical jobs (SQLite and Postgres, run 45397431219 at a31ed78c, base ba48c9aa) measured 1501525/1487567 gzip bytes against tc3891OwnerRegistryRecordRoot's 1542479/1487555. The Web SDK root passes the request's expiry and the app's optional caption to the permission prompt (requestPermissionsCore showModal); the derived line and its escaping render in the prompt. Not taken: hiding the expiry line unless a caption is passed (Naomi 13:06Z). Details: TC-4222"
+};
+
 export const approvedLedgerRows: Record<string, unknown> = {
   phase2Ratchet: approvedPhase2,
   fixRequiredRatchet: approvedFixRequiredRatchet,
@@ -4424,6 +4458,7 @@ export const approvedLedgerRows: Record<string, unknown> = {
   tc3975NamedKeyWarningRoot: approvedTc3975NamedKeyWarningRoot,
   tc4082HostedOwnerRoot: approvedTc4082HostedOwnerRoot,
   tc3891OwnerRegistryRecordRoot: approvedTc3891OwnerRegistryRecordRoot,
+  tc4222PermissionLineRoot: approvedTc4222PermissionLineRoot,
   tc3522InvocationRefusalKvWorker: approvedTc3522InvocationRefusalKvWorker,
   tc3522InvocationRefusalReplicaWorker: approvedTc3522InvocationRefusalReplicaWorker,
 };
@@ -5044,6 +5079,11 @@ export function validateLedger(value: Ledger, historicalBase = false): void {
       (!value.tc4082HostedOwnerRoot ||
         JSON.stringify(value.tc3891OwnerRegistryRecordRoot) !== JSON.stringify(approvedTc3891OwnerRegistryRecordRoot))) {
     throw new Error("Only the exact TC-3891 owner registry record root admission is approved.");
+  }
+  if (value.tc4222PermissionLineRoot !== undefined &&
+      (!value.tc3891OwnerRegistryRecordRoot ||
+        JSON.stringify(value.tc4222PermissionLineRoot) !== JSON.stringify(approvedTc4222PermissionLineRoot))) {
+    throw new Error("Only the exact TC-4222 permission line root admission is approved.");
   }
   if (value.tc3522InvocationRefusalKvWorker !== undefined || value.tc3522InvocationRefusalReplicaWorker !== undefined) {
     if (!value.tc3947ReplicaRevokeRoot ||

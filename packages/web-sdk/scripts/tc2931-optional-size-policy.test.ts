@@ -16,6 +16,7 @@ delete root.tc3810ReaderRoot;
 delete root.tc3975NamedKeyWarningRoot;
 delete root.tc4082HostedOwnerRoot;
 delete root.tc3891OwnerRegistryRecordRoot;
+delete root.tc4222PermissionLineRoot;
 delete root.tc3947ReplicaRevokeRoot;
 delete root.tc3522InvocationRefusalKvWorker;
 delete root.tc3522InvocationRefusalReplicaWorker;
