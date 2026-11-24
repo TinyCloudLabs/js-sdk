@@ -171,7 +171,10 @@ export function checkShrinkwrap(lock, manifest, tree) {
     }
     if (entry.dev || entry.devOptional || entry.extraneous) problems.push(`${location} is not a runtime dependency`);
     if (entry.inBundle) {
-      problems.push(`${location} is bundled inside another package`);
+      let parent = location.slice(0, location.lastIndexOf("/node_modules/"));
+      while (lock.packages[parent]?.inBundle) parent = parent.slice(0, parent.lastIndexOf("/node_modules/"));
+      const bundler = parent.slice(parent.lastIndexOf("node_modules/") + "node_modules/".length);
+      problems.push(`${id} (${location}) is in ${bundler}'s bundleDependencies: npm installs it from ${bundler}'s tarball, so the shrinkwrap can't pin it and the updater can't check its npm signature. Replace ${bundler}, or use a version of it that doesn't bundle dependencies`);
       continue;
     }
     if (entry.resolved !== registryTarball(name, entry.version)) problems.push(`${location} resolves to ${entry.resolved}, not ${registryTarball(name, entry.version)}`);

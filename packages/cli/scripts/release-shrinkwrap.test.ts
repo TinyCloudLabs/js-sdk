@@ -178,7 +178,7 @@ describe("checkShrinkwrap", () => {
       "node_modules/aliased is not a plain registry package",
       "node_modules/tsup is not a runtime dependency",
       "tsup@8.0.0 (node_modules/tsup) is not the version bun.lock installs",
-      "node_modules/ora/node_modules/inner is bundled inside another package",
+      "inner@1.0.0 (node_modules/ora/node_modules/inner) is in ora's bundleDependencies: npm installs it from ora's tarball, so the shrinkwrap can't pin it and the updater can't check its npm signature. Replace ora, or use a version of it that doesn't bundle dependencies",
       "node_modules/nohash has no sha512 integrity",
       "nohash@1.0.0 (node_modules/nohash) is not the version bun.lock installs",
     ]);
