@@ -11,7 +11,7 @@
 // in its output.
 
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -30,15 +30,19 @@ const home = mkdtempSync(join(tmpdir(), "cli-node20-smoke-"));
 // A replication controller whose close never settles, put where the CLI's
 // replication registry looks for its state. After the command finishes,
 // closeReplication() gives up after 3 s and the CLI flushes stdio and exits:
-// the path that used Promise.withResolvers (TC-4279).
+// the path that used Promise.withResolvers (TC-4279). close() writes a marker
+// file, so the case can tell the CLI really called it.
 const stuckReplication = join(home, "stuck-replication.mjs");
-writeFileSync(stuckReplication, `const control = { close: () => new Promise(() => {}) };
+const closeCalled = join(home, "close-called");
+writeFileSync(stuckReplication, `import { writeFileSync } from "node:fs";
+const control = { close: () => { writeFileSync(${JSON.stringify(closeCalled)}, ""); return new Promise(() => {}); } };
 globalThis[Symbol.for("@tinycloud/cli/replication-registry")] = {
   controls: new Map([["default", control]]), allControls: new Set([control]), installedSignalHandlers: false, generation: 1,
 };
 `);
 
 function run(args, nodeArgs = []) {
+  const started = performance.now();
   const result = spawnSync(process.execPath, [...nodeArgs, bin, ...args], {
     cwd: home,
     env: { PATH: process.env.PATH, HOME: home, TC_HOME: join(home, "tc"), TMPDIR: home, TINYCLOUD_CLI_LOGS: "0", NO_COLOR: "1" },
@@ -46,7 +50,8 @@ function run(args, nodeArgs = []) {
     encoding: "utf8",
     timeout: 60_000,
   });
-  return { status: result.status, signal: result.signal, stdout: result.stdout ?? "", stderr: result.stderr ?? "" };
+  const ms = performance.now() - started;
+  return { status: result.status, signal: result.signal, stdout: result.stdout ?? "", stderr: result.stderr ?? "", ms };
 }
 
 const cases = [
@@ -63,8 +68,10 @@ const cases = [
     }
   }],
   ["a command whose replication close times out still exits 0", ["--json", "profile", "list"], (r) => {
+    // Exits only after the 3 s close timeout, having called close().
+    if (r.status !== 0 || r.ms < 3_000 || !existsSync(closeCalled)) return false;
     try {
-      return r.status === 0 && Array.isArray(JSON.parse(r.stdout).profiles);
+      return Array.isArray(JSON.parse(r.stdout).profiles);
     } catch {
       return false;
     }
@@ -82,7 +89,7 @@ try {
       continue;
     }
     failed += 1;
-    console.error(`::error::${name}: tinycloud ${args.join(" ")} exited ${result.status ?? result.signal}${crashed ? `, output has ${crashed[0]}` : ""}`);
+    console.error(`::error::${name}: tinycloud ${args.join(" ")} exited ${result.status ?? result.signal} after ${Math.round(result.ms)} ms${crashed ? `, output has ${crashed[0]}` : ""}`);
     console.error(`stdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
   }
 } finally {
