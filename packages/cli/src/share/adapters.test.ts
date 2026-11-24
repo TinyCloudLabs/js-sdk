@@ -10,7 +10,7 @@ import { fromBase64Url, unifiedPolicyV2Schema } from "@tinycloud/share-envelope"
 import { buildShortLink } from "@tinycloud/share-envelope/links";
 import { ADDRESSED_SHARE_TOO_LARGE_MESSAGE, historyRecordForPublishedShare, notifyShare, revokeShare, type PublishedShare, type SenderShareRecord, type ShareNotifyResult, type SharePolicyRootRevocation, type TargetPublishInput } from "@tinycloud/share-sdk";
 import { shortLinkId } from "./short-links.js";
-import { createEmailCredentialRequirement, createEmailDomainCredentialRequirement, credentialRequirementDigest, LocationRecordValidationError, LocationRegistryHttpError, ShareDeliveryRefusedError } from "@tinycloud/sdk-core";
+import { canonicalDigest, createEmailCredentialRequirement, createEmailDomainCredentialRequirement, credentialRequirementDigest, LocationRecordValidationError, LocationRegistryHttpError, ShareDeliveryRefusedError } from "@tinycloud/sdk-core";
 import { CLIError } from "../output/errors.js";
 import { ShareHistoryReadError, ShareHistoryRetryError, ShareHistoryUnreadableError, SharePublishAuthorityError, shareHistoryReason } from "./errors.js";
 
@@ -814,60 +814,101 @@ describe("TinyCloud share authority adapter", () => {
     mediaType: "text/markdown",
   });
 
-  it("refuses exact-email publication without a descriptor and issuer before side effects", async () => {
-    const rawEmailInput: TargetPublishInput = {
-      source: new TextEncoder().encode("only me"), filename: "note.md",
-      target: { kind: "email", address: "owner@example.com" },
-      expiresAt: new Date("2030-01-01T00:00:00.000Z"),
-      origin: "https://share.example", mediaType: "text/markdown",
-    };
-    await expect(addressedAdapter().publish(rawEmailInput)).rejects.toThrow();
+  /** The Share service config, plus the built-in OpenCredentials witness's catalog (the golden email descriptor), recording every request. */
+  const emailServices = (requests: string[], options: { readonly witness?: "catalog" | "down" | "other-issuer" } = {}) => (async (input: string | URL | Request) => {
+    const url = String(input);
+    requests.push(url);
+    if (url === "https://witness.credentials.org/.well-known/opencredentials") {
+      if (options.witness === "down") throw new TypeError("fetch failed");
+      const served = options.witness === "other-issuer"
+        ? { ...(emailDescriptor as Record<string, unknown>), issuer: { ...((emailDescriptor as { issuer: object }).issuer), did: "did:web:other.example" } }
+        : emailDescriptor;
+      return Response.json({
+        type: "tinycloud.credentials/catalog/v1", protocol: "tinycloud.credentials/acquisition/v1", catalogVersion: 1,
+        profiles: [{ supported: true, enabled: true, readiness: "ready", descriptor: served, descriptorDigest: await canonicalDigest(served as Parameters<typeof canonicalDigest>[0]) }],
+      });
+    }
+    return Response.json({ version: "tinycloud.share/config-v2", shareOrigin: "https://share.example", registryOrigin: "https://registry.example", credentialsOrigin: "https://credentials.example" });
+  }) as unknown as typeof globalThis.fetch;
+  const emailAdapter = (fetchFn: typeof globalThis.fetch) => createShareAuthorityAdapters({ origin: "https://share.example", profileName: async () => "test", fetchFn }).targetAdapter;
+  const bareEmailInput = (): TargetPublishInput => ({
+    source: new TextEncoder().encode("only me"), filename: "note.md",
+    target: { kind: "email", address: "owner@example.com" },
+    expiresAt: new Date("2030-01-01T00:00:00.000Z"),
+    origin: "https://share.example", mediaType: "text/markdown",
+  });
+
+  it("publishes an exact email with no credential options to the built-in OpenCredentials issuer, pinned to its descriptor", async () => {
+    const requests: string[] = [];
+    const published = await emailAdapter(emailServices(requests)).publish(bareEmailInput());
+    if ("state" in published) throw new Error("expected addressed publication");
+    expect(requests).toContain("https://witness.credentials.org/.well-known/opencredentials");
+    const commitment = unifiedPolicyV2Schema.parse(registeredPolicies[0]).credentialRequirement;
+    expect(commitment).toMatchObject({ issuerDid: "did:web:issuer.credentials.org", issuerKid: "did:web:issuer.credentials.org#controller", descriptorDigest: await goldenDescriptorDigest("email") });
+    expect(published.metadata.recipientMatcher).toEqual({ kind: "exactEmail", value: "owner@example.com" });
+  });
+
+  it("uses the credential options it is given instead of asking the built-in issuer", async () => {
+    const requests: string[] = [];
+    const published = await emailAdapter(emailServices(requests)).publish({ ...bareEmailInput(), ...emailCredentialInputs });
+    if ("state" in published) throw new Error("expected addressed publication");
+    expect(requests.filter((url) => url.startsWith("https://witness.credentials.org"))).toEqual([]);
+    expect(registeredPolicies).toHaveLength(1);
+  });
+
+  it("refuses a partial set of credential options before any request or side effect", async () => {
+    const requests: string[] = [];
+    await expect(emailAdapter(emailServices(requests)).publish({ ...bareEmailInput(), issuerDid: emailCredentialInputs.issuerDid })).rejects.toThrow(TypeError);
+    expect(requests.filter((url) => url.startsWith("https://witness.credentials.org"))).toEqual([]);
     expect(publishEvents).toEqual([]);
     expect(uploadedPaths).toEqual([]);
     expect(registeredPolicies).toEqual([]);
   });
 
-  it("refuses exact-email CLI publication before every adapter side effect, even with valid credential flags", async () => {
+  it("stops before every side effect, naming the built-in issuer, when it cannot be reached", async () => {
+    const requests: string[] = [];
+    await expect(emailAdapter(emailServices(requests, { witness: "down" })).publish(bareEmailInput())).rejects.toMatchObject({ failure: { kind: "email-issuer-unavailable", reason: "unreachable" } });
+    expect(publishEvents).toEqual([]);
+    expect(encryptions).toBe(0);
+    expect(uploadedPaths).toEqual([]);
+    expect(registeredPolicies).toEqual([]);
+    expect(ownerRootInputs).toEqual([]);
+    expect(sessionSignatures).toEqual([]);
+  });
+
+  it("tells an issuer that is not the pinned one apart from an issuer that cannot be reached, and shares nothing", async () => {
+    await expect(emailAdapter(emailServices([], { witness: "other-issuer" })).publish(bareEmailInput())).rejects.toMatchObject({ failure: { kind: "email-issuer-unavailable", reason: "mismatch" } });
+    expect(publishEvents).toEqual([]);
+    expect(uploadedPaths).toEqual([]);
+    expect(registeredPolicies).toEqual([]);
+  });
+
+  it("publishes an exact email through the command with no credential flags, and overrides with all three", async () => {
     // Load the command graph after this file's profile/SDK module mocks.
     const { configureShareCommandServices } = await import("../commands/share.js");
     const { runShareCaptured } = await import("../commands/share.integration-harness.js");
-    const root = await mkdtemp(join(tmpdir(), "tc-email-unavailable-adapter-"));
+    const root = await mkdtemp(join(tmpdir(), "tc-email-share-adapter-"));
     const input = join(root, "note.md");
     const descriptor = join(root, "descriptor.json");
-    let creates = 0;
-    let configs = 0;
-    const adapter = createShareAuthorityAdapters({
-      origin: "https://share.example", profileName: async () => "test",
-      fetchFn: (async () => {
-        configs++;
-        return Response.json({ version: "tinycloud.share/config-v2", shareOrigin: "https://share.example", registryOrigin: "https://registry.example", credentialsOrigin: "https://credentials.example" });
-      }) as unknown as typeof globalThis.fetch,
-    }).targetAdapter;
-    configureShareCommandServices({ targetAdapter: { publish: async (request) => {
-      creates++;
-      return adapter.publish(request);
-    } } });
+    const requests: string[] = [];
+    const adapter = emailAdapter(emailServices(requests));
+    configureShareCommandServices({ targetAdapter: adapter });
     const originalExit = process.exit;
-    let exitCode: number | undefined;
-    process.exit = ((code?: number) => { exitCode = code; }) as typeof process.exit;
+    process.exit = (() => {}) as typeof process.exit;
     try {
-      await writeFile(input, "synthetic refusal input");
+      await writeFile(input, "synthetic share input");
       await writeFile(descriptor, JSON.stringify(emailDescriptor));
-      const result = await runShareCaptured(["share", "publish", input, "--to", "email:owner@example.com", "--json",
-        "--viewer-origin", "https://share.example", "--credential-descriptor", descriptor,
-        "--issuer-did", emailCredentialInputs.issuerDid, "--issuer-kid", emailCredentialInputs.issuerKid]);
-      expect(exitCode ?? result.exitCode).toBe(4);
-      const error = JSON.parse(result.stderr).error as { code: string; message: string };
-      expect(error.code).toBe("UNAVAILABLE");
-      expect(error.message).toMatch(/unavailable|not available/i);
-      expect(creates).toBe(0);
-      expect(configs).toBe(0);
-      expect(publishEvents).toEqual([]);
-      expect(encryptions).toBe(0);
-      expect(uploadedPaths).toEqual([]);
-      expect(registeredPolicies).toEqual([]);
-      expect(ownerRootInputs).toEqual([]);
-      expect(sessionSignatures).toEqual([]);
+      const plain = await runShareCaptured(["share", "publish", input, "--to", "email:owner@example.com", "--json", "--viewer-origin", "https://share.example"]);
+      expect(plain.exitCode).toBe(0);
+      expect(JSON.parse(plain.stdout)).toMatchObject({ metadata: { target: { kind: "email" }, display: { filename: "note.md" } } });
+      expect(requests).toContain("https://witness.credentials.org/.well-known/opencredentials");
+      expect(registeredPolicies).toHaveLength(1);
+      requests.length = 0;
+      const override = await runShareCaptured(["share", "publish", input, "--to", "owner@example.com", "--json", "--viewer-origin", "https://share.example",
+        "--credential-descriptor", descriptor, "--issuer-did", emailCredentialInputs.issuerDid, "--issuer-kid", emailCredentialInputs.issuerKid]);
+      expect(override.exitCode).toBe(0);
+      expect(requests.filter((url) => url.startsWith("https://witness.credentials.org"))).toEqual([]);
+      expect(registeredPolicies).toHaveLength(2);
     } finally {
       process.exit = originalExit;
       configureShareCommandServices({});

@@ -12,6 +12,8 @@ export type SharePublishFailure =
   | { readonly kind: "registry-unavailable" }
   /** The Share service's public config could not be fetched (network failure, timeout, or a non-OK answer). */
   | { readonly kind: "share-service-unavailable"; readonly origin: string }
+  /** The built-in OpenCredentials email issuer's descriptor could not be fetched or did not match the pinned issuer. Nothing was shared. */
+  | { readonly kind: "email-issuer-unavailable"; readonly reason: "unreachable" | "mismatch" }
   /** The node's version cannot be verified for domain invite delivery. */
   | { readonly kind: "node-info-unavailable" }
   /** The registry refused the record (other 4xx, or an invalid record): a retry cannot succeed. */
