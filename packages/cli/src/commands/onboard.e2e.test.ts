@@ -678,6 +678,26 @@ globalThis.fetch = ((input: Parameters<typeof fetch>[0], init?: Parameters<typeo
     }
   });
 
+  test("onboard on a live sign-in that lacks its scope adds one non-renewing 30-day grant and reports that grant's lifetime", async () => {
+    await mkdir(home("added"), { recursive: true, mode: 0o700 });
+    const manifest = join(root, "added-applications-only.json");
+    await writeFile(manifest, JSON.stringify({ app_id: "onboard-added", name: "Applications", space: "applications", prefix: "", defaults: false,
+      includePublicSpace: false, permissions: [{ service: "tinycloud.kv", space: "applications", path: "", actions: ["tinycloud.kv/get", "tinycloud.kv/list"] }] }), { mode: 0o600 });
+    expect((await cli("added", ["init", "--key-only"])).exitCode).toBe(0);
+    const signedIn = await onboardWithApprovals("added", () => ownerSigner, ["auth", "login", "--manifest", manifest, "--expiry", "7d", "--no-popup"]);
+    expect(signedIn.exitCode, signedIn.stderr + signedIn.stdout).toBe(0);
+    const onboarded = await onboardWithApprovals("added", () => ownerSigner);
+    expect(onboarded.exitCode, onboarded.stderr + onboarded.stdout).toBe(0);
+    expect(onboarded.offered).toHaveLength(1);
+    const grant = onboarded.offered[0]!.request!;
+    expect(grant).toMatchObject({ grantLifetimeSeconds: THIRTY_DAYS_S, reason: "Set up TinyCloud on this computer: use your apps and see your spaces, for 30 days." });
+    expect(grant.renewal).toBeUndefined();
+    expect(JSON.parse(onboarded.stdout).granted.map((granted: { asks: string }) => granted.asks)).toEqual([
+      "Set up TinyCloud on this computer: use your apps and see your spaces, for 30 days.",
+      "Set up TinyCloud on this computer: use your apps and see your spaces, for 30 days.",
+    ]);
+  });
+
   test("TC3302 synthetic handoff", async () => {
     await verifyOnboardingHandoff({ host, registryOrigin: registry.url.origin, ownerSigner, cli, onboardWithApprovals });
   });

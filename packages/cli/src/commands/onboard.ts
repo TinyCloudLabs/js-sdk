@@ -75,15 +75,16 @@ export function registerOnboardCommand(program: Command): void {
         let onboardedNode: TinyCloudNode | undefined;
         let addedGrant = false;
         for (const [index, step] of steps.entries()) {
-          const reason = plan.asks;
+          // A replica profile signs in through a prepared hand-off, which cannot carry the owner's renewal lease.
+          const leaseable = !profile.replication?.prefixes.length;
           currentStep = index + 1;
           const session = await ProfileManager.getSession(ctx.profile) as Record<string, unknown> | null;
           if (!sessionStateIsUsable(storedSessionState(session, profile).state)) {
             const { delegationData } = await refreshOpenKeySession(ctx.profile, ctx.host, {
               permissions: step.permissions,
-              reason,
+              reason: leaseable ? plan.asks : plan.finiteAsks,
               expiry: plan.expiry,
-              renew: plan.renewalLeaseSeconds ?? false,
+              renew: leaseable ? plan.renewalLeaseSeconds ?? false : false,
               persistHost: globalOpts.host !== undefined,
               openKeyAcquisition: acquire,
               ...(created === undefined ? {} : { createdProfile: { previousDefaultProfile: created.previousDefaultProfile } }),
@@ -100,7 +101,9 @@ export function registerOnboardCommand(program: Command): void {
             deadlineMs === undefined ? {} : { timeoutMs: spaceSetupTimeoutMs({ deadlineMs, step: currentStep, of: steps.length }) });
           const node = await ensureAuthenticated(ctx);
           const requested = await resolvePermissionSpaces(step.permissions, ctx.profile);
-          addedGrant = await ensureDelegationAuthority({
+          // ensureDelegationAuthority returns nothing on the OpenKey path, so whether it adds a grant is decided here, as it decides.
+          const needsGrant = !node.hasRuntimePermissions(requested);
+          await ensureDelegationAuthority({
             ctx,
             profile,
             node,
@@ -110,7 +113,8 @@ export function registerOnboardCommand(program: Command): void {
             exactApproval: true,
             ...(deadlineMs === undefined ? {} : { spaceSetupTimeoutMs: () => spaceSetupTimeoutMs({ deadlineMs, step: currentStep, of: steps.length }) }),
             openKeyAcquisition: acquire,
-          }) !== undefined || addedGrant;
+          });
+          addedGrant ||= needsGrant;
           // A saved grant can cover the task before OpenKey has finished hosting every space.
           // Re-running onboarding rechecks each route even when no new approval is needed.
           await ensureSpaceSetup(ctx, {
