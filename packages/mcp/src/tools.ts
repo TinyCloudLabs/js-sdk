@@ -59,7 +59,7 @@ export interface McpStartupSelection {
   /** Refuse a call before it runs when its caller is over a rate limit (hosted only). */
   readonly rateLimit?: (tool: { readonly name: ToolName; readonly destructive: boolean }) => RateRefusal | undefined;
   /** Hosted transports may attach a browser approval URL to canonical results. */
-  readonly transformOperationResult?: (result: unknown, invocation: McpOperationInvocation) => Promise<unknown>;
+  readonly transformOperationResult?: (result: unknown, invocation: McpOperationInvocation, acceptedNodeInvocation: boolean) => Promise<unknown>;
   /** Repeat each tool's title as `annotations.title`, for a directory that takes the listing name from there. */
   readonly annotationTitles?: boolean;
 }
@@ -479,7 +479,7 @@ export function registerTinyCloudTools(
       },
       async (input: unknown): Promise<McpToolResult> => {
         const startedAt = performance.now();
-        const metrics = { replayedGrants: 0 };
+        const metrics = { replayedGrants: 0, acceptedNodeInvocation: selection.transformOperationResult === undefined ? undefined : false };
         let code = "INTERNAL_ERROR";
         try {
           const refused = selection.rateLimit?.({ name: binding.name, destructive: binding.destructiveHint });
@@ -508,7 +508,7 @@ export function registerTinyCloudTools(
                 operationId: binding.operationId,
                 operationVersion: binding.operationVersion,
                 input,
-              });
+              }, metrics.acceptedNodeInvocation === true);
           }
           const response = toMcpToolResult(projected, bindings, {
             surface: selection.surface === "local" ? "local" : "hosted",

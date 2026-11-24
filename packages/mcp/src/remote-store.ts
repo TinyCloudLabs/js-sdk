@@ -1,8 +1,8 @@
 import { sameTinyCloudNode } from "@tinycloud/sdk-core";
 import { admitOwnerRenewalLease, RENEWAL_LEASE_ORIGINAL_EXPIRED, RENEWAL_RENEWER_CHANGED } from "@tinycloud/sdk-core/delegations/renewal";
 import { RENEWAL_ADMISSION_LEAD_MS, verifyOwnerRenewalLease } from "@tinycloud/sdk-core/delegations/renewal-receipt";
-import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
-import { chmod, mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
+import { createHmac, createPrivateKey, randomBytes, sign, timingSafeEqual } from "node:crypto";
+import { chmod, mkdir, readFile, readdir, rename, rm, rmdir, stat, utimes, writeFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 
@@ -23,6 +23,7 @@ import {
   type PortableDelegation,
   type TinyCloudSession,
 } from "@tinycloud/node-sdk";
+import { retireSessionKey } from "@tinycloud/node-sdk/session-retire";
 import { TCWSessionManager, importKey, initPanicHook } from "@tinycloud/node-sdk-wasm";
 import { createOrReusePermissionRequest } from "@tinycloud/operations/artifacts";
 import { withTinyCloudStateRoot } from "@tinycloud/operations/state";
@@ -62,6 +63,8 @@ const FAST_POLL_WINDOW_MS = 60_000;
 const SLOW_POLL_INTERVAL_MS = 10_000;
 /** Approvals polled in the background at once; beyond this, calls collect. */
 const MAX_COLLECTION_POLLS = 64;
+/** Of those, the most one tenant may hold, so one tenant's links cannot take every slot. */
+const MAX_COLLECTION_POLLS_PER_TENANT = 4;
 /** How long after its request ends a result may still be collected (OpenKey keeps it 10 minutes). */
 const RESULT_COLLECTION_GRACE_MS = 600_000;
 /** A claimed result left by a stopped server becomes collectable again after this. */
@@ -71,6 +74,15 @@ const PROCESSING_STALE_MS = 120_000;
  * grant ends at its signed end and is approved again.
  */
 export const BOOTSTRAP_LEASE_SECONDS = 90 * 86_400;
+/** How long the signed connection grant lasts unless configured otherwise. Scoped task grants use `delegationExpiry`. */
+export const DEFAULT_BOOTSTRAP_GRANT_EXPIRY = "30d";
+/** Idle tenants become eligible before seven days to leave time for the sweep and retries. */
+export const TENANT_IDLE_MS = 6 * 86_400_000;
+/** First sweep after startup, then on an hourly cadence without overlapping passes. */
+const IDLE_SWEEP_DELAY_MS = 60_000;
+const IDLE_SWEEP_INTERVAL_MS = 3_600_000;
+/** A pending link for an already-active holder must leave time to retire that holder by day seven. */
+const IDLE_APPROVAL_HEADROOM_MS = 12 * 3_600_000;
 const NATIVE_GRANT_IMPORT_REJECTION_CODES = new Set([
   "DELEGATION_ARTIFACT_INVALID",
   "DELEGATION_EXPIRED",
@@ -111,7 +123,10 @@ export interface RemoteStoreConfig {
   /** Links API origin that stores signed approval requests. */
   readonly linksApiOrigin?: string;
   readonly approvalTtlSeconds: number;
+  /** Lifetime of a scoped (task) grant. It asks for no renewal. */
   readonly delegationExpiry: string;
+  /** Lifetime of the signed connection (bootstrap) grant, which may carry an approved renewal lease. Defaults to 30 days. */
+  readonly bootstrapDelegationExpiry?: string;
   /** Shared secret used only by the Exo native client, never logged. */
   readonly nativeServiceCredential?: string;
 }
@@ -166,6 +181,11 @@ interface PendingApproval {
 
 /** What one collection attempt left: keep polling, retry later, finished, or nothing to collect. */
 type CollectionOutcome = "pending" | "retry" | "done" | "idle";
+
+interface LeaseExposures {
+  unknownSince: number;
+  pending: Record<string, { createdAt: number; expiresAt: number }>;
+}
 
 export interface ConnectStatus {
   readonly connected: boolean;
@@ -304,24 +324,52 @@ export class RemoteTenantStore {
   readonly #approvalProcessing = new Map<string, Promise<void>>();
   readonly #linkCreations = new Map<string, Promise<string>>();
   readonly #collections = new Map<string, Promise<CollectionOutcome>>();
-  readonly #polls = new Map<string, NodeJS.Timeout>();
+  readonly #polls = new Map<string, { readonly stateRoot: string; timer: NodeJS.Timeout }>();
+  /** state root -> last verified approval or successful authenticated use (ms). */
+  readonly #lastCalls = new Map<string, number>();
+  /** Serialize durable updates to a tenant's idle markers and approval exposures. */
+  readonly #idleSignalWrites = new Map<string, Promise<void>>();
+  readonly #liveExposureUntil = new Map<string, number>();
+  readonly #idleRemovals = new Map<string, Promise<boolean>>();
+  #sweepTimer?: NodeJS.Timeout;
+  #sweeping?: Promise<number>;
   #closed = false;
   readonly #endpoints: OpenKeyEndpoints;
-  readonly #grantLifetimeSeconds: number;
+  readonly #taskGrantLifetimeSeconds: number;
+  readonly #bootstrapGrantLifetimeSeconds: number;
   #nativeIdentity?: Promise<{ did: string; jwk: Record<string, unknown> }>;
   readonly #nativeGrantQueues = new Map<string, Promise<void>>();
 
   constructor(config: RemoteStoreConfig) {
     this.#config = config;
     const openkeyOrigin = new URL(config.openkeyHost).origin;
+    const openkeyApiOrigin = new URL(
+      config.openkeyApiHost ?? (openkeyOrigin === "https://openkey.so" ? "https://api.openkey.so" : openkeyOrigin),
+    ).origin;
+    // Approval results, and the owner's signed approval inside them, are fetched from this origin.
+    if (!openkeyApiOrigin.startsWith("https://")) {
+      throw new Error("The OpenKey API origin must use https.");
+    }
     this.#endpoints = {
       openkeyOrigin,
-      openkeyApiOrigin: new URL(
-        config.openkeyApiHost ?? (openkeyOrigin === "https://openkey.so" ? "https://api.openkey.so" : openkeyOrigin),
-      ).origin,
+      openkeyApiOrigin,
       linksApiOrigin: new URL(config.linksApiOrigin ?? DEFAULT_LINKS_API_ORIGIN).origin,
     };
-    this.#grantLifetimeSeconds = lifetimeSeconds(config.delegationExpiry);
+    this.#taskGrantLifetimeSeconds = lifetimeSeconds(config.delegationExpiry);
+    this.#bootstrapGrantLifetimeSeconds = lifetimeSeconds(config.bootstrapDelegationExpiry ?? DEFAULT_BOOTSTRAP_GRANT_EXPIRY);
+    this.#scheduleSweep(IDLE_SWEEP_DELAY_MS);
+  }
+
+  #scheduleSweep(delay: number): void {
+    this.#sweepTimer = setTimeout(() => {
+      const started = performance.now();
+      void this.sweepIdleTenants()
+        .catch(() => writeDiagnostic("idle sweep failed"))
+        .finally(() => {
+          if (!this.#closed) this.#scheduleSweep(Math.max(0, IDLE_SWEEP_INTERVAL_MS - (performance.now() - started)));
+        });
+    }, delay);
+    this.#sweepTimer.unref();
   }
 
   async nativeServiceIdentity(): Promise<NativeServiceIdentity> {
@@ -546,11 +594,14 @@ export class RemoteTenantStore {
     await this.#hasValidSession(tenant, ownerDids);
   }
 
-  async connectStatus(subject: string, ownerDids: readonly string[] = []): Promise<ConnectStatus> {
+  async connectStatus(subject: string, ownerDids: readonly string[]): Promise<ConnectStatus> {
     const tenant = await this.#ensureTenant(subject);
     await this.#collectApprovals(tenant);
     const state = await this.#sessionState(tenant, ownerDids, true);
-    if (state === "valid") return { connected: true, sessionDid: tenant.sessionDid };
+    if (state === "valid") {
+      await this.#recordSuccessfulUse(tenant.stateRoot);
+      return { connected: true, sessionDid: tenant.sessionDid };
+    }
     // An unconfirmed session is not connected, but no new approval is issued for it.
     if (state === "unknown") return { connected: false, sessionDid: tenant.sessionDid };
     const pending = await this.#createPending(subject, ownerDids, "bootstrap", BOOTSTRAP_PERMISSIONS);
@@ -567,8 +618,13 @@ export class RemoteTenantStore {
     ownerDids: readonly string[],
     result: unknown,
     invocation?: McpOperationInvocation,
+    acceptedNodeInvocation = false,
   ): Promise<unknown> {
     if (!isRecord(result)) return result;
+    if (result.status === "ok") {
+      if (acceptedNodeInvocation) await this.#recordSuccessfulUse(this.tenantStateRoot(subject));
+      return result;
+    }
     if (result.status === "error" && isRecord(result.error) &&
       (result.error.code === "SESSION_NOT_FOUND" || result.error.code === "AUTH_REQUIRED")) {
       const tenant = await this.#ensureTenant(subject);
@@ -747,6 +803,11 @@ export class RemoteTenantStore {
    */
   async approvalLink(state: string): Promise<string> {
     const located = await this.#readPending(state);
+    const removal = this.#idleRemovals.get(located.stateRoot);
+    if (removal !== undefined) {
+      await removal;
+      return this.approvalLink(state);
+    }
     const path = this.#pendingPath(located.stateRoot, located.pending.nonce);
     const prior = this.#linkCreations.get(path);
     if (prior) return prior;
@@ -763,16 +824,38 @@ export class RemoteTenantStore {
     if (pending === null || pending.version !== PENDING_VERSION) {
       throw new ApprovalRequestError("state_not_pending", "Approval state is invalid or already used.");
     }
-    if (pending.openkey !== undefined && this.#currentRequest(pending.openkey)) {
+    if (await fileModifiedAt(this.#retiringPath(stateRoot)) !== undefined) {
+      throw new ApprovalRequestError("state_not_pending", "Approval state is invalid or already used.");
+    }
+    if (pending.openkey !== undefined && this.#currentRequest(pending.openkey) &&
+      this.#askCurrent(pending.kind, pending.openkey)) {
       if (Date.parse(pending.openkey.expiresAt) <= Date.now()) {
         throw new ApprovalRequestError("state_expired", "Approval state has expired.");
       }
       this.#startCollectionPoll(stateRoot, pending.nonce);
       return pending.openkey.link;
     }
-    // A request made against other OpenKey origins is never opened or collected; this visit asks again.
-    if (pending.openkey !== undefined) writeDiagnostic("approval dropped: reason=openkey_origin_changed");
+    if (pending.openkey !== undefined) {
+      // Typed reasons only; a request made against other origins, or asking for more than this server now grants,
+      // is never opened or collected on this visit, and this visit asks again.
+      writeDiagnostic(!this.#currentRequest(pending.openkey)
+        ? "approval dropped: reason=openkey_origin_changed"
+        : !this.#withinGrantCeiling(pending.kind, pending.openkey)
+          ? "approval dropped: reason=grant_lifetime_over_ceiling"
+          : "approval dropped: reason=request_ask_changed");
+    }
     const tenant = await this.#readTenant(pending.tenantId);
+    const [marker, exposures] = await Promise.all([
+      fileModifiedAt(this.#callMarkerPath(stateRoot)),
+      readJson<LeaseExposures>(this.#leaseExposuresPath(stateRoot)),
+    ]);
+    const verified = Math.max(this.#lastCalls.get(stateRoot) ?? 0, marker ?? 0);
+    let anchor = verified || Date.parse(pending.createdAt);
+    if (verified === 0 && exposures !== null) {
+      anchor = Math.min(anchor, exposures.unknownSince || Infinity);
+      for (const exposure of Object.values(exposures.pending)) anchor = Math.min(anchor, exposure.createdAt);
+    }
+    const lastPossibleEnd = anchor + TENANT_IDLE_MS + IDLE_APPROVAL_HEADROOM_MS;
     let openkey: OpenKeyRequestState;
     try {
       openkey = await createOpenKeyRequest(this.#endpoints, {
@@ -780,19 +863,27 @@ export class RemoteTenantStore {
         nodeHost: this.#config.nodeHost,
         permissions: pending.permissions,
         reason: approvalReason(pending),
-        grantLifetimeSeconds: this.#grantLifetimeSeconds,
-        ...(pending.kind === "bootstrap" ? { leaseLifetimeSeconds: BOOTSTRAP_LEASE_SECONDS } : {}),
-        expiresAt: new Date(pending.expiresAt),
+        grantLifetimeSeconds: pending.kind === "bootstrap" ? this.#bootstrapGrantLifetimeSeconds : this.#taskGrantLifetimeSeconds,
+        ...(pending.kind === "bootstrap" ? { leaseLifetimeSeconds: BOOTSTRAP_LEASE_SECONDS, purpose: "standing" as const } : {}),
+        expiresAt: new Date(Math.min(Date.parse(pending.expiresAt), lastPossibleEnd)),
       });
     } catch (error) {
       throw new ApprovalLinkUnavailableError(error);
     }
+    if (Date.parse(openkey.expiresAt) > lastPossibleEnd) {
+      throw new ApprovalRequestError("state_expired", "Approval state has expired.");
+    }
     if (!samePrincipal(openkey.request.issuer, tenant.sessionDid)) {
       throw new ApprovalLinkUnavailableError(new Error("The approval request does not name this tenant's key."));
     }
-    // The link stays usable as long as the OpenKey request it opens.
-    const expiresAt = new Date(Math.max(Date.parse(pending.expiresAt), Date.parse(openkey.expiresAt))).toISOString();
-    await secureWrite(path, { ...pending, expiresAt, openkey });
+    // Record the exposure before revealing the link. A stopped/restarted server may never see the result.
+    if (openkey.request.renewal !== undefined) {
+      await this.#updateIdleSignals(stateRoot, { exposure: {
+        id: openkey.requestId, createdAt: Date.parse(pending.createdAt), expiresAt: Date.parse(openkey.expiresAt),
+      } });
+    }
+    // Reopening an approval must not extend the lifetime of the MCP's original link.
+    await secureWrite(path, { ...pending, openkey });
     this.#startCollectionPoll(stateRoot, pending.nonce);
     return openkey.link;
   }
@@ -821,12 +912,11 @@ export class RemoteTenantStore {
       if (isRecord(error) && error.code === "ENOENT") return;
       throw error;
     }
+    const nonces = new Set<string>();
     for (const name of names) {
-      if (name.endsWith(".json.processing")) await this.#recoverProcessing(join(directory, name));
+      const match = /^([A-Za-z0-9_-]{32})\.json(?:\.processing)?$/.exec(name);
+      if (match !== null) nonces.add(match[1]!);
     }
-    const nonces = (await readdir(directory).catch(() => [] as string[]))
-      .filter((name) => name.endsWith(".json"))
-      .map((name) => name.slice(0, -".json".length));
     for (const nonce of nonces) {
       await this.#collectApproval(tenant.stateRoot, nonce, CALL_COLLECTION_TIMEOUT_MS);
     }
@@ -844,7 +934,7 @@ export class RemoteTenantStore {
       return;
     }
     const stateRoot = join(this.#config.stateDir, "tenants", pending.tenantId);
-    if (this.#collections.has(this.#pendingPath(stateRoot, pending.nonce))) return;
+    await this.#retainLegacyExposure(stateRoot, pending);
     if (pending.openkey.storedCid !== undefined) {
       await this.#acknowledge(stateRoot, pending.openkey);
       await rm(claimed, { force: true });
@@ -860,6 +950,7 @@ export class RemoteTenantStore {
 
   /** One collection attempt for one pending approval, single-flight per approval. */
   async #collectApproval(stateRoot: string, nonce: string, timeoutMs: number): Promise<CollectionOutcome> {
+    if (this.#idleRemovals.has(stateRoot)) return "pending";
     const path = this.#pendingPath(stateRoot, nonce);
     const running = this.#collections.get(path);
     if (running) return running;
@@ -874,15 +965,28 @@ export class RemoteTenantStore {
   }
 
   async #collectStep(stateRoot: string, nonce: string, timeoutMs: number): Promise<CollectionOutcome> {
+    if (await fileModifiedAt(this.#retiringPath(stateRoot)) !== undefined) return "idle";
     const path = this.#pendingPath(stateRoot, nonce);
-    const pending = await readJson<PendingApproval>(path).catch(() => null);
+    let pending = await readJson<PendingApproval>(path);
+    if (pending === null && await fileModifiedAt(`${path}.processing`) !== undefined) {
+      await this.#recoverProcessing(`${path}.processing`);
+      pending = await readJson<PendingApproval>(path);
+      if (pending === null && await fileModifiedAt(`${path}.processing`) !== undefined) return "pending";
+    }
     if (pending === null || pending.version !== PENDING_VERSION || pending.openkey === undefined) return "idle";
     const openkey = pending.openkey;
+    await this.#retainLegacyExposure(stateRoot, pending);
     // Results are fetched only from the OpenKey API origin this server is configured with.
     if (!this.#currentRequest(openkey)) {
       writeDiagnostic("approval dropped: reason=openkey_origin_changed");
       await rm(path, { force: true });
       return "done";
+    }
+    // A scoped request that asks for more than the configured task lifetime is never collected, so its result is
+    // never admitted or stored. The file stays until it expires; the owner's next visit asks again.
+    if (!this.#withinGrantCeiling(pending.kind, openkey)) {
+      writeDiagnostic("approval held: reason=grant_lifetime_over_ceiling");
+      return "idle";
     }
     if (Date.now() >= collectionDeadline(openkey)) {
       await rm(path, { force: true });
@@ -924,10 +1028,14 @@ export class RemoteTenantStore {
         throw new ApprovalRequestError("state_not_pending", "Approval state is invalid or already used.");
       }
       const { checked } = collected;
-      const storedCid = pending.kind === "bootstrap"
+      const stored = pending.kind === "bootstrap"
         ? await this.#storeBootstrap(current, pending, checked.delegation, checked.ownerDid, checked.renewal)
         : await this.#storeDelegation(current, pending, checked.delegation, checked.ownerDid);
-      await secureWrite(claimed, { ...pending, openkey: { ...openkey, storedCid } });
+      await this.#updateIdleSignals(stateRoot, {
+        at: stored.approvedAt,
+        ...(openkey.request.renewal === undefined ? {} : { resolved: openkey.requestId }),
+      });
+      await secureWrite(claimed, { ...pending, openkey: { ...openkey, storedCid: stored.cid } });
     })();
     this.#approvalProcessing.set(stateRoot, processing);
     try {
@@ -993,18 +1101,22 @@ export class RemoteTenantStore {
   /**
    * Poll one opened approval until it is collected or its request and result
    * window end: every 2 s for the first minute, then every 10 s. At most
-   * `MAX_COLLECTION_POLLS` run at once; beyond that the tenant's next call
+   * `MAX_COLLECTION_POLLS` run at once, and one tenant holds at most
+   * `MAX_COLLECTION_POLLS_PER_TENANT` of them; beyond that the tenant's next call
    * collects.
    */
   #startCollectionPoll(stateRoot: string, nonce: string): void {
     const key = this.#pendingPath(stateRoot, nonce);
     if (this.#closed || this.#polls.has(key) || this.#polls.size >= MAX_COLLECTION_POLLS) return;
+    let tenantPolls = 0;
+    for (const poll of this.#polls.values()) if (poll.stateRoot === stateRoot) tenantPolls++;
+    if (tenantPolls >= MAX_COLLECTION_POLLS_PER_TENANT) return;
     const startedAt = Date.now();
     const schedule = (): void => {
       const delay = Date.now() - startedAt < FAST_POLL_WINDOW_MS ? APPROVAL_POLL_INTERVAL_MS : SLOW_POLL_INTERVAL_MS;
       const timer = setTimeout(() => void tick(), delay);
       timer.unref();
-      this.#polls.set(key, timer);
+      this.#polls.set(key, { stateRoot, timer });
     };
     const tick = async (): Promise<void> => {
       const outcome = await this.#collectApproval(stateRoot, nonce, POLL_COLLECTION_TIMEOUT_MS);
@@ -1017,12 +1129,241 @@ export class RemoteTenantStore {
     schedule();
   }
 
-  /** Stop background collection. Pending approvals stay on disk for the next start. */
+  /** Stop background collection and idle sweeps. Pending approvals stay on disk for the next start. */
   async close(): Promise<void> {
     this.#closed = true;
-    for (const timer of this.#polls.values()) clearTimeout(timer);
+    clearTimeout(this.#sweepTimer);
+    for (const { timer } of this.#polls.values()) clearTimeout(timer);
     this.#polls.clear();
-    await Promise.allSettled([...this.#collections.values()]);
+    await Promise.allSettled([...this.#collections.values(), this.#sweeping]);
+  }
+
+  /**
+   * Retire idle holders at the node before removing their keys, sessions, grants and links.
+   * Resolves to the number of tenants removed.
+   */
+  async sweepIdleTenants(): Promise<number> {
+    this.#sweeping ??= this.#sweepIdle().finally(() => {
+      this.#sweeping = undefined;
+    });
+    return this.#sweeping;
+  }
+
+  async #sweepIdle(): Promise<number> {
+    const tenants = join(this.#config.stateDir, "tenants");
+    const names = await readdir(tenants).catch((error: unknown) => {
+      if (isRecord(error) && error.code === "ENOENT") return [];
+      throw error;
+    });
+    let removed = 0;
+    tenants: for (const tenantId of names) {
+      if (this.#closed) break;
+      if (!/^[a-f0-9]{64}$/.test(tenantId)) continue;
+      const stateRoot = join(tenants, tenantId);
+      const lastActivity = await this.#lastActivity(stateRoot).catch(() => {
+        writeDiagnostic("idle tenant activity unavailable");
+        return undefined;
+      });
+      // Read again with no await before the removal is registered: a call seen meanwhile keeps the tenant.
+      if (lastActivity === undefined ||
+        Date.now() - Math.max(lastActivity, this.#lastCalls.get(stateRoot) ?? 0) < TENANT_IDLE_MS) continue;
+      if (this.#idleSignalWrites.has(stateRoot)) continue;
+      if ((this.#liveExposureUntil.get(stateRoot) ?? 0) > Date.now()) continue;
+      // Do not let a slow approval for one account block every other account's retirement.
+      const pending = `${this.#pendingDirectory(stateRoot)}/`;
+      for (const work of [this.#linkCreations, this.#collections]) {
+        for (const path of work.keys()) {
+          if (path.startsWith(pending)) continue tenants;
+        }
+      }
+      const removal = this.#removeTenant(tenantId, stateRoot)
+        .catch(() => {
+          writeDiagnostic("idle tenant retirement not confirmed");
+          return false;
+        })
+        .finally(() => this.#idleRemovals.delete(stateRoot));
+      this.#idleRemovals.set(stateRoot, removal);
+      if (await removal) {
+        removed++;
+        writeDiagnostic("idle tenant removed");
+      }
+    }
+    return removed;
+  }
+
+  /** Last verified activity; a lost result can be bounded only by its durable request creation. */
+  async #lastActivity(stateRoot: string): Promise<number | undefined> {
+    if (await fileModifiedAt(this.#retiringPath(stateRoot)) !== undefined) return 0;
+    await this.#restoreApprovalPolling(stateRoot);
+    const [marker, session, key, exposures] = await Promise.all([
+      fileModifiedAt(this.#callMarkerPath(stateRoot)),
+      fileModifiedAt(this.#sessionPath(stateRoot)),
+      fileModifiedAt(this.#keyPath(stateRoot)),
+      readJson<LeaseExposures>(this.#leaseExposuresPath(stateRoot)),
+    ]);
+    if (session === undefined && key === undefined) return undefined;
+    const verified = Math.max(this.#lastCalls.get(stateRoot) ?? 0, marker ?? 0);
+    let unknownSince = exposures?.unknownSince || Infinity;
+    const now = Date.now();
+    for (const exposure of Object.values(exposures?.pending ?? {})) {
+      if (!Number.isFinite(exposure.createdAt) || !Number.isFinite(exposure.expiresAt)) {
+        throw new Error("Invalid stored approval exposure.");
+      }
+      if (exposure.expiresAt > now) return undefined;
+      unknownSince = Math.min(unknownSince, exposure.createdAt);
+    }
+    return verified || (Number.isFinite(unknownSince) ? unknownSince : Math.max(session ?? 0, key ?? 0));
+  }
+
+  /** Resume durable polling and backfill the custody record for pre-upgrade exposed links. */
+  async #restoreApprovalPolling(stateRoot: string): Promise<void> {
+    const directory = this.#pendingDirectory(stateRoot);
+    const names = await readdir(directory).catch((error: unknown) => {
+      if (isRecord(error) && error.code === "ENOENT") return [];
+      throw error;
+    });
+    for (const name of names) {
+      if (!name.endsWith(".json") && !name.endsWith(".json.processing")) continue;
+      const pending = await readJson<PendingApproval>(join(directory, name));
+      if (pending?.version !== PENDING_VERSION || pending.openkey === undefined) continue;
+      await this.#retainLegacyExposure(stateRoot, pending);
+      if (collectionDeadline(pending.openkey) > Date.now()) {
+        this.#startCollectionPoll(stateRoot, pending.nonce);
+      }
+    }
+  }
+
+  async #retainLegacyExposure(stateRoot: string, pending: PendingApproval): Promise<void> {
+    const openkey = pending.openkey;
+    if (openkey?.request?.renewal === undefined || openkey.storedCid !== undefined) return;
+    const createdAt = Date.parse(pending.createdAt);
+    const expiresAt = Date.parse(openkey.expiresAt);
+    const exposures = await readJson<LeaseExposures>(this.#leaseExposuresPath(stateRoot));
+    if (exposures?.pending[openkey.requestId] !== undefined ||
+      (expiresAt <= Date.now() && (exposures?.unknownSince || Infinity) <= createdAt)) return;
+    await this.#updateIdleSignals(stateRoot, { exposure: { id: openkey.requestId, createdAt, expiresAt } });
+  }
+
+  async #recordSuccessfulUse(stateRoot: string): Promise<void> {
+    if (await fileModifiedAt(this.#retiringPath(stateRoot)) !== undefined || this.#idleRemovals.has(stateRoot)) return;
+    const calledAt = Date.now();
+    await this.#updateIdleSignals(stateRoot, { at: calledAt });
+  }
+
+  async #updateIdleSignals(
+    stateRoot: string,
+    change: { at?: number; exposure?: { id: string; createdAt: number; expiresAt: number }; resolved?: string },
+  ): Promise<void> {
+    if (change.at !== undefined) {
+      this.#lastCalls.set(stateRoot, Math.max(this.#lastCalls.get(stateRoot) ?? 0, change.at));
+    }
+    const prior = this.#idleSignalWrites.get(stateRoot);
+    const updating = (async () => {
+      if (prior) await prior.catch(() => undefined);
+      if (change.at !== undefined) {
+        const marker = this.#callMarkerPath(stateRoot);
+        const previous = await fileModifiedAt(marker);
+        if (previous === undefined || change.at > previous) await secureWrite(marker, "", change.at);
+      }
+      if (change.exposure !== undefined || change.resolved !== undefined) {
+        const path = this.#leaseExposuresPath(stateRoot);
+        const exposures = await readJson<LeaseExposures>(path) ?? { unknownSince: 0, pending: {} };
+        if (change.resolved !== undefined) delete exposures.pending[change.resolved];
+        const now = Date.now();
+        let liveUntil = 0;
+        for (const [id, exposure] of Object.entries(exposures.pending)) {
+          if (exposure.expiresAt + RESULT_COLLECTION_GRACE_MS > now) {
+            liveUntil = Math.max(liveUntil, exposure.expiresAt);
+            continue;
+          }
+          exposures.unknownSince = Math.min(exposures.unknownSince || Infinity, exposure.createdAt);
+          delete exposures.pending[id];
+        }
+        if (change.exposure !== undefined) {
+          const { id, createdAt, expiresAt } = change.exposure;
+          if (!Number.isFinite(createdAt) || !Number.isFinite(expiresAt) || expiresAt <= createdAt) {
+            throw new Error("Invalid approval link expiry.");
+          }
+          exposures.pending[id] = { createdAt, expiresAt };
+          liveUntil = Math.max(liveUntil, expiresAt);
+        }
+        await secureWrite(path, exposures);
+        if (liveUntil > now) this.#liveExposureUntil.set(stateRoot, liveUntil);
+        else this.#liveExposureUntil.delete(stateRoot);
+      }
+    })();
+    this.#idleSignalWrites.set(stateRoot, updating);
+    try {
+      await updating;
+    } finally {
+      if (this.#idleSignalWrites.get(stateRoot) === updating) this.#idleSignalWrites.delete(stateRoot);
+    }
+  }
+
+  /** Fence new approval work, then retire the key at the node before touching saved authority. */
+  async #removeTenant(tenantId: string, stateRoot: string): Promise<true> {
+    const retiring = this.#retiringPath(stateRoot);
+    const fenced = await fileModifiedAt(retiring) !== undefined;
+    if (!fenced) {
+      await secureWrite(retiring, true);
+    } else if (await fileModifiedAt(this.#keyPath(stateRoot)) === undefined) {
+      // A removal that stopped after the key went. The key is deleted only once the node confirmed retirement,
+      // so only local files are left, and there is no key to retire with: finish them, with the fence last.
+      await this.#removeCustody(stateRoot);
+      this.#lastCalls.delete(stateRoot);
+      this.#liveExposureUntil.delete(stateRoot);
+      return true;
+    }
+    const tenant = await this.#readTenant(tenantId);
+    const [session, additional] = await Promise.all([
+      readJson<unknown>(this.#sessionPath(stateRoot)),
+      readJson<unknown>(this.#additionalPath(stateRoot)),
+    ]);
+    if (additional !== null && !Array.isArray(additional)) throw new Error("Malformed stored grants.");
+    const delegations: string[] = [];
+    if (session !== null) delegations.push(retirementRoot(session));
+    for (const entry of additional ?? []) delegations.push(retirementRoot(isRecord(entry) ? entry.delegation : undefined));
+    const host = new URL(this.#config.nodeHost).origin;
+    const key = createPrivateKey({ key: tenant.jwk, format: "jwk" });
+    const receipt = await retireSessionKey({
+      hosts: [host],
+      delegations,
+      signer: {
+        verificationMethod: tenant.sessionDid,
+        async signJwt(header, payload) {
+          const input = `${Buffer.from(JSON.stringify(header)).toString("base64url")}.${Buffer.from(JSON.stringify(payload)).toString("base64url")}`;
+          return `${input}.${sign(null, Buffer.from(input), key).toString("base64url")}`;
+        },
+      },
+    });
+    if (!receipt.confirmed.includes(host)) throw new Error("Node did not record session retirement.");
+    await this.#clearAuthority(tenant);
+    await this.#removeCustody(stateRoot);
+    this.#lastCalls.delete(stateRoot);
+    this.#liveExposureUntil.delete(stateRoot);
+    return true;
+  }
+
+  /**
+   * Remove the custody this server holds for a retired tenant, by name: the delegate key, session, grants, approvals,
+   * markers and caches (`CUSTODY_PROFILE_NAMES`, `CUSTODY_TINYCLOUD_FILE`). Every other file in the state directory
+   * is not ours to delete and stays, and so does any directory that still holds one. The key and the retiring fence
+   * go last, so an interrupted removal can be retried.
+   */
+  async #removeCustody(stateRoot: string): Promise<void> {
+    const tinycloud = join(stateRoot, ".tinycloud");
+    const profiles = join(tinycloud, "profiles");
+    const profile = join(profiles, PROFILE);
+    await removeNamed(profile, (name) => name === "pending" || (name !== "key.json" && CUSTODY_PROFILE_FILE.test(name)));
+    await removeNamed(tinycloud, (name) => name !== "retiring" && CUSTODY_TINYCLOUD_FILE.test(name));
+    await rm(this.#keyPath(stateRoot), { force: true });
+    await rm(this.#retiringPath(stateRoot), { force: true });
+    // Only what this server created and emptied: a directory that holds anything else stays.
+    for (const directory of [profile, profiles, tinycloud, stateRoot]) {
+      await rmdir(directory).catch((error: unknown) => {
+        if (!(isRecord(error) && (error.code === "ENOENT" || error.code === "ENOTEMPTY" || error.code === "EEXIST"))) throw error;
+      });
+    }
   }
 
   /** Whether a stored request opens on, and is collected from, the OpenKey origins this server is configured with. */
@@ -1032,16 +1373,36 @@ export class RemoteTenantStore {
       new URL(openkey.link).origin === new URL(this.#endpoints.openkeyOrigin).origin;
   }
 
+  /**
+   * Whether a request asks for no more than this server grants. A scoped request is held to the task lifetime, so
+   * one opened under an older, longer setting never stores a longer scoped grant. A shorter ask is always allowed.
+   */
+  #withinGrantCeiling(kind: PendingApproval["kind"], openkey: OpenKeyRequestState): boolean {
+    return kind === "bootstrap" || openkey.request.grantLifetimeSeconds <= this.#taskGrantLifetimeSeconds;
+  }
+
+  /**
+   * Whether a stored request is the ask this server makes now, so a link is served or reused only for it. A
+   * connection request signs a standing purpose and the current lease; a scoped one signs neither.
+   */
+  #askCurrent(kind: PendingApproval["kind"], openkey: OpenKeyRequestState): boolean {
+    const { renewal, purpose } = openkey.request;
+    return kind === "bootstrap"
+      ? renewal?.version === 1 && renewal.leaseLifetimeSeconds === BOOTSTRAP_LEASE_SECONDS && purpose === "standing"
+      : renewal === undefined && purpose === undefined && this.#withinGrantCeiling(kind, openkey);
+  }
+
   async #storeBootstrap(
     tenant: TenantProfile,
     pending: PendingApproval,
     data: Record<string, unknown>,
     resultOwner: string,
     renewal: ApprovalRenewal | undefined,
-  ): Promise<string> {
+  ): Promise<{ cid: string; approvedAt: number }> {
     const { node, session } = await this.#restoreApproval(tenant, data, resultOwner);
-    this.#assertCurrentApproval(pending, session);
-    if (pending.ownerDids.length > 0 && !pending.ownerDids.some((did) => samePrincipal(node.did, did))) {
+    const issuedAt = this.#assertCurrentApproval(pending, session);
+    // An approval is stored only when its verified signer is the OAuth principal that asked.
+    if (!pending.ownerDids.some((did) => samePrincipal(node.did, did))) {
       throw new ApprovalOwnerMismatchError();
     }
     // The verifier reports one entry per signed action; the SDK subset check
@@ -1049,7 +1410,7 @@ export class RemoteTenantStore {
     if (!isCapabilitySubset(pending.permissions, node.getVerifiedSessionCapabilities()).subset) {
       throw new Error("The approved delegation does not cover the requested account access.");
     }
-    if (renewal !== undefined) await this.#admitRenewal(tenant, node.did, session, renewal);
+    const approvedAt = renewal === undefined ? issuedAt : await this.#admitRenewal(tenant, node.did, session, renewal);
     const profile = await readJson<Record<string, unknown>>(this.#profilePath(tenant.stateRoot));
     await secureWrite(this.#profilePath(tenant.stateRoot), {
       ...profile,
@@ -1064,7 +1425,7 @@ export class RemoteTenantStore {
     });
     this.#renewalRequired.delete(tenant.stateRoot);
     this.#activeSessions.delete(tenant.stateRoot);
-    return session.delegationCid;
+    return { cid: session.delegationCid, approvedAt };
   }
 
   /**
@@ -1076,10 +1437,11 @@ export class RemoteTenantStore {
     ownerDid: string,
     session: CallbackSession,
     renewal: ApprovalRenewal,
-  ): Promise<void> {
+  ): Promise<number> {
     let signed: { originalExpiresAt: string; leaseSignedExpiresAt: string };
     try {
       signed = await verifyOwnerRenewalLease(session, ownerDid, renewal);
+      if (Date.parse(renewal.approvedAt) > Date.now() + 60_000) throw new Error("Approval time is in the future.");
     } catch (error) {
       throw new ApprovalStageError("renewal", "RENEWAL_LEASE_MISMATCH", undefined, error);
     }
@@ -1099,6 +1461,7 @@ export class RemoteTenantStore {
         leaseAuthorization: renewal.receipt.leaseAuthorization,
         leaseCid: renewal.receipt.leaseCid,
         leaseExpiresAt: signed.leaseSignedExpiresAt,
+        signal: AbortSignal.timeout(10_000),
       });
     } catch (error) {
       const code = isRecord(error) ? error.code : undefined;
@@ -1108,6 +1471,7 @@ export class RemoteTenantStore {
       }
       throw new RenewalAdmissionUnavailableError(error);
     }
+    return Date.parse(renewal.approvedAt);
   }
 
   async #storeDelegation(
@@ -1115,12 +1479,12 @@ export class RemoteTenantStore {
     pending: PendingApproval,
     data: Record<string, unknown>,
     resultOwner: string,
-  ): Promise<string> {
+  ): Promise<{ cid: string; approvedAt: number }> {
     if (pending.requestId === undefined) throw new Error("Authority request is missing.");
     // Unlike bootstrap there is no empty-list exemption: a delegation is only
     // imported when its verified signer is the OAuth principal that asked.
     const { node, session } = await this.#restoreApproval(tenant, data, resultOwner);
-    this.#assertCurrentApproval(pending, session);
+    const issuedAt = this.#assertCurrentApproval(pending, session);
     if (!pending.ownerDids.some((did) => samePrincipal(node.did, did))) throw new ApprovalOwnerMismatchError();
     // OpenKey returns a signed-login (CACAO) delegation. Every field is
     // projected from the verified SIWE; `tinycloud.auth.import` verifies it
@@ -1167,15 +1531,15 @@ export class RemoteTenantStore {
       );
     }
     if (result.status !== "ok") throw new ApprovalStageError("auth_import", "AUTHORITY_REQUIRED");
-    return session.delegationCid;
+    return { cid: session.delegationCid, approvedAt: issuedAt };
   }
 
-  #assertCurrentApproval(pending: PendingApproval, session: CallbackSession): void {
-    const issuedAt = /^Issued At: ([^\r\n]+)\r?$/m.exec(session.siwe)?.[1];
-    if (issuedAt === undefined || !Number.isFinite(Date.parse(issuedAt)) ||
-      Date.parse(issuedAt) < Date.parse(pending.createdAt)) {
+  #assertCurrentApproval(pending: PendingApproval, session: CallbackSession): number {
+    const issuedAt = Date.parse(/^Issued At: ([^\r\n]+)\r?$/m.exec(session.siwe)?.[1] ?? "");
+    if (!Number.isFinite(issuedAt) || issuedAt < Date.parse(pending.createdAt)) {
       throw new ApprovalStageError("restore_approval", "APPROVAL_PREDATES_REQUEST");
     }
+    return issuedAt;
   }
 
   /**
@@ -1221,12 +1585,18 @@ export class RemoteTenantStore {
 
   async #ensureTenant(subject: string): Promise<TenantProfile> {
     const tenantId = this.#tenantId(subject);
-    const current = this.#initializing.get(tenantId);
-    if (current !== undefined) return current;
-    const initializing = this.#initializeTenant(tenantId).finally(() => {
-      this.#initializing.delete(tenantId);
-    });
-    this.#initializing.set(tenantId, initializing);
+    const stateRoot = join(this.#config.stateDir, "tenants", tenantId);
+    await this.#idleRemovals.get(stateRoot);
+    if (await fileModifiedAt(this.#retiringPath(stateRoot)) !== undefined) {
+      throw new Error("The hosted delegate is being retired.");
+    }
+    let initializing = this.#initializing.get(tenantId);
+    if (initializing === undefined) {
+      initializing = this.#initializeTenant(tenantId).finally(() => {
+        this.#initializing.delete(tenantId);
+      });
+      this.#initializing.set(tenantId, initializing);
+    }
     return initializing;
   }
 
@@ -1433,6 +1803,7 @@ export class RemoteTenantStore {
   ): Promise<PendingApproval> {
     const clearing = this.#clearing.get(this.tenantStateRoot(subject));
     if (clearing) await clearing;
+    if (ownerDids.length === 0) throw new Error("An approval link needs the account that requested it.");
     const tenant = await this.#ensureTenant(subject);
     const tenantId = this.#tenantId(subject);
     const normalizedOwners = ownerDids.map(normalizeDid);
@@ -1453,11 +1824,10 @@ export class RemoteTenantStore {
     ownerDids: string[],
     requestId?: string,
   ): Promise<PendingApproval> {
-    const leaseAsk = kind === "bootstrap" ? BOOTSTRAP_LEASE_SECONDS : undefined;
     const reusable = await reusablePending(
       this.#pendingDirectory(tenant.stateRoot),
       { tenantId, approvalEpoch: tenant.approvalEpoch, kind, requestId, permissions, ownerDids },
-      (openkey) => this.#currentRequest(openkey) && openkey.request.renewal?.leaseLifetimeSeconds === leaseAsk,
+      (openkey) => this.#currentRequest(openkey) && this.#askCurrent(kind, openkey),
     );
     if (reusable !== undefined) return reusable;
     const nonce = randomBytes(24).toString("base64url");
@@ -1709,6 +2079,54 @@ export class RemoteTenantStore {
   #pendingDirectory(stateRoot: string): string {
     return join(stateRoot, ".tinycloud", "profiles", PROFILE, "pending");
   }
+
+  #callMarkerPath(stateRoot: string): string {
+    return join(stateRoot, ".tinycloud", "last-call");
+  }
+
+  #retiringPath(stateRoot: string): string {
+    return join(stateRoot, ".tinycloud", "retiring");
+  }
+
+  #leaseExposuresPath(stateRoot: string): string {
+    return join(stateRoot, ".tinycloud", "lease-exposures.json");
+  }
+}
+
+/** Files under `.tinycloud/profiles/<profile>/` that are the delegate's key, authority or caches, with their atomic-write temporaries. `.lock` is the operations runtime's profile lock. */
+const CUSTODY_PROFILE_NAMES = [
+  "key.json", "profile.json", "delegation-binding-migration.json", ".lock",
+  ...["session", "additional-delegations", "auth-requests", "registry-cache", "registry-sequences"]
+    .flatMap((store) => [`${store}.json`, `${store}.json.metadata.json`]),
+];
+/** The lock's owner record, staged beside `.lock` under the name `.lock-owner-<token>.tmp`. */
+const CUSTODY_PROFILE_FILE = new RegExp(`${namedFile(CUSTODY_PROFILE_NAMES).source}|^\\.lock-owner-[^/]+\\.tmp$`);
+/** Entries directly under `.tinycloud/` that this server keeps for the tenant (`profile-locks` is the operations runtime's lock bookkeeping). The `retiring` fence itself is removed separately, last; its temporaries go here. */
+const CUSTODY_TINYCLOUD_FILE = namedFile(["native-grant.json", "last-call", "lease-exposures.json", "profile-locks", "retiring"]);
+
+/** Matches exactly these names, and their `<name>.<suffix>.tmp` / `.<name>.<suffix>.tmp` temporaries. */
+function namedFile(names: readonly string[]): RegExp {
+  const escaped = names.map((name) => name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|");
+  return new RegExp(`^(?:${escaped})$|^\\.?(?:${escaped})\\.[^/]+\\.tmp$`);
+}
+
+/** Delete the entries of `directory` whose names `matches` accepts; nothing else. A missing directory is nothing to delete. */
+async function removeNamed(directory: string, matches: (name: string) => boolean): Promise<void> {
+  let names: string[];
+  try {
+    names = await readdir(directory);
+  } catch (error) {
+    if (isRecord(error) && error.code === "ENOENT") return;
+    throw error;
+  }
+  for (const name of names) if (matches(name)) await rm(join(directory, name), { recursive: true, force: true });
+}
+
+function retirementRoot(delegation: unknown): string {
+  const authorization = isRecord(delegation) && isRecord(delegation.delegationHeader)
+    ? delegation.delegationHeader.Authorization : undefined;
+  if (typeof authorization !== "string" || authorization.length === 0) throw new Error("Malformed stored grant.");
+  return authorization;
 }
 
 let wasmInitialized = false;
@@ -1878,17 +2296,27 @@ async function secureDirectory(path: string): Promise<void> {
   await chmod(path, 0o700);
 }
 
-async function secureWrite(path: string, value: unknown): Promise<void> {
+async function secureWrite(path: string, value: unknown, modifiedAt?: number): Promise<void> {
   const directory = dirname(path);
   await secureDirectory(directory);
   const temporary = `${path}.${process.pid}.${randomBytes(8).toString("hex")}.tmp`;
   await writeFile(temporary, `${JSON.stringify(value, jsonReplacer, 2)}\n`, { mode: 0o600 });
+  if (modifiedAt !== undefined) await utimes(temporary, modifiedAt / 1000, modifiedAt / 1000);
   await rename(temporary, path);
   await chmod(path, 0o600);
 }
 
 function jsonReplacer(_key: string, value: unknown): unknown {
   return value instanceof Date ? value.toISOString() : value;
+}
+
+async function fileModifiedAt(path: string): Promise<number | undefined> {
+  try {
+    return (await stat(path)).mtimeMs;
+  } catch (error) {
+    if (isRecord(error) && error.code === "ENOENT") return undefined;
+    throw error;
+  }
 }
 
 async function readJson<T>(path: string): Promise<T | null> {

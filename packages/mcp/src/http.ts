@@ -202,8 +202,8 @@ function createHostedSurface(
           refuseTool(limits, subject, tool.name, tool.destructive),
       } : {}),
       ...(nativeOwner === undefined ? {
-        transformOperationResult: (result: unknown, invocation: McpOperationInvocation) =>
-          store.decorateAuthorityResult(subject, ownerDids, result, invocation),
+        transformOperationResult: (result: unknown, invocation: McpOperationInvocation, acceptedNodeInvocation: boolean) =>
+          store.decorateAuthorityResult(subject, ownerDids, result, invocation, acceptedNodeInvocation),
       } : {}),
     }, validator);
     if (nativeOwner === undefined) registerConnectTool(server, validator, store, identity, surface, annotationTitles, limits);
