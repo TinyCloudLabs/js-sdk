@@ -4,10 +4,11 @@ import {
   McpServer,
   createMcpHandler,
   fromJsonSchema,
+  bearerAuthChallengeResponse,
   getOAuthProtectedResourceMetadataUrl,
   hostHeaderValidationResponse,
   oauthMetadataResponse,
-  requireBearerAuth,
+  verifyBearerToken,
   type AuthInfo,
   type OAuthMetadata,
 } from "@modelcontextprotocol/server";
@@ -42,6 +43,14 @@ import type { McpOperationInvocation } from "./tools.js";
 import { MCP_VERSION } from "./version.js";
 
 const REQUIRED_SCOPE = "tinycloud:mcp";
+/**
+ * What clients are told to ask for, in the protected-resource metadata and the
+ * 401 challenge. OpenKey issues a refresh token only when `offline_access` is
+ * granted, and clients take their scope from these two places, so leaving it
+ * out signs the user out when the 12-hour access token ends. Not enforced:
+ * only `REQUIRED_SCOPE` is, so a token without `offline_access` still works.
+ */
+const ADVERTISED_SCOPES = [REQUIRED_SCOPE, "offline_access"];
 const MCP_CORS_ALLOWED_HEADERS =
   "Authorization, Content-Type, Accept, Mcp-Protocol-Version, Mcp-Session-Id, Last-Event-ID, Mcp-Method, Mcp-Name";
 const MCP_CORS_EXPOSED_HEADERS = "WWW-Authenticate, Mcp-Session-Id, Mcp-Protocol-Version";
@@ -136,11 +145,16 @@ function createHostedSurface(
     ...(tokenStatus === undefined ? {} : { tokenStatus }),
   });
   const resourceMetadataUrl = getOAuthProtectedResourceMetadataUrl(resourceUrl);
-  const authenticate = requireBearerAuth({
-    verifier,
-    requiredScopes: [REQUIRED_SCOPE],
-    resourceMetadataUrl,
-  });
+  const authenticate = async (request: Request): Promise<AuthInfo | Response> => {
+    const [authorization] = (request.headers.get("authorization") ?? "").split(",");
+    try {
+      return await verifyBearerToken(authorization || undefined, { verifier, requiredScopes: [REQUIRED_SCOPE] });
+    } catch (error) {
+      // The challenge's `scope` is advice for the client, so it comes from
+      // ADVERTISED_SCOPES; `requiredScopes` above is the only enforcement.
+      return bearerAuthChallengeResponse(error, { requiredScopes: ADVERTISED_SCOPES, resourceMetadataUrl });
+    }
+  };
   const store = new RemoteTenantStore({ ...config, publicUrl: resourceUrl });
   const nativeServiceIdentityEnabled = surface === "hosted" && config.nativeServiceCredential !== undefined;
   if (nativeServiceIdentityEnabled) void store.nativeServiceIdentity().catch(() => undefined);
@@ -196,7 +210,7 @@ function createHostedSurface(
     oauthMetadata: config.oauthMetadata,
     resourceServerUrl: resourceUrl,
     serviceDocumentationUrl: new URL("https://docs.tinycloud.xyz/cli/mcp"),
-    scopesSupported: [REQUIRED_SCOPE],
+    scopesSupported: ADVERTISED_SCOPES,
     resourceName: surface === "public" ? "TinyCloud personal records" : "TinyCloud hosted MCP",
   };
   const discoveryRoutes = surface === "hosted"
@@ -299,7 +313,7 @@ function createHostedSurface(
           `Protected Resource Metadata: ${new URL("/.well-known/oauth-protected-resource", resourceUrl)}.`,
           `Authorization server issuer: ${issuer}.`,
           `Authorization server metadata: ${authorizationServerMetadataUrl}.`,
-          `Scope: \`${REQUIRED_SCOPE}\`.`,
+          `Scope: \`${REQUIRED_SCOPE}\` is required. Request \`offline_access\` too, so OpenKey issues a refresh token.`,
           "",
           "Hosted access uses OpenKey OAuth.",
           registrationNote,
