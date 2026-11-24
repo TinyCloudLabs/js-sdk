@@ -48,6 +48,7 @@ in OpenKey and decides who to pair with. Setup takes no code to copy back:
    `{"pending":{"step":1,"of":1,"approvalUrl":…,"expiresAt":…}}` on stdout.
    Exit 8 is not a failure: the approval is still pending. Send the owner the `pending.approvalUrl` (the same link as `openkeyUrl`), ask them to approve it, then re-run `courier init --wait --timeout 60s`. Repeat while it exits 8. Any other non-zero exit is an error: stderr carries `[code]`.
    The same request resumes each time: no new link and no second approval.
+   `init --wait` uses the saved request's `--expiry` and `--renew`. Do not repeat them: a different value is refused.
 3. OpenKey keeps an approved result for 10 minutes only. If `init --wait` reports
    `approval-result-expired` or `approval-expired`, nothing was installed: run
    `init --request` again, send the new link, and re-run `init --wait` at once.

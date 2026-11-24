@@ -209,7 +209,7 @@ export async function cmdInit(args: ParsedArgs) {
 
   if (args.has('request')) {
     const pending = await requestApproval(profile, key, args.get('expiry'), { openkeyApiHost: apiHostFlag, renew: renewFlag });
-    console.error(`Send the owner this link to approve (it expires ${pending.requestExpiresAt}). Copy it exactly, never retype it:\n${pending.approvalUrl}\nThen run \`${cmd('init --wait --timeout 60s')}\` to collect the approval.`);
+    console.error(`Send the owner this link to approve (it expires ${pending.requestExpiresAt}). Copy it exactly, never retype it:\n${pending.approvalUrl}\nThen run \`${cmd('init --wait --timeout 60s')}\` to collect the approval. --wait uses the saved request, so do not repeat --expiry or --renew.`);
     console.error(initRequestNextLine());
     // A resumed request keeps the lifetime it was made with.
     const lifetime = pending.request.grantLifetimeSeconds * 1000 === expiryMs ? expiry : `${pending.request.grantLifetimeSeconds}s`;

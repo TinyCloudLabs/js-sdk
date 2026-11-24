@@ -93,6 +93,7 @@ Courier setup (humans run these):
                                    re-run \`${name} init --wait --timeout 60s\`. Repeat while it exits 8. Any other
                                    non-zero exit is an error: stderr carries \`[code]\`.
                                    The same request resumes each time: no second link, no second approval.
+                                   --wait keeps the saved request's --expiry and --renew. Do not repeat them; a different value is refused.
                                    An approved result is kept by OpenKey for 10 minutes only: wait promptly.
                                    --paste and --grant-file still take an old OpenKey XXXX-XXXX code.
                                    After an authorized key rotation, collect the new grant, then use a
