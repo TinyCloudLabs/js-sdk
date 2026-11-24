@@ -22,6 +22,14 @@ with `tinycloud --version`.
 
 The CLI checks the npm registry for a newer release at most once a day. When one is available, it says so on stderr after a command succeeds, with the version you have and how it was installed. Stable installs follow npm's `latest` tag; prerelease installs follow their matching channel. The first command of each day can wait up to 3 seconds at exit for the check; a failed or slow check never fails the command. `--quiet` hides the notice. Set `TC_NO_AUTO_UPDATE=1` or `CI=true` to turn the check off.
 
+## Updates
+
+The CLI updates itself. After a command, it installs a newer patch or minor release of your channel in the background, once that release has been out for 6 hours and passes the provenance and npm signature checks; your next command uses it. A new major release gets a notice only. Turn it off with `TC_NO_AUTO_UPDATE=1` or `"autoUpdate": false` in `~/.tinycloud/config.json`; it is always off in CI.
+
+`tinycloud upgrade` checks provenance and npm signatures, installs the exact version next to the current one and switches only after the new version runs. `--to <version>` switches to an exact version and pauses automatic updates. Outside a terminal it needs `--yes`. Exit codes: 12 refused, 13 failed (the previous version runs), 14 failed and not restored.
+
+Versions live in `~/.tinycloud/versions`. To uninstall, run `npm uninstall -g @tinycloud/cli` (or `bun remove -g @tinycloud/cli`), then delete `~/.tinycloud/versions`. The standalone `courier` (`npm i -g @tinycloud/courier`) isn't updated this way; reinstall it by hand.
+
 ## Agent skills
 
 The package ships the general `tinycloud-cli` skill and its references in

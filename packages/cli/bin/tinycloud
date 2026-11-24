@@ -7,6 +7,16 @@ if (basename(process.argv[1] ?? "") === "tc") {
   process.stderr.write("tc is now tinycloud; tc will keep working for now.\n");
 }
 // Both installed names share one entry and canonical command/error guidance.
+// It also stays the program path for every version this launcher runs, so the
+// Courier guard's record of this executable survives a version switch.
 process.argv[1] = fileURLToPath(import.meta.url);
 
-import("../dist/index.js");
+// Run the newest verified version under ~/.tinycloud/versions, else this install's own build.
+let entry = "../dist/index.js";
+try {
+  const { launchTarget } = await import("../dist/launcher.js");
+  entry = launchTarget(process.argv[1]) ?? entry;
+} catch {
+  // A build without the launcher runs itself.
+}
+import(entry);

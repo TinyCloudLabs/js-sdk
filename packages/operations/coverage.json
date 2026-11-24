@@ -160,6 +160,7 @@
     { "command": "manifest", "status": "legacy" },
     { "command": "manifest resolve <source>", "status": "legacy" },
     { "command": "upgrade", "status": "legacy" },
+    { "command": "__auto-update", "status": "excluded", "reason": "Hidden background job of the CLI's self-update (TC-4276); installs a verified CLI release, no storage operation." },
     { "command": "status", "status": "legacy" },
     { "command": "account", "status": "legacy" },
     { "command": "account status", "status": "legacy" },

@@ -1,7 +1,8 @@
 import { defineConfig } from "tsup";
 
 export default defineConfig({
-  entry: ["src/index.ts", "src/legacy-entry.ts", "src/courier-entry.ts"],
+  // The launcher entry chooses which installed version `bin/tinycloud` runs; it imports only Node built-ins.
+  entry: ["src/index.ts", "src/legacy-entry.ts", "src/courier-entry.ts", "src/launcher.ts"],
   format: ["esm"],
   target: "node20",
   dts: true,

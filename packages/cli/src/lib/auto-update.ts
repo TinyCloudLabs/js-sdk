@@ -27,6 +27,13 @@ function parseVersion(value: string): ParsedVersion | null {
   };
 }
 
+/** Semver order of two version strings; null when either is not a version. */
+export function compareVersionStrings(left: string, right: string): number | null {
+  const a = parseVersion(left);
+  const b = parseVersion(right);
+  return a && b ? compareVersions(a, b) : null;
+}
+
 function compareVersions(left: ParsedVersion, right: ParsedVersion): number {
   for (const key of ["major", "minor", "patch"] as const) {
     if (left[key] !== right[key]) return left[key] > right[key] ? 1 : -1;
@@ -176,7 +183,7 @@ async function writeCache(cachePath: string, value: UpdateCache): Promise<void> 
   }
 }
 
-async function acquireLock(lockPath: string): Promise<(() => Promise<void>) | null> {
+export async function acquireLock(lockPath: string): Promise<(() => Promise<void>) | null> {
   await mkdir(dirname(lockPath), { recursive: true, mode: 0o700 });
   try {
     const handle = await open(lockPath, "wx", 0o600);

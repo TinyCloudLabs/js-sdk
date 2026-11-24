@@ -1,6 +1,8 @@
 export interface GlobalConfig {
   defaultProfile: string;
   version: number;
+  /** `false` turns off automatic updates; the update notice and `tc upgrade` still work (TC-4276). */
+  autoUpdate?: boolean;
 }
 
 export type AuthMethod = "openkey" | "local";

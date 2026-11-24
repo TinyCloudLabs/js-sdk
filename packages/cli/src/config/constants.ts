@@ -51,6 +51,12 @@ export const ExitCode = {
   STORAGE_FULL: 10,
   /** A secrets write was refused because the node has no per-secret keys (`NAMED_KEYS_UNSUPPORTED`); nothing was saved. */
   NAMED_KEYS_UNSUPPORTED: 11,
+  /** `tc upgrade` refused before switching anything (`status: "refused"`, with a `reason`). */
+  UPGRADE_REFUSED: 12,
+  /** `tc upgrade` failed and the previous version is still the one that runs. */
+  UPGRADE_FAILED_ROLLED_BACK: 13,
+  /** `tc upgrade` failed and the previous version could not be restored; the output names the recovery command. */
+  UPGRADE_FAILED_NOT_ROLLED_BACK: 14,
   /** Interrupted by SIGINT/SIGTERM (`CANCELLED`). */
   CANCELLED: 130,
 } as const;

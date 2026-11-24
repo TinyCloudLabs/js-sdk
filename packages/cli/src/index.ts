@@ -1,6 +1,6 @@
+import { spawn } from "node:child_process";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
 import {
   checkForUpdate,
   detectInstallKind,
@@ -9,6 +9,8 @@ import {
   registerUpdateNoticeFinalizer,
   updateNotice,
 } from "./lib/auto-update.js";
+import { autoUpdateOffReason, baseInstall, pendingSwitch, readGlobalConfig, startAutoUpdateIfDue } from "./lib/self-update.js";
+import { writeLease } from "./lib/versions.js";
 import { TC_OPTIONS_BEFORE_COURIER } from "./commands/courier.js";
 import { readFileSync } from "node:fs";
 import { CLI_NAME } from "@tinycloud/operations/cli-name";
@@ -25,17 +27,32 @@ const updateCheck = isAutoUpdateEnabled(process.env)
   ? checkForUpdate({ currentVersion: version, cachePath: join(CONFIG_DIR, "update-check.json") }).catch(() => null)
   : Promise.resolve(null);
 
+// TC-4276: this process's global install, and whether it updates itself (npm or bun global installs only).
+const base = baseInstall();
+const installKind = detectInstallKind(base.packageDir, process.cwd(), homedir());
+const selfUpdating = installKind === "npm-global" || installKind === "bun-global";
+
 registerUpdateNoticeFinalizer(async () => {
+  // The background updater starts after any command, quiet or failed ones included; it never prints.
+  if (selfUpdating && commandToken !== "upgrade" && commandToken !== "__auto-update" &&
+      autoUpdateOffReason(process.env, readGlobalConfig()) === null) {
+    startAutoUpdateIfDue(base.root, Date.now(), () => {
+      const job = spawn(process.execPath, [base.bin, "--quiet", "__auto-update"], { detached: true, stdio: "ignore" });
+      job.on("error", () => undefined);
+      job.unref();
+    });
+  }
   // Only a command that finished cleanly gets the notice: a failing command's stderr is a structured JSON error
   // that callers parse, so nothing is appended to it.
   if (program.opts().quiet === true || Number(process.exitCode ?? 0) !== 0) return;
   const available = await updateCheck;
-  if (!available) return;
+  const pending = selfUpdating ? pendingSwitch(base.root, version) : null;
+  if (!available && !pending) return;
   await new Promise<void>((resolve) => process.stdout.write("", () => resolve()));
   await new Promise<void>((resolve) => process.stderr.write("", () => resolve()));
-  const packagePath = fileURLToPath(new URL("../", import.meta.url));
-  const installKind = detectInstallKind(packagePath, process.cwd(), homedir());
-  process.stderr.write(`${updateNotice(installKind, version, available)}\n`);
+  if (available) process.stderr.write(`${updateNotice(installKind, version, available)}\n`);
+  // User-facing copy: TC-4276, approved by Monica.
+  if (pending) process.stderr.write(`TinyCloud CLI ${pending} is ready. Restart Courier to finish the update.\n`);
   await new Promise<void>((resolve) => process.stderr.write("", () => resolve()));
 });
 import { theme } from "./output/theme.js";
@@ -221,6 +238,11 @@ setDiagnosticCommandContext({
   disabled: process.env.TINYCLOUD_CLI_LOGS === "0" || argv.includes("--no-diagnostic-logs"),
   cliVersion: version,
 });
+// A Courier process, and any process started from a versioned install, leases its version: the updater neither
+// prunes it nor switches away from the version a running Courier uses (TC-4276).
+if (selfUpdating && (argv[0] === "courier" || version !== base.version)) {
+  writeLease(base.root, { version, courier: argv[0] === "courier" });
+}
 if (argv[0] === "courier") {
   // Courier owns its argv (including --host and --json) and its own profile,
   // so Commander, the banner and the tc profile guard never see it.
