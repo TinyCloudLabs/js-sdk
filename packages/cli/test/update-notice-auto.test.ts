@@ -42,8 +42,8 @@ function npmGlobalInstall() {
   writeFileSync(join(versions, "next-check.json"), nextCheck);
   const { TC_PROFILE: _profile, TC_HOST: _host, TC_HOME: _home, TC_PRIVATE_KEY: _key, ...ambient } = process.env;
   return {
-    /** The first-run notice this install shows: its versions directory is `~/versions` under HOME. */
-    firstRun: firstRunNotice(versions, dir),
+    /** The first-run notice this install shows: under HOME, its versions directory is `~/versions` and TC_HOME's config `~/state/.tinycloud/config.json`. */
+    firstRun: firstRunNotice(versions, join(state, ".tinycloud", "config.json"), dir),
     /** What the background job records once `npm root -g` confirms this is the npm global install. */
     verified() {
       recordInstallKind(versions, packageDir, installed, "npm-global");
@@ -112,6 +112,7 @@ describe.skipIf(process.platform !== "linux")("update notice with automatic upda
     cli.verified();
     const first = cli.noticeFor(installed);
     expect(cli.firstRun[0]).toContain("Log: ~/versions/auto-update.log");
+    expect(cli.firstRun[1]).toContain(" in ~/state/.tinycloud/config.json, ");
     for (const line of cli.firstRun) expect(first).toContain(line);
     expect(cli.noticeFor(installed)).not.toContain(cli.firstRun[0]);
   });

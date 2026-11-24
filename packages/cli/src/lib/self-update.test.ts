@@ -452,18 +452,22 @@ describe("unexpected errors", () => {
 });
 
 describe("telling the user", () => {
-  test("the first-run notice shows once, only where automatic updates are on, and names the real versions directory", () => {
+  test("the first-run notice shows once, only where automatic updates are on, and names the real versions directory and config file", () => {
     const fake = fakeUpdater("1.10.0");
     mkdirSync(fake.deps.root, { recursive: true });
-    expect(takeAutoUpdateNotices(fake.deps.root, "1.10.0", false, fake.dir)).toEqual([]);
-    expect(takeAutoUpdateNotices(fake.deps.root, "1.10.0", true, fake.dir)).toEqual([
+    const config = join(fake.dir, ".tinycloud", "config.json");
+    expect(takeAutoUpdateNotices(fake.deps.root, "1.10.0", false, config, fake.dir)).toEqual([]);
+    expect(takeAutoUpdateNotices(fake.deps.root, "1.10.0", true, config, fake.dir)).toEqual([
       "TinyCloud CLI updates itself: it installs verified patch and minor releases of your channel in the background, 6 hours after your CLI first sees each one on your channel, and moves back if your channel moves back. Major releases are never installed automatically. Log: ~/versions/auto-update.log",
       "To turn this off, set \"autoUpdate\": false in ~/.tinycloud/config.json, or set TC_NO_AUTO_UPDATE=1.",
     ]);
-    expect(takeAutoUpdateNotices(fake.deps.root, "1.10.0", true, fake.dir)).toEqual([]);
-    // A TC_VERSIONS_DIR outside the home directory is shown as it is.
-    expect(firstRunNotice("/srv/tinycloud/versions", "/home/someone")[0]).toEndWith(" Log: /srv/tinycloud/versions/auto-update.log");
-    expect(firstRunNotice("/home/someone-else/versions", "/home/someone")[0]).toEndWith(" Log: /home/someone-else/versions/auto-update.log");
+    expect(takeAutoUpdateNotices(fake.deps.root, "1.10.0", true, config, fake.dir)).toEqual([]);
+    // A TC_VERSIONS_DIR, or a TC_HOME config, outside the home directory is shown as it is.
+    expect(firstRunNotice("/srv/tinycloud/versions", config, "/home/someone")[0]).toEndWith(" Log: /srv/tinycloud/versions/auto-update.log");
+    expect(firstRunNotice("/home/someone-else/versions", config, "/home/someone")[0]).toEndWith(" Log: /home/someone-else/versions/auto-update.log");
+    expect(firstRunNotice("/home/someone/versions", "/srv/state/.tinycloud/config.json", "/home/someone")[1]).toBe(
+      "To turn this off, set \"autoUpdate\": false in /srv/state/.tinycloud/config.json, or set TC_NO_AUTO_UPDATE=1.",
+    );
   });
 
   test("an automatic switch, and a follow-down, are each reported once by the version switched to; a manual upgrade clears it", async () => {

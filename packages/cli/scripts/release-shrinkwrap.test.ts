@@ -4,17 +4,19 @@ import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSy
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { requireReleaseProvenance } from "../src/lib/provenance.js";
-import { BUNDLES, COURIER, offlineVerifier } from "../src/test-support/offline-sigstore.js";
+import { requireReleaseProvenance, VerificationError } from "../src/lib/provenance.js";
+import { BUNDLES, COURIER, COURIER_STAGE, offlineVerifier } from "../src/test-support/offline-sigstore.js";
 import { FakeRegistry, integrityOf } from "../src/test-support/self-update-fakes.js";
 import {
   bunRuntimeTree,
   checkShrinkwrap,
   generateShrinkwrap,
+  MISSING_PROVENANCE_RETRY_MS,
   parseBunLock,
+  readUnattested,
   registryTarball,
-  releaseRunVersions,
-  sameRunAttestationProblems,
+  retryingMissingProvenance,
+  tinycloudProvenanceProblems,
   versionsWithoutShrinkwrap,
   yarnLockFor,
 } from "./release-shrinkwrap.mjs";
@@ -329,85 +331,113 @@ test("versionsWithoutShrinkwrap flags each published CLI version npm does not ma
   expect(requested).toEqual(Object.keys(docs));
 });
 
-describe("@tinycloud versions this release publishes need the Release workflow's provenance (D1)", () => {
-  const courier = `${COURIER.name}@${COURIER.version}`;
+describe("every @tinycloud package the CLI pins needs the Release workflow's provenance or a listed exact match (F1 (b))", () => {
+  const id = (pkg: { name: string; version: string }) => `${pkg.name}@${pkg.version}`;
+  const attestation = (pkg: { name: string; version: string }) => [{ predicateType: "https://slsa.dev/provenance/v1", bundle: BUNDLES.get(id(pkg)) }];
+  const envelope = { name: "@tinycloud/share-envelope", version: "1.6.0", integrity: integrityOf("@tinycloud/share-envelope", "1.6.0") };
   // The prepack's check (requireReleaseProvenance: the updater's Release identity) on real npm provenance: courier
-  // 0.8.2 is Release-attested, sdk-core 3.15.0 has no attestation, share-envelope 1.6.0 was on npm before, unattested.
+  // 0.8.2 is signed by the Release workflow, 0.8.1 by courier-stable-stage.yml; share-envelope 1.6.0 is unattested
+  // and listed.
   function setup() {
     const registry = new FakeRegistry();
-    registry.integrity = (name: string, version: string) => (name === COURIER.name ? COURIER.integrity : integrityOf(name, version));
-    registry.publish(COURIER.name, COURIER.version);
-    registry.attestationsById.set(courier, [{ predicateType: "https://slsa.dev/provenance/v1", bundle: BUNDLES.get(courier) }]);
-    registry.publish("@tinycloud/sdk-core", "3.15.0", { attested: false });
-    registry.publish("@tinycloud/share-envelope", "1.6.0", { attested: false });
+    const real = new Map([[id(COURIER), COURIER.integrity], [id(COURIER_STAGE), COURIER_STAGE.integrity]]);
+    registry.integrity = (name: string, version: string) => real.get(`${name}@${version}`) ?? integrityOf(name, version);
+    for (const pkg of [COURIER, COURIER_STAGE]) {
+      registry.publish(pkg.name, pkg.version);
+      registry.attestationsById.set(id(pkg), attestation(pkg));
+    }
+    registry.publish(envelope.name, envelope.version, { attested: false });
     const verified: string[] = [];
-    const verify = (name: string, version: string) => {
+    const verify = (name: string, version: string, integrity: string) => {
       verified.push(`${name}@${version}`);
-      return requireReleaseProvenance(registry, offlineVerifier, name, version);
+      return requireReleaseProvenance(registry, offlineVerifier, name, version, integrity);
     };
-    const lock = {
-      lockfileVersion: 3,
-      packages: {
-        "": { name: "@tinycloud/cli", version: "1.10.0" },
-        "node_modules/@tinycloud/courier": { version: COURIER.version },
-        "node_modules/@tinycloud/sdk-core": { version: "3.15.0" },
-        "node_modules/@tinycloud/share-envelope": { version: "1.6.0" },
-        "node_modules/chalk": { version: "5.3.0" },
-      },
-    };
-    return { verify, verified, lock };
+    const unattested = new Map([[id(envelope), envelope.integrity]]);
+    return { registry, verify, verified, unattested };
   }
+  const lockOf = (...pkgs: { name: string; version: string; integrity: string }[]) => ({
+    lockfileVersion: 3,
+    packages: {
+      "": { name: "@tinycloud/cli", version: "1.10.1" },
+      "node_modules/chalk": { version: "5.3.0", integrity: integrityOf("chalk", "5.3.0") },
+      ...Object.fromEntries(pkgs.map((pkg) => [`node_modules/${pkg.name}`, { version: pkg.version, integrity: pkg.integrity }])),
+    },
+  });
 
-  test("a version from this run without the attestation fails the publish", async () => {
-    const { verify, lock } = setup();
-    expect(await sameRunAttestationProblems(lock, new Set([courier, "@tinycloud/sdk-core@3.15.0"]), verify)).toEqual({
+  test("a Release-attested version and a listed exact match pass; the listed one isn't looked up", async () => {
+    const { verify, verified, unattested } = setup();
+    expect(await tinycloudProvenanceProblems(lockOf(COURIER, envelope), unattested, verify)).toEqual({ problems: [], attested: [id(COURIER)], listed: [id(envelope)] });
+    expect(verified).toEqual([id(COURIER)]);
+  });
+
+  test("a half-finished release can't be finished by someone else: the unattested version it left pinned fails", async () => {
+    // Release N bumped sdk-core to 3.15.0 and the CLI, then stopped before publishing them. Someone else published an
+    // unattested sdk-core 3.15.0 (and a throwaway CLI). Release N+1 bumps only the CLI, whose shrinkwrap pins it.
+    const { registry, verify, unattested } = setup();
+    registry.publish("@tinycloud/sdk-core", "3.15.0", { attested: false });
+    const sdkCore = { name: "@tinycloud/sdk-core", version: "3.15.0", integrity: integrityOf("@tinycloud/sdk-core", "3.15.0") };
+    expect(await tinycloudProvenanceProblems(lockOf(COURIER, envelope, sdkCore), unattested, verify)).toEqual({
       problems: [
-        "@tinycloud/sdk-core@3.15.0 is published by this release but lacks the Release workflow's provenance: PROVENANCE_MISSING: @tinycloud/sdk-core@3.15.0: no provenance attestation",
+        "@tinycloud/sdk-core@3.15.0 has no provenance from the Release workflow and is not listed as unattested: PROVENANCE_MISSING: @tinycloud/sdk-core@3.15.0: no provenance attestation",
       ],
-      checked: [courier, "@tinycloud/sdk-core@3.15.0"],
+      attested: [id(COURIER)],
+      listed: [id(envelope)],
     });
   });
 
-  test("a version from this run with a valid Release attestation passes", async () => {
-    const { verify, verified, lock } = setup();
-    expect(await sameRunAttestationProblems(lock, new Set([courier]), verify)).toEqual({ problems: [], checked: [courier] });
-    expect(verified).toEqual([courier]);
+  test("a version signed by another workflow (courier-stable-stage.yml) fails", async () => {
+    const { verify, unattested } = setup();
+    expect((await tinycloudProvenanceProblems(lockOf(COURIER_STAGE), unattested, verify)).problems).toEqual([
+      `${id(COURIER_STAGE)} has no provenance from the Release workflow and is not listed as unattested: PROVENANCE_INVALID: ${id(COURIER_STAGE)}: provenance signed by "https://github.com/TinyCloudLabs/js-sdk/.github/workflows/courier-stable-stage.yml@refs/heads/master", not the Release workflow`,
+    ]);
   });
 
-  test("an unattested version that was on npm before this run is pinned as it is", async () => {
-    const { verify, verified, lock } = setup();
-    expect(await sameRunAttestationProblems(lock, new Set(["@tinycloud/cli@1.10.0"]), verify)).toEqual({ problems: [], checked: [] });
-    expect(verified).toEqual([]);
+  test("a listed version whose integrity differs fails, and so does an attested one npm serves with another integrity", async () => {
+    const { verify, verified, unattested } = setup();
+    const other = "sha512-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==";
+    expect((await tinycloudProvenanceProblems(lockOf({ ...envelope, integrity: other }, { ...COURIER, integrity: other }), unattested, verify)).problems).toEqual([
+      `${id(envelope)} is listed as unattested with ${envelope.integrity}, but the shrinkwrap pins ${other}`,
+      `${id(COURIER)} has no provenance from the Release workflow and is not listed as unattested: PROVENANCE_INVALID: ${id(COURIER)}: npm serves ${COURIER.integrity}, not the pinned ${other}`,
+    ]);
+    expect(verified).toEqual([id(COURIER)]);
   });
 
-  test("the run's versions are the release-scope packages HEAD's version commit changed; without a scope file the publish fails", async () => {
-    const repo = mkdtempSync(join(tmpdir(), "release-shrinkwrap-run-"));
-    const git = (...args: string[]) => {
-      const result = spawnSync("git", ["-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false", ...args], { cwd: repo, encoding: "utf8" });
-      expect(result.status).toBe(0);
+  test("a missing attestation is retried with backoff for at most 2 minutes; any other refusal is final", async () => {
+    let now = 0;
+    const sleeps: number[] = [];
+    const clock = { now: () => now, sleep: async (ms: number) => { sleeps.push(ms); now += ms; } };
+    const failing = (code: "PROVENANCE_MISSING" | "PROVENANCE_INVALID", times: number) => {
+      let calls = 0;
+      return async () => {
+        calls += 1;
+        if (calls <= times) throw new VerificationError(code, "@tinycloud/sdk-core@3.15.0", "refused");
+        return calls;
+      };
     };
-    const manifest = (dir: string, value: object) => {
-      mkdirSync(join(repo, dir), { recursive: true });
-      writeFileSync(join(repo, dir, "package.json"), JSON.stringify(value));
-    };
-    try {
-      git("init", "-q");
-      manifest(".", { name: "root", private: true, workspaces: ["packages/*"] });
-      manifest("packages/sdk-core", { name: "@tinycloud/sdk-core", version: "3.14.0" });
-      manifest("packages/share-envelope", { name: "@tinycloud/share-envelope", version: "1.6.0" });
-      manifest("packages/held", { name: "@tinycloud/held", version: "0.1.0" });
-      git("add", ".");
-      git("commit", "-qm", "base");
-      // The version commit bumps sdk-core and a package outside the release scope.
-      manifest("packages/sdk-core", { name: "@tinycloud/sdk-core", version: "3.15.0" });
-      manifest("packages/held", { name: "@tinycloud/held", version: "0.2.0" });
-      writeFileSync(join(repo, "scope.json"), JSON.stringify({ packages: ["@tinycloud/sdk-core", "@tinycloud/share-envelope"] }));
-      git("add", ".");
-      git("commit", "-qm", "Version Packages");
-      expect(await releaseRunVersions(repo, "scope.json")).toEqual(new Set(["@tinycloud/sdk-core@3.15.0"]));
-      await expect(releaseRunVersions(repo, "")).rejects.toThrow("RELEASE_SCOPE_FILE is not set");
-    } finally {
-      rmSync(repo, { recursive: true, force: true });
+    // npm serves the attestation on the third look.
+    expect(await retryingMissingProvenance(failing("PROVENANCE_MISSING", 2), clock)()).toBe(3);
+    expect(sleeps).toEqual([5000, 10000]);
+    // Never served: the publish fails once the 2 minutes are spent.
+    sleeps.length = 0;
+    await expect(retryingMissingProvenance(failing("PROVENANCE_MISSING", Infinity), clock)()).rejects.toMatchObject({ code: "PROVENANCE_MISSING" });
+    expect(sleeps).toEqual([5000, 10000, 20000, 40000, 45000]);
+    expect(sleeps.reduce((sum, ms) => sum + ms, 0)).toBe(MISSING_PROVENANCE_RETRY_MS);
+    // An invalid attestation is not retried.
+    sleeps.length = 0;
+    await expect(retryingMissingProvenance(failing("PROVENANCE_INVALID", 1), clock)()).rejects.toMatchObject({ code: "PROVENANCE_INVALID" });
+    expect(sleeps).toEqual([]);
+  });
+
+  test("the committed list holds only exact sha512 pins of versions published before 24 Nov 2026, each with its reason", () => {
+    const file = JSON.parse(readFileSync(new URL("./unattested-tinycloud-versions.json", import.meta.url), "utf8")) as { versions: Record<string, { integrity: string; published: string; source: string }> };
+    const entries = Object.entries(file.versions);
+    expect(entries.length).toBeGreaterThan(0);
+    for (const [key, entry] of entries) {
+      expect(key).toMatch(/^@tinycloud\/[a-z0-9-]+@\d+\.\d+\.\d+$/);
+      expect(entry.integrity).toMatch(/^sha512-[A-Za-z0-9+/]{86}==$/);
+      expect(Date.parse(entry.published)).toBeLessThan(Date.parse("2026-11-24T00:00:00Z"));
+      expect(entry.source.length).toBeGreaterThan(0);
     }
+    expect(readUnattested()).toEqual(new Map(entries.map(([key, entry]) => [key, entry.integrity])));
   });
 });

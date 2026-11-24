@@ -183,11 +183,15 @@ export async function verifyProvenance(registry: ReleaseRegistry, verifyBundle: 
 }
 
 /**
- * `name@version` must carry provenance from the Release workflow: `PROVENANCE_MISSING` without any. For the CLI's
- * prepack, a @tinycloud package published in the same Release run (TC-4276 D1).
+ * npm's `name@version` must be the tarball `integrity` pins and carry provenance from the Release workflow:
+ * `PROVENANCE_MISSING` without any. For the CLI's prepack: each @tinycloud package its shrinkwrap pins (TC-4276 F1 (b)).
  */
-export async function requireReleaseProvenance(registry: ReleaseRegistry, verifyBundle: BundleVerifier, name: string, version: string): Promise<void> {
-  if (!await verifyProvenance(registry, verifyBundle, await registry.manifest(name, version))) {
+export async function requireReleaseProvenance(registry: ReleaseRegistry, verifyBundle: BundleVerifier, name: string, version: string, integrity: string): Promise<void> {
+  const manifest = await registry.manifest(name, version);
+  if (manifest.dist.integrity !== integrity) {
+    throw new VerificationError("PROVENANCE_INVALID", `${name}@${version}`, `npm serves ${manifest.dist.integrity}, not the pinned ${integrity}`);
+  }
+  if (!await verifyProvenance(registry, verifyBundle, manifest)) {
     throw new VerificationError("PROVENANCE_MISSING", `${name}@${version}`, "no provenance attestation");
   }
 }

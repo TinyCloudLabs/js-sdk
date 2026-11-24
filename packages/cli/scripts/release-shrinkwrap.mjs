@@ -12,15 +12,14 @@
 // runs as the CLI's prepack inside `npm publish`, which the layered release publishes after every package it
 // requires is served (.github/scripts/publish-in-dependency-order.mjs).
 //
-// A @tinycloud package this same Release run publishes must also carry the Release workflow's provenance (TC-4276 D1
-// scoped (b), Naomi 21:06Z), checked with the updater's own Release-identity check (dist/release-attestation.js),
-// or the publish fails. "This run" is the release-scope packages whose version HEAD's version commit changed: the set
-// publish-in-dependency-order.mjs publishes (releaseScope), read from git, so it is the same before and after earlier
-// layers reach npm. Without RELEASE_SCOPE_FILE the set is unknown and the publish fails. Versions that were on npm
-// before the run are pinned as they are.
+// Every @tinycloud package the shrinkwrap pins must then carry provenance from the Release workflow (changesets.yml
+// on master, no other workflow), checked with the updater's own Release-identity check (dist/release-attestation.js),
+// or be listed, by name@version and exact sha512 integrity, in unattested-tinycloud-versions.json: the versions
+// published before Release provenance (TC-4276 F1 (b), Naomi 21:34Z). Otherwise the publish fails. npm may serve a
+// version's attestation after its tarball, so a missing one is retried for up to 2 minutes; nothing else is.
 //
 // usage: release-shrinkwrap.mjs prepack     in `npm publish` (npm_command=publish): write ./npm-shrinkwrap.json and
-//                                           check same-run @tinycloud provenance; any other pack (tests, `npm pack`)
+//                                           check its @tinycloud provenance; any other pack (tests, `npm pack`)
 //                                           does nothing
 //        release-shrinkwrap.mjs postpack    in `npm publish`: remove ./npm-shrinkwrap.json again
 //        release-shrinkwrap.mjs generate <out>   write the shrinkwrap for this checkout to <out>
@@ -248,54 +247,75 @@ export async function versionsWithoutShrinkwrap(accepted, name, fetchFn = fetch)
   return missing;
 }
 
+/** The committed unattested @tinycloud versions: "name@version" → the sha512 integrity npm serves for it. */
+export function readUnattested(path = new URL("./unattested-tinycloud-versions.json", import.meta.url)) {
+  const versions = JSON.parse(readFileSync(path, "utf8")).versions;
+  return new Map(Object.entries(versions).map(([id, entry]) => [id, entry.integrity]));
+}
+
+/** How long a missing attestation is retried in total: npm may serve it after the tarball (Naomi 21:34Z). */
+export const MISSING_PROVENANCE_RETRY_MS = 2 * 60 * 1000;
+
 /**
- * The "name@version" ids this Release run publishes: the packages RELEASE_SCOPE_FILE (`scopeFile`, relative to
- * `repoDir`) lists whose version HEAD's version commit changed, as publish-in-dependency-order.mjs selects them.
- * Throws without a scope file: then which versions are new in this run is unknown.
+ * `verify`, retried with backoff (5 s, doubling) while it fails with PROVENANCE_MISSING, until `budgetMs` has passed.
+ * Any other failure is final.
  */
-export async function releaseRunVersions(repoDir, scopeFile = process.env.RELEASE_SCOPE_FILE) {
-  if (!scopeFile) {
-    throw new Error("RELEASE_SCOPE_FILE is not set, so which @tinycloud versions this release publishes is unknown and their provenance can't be required. Publish the CLI through the Release workflow.");
-  }
-  const { gitRepo, publicPackages, releaseScope } = await import(new URL("../../../.github/scripts/check-npm-release-provenance.mjs", import.meta.url).href);
-  const repo = gitRepo(repoDir);
-  const inScope = releaseScope(repo, resolve(repoDir, scopeFile));
-  return new Set(publicPackages(repo, "HEAD").filter(inScope).map((pkg) => `${pkg.name}@${pkg.version}`));
+export function retryingMissingProvenance(verify, { budgetMs = MISSING_PROVENANCE_RETRY_MS, now = Date.now, sleep = (ms) => new Promise((done) => setTimeout(done, ms)) } = {}) {
+  return async (...args) => {
+    const deadline = now() + budgetMs;
+    for (let delay = 5000; ; delay *= 2) {
+      try {
+        return await verify(...args);
+      } catch (error) {
+        const wait = Math.min(delay, deadline - now());
+        if (error?.code !== "PROVENANCE_MISSING" || wait <= 0) throw error;
+        await sleep(wait);
+      }
+    }
+  };
 }
 
 /**
- * Problems with the @tinycloud packages in `lock` (an npm lockfile) that this run publishes (`runVersions`):
- * `verify(name, version)` must resolve, which it does only for provenance from the Release workflow. Other @tinycloud
- * versions and third-party packages are not checked here.
+ * Problems with the @tinycloud packages in `lock` (an npm lockfile): each must be in `unattested` with exactly its
+ * integrity, or `verify(name, version, integrity)` must resolve, which it does only for npm's tarball with
+ * provenance from the Release workflow. Third-party packages are not checked here.
  */
-export async function sameRunAttestationProblems(lock, runVersions, verify) {
+export async function tinycloudProvenanceProblems(lock, unattested, verify) {
   const problems = [];
-  const checked = new Set();
+  const attested = [];
+  const listed = [];
+  const seen = new Set();
   for (const [path, entry] of Object.entries(lock.packages ?? {})) {
     if (path === "") continue;
     const name = typeof entry.name === "string" ? entry.name : path.slice(path.lastIndexOf("node_modules/") + "node_modules/".length);
     const id = `${name}@${entry.version}`;
-    if (!name.startsWith(WORKSPACE_PREFIX) || !runVersions.has(id) || checked.has(id)) continue;
-    checked.add(id);
+    if (!name.startsWith(WORKSPACE_PREFIX) || seen.has(`${id} ${entry.integrity}`)) continue;
+    seen.add(`${id} ${entry.integrity}`);
+    if (unattested.has(id)) {
+      if (unattested.get(id) === entry.integrity) listed.push(id);
+      else problems.push(`${id} is listed as unattested with ${unattested.get(id)}, but the shrinkwrap pins ${entry.integrity}`);
+      continue;
+    }
     try {
-      await verify(name, entry.version);
+      await verify(name, entry.version, entry.integrity);
+      attested.push(id);
     } catch (error) {
-      problems.push(`${id} is published by this release but lacks the Release workflow's provenance: ${error.code ? `${error.code}: ` : ""}${error.message}`);
+      problems.push(`${id} has no provenance from the Release workflow and is not listed as unattested: ${error.code ? `${error.code}: ` : ""}${error.message}`);
     }
   }
-  return { problems, checked: [...checked] };
+  return { problems, attested, listed };
 }
 
-/** Fail unless every @tinycloud package the shrinkwrap at `shrinkwrapPath` pins from this run is Release-attested. */
-async function checkSameRunAttestations({ packageDir, repoDir, shrinkwrapPath, log = (line) => process.stderr.write(`${line}\n`) }) {
-  const runVersions = await releaseRunVersions(repoDir);
+/** Fail unless every @tinycloud package the shrinkwrap at `shrinkwrapPath` pins is Release-attested or listed. */
+async function checkTinycloudProvenance({ packageDir, shrinkwrapPath, log = (line) => process.stderr.write(`${line}\n`) }) {
   const { releaseAttestationVerifier } = await import(pathToFileURL(join(packageDir, "dist", "release-attestation.js")).href);
   const tuf = mkdtempSync(join(tmpdir(), "cli-shrinkwrap-tuf-"));
   try {
     const lock = JSON.parse(readFileSync(shrinkwrapPath, "utf8"));
-    const { problems, checked } = await sameRunAttestationProblems(lock, runVersions, releaseAttestationVerifier(tuf));
-    if (problems.length > 0) throw new Error(`the CLI pins @tinycloud versions from this release without Release provenance:\n  ${problems.join("\n  ")}`);
-    log(`release-shrinkwrap: Release provenance verified for ${checked.length > 0 ? checked.join(", ") : "no @tinycloud package from this run"}`);
+    const verify = retryingMissingProvenance(releaseAttestationVerifier(tuf));
+    const { problems, attested, listed } = await tinycloudProvenanceProblems(lock, readUnattested(), verify);
+    if (problems.length > 0) throw new Error(`the CLI pins @tinycloud versions without the Release workflow's provenance:\n  ${problems.join("\n  ")}`);
+    log(`release-shrinkwrap: Release provenance verified for ${attested.join(", ") || "no @tinycloud package"}; listed as unattested: ${listed.join(", ") || "none"}`);
   } finally {
     rmSync(tuf, { recursive: true, force: true });
   }
@@ -309,7 +329,7 @@ async function main([mode, arg]) {
     if (process.env.npm_command === "publish") {
       generateShrinkwrap({ packageDir, repoDir, out: target });
       try {
-        await checkSameRunAttestations({ packageDir, repoDir, shrinkwrapPath: target });
+        await checkTinycloudProvenance({ packageDir, shrinkwrapPath: target });
       } catch (error) {
         rmSync(target, { force: true });
         throw error;

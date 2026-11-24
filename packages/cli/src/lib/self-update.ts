@@ -683,17 +683,21 @@ const LAST_SWITCH_FILE = "last-switch.json";
 /** Written once the first-run notice has been shown for this versions root. */
 const FIRST_RUN_FILE = "first-run-notice.json";
 
-/**
- * The first-run notice for the versions directory `root`, shown as `~/…` when it is under `home`.
- * User-facing copy: TC-4276, Monica (21:06Z), verbatim.
- */
-export function firstRunNotice(root: string, home: string = homedir()): string[] {
-  const below = relative(home, root);
+/** `path` as `~/…` when it is under `home`, else as it is. */
+function homeRelative(path: string, home: string): string {
+  const below = relative(home, path);
   const outside = below === ".." || below.startsWith(`..${sep}`) || isAbsolute(below);
-  const versionsDir = below === "" ? "~" : outside ? root : `~/${below}`;
+  return below === "" ? "~" : outside ? path : `~/${below}`;
+}
+
+/**
+ * The first-run notice for the versions directory `root` and the config file `configPath` (it follows TC_HOME),
+ * each shown as `~/…` when it is under `home`. User-facing copy: TC-4276, Monica (21:06Z; config path 21:35Z), verbatim.
+ */
+export function firstRunNotice(root: string, configPath: string = CONFIG_FILE, home: string = homedir()): string[] {
   return [
-    `TinyCloud CLI updates itself: it installs verified patch and minor releases of your channel in the background, 6 hours after your CLI first sees each one on your channel, and moves back if your channel moves back. Major releases are never installed automatically. Log: ${versionsDir}/auto-update.log`,
-    "To turn this off, set \"autoUpdate\": false in ~/.tinycloud/config.json, or set TC_NO_AUTO_UPDATE=1.",
+    `TinyCloud CLI updates itself: it installs verified patch and minor releases of your channel in the background, 6 hours after your CLI first sees each one on your channel, and moves back if your channel moves back. Major releases are never installed automatically. Log: ${homeRelative(root, home)}/auto-update.log`,
+    `To turn this off, set "autoUpdate": false in ${homeRelative(configPath, home)}, or set TC_NO_AUTO_UPDATE=1.`,
   ];
 }
 
@@ -708,11 +712,11 @@ function switchedLine(from: string, to: string, down: boolean): string {
  * updates are on for a verified install; the caller checks), then the line for an automatic switch to `running`.
  * Marks them shown.
  */
-export function takeAutoUpdateNotices(root: string, running: string, autoUpdating: boolean, home: string = homedir()): string[] {
+export function takeAutoUpdateNotices(root: string, running: string, autoUpdating: boolean, configPath: string = CONFIG_FILE, home: string = homedir()): string[] {
   const lines: string[] = [];
   if (autoUpdating && !existsSync(join(root, FIRST_RUN_FILE))) {
     writeFileAtomic(join(root, FIRST_RUN_FILE), `${JSON.stringify({ shown: running })}\n`);
-    lines.push(...firstRunNotice(root, home));
+    lines.push(...firstRunNotice(root, configPath, home));
   }
   const last = readJson(join(root, LAST_SWITCH_FILE));
   if (last && typeof last === "object" && "to" in last && last.to === running && "from" in last && isVersion(last.from)) {

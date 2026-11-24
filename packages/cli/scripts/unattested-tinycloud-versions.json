@@ -1,0 +1,25 @@
+{
+  "note": "@tinycloud versions the CLI may pin without the Release workflow's provenance (TC-4276 F1 (b), Naomi 21:34Z). scripts/release-shrinkwrap.mjs (the CLI's prepack) refuses every other @tinycloud package in npm-shrinkwrap.json unless npm serves it with provenance signed by changesets.yml on master. An entry matches only by name@version and the exact sha512 integrity npm serves. Only versions published before 24 Nov 2026 without provenance belong here. Adding an entry needs Naomi's ruling; TC-4278 (republishing them with provenance) empties this list.",
+  "versions": {
+    "@tinycloud/bootstrap@2.10.0": {
+      "integrity": "sha512-FPoNBKJ1caAIOJ0lNC1FyYPWuGn8XJ+twuVEMkKZpuP06ZwdJAEK56YALL+y81N7oFfIAkFrWBdqQVpR4EVluA==",
+      "published": "2026-11-23T20:09:56.628Z",
+      "source": "published before Release provenance; held out of the Release scope (TC-4278). Pinned through sdk-core, sdk-services"
+    },
+    "@tinycloud/node-sdk-wasm@1.8.0": {
+      "integrity": "sha512-YWeCKQHCgNSGEUk1lAggi7KqZo30J/aoRJ+ljZax4nnjSGGko4IxaLDLL794SobdqNnMUxzYtpI01Ap/h+hj6g==",
+      "published": "2026-11-23T20:10:21.360Z",
+      "source": "published before Release provenance; held out of the Release scope (TC-4278). Pinned by cli, node-sdk"
+    },
+    "@tinycloud/share-envelope@1.6.0": {
+      "integrity": "sha512-AnKLZgp1ItCfRDA8Sx5iGsB9pWaDUkj+LHF04LgDjZGTqa80i1LQgHxDDnpBahp2ZXOnm41eZQp6pWuY66SjKQ==",
+      "published": "2026-11-17T21:26:44.922Z",
+      "source": "published before Release provenance; held out of the Release scope (TC-4278). Pinned by cli, node-sdk, sdk-core, share-sdk"
+    },
+    "@tinycloud/share-sdk@1.6.0": {
+      "integrity": "sha512-+rXs1Mt8F8NyK1AkSA1IqpHgZTQw7EBxsSz8JjhA2MfdgAiGFOWNvkADXfadM43nSBdKbiAXoQNRCtIpQtIfwA==",
+      "published": "2026-11-19T18:54:57.845Z",
+      "source": "published before Release provenance; held out of the Release scope (TC-4278). Pinned by cli, node-sdk, sdk-core"
+    }
+  }
+}

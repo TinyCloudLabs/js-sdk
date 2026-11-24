@@ -13,11 +13,14 @@ const fixture = (name: string): unknown => JSON.parse(readFileSync(new URL(`./fi
 
 /** @tinycloud/courier 0.8.2, published by the Release workflow on master, and its registry integrity. */
 export const COURIER = { name: "@tinycloud/courier", version: "0.8.2", integrity: "sha512-LU2djD/HkQiNZECfRVUoCkvGqqQILKkwV4yAO4WovFI9iJg3+0H1R7Uiw6CVWllNdLOcMyR9ThcJgHUsM88MZA==" };
+/** @tinycloud/courier 0.8.1, published with valid provenance by another js-sdk workflow (courier-stable-stage.yml). */
+export const COURIER_STAGE = { name: "@tinycloud/courier", version: "0.8.1", integrity: "sha512-6qrSxzUTCakW/DwcXNwWOF6z+rW8L6nSHaUHiYNH9vdWNXgh5RPWYmddYSy1TFPDW6P5H2VWSFwZSNo8YqhKJA==" };
 /** sigstore 4.1.1, published with valid provenance by another project's release workflow. */
 export const SIGSTORE = { name: "sigstore", version: "4.1.1", integrity: "sha512-endqECJkfhozrXMK5ngu/UAA0xVcVEFdnHJCElGaExypjW+HK5i6zu3NteLoaX/iFbRUbC3+DjttQs0GARr+5w==" };
 /** Their npm provenance bundles, by "name@version". */
 export const BUNDLES = new Map<string, unknown>([
   [`${COURIER.name}@${COURIER.version}`, fixture("courier-0.8.2.provenance.json")],
+  [`${COURIER_STAGE.name}@${COURIER_STAGE.version}`, fixture("courier-0.8.1.provenance.json")],
   [`${SIGSTORE.name}@${SIGSTORE.version}`, fixture("sigstore-4.1.1.provenance.json")],
 ]);
 
