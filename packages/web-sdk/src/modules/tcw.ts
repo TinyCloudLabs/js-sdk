@@ -1524,9 +1524,9 @@ export class TinyCloudWeb {
   };
 
   /**
-   * Publish the owner's registry location record. Call it from a deliberate owner action
-   * (for example a "Finish setup" button), never automatically: a call is the owner's
-   * consent to one signature.
+   * Publish the owner's registry location record when the registry has none. TinyCloud One
+   * calls it after a sign-in and from its `finish-setup=registry` link. The owner's wallet or
+   * OpenKey signature prompt is the consent: one signature, only when a record is missing.
    *
    * Only TinyCloud One and Home can publish; OpenKey refuses to sign a registry record
    * for any other origin. On any other host, or when OpenKey refuses, an owner who has no
@@ -1595,7 +1595,7 @@ export class TinyCloudWeb {
             const account = node.address;
             if (!account) return undefined;
             const mode = openkey?.mode ?? "popup";
-            const keyId = await resolveOpenKeySigningKey(openkeyMessageClient, account, mode, () => {});
+            const keyId = await resolveOpenKeySigningKey(openkeyMessageClient, account, mode, assertCurrent);
             return {
               subject,
               signMessage: async (message) => {
