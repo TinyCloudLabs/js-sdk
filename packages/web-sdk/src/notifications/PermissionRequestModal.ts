@@ -24,6 +24,13 @@ import {
 } from "@tinycloud/sdk-core";
 import { acquireScrollLock } from "./scrollLock";
 import { deepActiveElement, focusableControls, isTopmostControl, nextTabIndex, restoreFocusTo } from "./dialogFocus";
+import {
+  derivePermissionLine,
+  encryptionReach,
+  grantLifetimeMs,
+  normalizeCaption,
+  PERMISSION_LINE_COPY,
+} from "./permissionLine";
 
 export interface PermissionRequestModalOptions {
   /** Display name of the app requesting permissions (from the manifest). */
@@ -32,6 +39,16 @@ export interface PermissionRequestModalOptions {
   appIcon?: string;
   /** The additional permissions the app wants on top of its current session. */
   additional: PermissionEntry[];
+  /**
+   * Requested lifetime of the grant, in milliseconds (`requestPermissions` `expiryMs`). Each entry's line states it,
+   * or the node's default when absent.
+   */
+  expiryMs?: number;
+  /**
+   * The app's own label for this request. Shown as plain text beneath the derived lines, attributed to `appName`; it
+   * never replaces them. Trimmed, folded to one line and cut to 120 characters.
+   */
+  caption?: string;
   /**
    * Display name of the app the request is for, when `appName` asks on its
    * behalf. Names it in the title and the description.
@@ -90,6 +107,15 @@ export class TinyCloudPermissionRequestModal extends HTMLElement {
     const entriesHtml = this.options.additional
       .map((entry) => this.renderEntry(entry))
       .join("");
+    const lifetimeMs = grantLifetimeMs(this.options.additional, this.options.expiryMs);
+    const linesHtml = this.options.additional
+      .map((entry) => `<li class="permission-line" data-role="permission-line">${escapeHtml(derivePermissionLine(entry, lifetimeMs))}</li>`)
+      .join("");
+    // The caption's text is set below through textContent, never parsed as HTML.
+    const caption = normalizeCaption(this.options.caption);
+    const captionMarkup = caption === undefined
+      ? ""
+      : `<p class="app-caption" data-role="app-caption"><span class="app-caption-source">${escapeHtml(PERMISSION_LINE_COPY.captionSource(this.options.appName))}</span> <span data-role="app-caption-text"></span></p>`;
 
     // We deliberately HTML-escape every dynamic string below. appName and
     // path come straight from user-controlled manifest input; dropping
@@ -135,6 +161,8 @@ export class TinyCloudPermissionRequestModal extends HTMLElement {
               <p class="modal-description" id="tc-permission-description">
                 ${description}
               </p>
+              <ul class="permission-lines">${linesHtml}</ul>
+              ${captionMarkup}
               <ul class="permission-list">${entriesHtml}</ul>
               ${suppressionMarkup}
             </div>
@@ -151,15 +179,22 @@ export class TinyCloudPermissionRequestModal extends HTMLElement {
         </div>
       </div>
     `;
+    if (caption !== undefined) {
+      this.shadowRoot!.querySelector('[data-role="app-caption-text"]')!.textContent = caption;
+    }
   }
 
   private renderEntry(entry: PermissionEntry): string {
-    const scopeLabel = permissionScopeLabel(entry);
+    // An entry narrower than its encryption network gets no per-action rows: their wording is network-wide.
+    // Its derived line says what it grants.
+    const reach = encryptionReach(entry);
+    const narrow = reach === undefined || reach.kind === "network" ? undefined : PERMISSION_LINE_COPY.details[reach.kind];
+    const scopeLabel = narrow?.scope ?? permissionScopeLabel(entry);
     const resource = entry.path === "" ? "/" : entry.path;
     const actionDetails = entry.actions.map((action) =>
       describeAction(entry, action),
     );
-    const capabilities = actionDetails
+    const capabilities = narrow !== undefined ? "" : actionDetails
       .map((detail) => `
         <li class="permission-summary-item">
           <div class="permission-summary-row">
@@ -189,10 +224,10 @@ export class TinyCloudPermissionRequestModal extends HTMLElement {
 
     return `
       <li class="permission-entry">
-        <ul class="permission-summary-list">${capabilities}</ul>
+        ${capabilities === "" ? "" : `<ul class="permission-summary-list">${capabilities}</ul>`}
         <details class="technical-details">
           <summary>Show technical details</summary>
-          <p class="entry-summary">${escapeHtml(permissionScopeSummary(entry))}</p>
+          <p class="entry-summary">${escapeHtml(narrow?.summary ?? permissionScopeSummary(entry))}</p>
           <dl class="permission-dictionary">${dictionaryRows}</dl>
         </details>
       </li>
@@ -271,6 +306,16 @@ export class TinyCloudPermissionRequestModal extends HTMLElement {
       .modal-description {
         font-size: 14px; line-height: 1.5; margin: 0 0 16px 0; color: var(--modal-muted);
       }
+      .permission-lines {
+        list-style: none; padding: 0; margin: 0 0 12px 0;
+        display: flex; flex-direction: column; gap: 8px;
+        font-size: 15px; font-weight: 600; line-height: 1.4; color: var(--modal-foreground);
+      }
+      .app-caption {
+        font-size: 13px; line-height: 1.45; color: var(--modal-muted);
+        margin: 0 0 12px 0;
+      }
+      .app-caption-source { font-weight: 600; }
       .permission-list {
         list-style: none; padding: 0; margin: 0;
         display: flex; flex-direction: column; gap: 10px;
@@ -322,6 +367,7 @@ export class TinyCloudPermissionRequestModal extends HTMLElement {
         border-top: 1px solid var(--modal-border);
         padding-top: 10px;
       }
+      .technical-details:first-child { margin-top: 0; border-top: 0; padding-top: 0; }
       .technical-details summary {
         cursor: pointer; color: var(--modal-muted); font-size: 12px;
         user-select: none;

@@ -26,6 +26,8 @@ export interface RequestPermissionsCoreDeps {
     appName: string;
     appIcon?: string;
     additional: PermissionEntry[];
+    expiryMs?: number;
+    caption?: string;
     onBehalfOf?: string;
     allowSuppression?: boolean;
   }) => Promise<{
@@ -64,6 +66,13 @@ export interface RequestPermissionsOptions {
    * the prompt offers none, and none is stored. Default `true`.
    */
   allowPromptSuppression?: boolean;
+  /**
+   * The app's own short label for what this request is for, e.g. `"TrustBot's chat history"`. The prompt shows it as
+   * plain text, attributed to the app, beneath the line it derives from the request (the exact resource, each action
+   * and the expiry). It never replaces that line. Whitespace is folded and it is cut to 120 characters. A signer that
+   * shows the request itself (OpenKey) does not show it.
+   */
+  caption?: string;
 }
 
 /**
@@ -102,12 +111,15 @@ export async function requestPermissionsCore(
 
   const allowSuppression = options?.allowPromptSuppression !== false;
   const onBehalfOf = options?.onBehalfOf;
+  const caption = options?.caption;
   let shouldSuppressPrompt = false;
   if (deps.skipPrompt !== true && (!allowSuppression || deps.isPromptSuppressed?.() !== true)) {
     const modalResult = await deps.showModal({
       appName: deps.manifest.name,
       appIcon: deps.manifest.icon,
       additional,
+      ...(expiryMs !== undefined ? { expiryMs } : {}),
+      ...(caption !== undefined ? { caption } : {}),
       ...(onBehalfOf !== undefined ? { onBehalfOf } : {}),
       ...(allowSuppression ? {} : { allowSuppression: false }),
     });
