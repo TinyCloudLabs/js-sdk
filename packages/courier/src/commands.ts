@@ -109,7 +109,8 @@ export async function cmdInit(args: ParsedArgs) {
   if (renewFlag !== undefined && !args.has('request') && !args.has('wait') && !args.has('resume')) {
     fail('usage', '--renew needs --request or --wait: only the approval link can ask the owner for a renewal.');
   }
-  renewalLeaseFor(renewFlag, Math.floor(expiryMs / 1000));
+  // A plain `--wait` without --expiry checks --renew against the saved request's lifetime instead (assertWaitKeepsSaved).
+  if (!args.has('wait') || args.has('rotate-key') || args.get('expiry') !== undefined) renewalLeaseFor(renewFlag, Math.floor(expiryMs / 1000));
   if (args.has('resume') && (args.has('request') || args.has('grant-file') || args.has('paste') || args.has('rotate-key'))) {
     fail('usage', `\`${cmd('init --resume')}\` cannot be combined with --request, --grant-file, --paste or --rotate-key.`);
   }
@@ -192,8 +193,8 @@ export async function cmdInit(args: ParsedArgs) {
   profile.label = labelFlag ?? profile.label;
   if (handleFlag) profile.selfHandle = handleFlag;
   profile.courierDid = bareDid(key.did);
-  // `--wait` never replaces a saved request: one made with other terms or settings is refused before this run's flags are saved.
-  if (args.has('wait') && prior) assertWaitKeepsSaved(profile, key, args.get('expiry'), { openkeyApiHost: apiHostFlag, renew: renewFlag });
+  // `--wait` never replaces a saved request, nor installs an approval against other hosts: refused before this run's flags are saved.
+  if (args.has('wait') && !rotate) assertWaitKeepsSaved(profile, key, args.get('expiry'), { openkeyApiHost: apiHostFlag, renew: renewFlag });
   if (rotate) {
     profile.peers = {};
     profile.ownerDid = undefined;

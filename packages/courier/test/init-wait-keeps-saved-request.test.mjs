@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import { fakeTime, homeFile, readHome, scenario } from './support/approval-fixture.mjs';
+import { cmdInit } from '../dist/commands.js';
+import { parseArgs } from '../dist/args.js';
+import { Crash, crashAtWrite, fakeTime, homeFile, readHome, scenario } from './support/approval-fixture.mjs';
 
 // TC-4264: `init --wait` collects the request `init --request` saved, as it was made. The owner may already have approved it, so
 // --wait never replaces it: an --expiry, --renew or setting that differs from the saved request is refused.
@@ -76,11 +78,21 @@ scenario('(e) with no saved request, --wait creates one from its flags and the d
 });
 
 const MOVED = 'https://moved.fixture.test';
+const API_HOST = (saved) => `OpenKey API host (--openkey-api-host or COURIER_OPENKEY_API_HOST): saved ${saved.apiOrigin}, this run ${MOVED}`;
+const NODE_HOST = (saved) => `node host (--host): saved ${saved.request.nodeOrigin}, this run ${MOVED}`;
+const moveApiHost = () => { process.env.COURIER_OPENKEY_API_HOST = MOVED; return []; };
+
+function assertNoFileChanged(fx, files, profile) {
+  assertUnchanged(fx, files);
+  assert.ok(fs.readFileSync(homeFile('profile.json')).equals(profile), 'profile.json is byte-identical');
+  assert.equal(fs.existsSync(homeFile('grant.json')), false, 'no grant.json was written');
+}
+
 for (const [label, change, item] of [
-  ['(f) --openkey-api-host', () => ['--openkey-api-host', MOVED], (saved) => `OpenKey API host: saved ${saved.apiOrigin}, this run ${MOVED}`],
-  ['(f) COURIER_OPENKEY_API_HOST', () => { process.env.COURIER_OPENKEY_API_HOST = MOVED; return []; }, (saved) => `OpenKey API host: saved ${saved.apiOrigin}, this run ${MOVED}`],
-  ['(g) TC_LINKS_API_ORIGIN', () => { process.env.TC_LINKS_API_ORIGIN = MOVED; return []; }, (saved) => `links API host: saved ${saved.linkApiOrigin}, this run ${MOVED}`],
-  ['(h) --host', () => ['--host', MOVED], (saved) => `node host: saved ${saved.request.nodeOrigin}, this run ${MOVED}`],
+  ['(f) --openkey-api-host', () => ['--openkey-api-host', MOVED], API_HOST],
+  ['(f) COURIER_OPENKEY_API_HOST', moveApiHost, API_HOST],
+  ['(g) TC_LINKS_API_ORIGIN', () => { process.env.TC_LINKS_API_ORIGIN = MOVED; return []; }, (saved) => `links API host (TC_LINKS_API_ORIGIN): saved ${saved.linkApiOrigin}, this run ${MOVED}`],
+  ['(h) --host', () => ['--host', MOVED], NODE_HOST],
 ]) {
   scenario(`${label} differs from the saved request: --wait is refused, naming the setting, and no file changes`, async ({ t, fx, request, courier }) => {
     const { saved, files } = await savedOneDay(t, request);
@@ -89,7 +101,46 @@ for (const [label, change, item] of [
     assert.equal(run.code, 2, run.stderr);
     assert.ok(run.stderr.includes(`Approval request ${saved.requestId} was made with different settings: ${item(saved)}.`), run.stderr);
     assert.equal(run.stdout, '');
-    assertUnchanged(fx, files);
-    assert.ok(fs.readFileSync(homeFile('profile.json')).equals(profile), 'profile.json is byte-identical');
+    assertNoFileChanged(fx, files, profile);
   });
 }
+
+/** A saved request the owner approved whose result is already saved locally (an interrupted --wait), so it holds the approval. */
+async function savedApproved(t, fx, request) {
+  const { saved } = await savedOneDay(t, request);
+  await fx.approve(readHome('approval-pending.json').approvalUrl);
+  const crash = crashAtWrite(t, 'approval-pending.json', { phase: 'after', when: (c) => c.resultEnvelope !== undefined });
+  await assert.rejects(cmdInit(parseArgs(['--wait'])), (error) => error instanceof Crash);
+  crash.disarm();
+  assert.ok(readHome('approval-pending.json').resultEnvelope, 'the approval is held');
+  return { saved, files: savedFiles(), profile: fs.readFileSync(homeFile('profile.json')) };
+}
+
+for (const [label, argv, item] of [
+  ['(i) --wait --host', () => ['--wait', '--host', MOVED], NODE_HOST],
+  ['(j) --wait with COURIER_OPENKEY_API_HOST', () => ['--wait', ...moveApiHost()], API_HOST],
+  ['(j) --resume with COURIER_OPENKEY_API_HOST', () => ['--resume', ...moveApiHost()], API_HOST],
+]) {
+  scenario(`${label} different from an approved request: refused, nothing installed, no file changes`, async ({ t, fx, request, courier }) => {
+    const { saved, files, profile } = await savedApproved(t, fx, request);
+    const run = await courier(...argv());
+    assert.equal(run.code, 2, run.stderr);
+    assert.ok(run.stderr.includes(`Approval request ${saved.requestId} was approved by the owner with different settings: ${item(saved)}.`), run.stderr);
+    assertNoFileChanged(fx, files, profile);
+    assert.equal(fx.acks.length, 0);
+  });
+}
+
+scenario('(k) a saved 1d request with a 5d lease: --wait --renew 5d resumes it (checked against the saved lifetime, not 30d)', async ({ t, fx, request, courier }) => {
+  fakeTime(t);
+  const printed = await request('--expiry', '1d', '--renew', '5d');
+  const files = savedFiles();
+  const run = await courier('--wait', '--timeout', '5s', '--renew', '5d');
+  assert.equal(run.code, 8, run.stderr);
+  assert.equal(JSON.parse(run.stdout).pending.approvalUrl, printed.openkeyUrl);
+  assertUnchanged(fx, files);
+  const other = await courier('--wait', '--timeout', '5s', '--renew', '6d');
+  assert.equal(other.code, 2, other.stderr);
+  assert.match(other.stderr, /is saved with --expiry 1d --renew 5d\./);
+  assertUnchanged(fx, files);
+});

@@ -93,7 +93,10 @@ Courier setup (humans run these):
                                    re-run \`${name} init --wait --timeout 60s\`. Repeat while it exits 8. Any other
                                    non-zero exit is an error: stderr carries \`[code]\`.
                                    The same request resumes each time: no second link, no second approval.
-                                   --wait keeps the saved request's --expiry and --renew. Do not repeat them; a different value is refused.
+                                   --wait uses the saved request's --expiry, --renew, --host, --openkey-host and
+                                   --openkey-api-host, and the COURIER_OPENKEY_API_HOST and TC_LINKS_API_ORIGIN settings.
+                                   Do not repeat or change them. A different host is refused, also after the owner
+                                   approved; a different --expiry or --renew is refused while the request waits for approval.
                                    An approved result is kept by OpenKey for 10 minutes only: wait promptly.
                                    --paste and --grant-file still take an old OpenKey XXXX-XXXX code.
                                    After an authorized key rotation, collect the new grant, then use a
