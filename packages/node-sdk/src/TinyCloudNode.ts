@@ -1947,17 +1947,17 @@ export class TinyCloudNode {
    * The one signed read a hosted-owner proof rests on (TC-4082): the read the session's own recap already holds, sent to
    * the pinned host with a transport that does not route by resource.
    */
-  private async readHostedOwner(host: string, spaceId: string, signedRequest: boolean): Promise<"positive" | "refused" | "unreachable"> {
+  private async readHostedOwner(host: string, spaceId: string, signedRequest: boolean): Promise<"positive" | "refused" | "unreachable" | "no-read"> {
     const session = this._serviceContext?.session;
     const primary = this.currentTinyCloudSession();
-    if (!session || !primary) return "refused";
+    if (!session || !primary) return "no-read";
     const graph = this._serviceGraph;
     // Not a static import on purpose: web-sdk's root size budget has no room for the proof, so bundlers ship it as its own file.
     const { assessHostedOwnerRecap, selectHostedOwnerRead, readHostedOwnerSpace } = await import("./space-hosting.js");
     // A fresh sign-in checks everything the signer actually signed; a restore only picks the read it already holds.
     const operations = this.recapOperationsFromSession(primary);
     const read = signedRequest ? assessHostedOwnerRecap(operations, spaceId) : selectHostedOwnerRead(operations, spaceId);
-    if (!read) return "refused";
+    if (!read) return "no-read";
     return readHostedOwnerSpace({
       spaceId,
       host,
@@ -1982,7 +1982,7 @@ export class TinyCloudNode {
       return;
     }
     auth.failHostedOwnerProof(proof, true);
-    throw outcome === "refused"
+    throw outcome === "refused" || outcome === "no-read"
       ? new AccountSetupRequiredError()
       : new NodeNotRespondingError([proof.host], new Error("The hosted-space check did not answer."));
   }
