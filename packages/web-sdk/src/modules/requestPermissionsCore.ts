@@ -111,15 +111,14 @@ export async function requestPermissionsCore(
 
   const allowSuppression = options?.allowPromptSuppression !== false;
   const onBehalfOf = options?.onBehalfOf;
-  const caption = options?.caption;
   let shouldSuppressPrompt = false;
   if (deps.skipPrompt !== true && (!allowSuppression || deps.isPromptSuppressed?.() !== true)) {
     const modalResult = await deps.showModal({
       appName: deps.manifest.name,
       appIcon: deps.manifest.icon,
       additional,
-      ...(expiryMs !== undefined ? { expiryMs } : {}),
-      ...(caption !== undefined ? { caption } : {}),
+      expiryMs,
+      caption: options?.caption,
       ...(onBehalfOf !== undefined ? { onBehalfOf } : {}),
       ...(allowSuppression ? {} : { allowSuppression: false }),
     });
