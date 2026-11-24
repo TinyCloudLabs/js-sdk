@@ -239,6 +239,13 @@ describe("hidden characters in the request", () => {
     expect(root.innerHTML).not.toMatch(/[\u0007\u200B\u2066]/);
   });
 
+  test("the Arabic letter mark, Mongolian vowel separator and line/paragraph separators are escaped too", () => {
+    const root = render({ additional: [{ service: "tinycloud.kv", path: "a\u061Cb\u180Ec\u2028d\u2029e/", actions: ["get"] }] });
+
+    expect(lines(root)[0]).toContain("a\\u{061C}b\\u{180E}c\\u{2028}d\\u{2029}e/");
+    expect(root.innerHTML).not.toMatch(/[\u061C\u180E\u2028\u2029]/);
+  });
+
   test("an RLO in the app name or the on-behalf-of name is shown escaped in the title, description and caption label", () => {
     const root = render({ appName: `Tiny${RLO}tahC`, additional: [botHistory], caption: "TrustBot's chat history" });
     expect(root.querySelector("#tc-permission-title")?.textContent).toBe("Tiny\\u{202E}tahC is requesting additional permissions");

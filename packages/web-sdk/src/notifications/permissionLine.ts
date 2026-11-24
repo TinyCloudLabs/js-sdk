@@ -111,10 +111,11 @@ export const PERMISSION_LINE_COPY = {
 export const CAPTION_MAX_LENGTH = 120;
 
 /**
- * C0 and C1 controls, zero-width characters (U+200B-200D, U+FEFF) and direction marks, embeddings, overrides and
- * isolates (U+200E-200F, U+202A-202E, U+2066-2069): characters that hide or reorder text.
+ * C0 and C1 controls, zero-width characters (U+180E, U+200B-200D, U+FEFF), line and paragraph separators
+ * (U+2028-2029) and direction marks, embeddings, overrides and isolates (U+061C, U+200E-200F, U+202A-202E,
+ * U+2066-2069): characters that hide or reorder text.
  */
-const HIDDEN_CHARACTERS = /[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]/g;
+const HIDDEN_CHARACTERS = /[\u0000-\u001f\u007f-\u009f\u061c\u180e\u200b-\u200f\u2028-\u202e\u2066-\u2069\ufeff]/g;
 
 /** `text` with every hidden character shown as a visible escape such as `\u{202E}`, so it never reads cleaner than it is. */
 export function showHiddenCharacters(text: string): string {
