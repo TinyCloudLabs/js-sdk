@@ -53,6 +53,14 @@ mapfile -d '' COMMAND < <(jq -j '.command[] | gsub("\\$\\$"; "$"), "\u0000"' "$W
 jq -e '.logging.driver == "json-file" and (.logging.options["max-size"] | test("^[0-9]+[km]$"))
        and (.logging.options["max-file"] | test("^[0-9]+$"))' "$WORK/ingress.json" >/dev/null \
     || fail "the ingress Docker log is not a capped json-file log: $(jq -c '.logging' "$WORK/ingress.json")"
+# Each restricted assistant surface the server mounts has its own route classes in the map.
+PREFIXES=$(sed -n 's/^const RESTRICTED_ADDRESS_PREFIXES = \[\(.*\)\] as const;$/\1/p' "$HERE/../src/http.ts" | grep -o '"[a-z]*"' | tr -d '"')
+[ -n "$PREFIXES" ] || fail "could not read RESTRICTED_ADDRESS_PREFIXES from packages/mcp/src/http.ts"
+for prefix in $PREFIXES; do
+    for route in "/$prefix/mcp" "/$prefix/connect" "/.well-known/oauth-protected-resource/$prefix/mcp"; do
+        grep -Eq "^ +$route +$route;$" <<<"${COMMAND[2]}" || fail "the ingress route map has no $route"
+    done
+done
 echo "testing $IMAGE with the compose command"
 
 hex() { od -An -N"$1" -tx1 /dev/urandom | tr -d ' \n'; }
@@ -144,6 +152,9 @@ expect_status 302 --http1.1 "https://$DOMAIN/connect?state=$STATE"
 expect_status 302 --http1.1 -X "$METHOD" "https://$DOMAIN/connect?state=$STATE"
 # A path the map does not know, carrying a marker.
 expect_status 200 "https://$DOMAIN/connect/$PATH_MARKER"
+# A restricted assistant surface (http.ts RESTRICTED_ADDRESS_PREFIXES) with an approval link, and its metadata.
+expect_status 200 "https://$DOMAIN/claude/connect?state=$STATE"
+expect_status 200 "https://$DOMAIN/.well-known/oauth-protected-resource/muse/mcp"
 # A regex route class (its `$$` anchor must reach nginx as `$`).
 expect_status 200 "https://$DOMAIN/.well-known/agent-skills/tinycloud-delegated-secrets/SKILL.md"
 expect_status 200 -X POST -H "Content-Type: application/json" --data "{\"token\":\"$QUERY_TOKEN\"}" \
@@ -198,6 +209,8 @@ expect_line 2 "GET /connect 302"
 expect_line 1 "<other> /connect 302"
 expect_line 1 "GET <other> 200"
 expect_line 1 "GET /.well-known/agent-skills/<skill>/SKILL.md 200"
+expect_line 1 "GET /claude/connect 200"
+expect_line 1 "GET /.well-known/oauth-protected-resource/muse/mcp 200"
 expect_line 1 "POST /mcp 200"
 expect_line 1 "POST /native/grant 502"
 # nginx refuses the oversized request line before it parses the method or path.

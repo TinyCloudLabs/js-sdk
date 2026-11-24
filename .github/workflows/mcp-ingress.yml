@@ -8,12 +8,15 @@ on:
       - .github/workflows/mcp-ingress.yml
       - packages/mcp/docker-compose.phala.yml
       - packages/mcp/ingress/**
+      # The route map mirrors the server's routes.
+      - packages/mcp/src/**
   push:
     branches: [master]
     paths:
       - .github/workflows/mcp-ingress.yml
       - packages/mcp/docker-compose.phala.yml
       - packages/mcp/ingress/**
+      - packages/mcp/src/**
 
 permissions:
   contents: read

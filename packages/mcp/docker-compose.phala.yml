@@ -86,6 +86,8 @@ services:
         # nginx opens its compiled-in error.log while parsing the config.
         ln -s /dev/stderr /var/log/nginx/error.log
         cat > /etc/nginx/conf.d/00-redacted-logging.conf <<'NGINX_LOGGING'
+        # The longest literal key (49 bytes) does not fit nginx's default 64-byte map hash bucket.
+        map_hash_bucket_size 128;
         map $$uri $$tc_route {
             default                                             "<other>";
             /                                                   /;
@@ -94,6 +96,14 @@ services:
             /connect                                            /connect;
             /native/grant                                       /native/grant;
             /mcp/server-card                                    /mcp/server-card;
+            /chatgpt/mcp                                        /chatgpt/mcp;
+            /chatgpt/connect                                    /chatgpt/connect;
+            /claude/mcp                                         /claude/mcp;
+            /claude/connect                                     /claude/connect;
+            /grok/mcp                                           /grok/mcp;
+            /grok/connect                                       /grok/connect;
+            /muse/mcp                                           /muse/mcp;
+            /muse/connect                                       /muse/connect;
             /auth.md                                            /auth.md;
             /llms.txt                                           /llms.txt;
             /robots.txt                                         /robots.txt;
@@ -101,6 +111,10 @@ services:
             /webmcp.js                                          /webmcp.js;
             /.well-known/oauth-protected-resource               /.well-known/oauth-protected-resource;
             /.well-known/oauth-protected-resource/mcp           /.well-known/oauth-protected-resource/mcp;
+            /.well-known/oauth-protected-resource/chatgpt/mcp   /.well-known/oauth-protected-resource/chatgpt/mcp;
+            /.well-known/oauth-protected-resource/claude/mcp    /.well-known/oauth-protected-resource/claude/mcp;
+            /.well-known/oauth-protected-resource/grok/mcp      /.well-known/oauth-protected-resource/grok/mcp;
+            /.well-known/oauth-protected-resource/muse/mcp      /.well-known/oauth-protected-resource/muse/mcp;
             /.well-known/oauth-authorization-server             /.well-known/oauth-authorization-server;
             /.well-known/ai-catalog.json                        /.well-known/ai-catalog.json;
             /.well-known/poppy.json                             /.well-known/poppy.json;
