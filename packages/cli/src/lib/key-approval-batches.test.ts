@@ -6,6 +6,7 @@ import {
   checkHeaderFits,
   estimateBatchBytes,
   FALLBACK_BATCH_BUDGET_BYTES,
+  MAX_CHECK_BYTES,
   planKeyApprovals,
 } from "./key-approval-batches.js";
 
@@ -144,6 +145,17 @@ describe("planKeyApprovals", () => {
     });
     expect((await planKeyApprovals(keyPaths(140), resourceOf, undefined, fetchImpl)).budgetSource).toBe("fallback");
     expect(checks).toHaveLength(0);
+  });
+
+  test("no check ever sends more than 256 KiB, for any ingress, at the length caps", async () => {
+    for (const limit of [16_000, 32_751, 64 * 1024 - 17, 256 * 1024 - 17]) {
+      for (const count of [140, 400]) {
+        const { fetchImpl, checks } = ingress(limit);
+        await planKeyApprovals(cappedKeyPaths(count), resourceOf, ORIGIN, fetchImpl);
+        expect(checks.length).toBeGreaterThan(0);
+        for (const check of checks) expect(check.bytes).toBeLessThanOrEqual(MAX_CHECK_BYTES);
+      }
+    }
   });
 });
 
