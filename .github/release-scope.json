@@ -5,9 +5,7 @@
     "@tinycloud/cli"
   ],
   "baselines": {
-    "@tinycloud/cli": "1.9.1"
-  },
-  "expect": {
     "@tinycloud/cli": "1.9.2"
-  }
+  },
+  "expect": {}
 }
