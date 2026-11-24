@@ -319,6 +319,18 @@ const lazyExternals = (moduleType, ext) => ({ context, request }, callback) => {
     callback(null, `${moduleType} ./panel-data.${ext}`);
     return;
   }
+  // sdk-core loads its issued-delegation code and the share links by dynamic import. The prompt carries sdk-core's
+  // permission helpers (TC-4222), so it loads those the way the root does: by name, never as a webpack chunk, whose
+  // computed import would make a downstream bundler (CRA in apps/openkey-example) parse the .d.ts files in dist/.
+  const dynamicType = ext === "mjs" ? "import" : "commonjs";
+  if (request === LINKS_REQUEST) {
+    callback(null, `${dynamicType} ${request}`);
+    return;
+  }
+  if (isIssuedDelegationsRequest({ context, request })) {
+    callback(null, `${dynamicType} ./delegations-issued.${ext}`);
+    return;
+  }
   callback();
 };
 

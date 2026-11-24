@@ -2034,6 +2034,11 @@ export class TinyCloudWeb {
    * always shows the prompt, ignoring an earlier 30-day opt-out, and offers none; a request
    * to decrypt, create keys or read secrets always does so.
    *
+   * The prompt states each entry in plain words derived from the request: the exact resource (for an encryption key,
+   * its key path), each action and the expiry. `options.caption` is the app's own short label for the request, such as
+   * `"TrustBot's chat history"`; the prompt shows it as plain text beneath that line, attributed to the app, and never
+   * in its place. It is cut to 120 characters.
+   *
    * An approved request that is not elevated (no decrypt or key creation, nothing in the secrets
    * space, no caveats) is kept with the session and active again after a page reload, with its own
    * signed expiry. An elevated one is not kept across a reload, except a grant made only of exact keys of the owner's
