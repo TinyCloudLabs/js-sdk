@@ -1,15 +1,7 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import {
-  CHECK_TIMEOUT_MS,
-  checkForUpdate,
-  detectInstallKind,
-  finishUpdateNotice,
-  isAutoUpdateEnabled,
-  registerUpdateNoticeFinalizer,
-  updateNotice,
-} from "./lib/auto-update.js";
+import { detectInstallKind, isAutoUpdateEnabled, readUpdateCheck, startUpdateCheck, updateNotice } from "./lib/auto-update.js";
 import { TC_OPTIONS_BEFORE_COURIER } from "./commands/courier.js";
 import { readFileSync } from "node:fs";
 import { CLI_NAME } from "@tinycloud/operations/cli-name";
@@ -21,43 +13,6 @@ import { closeReplication } from "./lib/replication-registry.js";
 const { version } = JSON.parse(
   readFileSync(new URL("../package.json", import.meta.url), "utf-8")
 );
-
-const updateCheckDeadline = Date.now() + CHECK_TIMEOUT_MS;
-let updateCheckSettled = false;
-const updateCheck = (isAutoUpdateEnabled(process.env)
-  ? checkForUpdate({ currentVersion: version, cachePath: join(CONFIG_DIR, "update-check.json") }).catch(() => null)
-  : Promise.resolve(null)
-).finally(() => { updateCheckSettled = true; });
-
-async function flushOutput(): Promise<void> {
-  for (const stream of [process.stdout, process.stderr]) {
-    const flushed = Promise.withResolvers<void>();
-    stream.write("", () => flushed.resolve());
-    await flushed.promise;
-  }
-}
-
-registerUpdateNoticeFinalizer(async () => {
-  // Only a command that finished cleanly gets the notice: a failing command's stderr is a structured JSON error
-  // that callers parse, so nothing is appended to it.
-  if (program.opts().quiet !== true && Number(process.exitCode ?? 0) === 0) {
-    const deadline = Promise.withResolvers<null>();
-    setTimeout(() => deadline.resolve(null), Math.max(0, updateCheckDeadline - Date.now())).unref();
-    const available = await Promise.race([updateCheck, deadline.promise]);
-    if (available) {
-      await flushOutput();
-      const packagePath = fileURLToPath(new URL("../", import.meta.url));
-      const installKind = detectInstallKind(packagePath, process.cwd(), homedir());
-      process.stderr.write(`${updateNotice(installKind, version, available)}\n`);
-    }
-  }
-  // A check still in flight (a slow registry or DNS lookup) would hold the finished command open past the
-  // deadline, or a failing one for no notice at all. process.exit() keeps process.exitCode.
-  if (!updateCheckSettled) {
-    await flushOutput();
-    process.exit();
-  }
-});
 import { theme } from "./output/theme.js";
 import { setJsonOutputRequested, shouldOutputJson, outputWarnings } from "./output/formatter.js";
 import { ProfileManager } from "./config/profiles.js";
@@ -241,16 +196,33 @@ setDiagnosticCommandContext({
   disabled: process.env.TINYCLOUD_CLI_LOGS === "0" || argv.includes("--no-diagnostic-logs"),
   cliVersion: version,
 });
+
+// After a command succeeds in a terminal, name a newer release that an earlier background check found. A missing or
+// day-old result starts a detached check, so the command itself never uses the network or waits (TC-2769).
+function showUpdateNotice(): void {
+  if (!isAutoUpdateEnabled(process.env) || Number(process.exitCode ?? 0) !== 0) return;
+  if (program.opts().quiet === true || shouldOutputJson() || !process.stderr.isTTY) return;
+  try {
+    const cachePath = join(CONFIG_DIR, "update-check.json");
+    const check = readUpdateCheck(version, cachePath);
+    if (check.due) startUpdateCheck(fileURLToPath(new URL("./update-check-entry.js", import.meta.url)), version, cachePath);
+    if (!check.version) return;
+    const installKind = detectInstallKind(fileURLToPath(new URL("../", import.meta.url)), process.cwd(), homedir());
+    process.stderr.write(`${updateNotice(installKind, version, check.version)}\n`);
+  } catch (error) {
+    // The notice never fails a command; TC_DEBUG=1 shows why it did not appear.
+    if (process.env.TC_DEBUG === "1") process.stderr.write(`update notice failed: ${error instanceof Error ? error.stack : String(error)}\n`);
+  }
+}
+
 if (argv[0] === "courier") {
   // Courier owns its argv (including --host and --json) and its own profile,
   // so Commander, the banner and the tc profile guard never see it.
   const code = await (await loadCourierEntry()).runCourier(argv.slice(1));
-  process.exitCode = code;
-  await finishUpdateNotice();
+  if (code !== 0) process.exit(code);
 } else if (commandToken === "courier") {
   process.stderr.write(`${TC_OPTIONS_BEFORE_COURIER}\n`);
-  process.exitCode = 2;
-  await finishUpdateNotice();
+  process.exit(2);
 } else {
   if (commandToken === "share") {
     // Keep the agent-critical surface independent from the legacy command
@@ -271,20 +243,23 @@ if (argv[0] === "courier") {
     process.stdin.unref?.();
     if (await closeReplication()) {
       process.exitCode = 0;
+      showUpdateNotice();
       const stdoutFlushed = Promise.withResolvers<void>();
       process.stdout.write("", () => stdoutFlushed.resolve());
       await stdoutFlushed.promise;
       const stderrFlushed = Promise.withResolvers<void>();
       process.stderr.write("", () => stderrFlushed.resolve());
       await stderrFlushed.promise;
-      await finishUpdateNotice();
       process.exit();
     }
-    await finishUpdateNotice();
+    showUpdateNotice();
   } catch (error) {
     if (error instanceof CommanderError) {
+      // Commander exits as soon as it has printed help, the version or a usage error; that stays, after the notice.
       process.exitCode = error.exitCode;
-      await finishUpdateNotice();
+      showUpdateNotice();
+      await new Promise<void>((resolve) => process.stderr.write("", () => resolve()));
+      process.exit(error.exitCode);
     } else {
       await handleError(error);
     }

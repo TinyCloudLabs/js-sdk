@@ -41,7 +41,7 @@ test("a hostile registry response yields no update and caches no version", async
       const result = await checkForUpdate({
         currentVersion: "1.8.0-beta.8",
         cachePath,
-        fetchFn: async () => Response.json({ version: hostile }),
+        fetchFn: async () => Response.json({ beta: hostile, latest: hostile.replace("-beta.9", "") }),
       });
       expect(result).toBeNull();
       const cached = JSON.parse(await readFile(`${cachePath}.beta`, "utf8")) as { version: unknown };
@@ -58,7 +58,7 @@ test("a hostile version already in the cache yields no update and no registry re
       const result = await checkForUpdate({
         currentVersion: "1.8.0-beta.8",
         cachePath,
-        fetchFn: async () => { requests += 1; return Response.json({ version: hostile }); },
+        fetchFn: async () => { requests += 1; return Response.json({ beta: hostile }); },
       });
       expect(result).toBeNull();
       expect(requests).toBe(0);
@@ -72,9 +72,9 @@ test("the registry request uses the encoded scope form and a valid response is r
     const result = await checkForUpdate({
       currentVersion: "1.8.0-beta.8",
       cachePath,
-      fetchFn: async (input) => { urls.push(String(input)); return Response.json({ version: "1.8.0-beta.9" }); },
+      fetchFn: async (input) => { urls.push(String(input)); return Response.json({ beta: "1.8.0-beta.9" }); },
     });
-    expect(urls).toEqual(["https://registry.npmjs.org/@tinycloud%2fcli/beta"]);
+    expect(urls).toEqual(["https://registry.npmjs.org/-/package/@tinycloud%2fcli/dist-tags"]);
     expect(result).toBe("1.8.0-beta.9");
     expect(updateNotice("npm-global", "1.8.0-beta.8", result!)).toBe("TinyCloud CLI 1.8.0-beta.9 is available. This is 1.8.0-beta.8, installed with npm.");
   });
