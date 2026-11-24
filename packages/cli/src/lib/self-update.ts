@@ -485,15 +485,16 @@ export function appendUpdateLog(root: string, line: string, now: Date = new Date
 }
 
 function runProcess(command: string, args: string[], env: NodeJS.ProcessEnv, timeoutMs: number): Promise<{ code: number | null; stdout: string; stderr: string }> {
-  const { promise, resolve: done, reject } = Promise.withResolvers<{ code: number | null; stdout: string; stderr: string }>();
-  const child = spawn(command, args, { env, stdio: ["ignore", "pipe", "pipe"], timeout: timeoutMs });
-  let stdout = "";
-  let stderr = "";
-  child.stdout.on("data", (chunk) => { stdout += chunk; });
-  child.stderr.on("data", (chunk) => { stderr = (stderr + chunk).slice(-4096); });
-  child.on("error", reject);
-  child.on("close", (code) => done({ code, stdout, stderr }));
-  return promise;
+  // Executor form: the CLI supports Node 20, which lacks Promise.withResolvers.
+  return new Promise((done, reject) => {
+    const child = spawn(command, args, { env, stdio: ["ignore", "pipe", "pipe"], timeout: timeoutMs });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk) => { stdout += chunk; });
+    child.stderr.on("data", (chunk) => { stderr = (stderr + chunk).slice(-4096); });
+    child.on("error", reject);
+    child.on("close", (code) => done({ code, stdout, stderr }));
+  });
 }
 
 /** The real registry, npm and node behind `UpdaterDeps`. */
