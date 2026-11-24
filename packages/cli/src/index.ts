@@ -1,14 +1,7 @@
-import { spawn } from "node:child_process";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import {
-  checkForUpdate,
-  detectInstallKind,
-  finishUpdateNotice,
-  isAutoUpdateEnabled,
-  registerUpdateNoticeFinalizer,
-  updateNotice,
-} from "./lib/auto-update.js";
+import { fileURLToPath } from "node:url";
+import { detectInstallKind, isAutoUpdateEnabled, readUpdateCheck, startUpdateCheck, updateNotice } from "./lib/auto-update.js";
 import {
   autoUpdateCovers,
   autoUpdateOffReason,
@@ -17,6 +10,7 @@ import {
   pendingSwitch,
   readGlobalConfig,
   startAutoUpdateIfDue,
+  startBackgroundUpdate,
 } from "./lib/self-update.js";
 import { recordedInstallKind } from "./lib/install-kind.js";
 import { readPointer, writeLease } from "./lib/versions.js";
@@ -31,50 +25,11 @@ import { closeReplication } from "./lib/replication-registry.js";
 const { version } = JSON.parse(
   readFileSync(new URL("../package.json", import.meta.url), "utf-8")
 );
-
-const updateCheck = isAutoUpdateEnabled(process.env)
-  ? checkForUpdate({ currentVersion: version, cachePath: join(CONFIG_DIR, "update-check.json") }).catch(() => null)
-  : Promise.resolve(null);
-
-// TC-4276: this process's global install, and whether it updates itself (npm or bun global installs only).
+// TC-4276: this process's global install, and whether it may update itself (npm or bun global installs only; the
+// background pass verifies that before installing anything).
 const base = baseInstall();
 const installKind = detectInstallKind(base.packageDir, process.cwd(), homedir());
 const selfUpdating = installKind === "npm-global" || installKind === "bun-global";
-
-registerUpdateNoticeFinalizer(async () => {
-  const offReason = selfUpdating ? autoUpdateOffReason(process.env, readGlobalConfig()) : null;
-  // The background updater starts after any command, quiet or failed ones included; it never prints.
-  if (selfUpdating && commandToken !== "upgrade" && commandToken !== "__auto-update" && offReason === null) {
-    startAutoUpdateIfDue(base.root, Date.now(), () => {
-      const job = spawn(process.execPath, [base.bin, "--quiet", "__auto-update"], { detached: true, stdio: "ignore" });
-      job.on("error", () => undefined);
-      job.unref();
-    });
-  }
-  // Only a command that finished cleanly gets the notice: a failing command's stderr is a structured JSON error
-  // that callers parse, so nothing is appended to it.
-  if (program.opts().quiet === true || Number(process.exitCode ?? 0) !== 0) return;
-  const latest = await updateCheck;
-  // A release the background updater installs itself gets no notice (TC-4276). Only an install the updater has
-  // verified counts; `detectInstallKind` is a path guess.
-  const pointer = selfUpdating ? readPointer(base.root) : null;
-  const available = latest && !autoUpdateCovers({
-    installKind: (selfUpdating && recordedInstallKind(base.root, base.packageDir, base.version)) || "unknown",
-    current: version,
-    available: latest,
-    offReason,
-    npmOnPath: selfUpdating && onPath("npm"),
-    pinned: pointer?.base === base.version && pointer.pinned,
-  }) ? latest : null;
-  const pending = selfUpdating ? pendingSwitch(base.root, version) : null;
-  if (!available && !pending) return;
-  await new Promise<void>((resolve) => process.stdout.write("", () => resolve()));
-  await new Promise<void>((resolve) => process.stderr.write("", () => resolve()));
-  if (available) process.stderr.write(`${updateNotice(installKind, version, available)}\n`);
-  // User-facing copy: TC-4276, approved by Monica.
-  if (pending) process.stderr.write(`TinyCloud CLI ${pending} is ready. Restart Courier to finish the update.\n`);
-  await new Promise<void>((resolve) => process.stderr.write("", () => resolve()));
-});
 import { theme } from "./output/theme.js";
 import { setJsonOutputRequested, shouldOutputJson, outputWarnings } from "./output/formatter.js";
 import { ProfileManager } from "./config/profiles.js";
@@ -258,21 +213,73 @@ setDiagnosticCommandContext({
   disabled: process.env.TINYCLOUD_CLI_LOGS === "0" || argv.includes("--no-diagnostic-logs"),
   cliVersion: version,
 });
+
+/**
+ * TC-4276: after a command, start the background auto-update pass when one is due, quiet or not and with or without
+ * a terminal. It runs in #1054's detached update-check child, which also refreshes the notice cache, so a run starts
+ * at most one child. Returns whether it started.
+ */
+function startSelfUpdate(cachePath: string): boolean {
+  if (!selfUpdating || commandToken === "upgrade") return false;
+  if (autoUpdateOffReason(process.env, readGlobalConfig()) !== null) return false;
+  const entry = join(base.packageDir, "dist", "update-check-entry.js");
+  return startAutoUpdateIfDue(base.root, Date.now(), () => startBackgroundUpdate(entry, version, cachePath));
+}
+
+// After a command succeeds in a terminal, name a newer release that an earlier background check found. A missing or
+// day-old result starts a detached check, so the command itself never uses the network or waits (TC-2769).
+function showUpdateNotice(): void {
+  const cachePath = join(CONFIG_DIR, "update-check.json");
+  let backgroundStarted = false;
+  try {
+    backgroundStarted = startSelfUpdate(cachePath);
+  } catch (error) {
+    if (process.env.TC_DEBUG === "1") process.stderr.write(`auto-update start failed: ${error instanceof Error ? error.stack : String(error)}\n`);
+  }
+  if (!isAutoUpdateEnabled(process.env) || Number(process.exitCode ?? 0) !== 0) return;
+  if (program.opts().quiet === true || shouldOutputJson() || !process.stderr.isTTY) return;
+  try {
+    const check = readUpdateCheck(version, cachePath);
+    if (check.due && !backgroundStarted) startUpdateCheck(fileURLToPath(new URL("./update-check-entry.js", import.meta.url)), version, cachePath);
+    // A release the background updater installs itself gets no notice (TC-4276). Only an install the updater has
+    // verified counts; `detectInstallKind` is a path guess.
+    const offered = check.version && selfUpdating && autoUpdateCovers({
+      installKind: recordedInstallKind(base.root, base.packageDir, base.version) ?? "unknown",
+      current: version,
+      available: check.version,
+      offReason: autoUpdateOffReason(process.env, readGlobalConfig()),
+      npmOnPath: onPath("npm"),
+      pinned: pinnedHere(),
+    }) ? null : check.version;
+    if (offered) process.stderr.write(`${updateNotice(installKind, version, offered)}\n`);
+    // User-facing copy: TC-4276, approved by Monica.
+    const pending = selfUpdating ? pendingSwitch(base.root, version) : null;
+    if (pending) process.stderr.write(`TinyCloud CLI ${pending} is ready. Restart Courier to finish the update.\n`);
+  } catch (error) {
+    // The notice never fails a command; TC_DEBUG=1 shows why it did not appear.
+    if (process.env.TC_DEBUG === "1") process.stderr.write(`update notice failed: ${error instanceof Error ? error.stack : String(error)}\n`);
+  }
+}
+
+function pinnedHere(): boolean {
+  const pointer = readPointer(base.root);
+  return pointer?.base === base.version && pointer.pinned === true;
+}
+
 // A Courier process, and any process started from a versioned install, leases its version: the updater neither
 // prunes it nor switches away from the version a running Courier uses (TC-4276).
 if (selfUpdating && (argv[0] === "courier" || version !== base.version)) {
   writeLease(base.root, { version, courier: argv[0] === "courier" });
 }
+
 if (argv[0] === "courier") {
   // Courier owns its argv (including --host and --json) and its own profile,
   // so Commander, the banner and the tc profile guard never see it.
   const code = await (await loadCourierEntry()).runCourier(argv.slice(1));
-  process.exitCode = code;
-  await finishUpdateNotice();
+  if (code !== 0) process.exit(code);
 } else if (commandToken === "courier") {
   process.stderr.write(`${TC_OPTIONS_BEFORE_COURIER}\n`);
-  process.exitCode = 2;
-  await finishUpdateNotice();
+  process.exit(2);
 } else {
   if (commandToken === "share") {
     // Keep the agent-critical surface independent from the legacy command
@@ -293,20 +300,23 @@ if (argv[0] === "courier") {
     process.stdin.unref?.();
     if (await closeReplication()) {
       process.exitCode = 0;
+      showUpdateNotice();
       const stdoutFlushed = Promise.withResolvers<void>();
       process.stdout.write("", () => stdoutFlushed.resolve());
       await stdoutFlushed.promise;
       const stderrFlushed = Promise.withResolvers<void>();
       process.stderr.write("", () => stderrFlushed.resolve());
       await stderrFlushed.promise;
-      await finishUpdateNotice();
       process.exit();
     }
-    await finishUpdateNotice();
+    showUpdateNotice();
   } catch (error) {
     if (error instanceof CommanderError) {
+      // Commander exits as soon as it has printed help, the version or a usage error; that stays, after the notice.
       process.exitCode = error.exitCode;
-      await finishUpdateNotice();
+      showUpdateNotice();
+      await new Promise<void>((resolve) => process.stderr.write("", () => resolve()));
+      process.exit(error.exitCode);
     } else {
       await handleError(error);
     }

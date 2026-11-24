@@ -1,3 +1,5 @@
+import { spawn } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { mkdir, open, readFile, rename, rm, stat } from "node:fs/promises";
 import { dirname } from "node:path";
 
@@ -11,7 +13,21 @@ export function selectUpdateVersion(currentVersion: string, distTags: Record<str
   const candidate = parseVersion(candidateString);
   if (!candidate) return null;
   if (channel === undefined ? candidate.prerelease.length > 0 : candidate.prerelease[0] !== channel) return null;
-  return compareVersions(candidate, current) > 0 ? candidateString : null;
+  return compareVersions(candidate, current) > 0 ? formatVersion(candidate) : null;
+}
+
+/**
+ * The version the notice offers: a newer release on the install's own channel and, for a prerelease install, a
+ * newer stable `latest` too, whichever is higher.
+ */
+export function selectNoticeVersion(currentVersion: string, distTags: Record<string, string>): string | null {
+  const current = parseVersion(currentVersion);
+  if (!current) return null;
+  const own = selectUpdateVersion(currentVersion, distTags);
+  const latest = current.prerelease.length > 0 && distTags.latest ? parseVersion(distTags.latest) : null;
+  if (!latest || latest.prerelease.length > 0 || compareVersions(latest, current) <= 0) return own;
+  if (own && compareVersions(parseVersion(own)!, latest) >= 0) return own;
+  return formatVersion(latest);
 }
 
 type ParsedVersion = { major: number; minor: number; patch: number; prerelease: string[] };
@@ -25,6 +41,12 @@ function parseVersion(value: string): ParsedVersion | null {
     patch: Number(match[3]),
     prerelease: match[4] === undefined ? [] : match[4].split("."),
   };
+}
+
+/** `x.y.z[-pre]`: build metadata is dropped. */
+function formatVersion(version: ParsedVersion): string {
+  const core = `${version.major}.${version.minor}.${version.patch}`;
+  return version.prerelease.length === 0 ? core : `${core}-${version.prerelease.join(".")}`;
 }
 
 /** Semver order of two version strings; null when either is not a version. */
@@ -59,6 +81,7 @@ function compareVersions(left: ParsedVersion, right: ParsedVersion): number {
 const DAY_MS = 24 * 60 * 60 * 1000;
 const CHECK_TIMEOUT_MS = 3_000;
 const STALE_LOCK_MS = 120_000;
+const DIST_TAGS_URL = "https://registry.npmjs.org/-/package/@tinycloud%2fcli/dist-tags";
 
 type UpdateCache = { checkedAt: number; version: string | null };
 type CheckOptions = {
@@ -71,6 +94,45 @@ type CheckOptions = {
 
 export type InstallKind = "npm-global" | "bun-global" | "npx" | "homebrew" | "project" | "unknown";
 
+function channelOf(currentVersion: string): string | null {
+  const current = parseVersion(currentVersion);
+  return current ? current.prerelease[0] ?? "latest" : null;
+}
+
+/** A cached offer is shown only while it is still newer than the running version, on a channel it may offer. */
+function cachedOffer(currentVersion: string, version: string | null): string | null {
+  return version ? selectNoticeVersion(currentVersion, { [channelOf(currentVersion)!]: version, latest: version }) : null;
+}
+
+/**
+ * What a finished command may say, from the cache alone: the offered version, and whether the cache is missing or a
+ * day old, so a new background check is due. Never touches the network.
+ */
+export function readUpdateCheck(currentVersion: string, cachePath: string, now = Date.now()): { due: boolean; version: string | null } {
+  const channel = channelOf(currentVersion);
+  if (!channel) return { due: false, version: null };
+  let cached: UpdateCache | null = null;
+  try {
+    cached = parseFreshCache(readFileSync(`${cachePath}.${channel}`, "utf8"), now);
+  } catch {
+    // Missing or unreadable: a check is due.
+  }
+  if (!cached) return { due: true, version: null };
+  return { due: false, version: cachedOffer(currentVersion, cached.version) };
+}
+
+/** Start the background check in a detached process that outlives the command and is never waited for. */
+export function startUpdateCheck(entryPath: string, currentVersion: string, cachePath: string): void {
+  const child = spawn(process.execPath, [entryPath, currentVersion, cachePath], {
+    detached: true,
+    stdio: "ignore",
+    windowsHide: true,
+  });
+  child.on("error", () => undefined);
+  child.unref();
+}
+
+/** The background check: one registry request per channel per day, shared by every process through the cache. */
 export async function checkForUpdate({
   currentVersion,
   cachePath,
@@ -78,49 +140,50 @@ export async function checkForUpdate({
   fetchFn = fetch,
   timeoutMs = CHECK_TIMEOUT_MS,
 }: CheckOptions): Promise<string | null> {
-  if (!parseVersion(currentVersion)) return null;
-  const channel = parseVersion(currentVersion)!.prerelease[0] ?? "latest";
+  const channel = channelOf(currentVersion);
+  if (!channel) return null;
   const time = now();
   const channelCachePath = `${cachePath}.${channel}`;
   const cached = await readFreshCache(channelCachePath, time);
-  if (cached) return cached.version && selectUpdateVersion(currentVersion, { [channel]: cached.version }) ? cached.version : null;
+  if (cached) return cachedOffer(currentVersion, cached.version);
 
   const releaseLock = await acquireLock(`${channelCachePath}.check-lock`);
   if (!releaseLock) {
     const concurrent = await readFreshCache(channelCachePath, time);
-    return concurrent?.version && selectUpdateVersion(currentVersion, { [channel]: concurrent.version }) ? concurrent.version : null;
+    return concurrent ? cachedOffer(currentVersion, concurrent.version) : null;
   }
 
-  let version: string | null = null;
   try {
     const afterLock = await readFreshCache(channelCachePath, time);
-    if (afterLock) return afterLock.version && selectUpdateVersion(currentVersion, { [channel]: afterLock.version }) ? afterLock.version : null;
+    if (afterLock) return cachedOffer(currentVersion, afterLock.version);
+    // Recorded before the request: a registry that never answers counts as today's failed check.
+    await writeCache(channelCachePath, { checkedAt: time, version: null });
+    let version: string | null = null;
     try {
-      const response = await fetchFn(`https://registry.npmjs.org/@tinycloud%2fcli/${channel}`, {
+      const response = await fetchFn(DIST_TAGS_URL, {
         signal: AbortSignal.timeout(timeoutMs),
         headers: { accept: "application/json" },
       });
       if (!response.ok) throw new Error("registry request failed");
-      const metadata = await response.json() as { version?: unknown };
-      if (typeof metadata.version === "string") version = selectUpdateVersion(currentVersion, { [channel]: metadata.version });
+      const tags = await response.json() as unknown;
+      if (tags && typeof tags === "object") {
+        const distTags = Object.fromEntries(Object.entries(tags).filter((entry): entry is [string, string] => typeof entry[1] === "string"));
+        version = selectNoticeVersion(currentVersion, distTags);
+      }
     } catch {
-      // Update checks must not affect the command.
+      // A failed check stays recorded as failed until tomorrow.
     }
-    await writeCache(channelCachePath, { checkedAt: time, version });
+    if (version) await writeCache(channelCachePath, { checkedAt: time, version });
     return version;
   } finally {
     await releaseLock();
   }
 }
 
-/** `CI` set to anything but `false` or `0` (any case). One rule for the notice, auto-install and `upgrade --yes`. */
-export function isCI(env: NodeJS.ProcessEnv): boolean {
-  const value = env.CI?.trim().toLowerCase();
-  return Boolean(value) && value !== "false" && value !== "0";
-}
-
 export function isAutoUpdateEnabled(env: NodeJS.ProcessEnv): boolean {
-  return env.TC_NO_AUTO_UPDATE !== "1" && !isCI(env);
+  const ci = env.CI?.toLowerCase();
+  const inCi = ci !== undefined && ci !== "" && ci !== "false" && ci !== "0";
+  return env.TC_NO_AUTO_UPDATE !== "1" && !inCi;
 }
 
 export function detectInstallKind(packagePath: string, workingDirectory: string, homeDirectory: string): InstallKind {
@@ -147,28 +210,23 @@ export function updateNotice(kind: InstallKind, currentVersion: string, availabl
   return `TinyCloud CLI ${availableVersion} is available. This is ${currentVersion}${method}.`;
 }
 
-let finishNotice: (() => Promise<void>) | undefined;
-let noticeFinished = false;
-
-export function registerUpdateNoticeFinalizer(finalizer: () => Promise<void>): void {
-  finishNotice = finalizer;
-}
-
-export async function finishUpdateNotice(): Promise<void> {
-  if (noticeFinished) return;
-  noticeFinished = true;
-  await finishNotice?.().catch(() => undefined);
+function parseFreshCache(text: string, now: number): UpdateCache | null {
+  try {
+    const cached = JSON.parse(text) as UpdateCache;
+    if (Number.isFinite(cached.checkedAt) && cached.checkedAt <= now && now - cached.checkedAt < DAY_MS &&
+        (cached.version === null || typeof cached.version === "string")) return cached;
+  } catch {
+    // A corrupt cache means a fresh check.
+  }
+  return null;
 }
 
 async function readFreshCache(cachePath: string, now: number): Promise<UpdateCache | null> {
   try {
-    const cached = JSON.parse(await readFile(cachePath, "utf8")) as UpdateCache;
-    if (Number.isFinite(cached.checkedAt) && cached.checkedAt <= now && now - cached.checkedAt < DAY_MS &&
-        (cached.version === null || typeof cached.version === "string")) return cached;
+    return parseFreshCache(await readFile(cachePath, "utf8"), now);
   } catch {
-    // Missing or corrupt cache means a fresh check.
+    return null;
   }
-  return null;
 }
 
 async function writeCache(cachePath: string, value: UpdateCache): Promise<void> {
@@ -216,13 +274,10 @@ async function acquireLock(lockPath: string): Promise<(() => Promise<void>) | nu
     !Number.isFinite(metadata.createdAt) ||
     metadata.createdAt > now
   ) return recoverMalformedLock(lockPath);
-  if (now - metadata.createdAt < STALE_LOCK_MS) return null;
-  try {
-    process.kill(metadata.pid, 0);
-    return null;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ESRCH") return null;
-  }
+  // A lock holds only while it is younger than the stale window and names another process. Past the window its PID
+  // may have been reused; this process's own PID means an earlier process with the same PID left it (PID 1 in a
+  // container with a persistent HOME).
+  if (metadata.pid !== process.pid && now - metadata.createdAt < STALE_LOCK_MS) return null;
   await rm(lockPath, { force: true });
   try {
     const handle = await open(lockPath, "wx", 0o600);

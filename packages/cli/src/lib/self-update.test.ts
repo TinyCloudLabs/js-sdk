@@ -3,7 +3,7 @@ import { existsSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { FakeRegistry, OTHER_IDENTITY, fakeUpdater, type FakeUpdater } from "../test-support/self-update-fakes.js";
-import { autoUpdateOffReason, pendingSwitch, runAutoUpdate, runManualUpgrade, SOAK_MS } from "./self-update.js";
+import { autoUpdateCovers, autoUpdateOffReason, pendingSwitch, runAutoUpdate, runManualUpgrade, SOAK_MS } from "./self-update.js";
 import { isVerified, readPointer, versionPackageDir } from "./versions.js";
 
 const HOUR = 60 * 60 * 1000;
@@ -73,6 +73,21 @@ describe("soak", () => {
     fake.registry.tags.latest = "1.9.5";
     expect(await runManualUpgrade(fake.deps, { installKind: "npm-global" })).toEqual({ status: "ok", from: "1.9.4", to: "1.9.5", changed: true });
     expect(readPointer(fake.deps.root)).toMatchObject({ version: "1.9.5", auto: false, pinned: false });
+  });
+});
+
+describe("notice suppression", () => {
+  const on = { installKind: "npm-global" as const, offReason: null, npmOnPath: true, pinned: false };
+  test("only a same-channel, same-major release on a verified install with auto-update on skips the notice", () => {
+    expect(autoUpdateCovers({ ...on, current: "1.9.4", available: "1.10.0" })).toBe(true);
+    expect(autoUpdateCovers({ ...on, current: "1.9.4", available: "2.0.0" })).toBe(false);
+    // #1054 offers a beta install the higher `latest`; the updater stays on beta, so the notice stays.
+    expect(autoUpdateCovers({ ...on, current: "1.10.0-beta.2", available: "1.10.0" })).toBe(false);
+    expect(autoUpdateCovers({ ...on, current: "1.10.0-beta.2", available: "1.10.0-beta.3" })).toBe(true);
+    expect(autoUpdateCovers({ ...on, installKind: "unknown", current: "1.9.4", available: "1.10.0" })).toBe(false);
+    expect(autoUpdateCovers({ ...on, pinned: true, current: "1.9.4", available: "1.10.0" })).toBe(false);
+    expect(autoUpdateCovers({ ...on, npmOnPath: false, current: "1.9.4", available: "1.10.0" })).toBe(false);
+    expect(autoUpdateCovers({ ...on, offReason: "config", current: "1.9.4", available: "1.10.0" })).toBe(false);
   });
 });
 

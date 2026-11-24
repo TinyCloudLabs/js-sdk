@@ -48,14 +48,18 @@ function npmGlobalInstall() {
     config(value: object) {
       writeFileSync(join(state, ".tinycloud", "config.json"), JSON.stringify({ defaultProfile: "default", version: 1, ...value }));
     },
+    /** `tinycloud --version` on a pty (the notice is for terminals only): stdout and stderr arrive together. */
     noticeFor(available: string): string {
       writeFileSync(join(state, ".tinycloud", "update-check.json.latest"), JSON.stringify({ checkedAt: Date.now(), version: available }));
-      const result = spawnSync("node", [join(packageDir, "bin", "tinycloud"), "--version"], {
+      const command = ["node", join(packageDir, "bin", "tinycloud"), "--version"].map((value) => `'${value.replaceAll("'", `'\\''`)}'`).join(" ");
+      const result = spawnSync("script", ["-qec", command, "/dev/null"], {
         encoding: "utf8",
+        timeout: 60_000,
         env: {
           ...ambient,
           CI: "",
           TC_NO_AUTO_UPDATE: "",
+          NO_COLOR: "1",
           HOME: dir,
           TC_HOME: state,
           TC_VERSIONS_DIR: versions,
@@ -63,10 +67,10 @@ function npmGlobalInstall() {
         },
       });
       expect(result.status).toBe(0);
-      expect(result.stdout.trim()).toBe(installed);
+      expect(result.stdout).toContain(installed);
       // No background update started.
       expect(readFileSync(join(versions, "next-check.json"), "utf8")).toBe(nextCheck);
-      return result.stderr;
+      return result.stdout;
     },
   };
 }
@@ -75,7 +79,8 @@ const [major, minor] = installed.split(".").map(Number);
 const newerMinor = `${major}.${minor + 1}.0`;
 const newerMajor = `${major + 1}.0.0`;
 
-describe("update notice with automatic updates", () => {
+// Terminal-only notice, so the runs go through util-linux `script` for a pty, as in #1054's update-notice test.
+describe.skipIf(process.platform !== "linux")("update notice with automatic updates", () => {
   test("a patch or minor that the background updater installs gets no notice", () => {
     const cli = npmGlobalInstall();
     cli.verified();

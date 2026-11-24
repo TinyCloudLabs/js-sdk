@@ -12,13 +12,15 @@ import { homedir } from "node:os";
 import { delimiter, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { CONFIG_FILE } from "../config/constants.js";
-import { compareVersionStrings, isAutoUpdateEnabled, selectUpdateVersion, type InstallKind } from "./auto-update.js";
+import { checkForUpdate, compareVersionStrings, isAutoUpdateEnabled, selectUpdateVersion, type InstallKind } from "./auto-update.js";
 import { acquireInstallLock, type InstallLock } from "./install-lock.js";
-import { bunGlobalModules, type GlobalRoots } from "./install-kind.js";
+import { bunGlobalModules, recordInstallKind, verifyInstallKind, type GlobalRoots } from "./install-kind.js";
 import {
   lockedPackages,
+  npmRegistry,
   packageUrlPath,
   REGISTRY,
+  sigstoreVerifier,
   VerificationError,
   verifyCliRelease,
   verifyStagedTree,
@@ -470,8 +472,8 @@ export function autoUpdateOffReason(env: NodeJS.ProcessEnv, config: unknown, hom
 
 /**
  * Whether the background updater installs `available` itself, so the "update available" notice is left out
- * (Naomi, TC-4276): a patch or minor for an npm or bun global install with auto-update on, npm on PATH, and no pin.
- * Majors, other installs, and installs with auto-update off keep the notice.
+ * (Naomi, TC-4276): a patch or minor on the install's channel, for an npm or bun global install with auto-update
+ * on, npm on PATH, and no pin. Majors, other channels, other installs and auto-update off keep the notice.
  */
 export function autoUpdateCovers(input: {
   installKind: InstallKind;
@@ -482,7 +484,9 @@ export function autoUpdateCovers(input: {
   pinned: boolean;
 }): boolean {
   return (input.installKind === "npm-global" || input.installKind === "bun-global") &&
-    input.offReason === null && input.npmOnPath && !input.pinned && majorOf(input.available) === majorOf(input.current);
+    input.offReason === null && input.npmOnPath && !input.pinned &&
+    // The updater stays on the install's channel; #1054 may offer a beta install the higher `latest`.
+    channelOf(input.available) === channelOf(input.current) && majorOf(input.available) === majorOf(input.current);
 }
 
 /** Whether an executable named `command` is on PATH, as the updater's `npm` lookup would find it. */
@@ -511,6 +515,45 @@ export function startAutoUpdateIfDue(root: string, now: number, startJob: () => 
   }
   startJob();
   return true;
+}
+
+/**
+ * Start the one detached background child of this run (TC-4276 on top of #1054's G1): #1054's update-check entry,
+ * which with `--self-update` refreshes the notice cache and then runs one auto-update pass (`runBackgroundUpdate`).
+ * `entryPath` is the global install's entry, so the pass belongs to that install, not to a versioned one.
+ */
+export function startBackgroundUpdate(entryPath: string, currentVersion: string, cachePath: string): void {
+  const child = spawn(process.execPath, [entryPath, currentVersion, cachePath, "--self-update"], {
+    detached: true,
+    stdio: "ignore",
+    windowsHide: true,
+  });
+  child.on("error", () => undefined);
+  child.unref();
+}
+
+/** The background child's work: #1054's update check (its dist-tags answer reused), then one auto-update pass. */
+export async function runBackgroundUpdate(currentVersion: string, cachePath: string): Promise<void> {
+  let tags: Record<string, string> | undefined;
+  const capture = (async (input: string | URL | Request, init?: RequestInit) => {
+    const response = await fetch(input, init);
+    if (response.ok) tags = stringEntries(await response.clone().json().catch(() => null));
+    return response;
+  }) as typeof fetch;
+  // The check's own 3 s abort can't end a DNS lookup; the pass goes on without its answer.
+  await Promise.race([
+    checkForUpdate({ currentVersion, cachePath, fetchFn: capture }).catch(() => null),
+    new Promise((resolve) => setTimeout(resolve, 10_000).unref()),
+  ]);
+  const base = baseInstall();
+  if (autoUpdateOffReason(process.env, readGlobalConfig()) !== null) return;
+  // Only a verified npm or bun global install updates itself; the record lets the foreground drop the notice.
+  const kind = await verifyInstallKind(base.packageDir, systemGlobalRoots());
+  recordInstallKind(base.root, base.packageDir, base.version, kind);
+  if (!kind) return;
+  const log = (line: string) => appendUpdateLog(base.root, line);
+  const outcome = await runAutoUpdate(defaultUpdater(base, log, tags));
+  if (outcome.action !== "none" && outcome.action !== "locked") log(JSON.stringify(outcome));
 }
 
 /** A verified version waiting only for Courier to stop, for the foreground notice. */
@@ -558,8 +601,26 @@ export function systemGlobalRoots(env: NodeJS.ProcessEnv = process.env): GlobalR
   };
 }
 
-/** The real registry, npm and node behind `UpdaterDeps`. */
-export function productionDeps(root: string, base: BaseInstall, registry: ReleaseRegistry, verifyBundle: BundleVerifier, log: (line: string) => void): UpdaterDeps {
+/** The production updater for the global install `install`, its versions root included. */
+export function defaultUpdater(install: BaseInstall & { root: string }, log: (line: string) => void, fetchedTags?: Record<string, string>): UpdaterDeps {
+  const { root, ...base } = install;
+  return productionDeps(root, base, npmRegistry(), sigstoreVerifier(join(root, ".tuf")), log, fetchedTags);
+}
+
+function stringEntries(value: unknown): Record<string, string> | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  return Object.fromEntries(Object.entries(value).filter((entry): entry is [string, string] => typeof entry[1] === "string"));
+}
+
+/** The real registry, npm and node behind `UpdaterDeps`. `fetchedTags`: dist-tags this process already fetched. */
+export function productionDeps(
+  root: string,
+  base: BaseInstall,
+  registry: ReleaseRegistry,
+  verifyBundle: BundleVerifier,
+  log: (line: string) => void,
+  fetchedTags?: Record<string, string>,
+): UpdaterDeps {
   return {
     root,
     base,
@@ -567,11 +628,12 @@ export function productionDeps(root: string, base: BaseInstall, registry: Releas
     registry: {
       ...registry,
       async distTags() {
+        if (fetchedTags) return fetchedTags;
         const response = await fetch(`${REGISTRY}/-/package/${packageUrlPath(CLI_PACKAGE)}/dist-tags`, { signal: AbortSignal.timeout(30_000) });
         if (!response.ok) throw new Error(`dist-tags returned ${response.status}`);
-        const tags: unknown = await response.json();
-        if (!tags || typeof tags !== "object") throw new Error("dist-tags unreadable");
-        return Object.fromEntries(Object.entries(tags).filter((entry): entry is [string, string] => typeof entry[1] === "string"));
+        const tags = stringEntries(await response.json());
+        if (!tags) throw new Error("dist-tags unreadable");
+        return tags;
       },
     },
     verifyBundle,

@@ -4,17 +4,13 @@ import { join } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { CLI_NAME } from "@tinycloud/operations/cli-name";
 import { ExitCode } from "../config/constants.js";
-import { detectInstallKind, isCI, type InstallKind } from "../lib/auto-update.js";
-import { npmRegistry, sigstoreVerifier } from "../lib/provenance.js";
+import { detectInstallKind, isAutoUpdateEnabled, type InstallKind } from "../lib/auto-update.js";
 import {
   appendUpdateLog,
-  autoUpdateOffReason,
   baseInstall,
   channelOf,
+  defaultUpdater,
   MIN_TARGET_VERSION,
-  productionDeps,
-  readGlobalConfig,
-  runAutoUpdate,
   runManualUpgrade,
   systemGlobalRoots,
   type FailureReason,
@@ -24,11 +20,6 @@ import { recordInstallKind, verifyInstallKind } from "../lib/install-kind.js";
 import { CLI_PACKAGE } from "../lib/versions.js";
 import { outputJson, shouldOutputJson } from "../output/formatter.js";
 import { theme } from "../output/theme.js";
-
-function updater(log: (line: string) => void) {
-  const { root, ...base } = baseInstall();
-  return productionDeps(root, base, npmRegistry(), sigstoreVerifier(join(root, ".tuf")), log);
-}
 
 const EXIT_FOR_STATUS: Record<UpgradeResult["status"], number> = {
   ok: ExitCode.SUCCESS,
@@ -102,10 +93,13 @@ async function confirmInTerminal(from: string, to: string): Promise<boolean> {
   }
 }
 
-/** How `tinycloud upgrade` confirms a switch: `--yes` skips the question, a terminal asks it, anything else refuses. */
+/**
+ * How `tinycloud upgrade` confirms a switch: `--yes` skips the question, a terminal asks it, anything else refuses.
+ * CI is #1054's rule (`CI` set to anything but `false` or `0`), read through `isAutoUpdateEnabled` so they can't drift.
+ */
 export function confirmation(yes: boolean, stdinIsTTY: boolean, env: NodeJS.ProcessEnv): "skip" | "ask" | "refuse" {
   if (yes) return "skip";
-  return stdinIsTTY && !isCI(env) ? "ask" : "refuse";
+  return stdinIsTTY && isAutoUpdateEnabled({ CI: env.CI }) ? "ask" : "refuse";
 }
 
 export function registerUpgradeCommand(program: Command): void {
@@ -121,7 +115,7 @@ export function registerUpgradeCommand(program: Command): void {
       const guessedKind = detectInstallKind(base.packageDir, process.cwd(), homedir());
       const verifiedKind = await verifyInstallKind(base.packageDir, systemGlobalRoots());
       if (verifiedKind) recordInstallKind(base.root, base.packageDir, base.version, verifiedKind);
-      const deps = updater((line) => appendUpdateLog(base.root, line));
+      const deps = defaultUpdater(base, (line) => appendUpdateLog(base.root, line));
       const mode = confirmation(options.yes === true, Boolean(process.stdin.isTTY), process.env);
       let result: UpgradeResult;
       // An install upgrade can't manage gets its manual command, which --yes wouldn't change.
@@ -150,19 +144,5 @@ export function registerUpgradeCommand(program: Command): void {
         for (const line of lines) write(line);
       }
       process.exitCode = EXIT_FOR_STATUS[result.status];
-    });
-
-  // The background updater the foreground starts after a command (TC-4276). Internal: hidden from help.
-  program
-    .command("__auto-update", { hidden: true })
-    .action(async () => {
-      const base = baseInstall();
-      if (autoUpdateOffReason(process.env, readGlobalConfig()) !== null) return;
-      // Only a verified npm or bun global install updates itself; the record lets the foreground drop the notice.
-      const kind = await verifyInstallKind(base.packageDir, systemGlobalRoots());
-      recordInstallKind(base.root, base.packageDir, base.version, kind);
-      if (!kind) return;
-      const outcome = await runAutoUpdate(updater((line) => appendUpdateLog(base.root, line)));
-      if (outcome.action !== "none" && outcome.action !== "locked") appendUpdateLog(base.root, JSON.stringify(outcome));
     });
 }
