@@ -344,7 +344,7 @@ describe("a profile this command created and removed leaves no directory and no 
     registerOnboardCommand(program);
     await capturing(() => program.parseAsync(["node", "tc", "--profile", profileName, "onboard", "--with", "feed"], { from: "node" }));
     expect(acquisitionReasons).toEqual([
-      "Set up TinyCloud on this computer: use your Feed, for 7 days. You can let it renew for up to 30 days.",
+      "Set up TinyCloud on this computer: use your Feed, for 7 days. It renews for up to 30 days unless you turn renewal off.",
     ]);
     expect(acquisitionReasons[0]).not.toMatch(/tinycloud\.[a-z0-9_-]+:/i);
     expect(recordedErrors).toEqual([expect.objectContaining({ code: "OPENKEY_PROOF_INVALID" })]);
