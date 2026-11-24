@@ -68,7 +68,7 @@ services:
     # start nginx if the pinned image's nginx.conf changes shape. Embedded because Phala deploys only this file;
     # packages/mcp/ingress/test-redacted-logging.sh runs this exact text. `$$` is a literal `$` after compose
     # interpolation. A path the connector adds is logged as `<other>` until it is added to the map.
-    command:
+    command: # not a bare `command:` line: log-shipper/test-shipper.sh takes the first bare one as the sidecar's
       - /bin/sh
       - -ec
       - |
