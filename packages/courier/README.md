@@ -34,17 +34,22 @@ The `courier` agent skill (`skills/courier/SKILL.md`) ships with both packages;
 `npx skills add … --skill tinycloud-cli courier` installs it next to `tinycloud-cli` (see the
 CLI's `skills/tinycloud-cli/INSTALL.md`).
 
-## Guided start and invitations
+## Connect with an invitation link
 
-Paste the prompt in [`skills/courier/start.md`](skills/courier/start.md) into your
-agent. It reuses Courier setup and grants, discovers stored chats, and asks
-whether to start a new chat only when an existing chat is available.
+Pass one private invitation URL to the other agent. Courier exchanges the
+pairing artifacts itself; neither agent pastes delegation JSON. Use the
+[one-prompt setup](skills/courier/start.md) or the commands below. If you
+already have an invitation, join it before starting or selecting a chat.
 
 ```bash
+# Issuer: select the intended chat (or start a new one), then use its session ID.
 courier start
-courier start --session <sessionId> --peer <peer>
-courier start --new "Subject"
-# Recipient: preserve the entire link, including its fragment.
+# --mode anyone creates a bearer link: the first valid claimant wins.
+courier invite --session <sessionId> --mode anyone --consent --wait 1
+# Send the exact printed URL privately BEFORE running:
+courier invite serve <invitationId> --wait 60
+
+# Recipient: with owner consent, use the full URL including its fragment.
 courier join '<invitation-link>' --consent
 # Equivalent incoming-link entry:
 courier start --link '<invitation-link>' --consent
@@ -54,6 +59,16 @@ courier start --link '<invitation-link>' --consent
 real stored chats; `setup-required` directs the agent to normal `init`. An incoming
 link takes precedence over discovery and new-chat flags. A refused link never
 creates a substitute chat.
+
+Use `same-owner` for another agent of the same owner, `anyone` for a bearer
+link (first valid claimant wins), or `named --recipient <did:key|verified-peer-handle>`
+for a specific agent key. Get the owner's consent before issuing or joining.
+For an existing session, pass `--peer <peer>` if `start` returns a peer.
+`[invite-pending]` is expected after `invite --wait 1`: send the link, then
+keep serving the same invitation ID while the recipient retries that same
+link. If the URL was truncated, ask for the exact URL again. If expired,
+claimed by someone else, or addressed to a retired key, ask the issuer for
+a fresh private link to the intended chat. Do not switch to manual pairing.
 
 The signed short link has the form
 `https://courier.tinycloud.xyz/c/<id>#v=4&k=<key>&c=<sealed-body-CID>`.
@@ -80,13 +95,6 @@ profiles, so `tinycloud courier` takes no TinyCloud CLI options (`tinycloud -p x
 tinycloud courier init --request --handle alice
 # Send the printed "openkeyUrl" (https://openkey.so/a/…) to the owner, then collect the approval:
 tinycloud courier init --wait
-tinycloud courier pair start bob
-tinycloud courier pair accept --file a.json
-tinycloud courier send bob --new "Subject" --ask "…" --file handoff.md
-tinycloud courier inbox && tinycloud courier read <threadId>
-tinycloud courier task new --peer bob --thread <id> --state working --ask a1
-tinycloud courier request <threadId> --peer bob --task <id> --verb merge --target owner/repo#12 --head-sha <40-lowercase-hex> --base master --summary "Merge PR 12" --why "…"
-tinycloud courier orders bob
 ```
 
 `init --request` creates an OpenKey approval request (sealed at the links API,
@@ -113,8 +121,8 @@ installs a grant from a file or stdin (a successful import discards an open shor
 `agents` space is hosted, Courier saves it and reports `no-space`. Complete setup by
 signing in at the Share view, or from a wallet profile run
 `tinycloud space host agents`, then use `init --resume` without requesting another
-approval. Run `init --request` again to renew the owner-approved grant, or
-`init --rotate-key` to replace the agent key and re-pair every peer.
+approval. Run `init --request` again to renew the owner-approved grant
+without rotating the key.
 If OpenKey reports the space is still being set up, `init --wait` waits for it
 within its `--timeout`; the legacy `init` flows wait about 2.5 minutes; otherwise use `init --resume`.
 An OpenKey `XXXX-XXXX` code works once. Courier saves the redeemed grant (`<COURIER_HOME>/pending-grant.json`, owner-only, public fields) before installing it, so if `init` is killed after the redeem, run it again with the same code or use `init --resume`; no second approval is needed. The saved copy is deleted once the grant and profile are saved, and ignored after the grant expires.
@@ -130,10 +138,31 @@ Run the printed command only after confirming no Courier writer anywhere is
 active that could be writing the temp or sidecar, including on another host or
 PID namespace.
 
-Pairing binds a peer by its Courier `did:key`, not by owner DID: two Courier
-agents of the same owner (two profiles, two agent keys) pair exactly like two
-owners, through the same explicit `pair start`/`pair accept` exchange. An
-artifact from the agent's own courier DID is refused.
+## Re-pair after a key rotation
+
+An owner-authorized rotation replaces the Courier agent `did:key` and clears
+local pairings. Renewing a grant without rotating does not replace the key.
+Do not rotate a key just because a link failed or expired.
+
+1. On the rotated side, finish the fresh owner approval in the same
+   `COURIER_HOME` with `courier init --wait`. If the rotation left no pending
+   request, start it with `courier init --request` and have the owner approve.
+   The other side keeps its current key and any live grant.
+2. Generate a **fresh private invitation link** for each intended peer using
+   the flow above. Do not replay old links or delegation files. If a named
+   invite targets the rotated side, use its new verified Courier `did:key`,
+   not an old stored handle.
+3. The recipient joins; the issuer keeps serving the same ID. Continue with
+   the returned peer and session ID. A new pairing does not restore access to
+   previously shared history. Verify with a short send and reply in that thread.
+
+## Advanced: manual pairing and grant artifacts
+
+For operators deliberately using a manual handoff, `courier pair start <peer>`
+produces A. The recipient runs `courier pair accept --file a.json` and returns
+B; the issuer accepts B and returns C; the recipient accepts C. Each artifact
+must travel over an existing trusted private channel. Pairing binds to the
+Courier agent key, not the owner; Courier refuses its own identity.
 
 If your inbound peer delegation has expired but the other side is still paired,
 that side can renew only its existing outbound scope and hand you a fresh C

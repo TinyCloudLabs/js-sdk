@@ -261,7 +261,7 @@ function readProfile(home: string): Profile {
     throw new CourierError('bad-profile', `Corrupt profile at ${profilePath('profile.json', home)}`);
   }
   if (loaded.version === 2) {
-    throw new CourierError('profile-outdated', `This profile stores Courier data in the applications space. Courier now uses your agents space: run \`${cmd('init --rotate-key')}\`, then re-pair peers.`);
+    throw new CourierError('profile-outdated', `This profile stores Courier data in the applications space. With owner approval, run \`${cmd('init --rotate-key --request')}\` and collect the new grant with \`${cmd('init --wait')}\`, then re-pair with fresh private links (\`${cmd('invite --help')}\`).`);
   }
   if (loaded.version !== 3 && loaded.version !== 4) throw new CourierError('bad-profile', `Unsupported profile version ${String(loaded.version)}; run \`${cmd('init --rotate-key')}\`.`);
   const profile = loaded as Profile;
@@ -519,7 +519,7 @@ export function getPeer(p: Profile, handle: string): StoredPeer {
     const known = Object.keys(p.peers);
     throw new CourierError(
       'unknown-peer',
-      `Unknown peer "${handle}".${known.length ? ` Known: ${known.join(', ')}.` : ` Run \`${cmd('pair start <peer>')}\` first.`}`,
+      `Unknown peer "${handle}".${known.length ? ` Known: ${known.join(', ')}.` : ''} Connect with a private invitation link: \`${cmd('invite --help')}\` to send one, or \`${cmd('join --help')}\` to accept one.`,
     );
   }
   return peer;

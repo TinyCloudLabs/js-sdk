@@ -60,6 +60,8 @@ import {
   DelegationError,
   DelegationResult,
   ClientSession,
+  type ClientSignInResult,
+  type SignInResult,
   Extension,
   type TelemetryConfig,
   type RetryPolicy,
@@ -635,6 +637,9 @@ export class TinyCloudWeb {
       capabilityRequest: this._capabilityRequest,
       signStrategy: this.config.signStrategy,
       ...this.bootstrapSignInPolicy(),
+      // TC-4082: outside first-party origins an owner with no registry record may sign in once the default node is
+      // shown to host their own `applications` space; the node-sdk refuses anything else.
+      allowHostedOwnerProof: this.bootstrapSignInPolicy().requireExistingAccount,
       telemetry: this.config.telemetry,
       retryPolicy: this.config.retryPolicy,
     };
@@ -1367,7 +1372,7 @@ export class TinyCloudWeb {
       : { expiryChangeable: true, maxExpiresAt: openkey.maxExpiresAt };
   }
 
-  signIn = (options?: SignInOptions): Promise<ClientSession> => {
+  signIn = (options?: SignInOptions): Promise<ClientSignInResult> => {
     this.warnIfWithoutAppHost();
     if (!this.config.openkey) return this.performSignIn(options);
     const client = this.config.openkey.client;
@@ -1405,7 +1410,7 @@ export class TinyCloudWeb {
     handle?: ReturnType<NonNullable<OpenKeyAuthorizeTinyCloud["beginTinyCloudSignIn"]>>;
     pending?: PreparedOpenKeyAuthorization;
     node?: TinyCloudNode;
-  }): Promise<ClientSession> => {
+  }): Promise<ClientSignInResult> => {
     // Refuse a caveated manifest before any restore, signer or network call.
     refuseCaveated(this._capabilityRequest?.manifests ?? this._manifest);
     const signOuts = this.signOutCount;
@@ -1461,10 +1466,11 @@ export class TinyCloudWeb {
     this.restoredNetworkWork = undefined;
     this._sessionRestoreStatus = "logging-in";
     const was = node.spaceId;
+    let result: SignInResult | void;
     try {
       if (continuation?.handle) {
         continuation.node = node;
-        const result = await continuation.handle.authorize(async identity => {
+        const signed = await continuation.handle.authorize(async identity => {
           assertNotSignedOut();
           const prepared = await node.prepareOpenKeySignIn(this.openKeySignInOptions(), identity);
           assertNotSignedOut();
@@ -1473,19 +1479,19 @@ export class TinyCloudWeb {
         });
         assertNotSignedOut();
         if (!continuation.pending) throw new Error("OpenKey sign-in was not prepared");
-        await node.signInWithPreparedOpenKey(continuation.pending, async () => result);
+        result = await node.signInWithPreparedOpenKey(continuation.pending, async () => signed);
       } else if (pending) {
-        await node.signInWithPreparedOpenKey(
+        result = await node.signInWithPreparedOpenKey(
           pending.request,
           wireOpenKeyAuthorize(this.config.openkey!.client, { mode: this.config.openkey!.mode ?? "popup" }),
         );
       } else if (this.config.openkey) {
-        await node.signInWithOpenKey(
+        result = await node.signInWithOpenKey(
           wireOpenKeyAuthorize(this.config.openkey.client, { mode: this.config.openkey.mode ?? "popup" }),
           this.openKeySignInOptions(),
         );
       } else {
-        await node.signIn(options);
+        result = await node.signIn(options);
       }
     } finally {
       if (was && was !== node.spaceId && this.signOutCount === signOuts && !this.signOutInFlight) this.uiClient.reset();
@@ -1497,6 +1503,7 @@ export class TinyCloudWeb {
     if (!session) throw new Error("Sign-in completed but no session available");
     // Explicit logout never permits an older tab's persisted proof to satisfy the next sign-in.
     if (!this.signOutCleanupFailed && this.signOutInFlight === 0) this.persistedRestoreBlocked = false;
+    const warnings = result ? result.warnings : undefined;
     return {
       address: session.address,
       walletAddress: session.address,
@@ -1504,6 +1511,7 @@ export class TinyCloudWeb {
       sessionKey: session.sessionKey,
       siwe: session.siwe,
       signature: session.signature,
+      ...(warnings === undefined ? {} : { warnings }),
     };
   };
 

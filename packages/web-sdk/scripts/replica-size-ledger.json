@@ -248,6 +248,13 @@
       "index.mjs": 0,
       "index.cjs": 0,
       "note": "Replica gzip growth measured against this PR's merge base"
+    },
+    {
+      "pr": "#1161",
+      "ticket": "TC-4010",
+      "index.mjs": 0,
+      "index.cjs": 0,
+      "note": "Replica gzip growth measured against this PR's merge base"
     }
   ],
   "phase2Ratchet": {
@@ -3796,6 +3803,64 @@
       }
     },
     "reason": "Both canonical jobs (SQLite and Postgres, run 45220085215, provisional head 3b44e890) measured 1540015/1470863 gzip bytes, 179/110 over #1148's measured 1539836/1470753. The Web SDK root reads signed attenuable and terminal ReCap delegation modes. Details: TC-3810"
+  },
+  "tc3975NamedKeyWarningRoot": {
+    "label": "report named-key omissions during sign-in (TC-3975)",
+    "ruling": "Naomi 2026-11-23 22:50:03Z: root-only allowance of up to +167 B ESM and +152 B CJS gzip for js-sdk #1144. Naomi 2026-11-23 23:26:47Z re-grant: exactly +149 B ESM and +193 B CJS over the TC-3810 ceilings, minifier drift after the master merge, source unchanged.",
+    "base": "c70e31715dbc62741625dfe2dfc6f30cece6deed",
+    "sourceCommits": [
+      "e11cfa271a872df5e9fed3f978e0d3f3ecb82b67"
+    ],
+    "canonicalCI": {
+      "run": "45285882988",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45285882988/job/138081954243",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45285882988/job/138081954136"
+      ]
+    },
+    "root": {
+      "delta": {
+        "index.mjs": 149,
+        "index.cjs": 193
+      },
+      "ceiling": {
+        "index.mjs": 1540164,
+        "index.cjs": 1471056
+      }
+    },
+    "reason": "Both canonical jobs (SQLite and Postgres, run 45285882988, head 7a6d21ed8 after the master merge) measured 1540164/1471056 gzip bytes, 149/193 over the TC-3810 ceilings of 1540015/1470863. Run 45177867274 at e11cfa27 before the merge measured 167/152 over the then-newest TC-3802 ceilings; the difference is minifier drift, source unchanged. The bytes are the Web SDK root's sign-in warning for secret key resources omitted when the node lacks encryption-named-keys-v1. Details: TC-3975"
+  },
+  "tc4082HostedOwnerRoot": {
+    "label": "sign in a hosted owner with no registry record (TC-4082)",
+    "ruling": "Naomi 2026-11-24 00:37:34Z: re-grant tc4082HostedOwnerRoot to exactly 1542306/1472943 (+2291/+2080 over tc3810ReaderRoot). Earlier grant, 2026-11-23 22:50:03Z: up to +2139/+1916 for the sign-in proof alone. Re-based onto tc3975NamedKeyWarningRoot after #1144 merged (Naomi 01:17Z: may move only by master's movement): the same +2291/+2080 now sits over tc3975NamedKeyWarningRoot's 1540164/1471056, so the ceilings are 1542455/1473136; CI decides. Naomi R2 2026-11-24 01:45:37Z: set tc4082HostedOwnerRoot to exactly 1542479/1473127 (+2315/+2071 over tc3975NamedKeyWarningRoot), ledger + policy only.",
+    "base": "878291c9f6e36812ba5785deb398a4117700c628",
+    "sourceCommits": [
+      "98f7a2e4932a40c5d56273177f50d5e0443a436a",
+      "952c889d8eedf252352bea7bf706a06a54c39c87",
+      "79534a0bc6e83e1e9489a5658b814086e3a09185",
+      "dc3282e0e9496e4089656c83d72d4064928fca91",
+      "bd7ce999c1d81017baa3cc20bd9c00e93ace96ad",
+      "d3ff712f8b2ca63b2fac3da31c9c40a833c8648a",
+      "63dfefb58a1384dc9b66faaf1e772e5edcecf75f"
+    ],
+    "canonicalCI": {
+      "run": "45305691554",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45305691554/job/138148858055",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45305691554/job/138148858149"
+      ]
+    },
+    "root": {
+      "delta": {
+        "index.mjs": 2315,
+        "index.cjs": 2071
+      },
+      "ceiling": {
+        "index.mjs": 1542479,
+        "index.cjs": 1473127
+      }
+    },
+    "reason": "5 reviewed TC-4082 commits + no-read fix 63dfefb58; Naomi 00:38Z. Both canonical jobs (SQLite and Postgres, run 45296681183 at debfa194e) measured 1542306/1472943 gzip bytes, 2291/2080 over tc3810ReaderRoot's 1540015/1470863. The Web SDK root carries the hosted-owner proof: the proof state in NodeUserAuthorization (begin, confirm, fail, restore candidate and adoption, proven-space routing, per-proof landed state), the TinyCloudNode restore, retire-on-failed-proof and sign-in handling around it, and one allowHostedOwnerProof line in TinyCloudWeb. The assess and read helpers load from the lazy space-hosting chunk, not the root. Details: TC-4082 Re-based onto tc3975NamedKeyWarningRoot after #1144 merged (Naomi 01:17Z: may move only by master's movement): the same +2291/+2080 now sits over tc3975NamedKeyWarningRoot's 1540164/1471056, so the ceilings are 1542455/1473136; CI decides. Run 45305691554 at 6ad3a0f2f (master 878291c9f merged) measured 1542479/1473127 on both SQLite and Postgres (the SQLite job 138148858055, the Postgres job 138148858149), +2315/+2071 over tc3975NamedKeyWarningRoot's 1540164/1471056: gzip non-additivity after the #1144 merge, source unchanged; Naomi 01:46Z"
   },
   "tc3522InvocationRefusalKvWorker": {
     "label": "retain invocation-refusal attribution in the kv-storage worker (TC-3522)",

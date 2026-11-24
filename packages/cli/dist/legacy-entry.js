@@ -36852,6 +36852,7 @@ init_logout_pending();
 init_formatter();
 init_errors();
 init_warnings();
+init_safe_text();
 init_constants();
 init_types();
 init_browser_auth();
@@ -40437,8 +40438,16 @@ async function handleLocalAuth(profileName2, host, options = {}) {
   return { profile: updatedProfile, sessionResult };
 }
 async function handleOpenKeyAuth(profileName2, host, options = {}) {
-  const { profile, delegationData, declined, legacyNested } = await refreshOpenKeySession(profileName2, host, options);
+  const { profile, delegationData, declined, legacyNested, warnings } = await refreshOpenKeySession(profileName2, host, options);
   reportDeclined(declined, legacyNested);
+  for (const warning of warnings ?? []) {
+    process.stderr.write(
+      `${theme.warn("Warning:")} This node does not advertise ${warning.feature}. Sign-in continued without:
+${warning.resources.map((resource) => `  ${safeInline(resource)}`).join("\n")}
+Details: TC-3975
+`
+    );
+  }
   await ensureSpaceSetup({ profile: profileName2, host }, delegationData, delegationData.permissions);
   outputJson({
     authenticated: true,
@@ -40447,6 +40456,7 @@ async function handleOpenKeyAuth(profileName2, host, options = {}) {
     spaceId: delegationData.spaceId,
     ownerDid: profile.ownerDid ?? null,
     authMethod: "openkey",
+    ...warnings === void 0 ? {} : { warnings },
     ...options.permissions ? {
       scoped: true,
       host,
@@ -40537,7 +40547,7 @@ async function refreshPreparedOpenKeySession(params) {
   const gateWasActive = await readGateSnapshot(profilePath12(profileName2)).then((gate) => gate !== void 0 && gate.principalHash !== null, () => true);
   try {
     if (namedKeys !== void 0) process.stderr.write(KEYS_APPROVAL_NOTE(namedKeys.prefix));
-    await node.signInWithOpenKey(async (prepared) => {
+    const signIn = await node.signInWithOpenKey(async (prepared) => {
       preparedDid = prepared.verificationMethod;
       handoff = await startPreparedOpenKeyHandoff({
         prepared,
@@ -40550,6 +40560,7 @@ async function refreshPreparedOpenKeySession(params) {
         return result;
       });
     }, preparedSignInOptions(expiry));
+    const warnings = signIn?.warnings;
     const active = node.restorableSession;
     if (!active || !preparedDid || node.sessionDid !== preparedDid || active.verificationMethod !== preparedDid) {
       throw new CLIError("OPENKEY_SESSION_MISMATCH", "OpenKey signed a different SDK session key; no profile or session was saved.", ExitCode.PERMISSION_DENIED);
@@ -40599,11 +40610,13 @@ async function refreshPreparedOpenKeySession(params) {
       if (grant === "both") await readyNamedKeysNetwork(node);
       else process.stderr.write(keysNotGrantedAfterLogin(profileName2));
     }
+    const proposed = warnings === void 0 ? permissions : permissions.filter((permission2) => !isVerifiedRawEncryptionPermission(permission2) || !warnings.some((warning) => warning.resources.includes(permission2.path)));
     return {
       profile: updatedProfile,
       delegationData: session,
-      declined: declinedPermissions(permissions, session.permissions, owner),
-      legacyNested: verified.legacyNested
+      declined: declinedPermissions(proposed, session.permissions, owner),
+      legacyNested: verified.legacyNested,
+      ...warnings === void 0 ? {} : { warnings }
     };
   } catch (error) {
     await handoff?.complete(false);

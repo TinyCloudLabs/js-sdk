@@ -13,12 +13,14 @@ delete root.tc3802SecretKeyCapRoot;
 delete root.tc3862ExplorerOriginRoot;
 delete root.tc3522InvocationRefusalRoot;
 delete root.tc3810ReaderRoot;
+delete root.tc3975NamedKeyWarningRoot;
+delete root.tc4082HostedOwnerRoot;
 delete root.tc3947ReplicaRevokeRoot;
 delete root.tc3522InvocationRefusalKvWorker;
 delete root.tc3522InvocationRefusalReplicaWorker;
 const optional = structuredClone(optionalLedger) as OptionalLedger;
 delete optional.tc3947;
-optional.entries = optional.entries.filter((entry) => entry.pr !== "#1138");
+optional.entries = optional.entries.filter((entry) => entry.pr !== "#1138" && entry.pr !== "#1161");
 optional.allowance = { ...tc2931OptionalAllowance };
 
 const validate = (value: OptionalLedger) => validateOptionalLedger(value, true, true, true, true, true, true, true, true, true, true, true, true, true, root.tc2481OfflineReplicaTransport, root.tc2931BootstrapScope);

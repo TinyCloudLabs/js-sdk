@@ -270,7 +270,7 @@ describe.skipIf(!NODE_BIN)("tinycloud onboard --timeout, against a real node", (
     const cipher = createCipheriv("aes-256-gcm", encryptionKey, nonce);
     cipher.setAAD(Buffer.from(entry.id));
     const plaintext = { resultVersion: 1, requestId: entry.id, requestDigest: entry.record.header.bodyCid,
-      requesterDid: entry.record.header.issuer, ownerDid, targetDid: request.targetDid, delegationExpiresAt, delegation };
+      requesterDid: entry.record.header.issuer, ownerDid, targetDid: request.targetDid, delegationExpiresAt, delegation, ...(request.renewal ? { renewalChoice: "finite" } : {}) };
     const ciphertext = Buffer.concat([cipher.update(JSON.stringify(plaintext), "utf8"), cipher.final(), cipher.getAuthTag()]);
     const publicKey = relay.getPublicKey(undefined, "uncompressed");
     entry.resultRef = randomBytes(24).toString("base64url");

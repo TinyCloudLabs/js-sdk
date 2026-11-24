@@ -1,8 +1,5 @@
 ---
-"@tinycloud/sdk-core": minor
-"@tinycloud/node-sdk": minor
 "@tinycloud/web-sdk": minor
-"@tinycloud/bootstrap": minor
 "@tinycloud/server": minor
 ---
 

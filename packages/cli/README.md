@@ -42,6 +42,12 @@ tinycloud courier inbox
 tinycloud courier --help
 ```
 
+Connect with one private Courier invitation URL: the issuer runs
+`tinycloud courier invite --help` for the create-and-serve steps; the recipient
+runs `tinycloud courier join '<exact link>' --consent`. Do not exchange pairing
+files. If a key was rotated, finish the new owner approval on that side, then
+[re-pair with fresh links](https://github.com/TinyCloudLabs/js-sdk/tree/master/packages/courier#re-pair-after-a-key-rotation).
+
 `init --wait` stops after `--timeout` (default 60 s, at most 9m) with exit 8 and `{"pending":{"step":1,"of":1,"approvalUrl":…,"expiresAt":…}}` on stdout. Exit 8 is not a failure: the approval is still pending. Send the owner the `pending.approvalUrl` (the same link as `openkeyUrl`), ask them to approve it, then re-run `courier init --wait --timeout 60s`. Repeat while it exits 8. Any other non-zero exit is an error: stderr carries `[code]`.
 
 ## Operations coverage
@@ -655,7 +661,7 @@ The one-hour request expiry is independent of the requested grant lifetime and
 result retention. A manifest login without `--expiry` requests one hour (seven
 days for `builtin:share-publishing`), a login without a manifest keeps its
 seven-day default, and onboarding requests
-30 days explicitly (7 days when the Feed is among the tasks, or the `--expiry` given, at most 30 days), in one approval for every task it asks for
+7 days that renew for up to 30 days unless the owner approves without renewal (or the `--expiry` given, at most 30 days; at 30 days there is no renewal), in one approval for every task it asks for
 (`tinycloud onboard --with apps|feed|apps,feed`; `apps` when omitted). `--paste` remains an explicit manual fallback with a
 five-minute, single-use return code, not the automatic short-link transport.
 

@@ -1,0 +1,379 @@
+tests:
+  - name: gelf envelope for tinycloud-mcp yields the bare message
+    inputs:
+      - insert_at: envelope
+        type: log
+        log_fields:
+          message: '{"version":"1.1","host":"sentinel-host","short_message":"[tinycloud-mcp-http] MCP request failed","_tc.logship":"tinycloud-mcp","_image_name":"sentinel-image","_container_id":"sentinel-container"}'
+    outputs:
+      - extract_from: envelope
+        conditions:
+          - type: vrl
+            source: |
+              .message == "[tinycloud-mcp-http] MCP request failed" && length(keys(.)) == 1
+
+  - name: gelf envelope rejects other labels, partial and malformed packets
+    inputs:
+      - insert_at: envelope
+        type: log
+        log_fields:
+          message: '{"version":"1.1","short_message":"x","_tc.logship":"tinycloud-ingress"}'
+      - insert_at: envelope
+        type: log
+        log_fields:
+          message: 'sentinel not json'
+      - insert_at: envelope
+        type: log
+        log_fields:
+          message: '{"version":"1.1","short_message":"x","_tc.logship":"tinycloud-mcp","_partial_message":true}'
+    outputs:
+      - extract_from: envelope
+        conditions:
+          - type: vrl
+            source: |
+              includes(["unexpected_label", "malformed_envelope", "partial"], .reason) && length(keys(.)) == 1
+
+  - name: tool call keeps only typed fields
+    inputs:
+      - insert_at: classify
+        type: log
+        log_fields:
+          message: '{"tool":"tinycloud_kv_get","code":"ok","durationMs":42,"replayedGrants":0,"extra":"sentinel-extra"}'
+    outputs:
+      - extract_from: classify
+        conditions:
+          - type: vrl
+            source: |
+              .event == "mcp_tool_call" && .svc == "mcp" && .level == "info" && .tool == "tinycloud_kv_get" && .code == "ok" && .duration_ms == 42 && .replayed_grants == 0 && !contains(encode_json(.), "sentinel")
+
+  - name: tool call with a stable error code and the connect tool
+    inputs:
+      - insert_at: classify
+        type: log
+        log_fields:
+          message: '{"tool":"tinycloud_connect","code":"authority_required","durationMs":3,"replayedGrants":0}'
+      - insert_at: classify
+        type: log
+        log_fields:
+          message: '{"tool":"tinycloud_kv_get","code":"KV_NOT_FOUND","durationMs":3,"replayedGrants":2}'
+    outputs:
+      - extract_from: classify
+        conditions:
+          - type: vrl
+            source: |
+              .event == "mcp_tool_call" && includes(["tinycloud_connect", "tinycloud_kv_get"], .tool) && includes(["authority_required", "KV_NOT_FOUND"], .code)
+
+  - name: tool call with an invalid number is counted, never forwarded
+    inputs:
+      - insert_at: classify
+        type: log
+        log_fields:
+          message: '{"tool":"tinycloud_kv_get","code":"ok","durationMs":-5,"replayedGrants":0}'
+      - insert_at: classify
+        type: log
+        log_fields:
+          message: '{"tool":"tinycloud_kv_get","code":"ok","durationMs":"sentinel","replayedGrants":0}'
+      - insert_at: classify
+        type: log
+        log_fields:
+          message: '{"tool":"tinycloud_kv_get","code":"ok","durationMs":1}'
+    outputs:
+      - extract_from: classify
+        conditions:
+          - type: vrl
+            source: |
+              .reason == "unclassified" && length(keys(.)) == 1
+
+  - name: unexpected values - key-like tool and 64-hex code become other
+    inputs:
+      - insert_at: classify
+        type: log
+        log_fields:
+          message: '{"tool":"sk_live_fixture","code":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef","durationMs":1,"replayedGrants":0}'
+    outputs:
+      - extract_from: classify
+        conditions:
+          - type: vrl
+            source: |
+              .event == "mcp_tool_call" && .tool == "other" && .code == "other" && !contains(encode_json(.), "sk_live") && !contains(encode_json(.), "0123456789abcdef")
+
+  - name: unexpected values - 48-hex tool and a newline in the code become other
+    inputs:
+      - insert_at: classify
+        type: log
+        log_fields:
+          message: '{"tool":"0123456789abcdef0123456789abcdef0123456789abcdef","code":"INTERNAL_ERROR\nsentinel","durationMs":1,"replayedGrants":0}'
+    outputs:
+      - extract_from: classify
+        conditions:
+          - type: vrl
+            source: |
+              .event == "mcp_tool_call" && .tool == "other" && .code == "other" && !contains(encode_json(.), "sentinel") && !contains(encode_json(.), "0123456789abcdef")
+
+  - name: unexpected values - a newline in the tool becomes other
+    inputs:
+      - insert_at: classify
+        type: log
+        log_fields:
+          message: '{"tool":"tinycloud_kv_get\nsentinel","code":"ok","durationMs":1,"replayedGrants":0}'
+    outputs:
+      - extract_from: classify
+        conditions:
+          - type: vrl
+            source: |
+              .event == "mcp_tool_call" && .tool == "other" && .code == "ok" && !contains(encode_json(.), "sentinel")
+
+  - name: lifecycle and failure lines map to fixed events without text
+    inputs:
+      - insert_at: classify
+        type: log
+        log_fields:
+          message: "[tinycloud-mcp-http] listening on 0.0.0.0:3000"
+      - insert_at: classify
+        type: log
+        log_fields:
+          message: "[tinycloud-mcp-http] MCP request failed"
+      - insert_at: classify
+        type: log
+        log_fields:
+          message: "[tinycloud-mcp-http] Startup failed."
+      - insert_at: classify
+        type: log
+        log_fields:
+          message: "[tinycloud-mcp-http] OpenKey token introspection refused the MCP client credentials (401); token checks fail closed until it accepts them."
+    outputs:
+      - extract_from: classify
+        conditions:
+          - type: vrl
+            source: |
+              includes(["mcp_listening", "mcp_request_failed", "mcp_startup_failed", "mcp_introspection_refused"], .event) && .svc == "mcp" && !contains(encode_json(.), "0.0.0.0") && !contains(encode_json(.), "token")
+
+  - name: approval renewal, origin and collection lines with known values
+    inputs:
+      - insert_at: classify
+        type: log
+        log_fields:
+          message: "[tinycloud-mcp-http] approval dropped: reason=openkey_origin_changed"
+      - insert_at: classify
+        type: log
+        log_fields:
+          message: "[tinycloud-mcp-http] approval renewal admission deferred: code=NODE_UNAVAILABLE"
+      - insert_at: classify
+        type: log
+        log_fields:
+          message: "[tinycloud-mcp-http] approval collection failed: code=REQUEST_EXPIRED"
+      - insert_at: classify
+        type: log
+        log_fields:
+          message: "[tinycloud-mcp-http] approval acknowledgement failed: code=UNKNOWN"
+      - insert_at: classify
+        type: log
+        log_fields:
+          message: "[tinycloud-mcp-http] approval result rejected: stage=collect code=NOT_FOUND"
+    outputs:
+      - extract_from: classify
+        conditions:
+          - type: vrl
+            source: |
+              includes(["mcp_approval_dropped", "mcp_approval_renewal_deferred", "mcp_approval_collection_failed", "mcp_approval_ack_failed", "mcp_approval_result_rejected"], .event) && .level == "warn" && (!exists(.code) || .code != "other")
+
+  - name: approval result rejected keeps known stage, code, reason and detail
+    inputs:
+      - insert_at: classify
+        type: log
+        log_fields:
+          message: "[tinycloud-mcp-http] approval result rejected: stage=siwe_runtime_delegation code=DELEGATION_REJECTED reason=host_mismatch detail=none"
+    outputs:
+      - extract_from: classify
+        conditions:
+          - type: vrl
+            source: |
+              .event == "mcp_approval_result_rejected" && .stage == "siwe_runtime_delegation" && .code == "DELEGATION_REJECTED" && .reason == "host_mismatch" && .detail == "none"
+
+  - name: approval result rejected owner mismatch and request-state detail
+    inputs:
+      - insert_at: classify
+        type: log
+        log_fields:
+          message: "[tinycloud-mcp-http] approval result rejected: stage=owner code=APPROVAL_OWNER_MISMATCH detail=none"
+      - insert_at: classify
+        type: log
+        log_fields:
+          message: "[tinycloud-mcp-http] approval result rejected: stage=unknown code=UNKNOWN detail=state_expired"
+    outputs:
+      - extract_from: classify
+        conditions:
+          - type: vrl
+            source: |
+              .event == "mcp_approval_result_rejected" && includes(["owner", "unknown"], .stage) && includes(["APPROVAL_OWNER_MISMATCH", "UNKNOWN"], .code) && includes(["none", "state_expired"], .detail)
+
+  - name: unexpected values - key-like and hex values in a result rejection become other
+    inputs:
+      - insert_at: classify
+        type: log
+        log_fields:
+          message: "[tinycloud-mcp-http] approval result rejected: stage=sk_live_fixture code=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef reason=0123456789abcdef0123456789abcdef0123456789abcdef detail=sk_live_fixture2"
+    outputs:
+      - extract_from: classify
+        conditions:
+          - type: vrl
+            source: |
+              .event == "mcp_approval_result_rejected" && .stage == "other" && .code == "other" && .reason == "other" && .detail == "other" && !contains(encode_json(.), "sk_live") && !contains(encode_json(.), "0123456789abcdef")
+
+  - name: unexpected values - key-like and hex codes in collection and acknowledgement failures become other
+    inputs:
+      - insert_at: classify
+        type: log
+        log_fields:
+          message: "[tinycloud-mcp-http] approval collection failed: code=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      - insert_at: classify
+        type: log
+        log_fields:
+          message: "[tinycloud-mcp-http] approval acknowledgement failed: code=sk_live_fixture"
+    outputs:
+      - extract_from: classify
+        conditions:
+          - type: vrl
+            source: |
+              includes(["mcp_approval_collection_failed", "mcp_approval_ack_failed"], .event) && .code == "other" && !contains(encode_json(.), "sk_live") && !contains(encode_json(.), "0123456789abcdef")
+
+  - name: connect rejected keeps a known reason and drops the path
+    inputs:
+      - insert_at: classify
+        type: log
+        log_fields:
+          message: "[tinycloud-mcp-http] connect rejected: reason=openkey_unavailable path=/connect/sentinel-path"
+    outputs:
+      - extract_from: classify
+        conditions:
+          - type: vrl
+            source: |
+              .event == "mcp_connect_rejected" && .reason == "openkey_unavailable" && !contains(encode_json(.), "sentinel")
+
+  - name: unexpected values - 48-hex and key-like connect rejection reasons become other
+    inputs:
+      - insert_at: classify
+        type: log
+        log_fields:
+          message: "[tinycloud-mcp-http] connect rejected: reason=0123456789abcdef0123456789abcdef0123456789abcdef path=/connect/sentinel-path"
+      - insert_at: classify
+        type: log
+        log_fields:
+          message: "[tinycloud-mcp-http] connect rejected: reason=sk_live_fixture path=/connect/sentinel-path"
+    outputs:
+      - extract_from: classify
+        conditions:
+          - type: vrl
+            source: |
+              .event == "mcp_connect_rejected" && .reason == "other" && !contains(encode_json(.), "sentinel") && !contains(encode_json(.), "sk_live") && !contains(encode_json(.), "0123456789abcdef")
+
+  - name: node host migration reports only the production hosts
+    inputs:
+      - insert_at: classify
+        type: log
+        log_fields:
+          message: "[tinycloud-mcp-http] tenant node host migrated: from=https://tee.node.tinycloud.xyz to=https://node.tinycloud.xyz"
+    outputs:
+      - extract_from: classify
+        conditions:
+          - type: vrl
+            source: |
+              .event == "mcp_node_host_migrated" && .from_host == "tee_node" && .to_host == "node"
+
+  - name: node host migration from an unknown host is other
+    inputs:
+      - insert_at: classify
+        type: log
+        log_fields:
+          message: "[tinycloud-mcp-http] tenant node host migrated: from=https://sentinel.example.com to=https://node.tinycloud.xyz"
+    outputs:
+      - extract_from: classify
+        conditions:
+          - type: vrl
+            source: |
+              .event == "mcp_node_host_migrated" && .from_host == "other" && .to_host == "node" && !contains(encode_json(.), "sentinel")
+
+  - name: unexpected values - whitespace or a newline inside a value is counted without text
+    inputs:
+      - insert_at: classify
+        type: log
+        log_fields:
+          message: "sentinel free text with a secret"
+      - insert_at: classify
+        type: log
+        log_fields:
+          message: "[tinycloud-mcp-http] approval collection failed: code=REQUEST_EXPIRED\nsentinel"
+      - insert_at: classify
+        type: log
+        log_fields:
+          message: "[tinycloud-mcp-http] approval collection failed: code=BAD CODE sentinel"
+      - insert_at: classify
+        type: log
+        log_fields:
+          message: "[tinycloud-mcp-http] connect rejected: reason=x path=/a b sentinel"
+      - insert_at: classify
+        type: log
+        log_fields:
+          message: "[tinycloud-mcp-http] tenant node host migrated: from=a sentinel to=b"
+    outputs:
+      - extract_from: classify
+        conditions:
+          - type: vrl
+            source: |
+              .reason == "unclassified" && length(keys(.)) == 1
+
+  - name: an accepted event with a reason field is counted once, as an event
+    inputs:
+      - insert_at: classify
+        type: log
+        log_fields:
+          message: "[tinycloud-mcp-http] connect rejected: reason=openkey_unavailable path=/connect/sentinel-path"
+    outputs:
+      - extract_from: event_count
+        conditions:
+          - type: vrl
+            source: |
+              .event_name == "mcp_connect_rejected" && .count == 1
+    no_outputs_from: [drop_count]
+
+  - name: an approval rejection with a reason field is counted once, as an event
+    inputs:
+      - insert_at: classify
+        type: log
+        log_fields:
+          message: "[tinycloud-mcp-http] approval result rejected: stage=activation code=DELEGATION_REJECTED reason=host_mismatch detail=none"
+    outputs:
+      - extract_from: event_count
+        conditions:
+          - type: vrl
+            source: |
+              .event_name == "mcp_approval_result_rejected" && .count == 1
+    no_outputs_from: [drop_count]
+
+  - name: a dropped record is counted once, as a drop
+    inputs:
+      - insert_at: classify
+        type: log
+        log_fields:
+          reason: partial
+    outputs:
+      - extract_from: drop_count
+        conditions:
+          - type: vrl
+            source: |
+              .reason == "partial" && .count == 1
+    no_outputs_from: [event_count]
+
+  - name: a record that is neither an event nor a drop is counted as unclassified
+    inputs:
+      - insert_at: route
+        type: log
+        log_fields:
+          unrelated: value
+    outputs:
+      - extract_from: drop_count
+        conditions:
+          - type: vrl
+            source: |
+              .reason == "unclassified" && .count == 1
+    no_outputs_from: [event_count]

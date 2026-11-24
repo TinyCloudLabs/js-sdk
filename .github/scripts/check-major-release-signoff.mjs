@@ -11,6 +11,9 @@
 //                     commits approves that package. A version PR that consumes
 //                     a major changeset also accepts the sign-off that changeset
 //                     was merged with.
+//   release           Before a push to master versions stable releases (no pre mode): no pending
+//                     changeset may declare `major` unless a commit between the commit that added
+//                     that changeset and HEAD approves the package.
 //   beta              Before publishing betas: changesets not yet admitted to
 //                     .changeset/pre.json may not declare `major` unless a
 //                     commit in this pre-release cycle approves the package.
@@ -222,6 +225,24 @@ function betaMajors() {
   return { majors, approved: majors.size ? historySignoffs(cycleRange()) : new Set() };
 }
 
+function releaseMajors() {
+  const majors = new Map();
+  const approved = new Set();
+  for (const name of readdirSync(".changeset").sort()) {
+    const path = `.changeset/${name}`;
+    if (!isChangeset(path)) continue;
+    const packages = changesetMajors(read(path));
+    if (packages.length === 0) continue;
+    const added = addedIn(path);
+    const signoffs = added ? historySignoffs(rangeFrom(added)) : new Set();
+    for (const pkg of packages) {
+      record(majors, pkg, `major in ${path}`);
+      if (signoffs.has(pkg)) approved.add(pkg);
+    }
+  }
+  return { majors, approved };
+}
+
 function stableMajors() {
   const pre = parseJson(read(".changeset/pre.json"));
   const majors = new Map();
@@ -279,7 +300,8 @@ const [mode, base, head] = process.argv.slice(2);
 if (mode === "pr" && base && head) report(prMajors(base, head), mode);
 else if (mode === "beta") report(betaMajors(), mode);
 else if (mode === "stable") report(stableMajors(), mode);
+else if (mode === "release") report(releaseMajors(), mode);
 else {
-  console.error("usage: check-major-release-signoff.mjs pr <base> <head> | beta | stable");
+  console.error("usage: check-major-release-signoff.mjs pr <base> <head> | beta | stable | release");
   process.exitCode = 2;
 }
