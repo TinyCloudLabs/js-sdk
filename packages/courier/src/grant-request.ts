@@ -234,7 +234,7 @@ export async function requestApprovalInTransaction(profile: Profile, key: AgentK
       if (settled === 'expired') { clearPending(existing); existing = undefined; }
     }
     if (existing && holdsApproval(existing)) {
-      throw new CourierError('usage', `Approval request ${existing.requestId} has already been approved by the owner. Run \`${cmd('init --wait')}\` to finish it first; \`${cmd('init --request')}\` can ask for another approval after that. To discard that approval instead, run \`${cmd('init --rotate-key --request')}\`: it replaces the agent key, CLEARS every pairing (peers must be re-paired by hand), deletes grant.json and puts the profile back to awaiting-grant, so there is no working grant until the owner approves.`);
+      throw new CourierError('usage', `Approval request ${existing.requestId} has already been approved by the owner. Run \`${cmd('init --wait')}\` to finish it first; \`${cmd('init --request')}\` can ask for another approval after that. To discard that approval instead, run \`${cmd('init --rotate-key --request')}\`: it replaces the agent key, clears every pairing, deletes grant.json, and returns the profile to awaiting-grant. Collect the new owner approval with \`${cmd('init --wait')}\`, then re-pair with fresh private links (\`${cmd('invite --help')}\`).`);
     }
     if (existing && matches(existing, profile, want) && !requestLapsed(existing)) return existing;
   }
@@ -334,7 +334,7 @@ async function verifiedPayload(profile: Profile, pending: PendingGrantRequest, k
     }
     // A renewal stays with the owner that holds the grant: with no code to paste back, whoever approves the link first would win.
     if (profile.ownerDid && checked.ownerDid.toLowerCase() !== profile.ownerDid.toLowerCase()) {
-      throw new CourierError('approval-result-invalid', `This agent is bound to owner ${profile.ownerDid}, but a different owner (${checked.ownerDid}) approved the request. Send the link only to the owner, privately. If the owner changed on purpose, run \`${cmd('init --rotate-key --request')}\` it replaces the agent key, clears every pairing (peers must be re-paired by hand) and deletes grant.json.`);
+      throw new CourierError('approval-result-invalid', `This agent is bound to owner ${profile.ownerDid}, but a different owner (${checked.ownerDid}) approved the request. Send the link only to the owner, privately. If the owner changed on purpose, \`${cmd('init --rotate-key --request')}\` replaces the agent key, clears every pairing and deletes grant.json. Collect the new owner approval with \`${cmd('init --wait')}\`, then re-pair with fresh private links (\`${cmd('invite --help')}\`).`);
     }
     if (checked.renewal) {
       await verifyOwnerRenewal(payload, checked.ownerDid, checked.renewal);

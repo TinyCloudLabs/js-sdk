@@ -64,7 +64,7 @@ export async function courierNode(profile: Profile, home?: string): Promise<Tiny
     throw new CourierError('no-grant', `No OpenKey owner grant is installed. Run \`${cmd('init')}\` and approve the request in OpenKey.`);
   }
   if (!grant.spaceId.toLowerCase().endsWith(`:${COURIER_SPACE}`)) {
-    throw new CourierError('profile-outdated', `Courier grant space is not ${COURIER_SPACE}; run \`${cmd('init --rotate-key')}\`, then re-pair peers.`);
+    throw new CourierError('profile-outdated', `Courier grant space is not ${COURIER_SPACE}. With owner approval, run \`${cmd('init --rotate-key --request')}\` and collect the new grant with \`${cmd('init --wait')}\`, then re-pair with fresh private links (\`${cmd('invite --help')}\`).`);
   }
   const expiry = Date.parse(grant.expiresAt);
   if (!Number.isFinite(expiry) || (!grant.renewal && Date.now() >= expiry)) {

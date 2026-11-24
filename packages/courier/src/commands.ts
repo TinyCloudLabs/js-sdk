@@ -303,7 +303,7 @@ export async function cmdPair(args: ParsedArgs) {
   if (sub === 'start') return pairStart(args);
   if (sub === 'accept') return pairAccept(args);
   if (sub === 'renew') return pairRenew(args);
-  fail('usage', `Usage: ${cmd('pair start <peer> | pair accept <artifact-json|--file f|--stdin> | pair renew [peer] [--force] [--renew-artifact]')}`);
+  fail('usage', `For private links, use \`${cmd('invite --help')}\` or \`${cmd('join --help')}\`. For advanced manual pairing, see \`${cmd('pair --help')}\`.`);
 }
 
 async function pairStart(args: ParsedArgs) {
