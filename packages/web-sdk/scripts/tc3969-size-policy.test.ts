@@ -25,7 +25,7 @@ test("the secrets permission fixes use their exact measured Web SDK root ceiling
   expect(row.root.ceiling).toEqual({ "index.mjs": 1539389, "index.cjs": 1471374 });
   expect(row.root.delta).toEqual({ "index.mjs": 21, "index.cjs": 30 });
   for (const format of ["index.mjs", "index.cjs"] as const) {
-    expect(rootCeilingFor({ ...ledger, tc3823BotHistoryKeyRoot: undefined, tc3802SecretKeyCapRoot: undefined, tc3862ExplorerOriginRoot: undefined, tc3522InvocationRefusalRoot: undefined, tc3810ReaderRoot: undefined, tc4082HostedOwnerRoot: undefined }, format)).toEqual({ row: "tc3969SecretKeyCoverageRoot", ceiling: prior.root.ceiling[format] + row.root.delta[format] });
+    expect(rootCeilingFor({ ...ledger, tc3823BotHistoryKeyRoot: undefined, tc3802SecretKeyCapRoot: undefined, tc3862ExplorerOriginRoot: undefined, tc3522InvocationRefusalRoot: undefined, tc3810ReaderRoot: undefined, tc3975NamedKeyWarningRoot: undefined, tc4082HostedOwnerRoot: undefined }, format)).toEqual({ row: "tc3969SecretKeyCoverageRoot", ceiling: prior.root.ceiling[format] + row.root.delta[format] });
   }
 });
 

@@ -1,5 +1,4 @@
 ---
-"@tinycloud/node-sdk-wasm": minor
 "@tinycloud/web-sdk-wasm": minor
 ---
 

@@ -102,10 +102,23 @@ describe("TC-858 merge-base optional ledger prefix", () => {
   });
 
   it("rejects a stale, missing or duplicate unmerged #548 measurement", () => {
-    const stale = { ...current.entries[0], "activation.cjs": 24651 };
+    const stale = { ...current.entries[0], "activation.cjs": 24653 };
     expect(() => validateOptionalEntryTransition([], [stale], observed, "#548")).toThrow();
     expect(() => validateOptionalEntryTransition([], [], observed, "#548")).toThrow();
     expect(() => validateOptionalEntryTransition([], [current.entries[0], current.entries[0]], observed, "#548")).toThrow();
+  });
+
+  it("tolerates the merge-base build's ±2 B per file (TC-4174) and nothing more", () => {
+    for (const format of ["replica.mjs", "replica.cjs", "activation.mjs", "activation.cjs"] as const) {
+      for (const offset of [2, -2]) {
+        const within = { ...current.entries[0], [format]: observed[format] + offset };
+        expect(() => validateOptionalEntryTransition([], [within], observed, "#548")).not.toThrow();
+      }
+      for (const offset of [3, -3]) {
+        const beyond = { ...current.entries[0], [format]: observed[format] + offset };
+        expect(() => validateOptionalEntryTransition([], [beyond], observed, "#548")).toThrow("TC-4174");
+      }
+    }
   });
   it("rejects a measured row assigned to another PR number", () => {
     const wrongPr = { ...current.entries[0], pr: "#999" };
@@ -548,6 +561,7 @@ describe("TC-2481 Web routing exact optional admission", () => {
     delete root.tc3823BotHistoryKeyRoot;
     delete root.tc3802SecretKeyCapRoot;
     delete root.tc3810ReaderRoot;
+    delete root.tc3975NamedKeyWarningRoot;
     delete root.tc4082HostedOwnerRoot;
     delete root.tc3947ReplicaRevokeRoot;
     delete root.tc3030FirstPartyOriginsRoot;
@@ -758,6 +772,7 @@ describe("TC-2481 final3e0 optional accounting admission", () => {
     delete root.tc3862ExplorerOriginRoot;
     delete root.tc3522InvocationRefusalRoot;
     delete root.tc3810ReaderRoot;
+    delete root.tc3975NamedKeyWarningRoot;
     delete root.tc4082HostedOwnerRoot;
     delete root.tc3947ReplicaRevokeRoot;
     delete root.tc3030FirstPartyOriginsRoot;
@@ -847,7 +862,7 @@ describe("TC-2481 final3e0 optional accounting admission", () => {
       "activation.mjs": newest["activation.mjs"], "activation.cjs": newest["activation.cjs"],
     };
     expect(() => validateOptionalEntryTransition(finalShipped.entries.slice(0, -1), finalShipped.entries, delta, newest.pr)).not.toThrow();
-    expect(() => validateOptionalEntryTransition(finalShipped.entries.slice(0, -1), finalShipped.entries, { ...delta, "replica.cjs": delta["replica.cjs"] + 1 }, newest.pr)).toThrow();
+    expect(() => validateOptionalEntryTransition(finalShipped.entries.slice(0, -1), finalShipped.entries, { ...delta, "replica.cjs": delta["replica.cjs"] + 3 }, newest.pr)).toThrow();
     expect(() => validateOptionalEntryTransition(finalShipped.entries.slice(0, -1), finalShipped.entries, delta, "#0")).toThrow();
   });
 });

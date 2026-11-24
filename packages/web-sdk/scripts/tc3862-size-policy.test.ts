@@ -12,7 +12,7 @@ test("TC-3862 charges only the canonical root growth over TC-3802", () => {
   });
   for (const format of ["index.mjs", "index.cjs"] as const) {
     expect(row.root.ceiling[format] - ledger.tc3802SecretKeyCapRoot.root.ceiling[format]).toBe(row.root.delta[format]);
-    expect(rootCeilingFor({ ...ledger, tc3522InvocationRefusalRoot: undefined, tc3810ReaderRoot: undefined, tc4082HostedOwnerRoot: undefined }, format)).toEqual({ row: "tc3862ExplorerOriginRoot", ceiling: row.root.ceiling[format] });
+    expect(rootCeilingFor({ ...ledger, tc3522InvocationRefusalRoot: undefined, tc3810ReaderRoot: undefined, tc3975NamedKeyWarningRoot: undefined, tc4082HostedOwnerRoot: undefined }, format)).toEqual({ row: "tc3862ExplorerOriginRoot", ceiling: row.root.ceiling[format] });
   }
   expect(ancestryPins(ledger, false)).toContainEqual({
     row: "tc3862ExplorerOriginRoot", pin: "3605a389b76b778fa77bed7acce40c6047f0631b",
