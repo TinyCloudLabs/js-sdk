@@ -14,20 +14,20 @@ describe("onboard --with feed", () => {
   });
 
   test("lasts 7 days unless --expiry says otherwise, and says so in the owner's words", () => {
-    expect(onboardingPlan("feed")).toMatchObject({ expiry: "7d", renewalLeaseSeconds: 2592000, asks: "Set up TinyCloud on this computer: use your Feed, for 7 days, renewing for up to 30 days." });
-    expect(onboardingPlan("feed", "12h")).toMatchObject({ expiry: "12h", asks: "Set up TinyCloud on this computer: use your Feed, for 12 hours, renewing for up to 30 days." });
-    expect(onboardingPlan("feed", "1d").asks).toBe("Set up TinyCloud on this computer: use your Feed, for 1 day, renewing for up to 30 days.");
+    expect(onboardingPlan("feed")).toMatchObject({ expiry: "7d", renewalLeaseSeconds: 2592000, asks: "Set up TinyCloud on this computer: use your Feed, for 7 days. It renews for up to 30 days unless you turn renewal off." });
+    expect(onboardingPlan("feed", "12h")).toMatchObject({ expiry: "12h", asks: "Set up TinyCloud on this computer: use your Feed, for 12 hours. It renews for up to 30 days unless you turn renewal off." });
+    expect(onboardingPlan("feed", "1d").asks).toBe("Set up TinyCloud on this computer: use your Feed, for 1 day. It renews for up to 30 days unless you turn renewal off.");
     expect(onboardingPlan("feed", "2w")).toMatchObject({ expiry: "2w" });
     expect(onboardingPlan("feed", "30d")).toMatchObject({ expiry: "30d" });
   });
 });
 
 describe("the other selections keep the account listing", () => {
-  test("apps and apps,feed last 7 days, renewing for up to 30 days", () => {
+  test("apps and apps,feed last 7 days, and renew for up to 30 days unless the owner turns renewal off", () => {
     const apps = onboardingPlan("apps");
-    expect(apps).toMatchObject({ expiry: "7d", asks: "Set up TinyCloud on this computer: use your apps and see your spaces, for 7 days, renewing for up to 30 days." });
+    expect(apps).toMatchObject({ expiry: "7d", asks: "Set up TinyCloud on this computer: use your apps and see your spaces, for 7 days. It renews for up to 30 days unless you turn renewal off." });
     for (const selector of ["apps,feed", "feed,apps"]) {
-      expect(onboardingPlan(selector)).toMatchObject({ expiry: "7d", asks: "Set up TinyCloud on this computer: use your apps and your Feed, and see your spaces, for 7 days, renewing for up to 30 days." });
+      expect(onboardingPlan(selector)).toMatchObject({ expiry: "7d", asks: "Set up TinyCloud on this computer: use your apps and your Feed, and see your spaces, for 7 days. It renews for up to 30 days unless you turn renewal off." });
     }
     for (const selector of ["apps", "apps,feed", "feed,apps"]) {
       expect(onboardingPlan(selector).permissions.some(p => p.space === "account" && p.path === "spaces/")).toBe(true);
@@ -35,7 +35,7 @@ describe("the other selections keep the account listing", () => {
   });
 
   test("--expiry changes the lifetime in the approval line for every selection, up to 30 days", () => {
-    expect(onboardingPlan("apps", "7d")).toMatchObject({ expiry: "7d", asks: "Set up TinyCloud on this computer: use your apps and see your spaces, for 7 days, renewing for up to 30 days." });
+    expect(onboardingPlan("apps", "7d")).toMatchObject({ expiry: "7d", asks: "Set up TinyCloud on this computer: use your apps and see your spaces, for 7 days. It renews for up to 30 days unless you turn renewal off." });
     expect(onboardingPlan("apps,feed", "30d")).toMatchObject({ expiry: "30d", asks: "Set up TinyCloud on this computer: use your apps and your Feed, and see your spaces, for 30 days." });
   });
 

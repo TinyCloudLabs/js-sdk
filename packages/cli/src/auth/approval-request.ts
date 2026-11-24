@@ -566,7 +566,10 @@ export async function acquireApprovalRequest(_did: string, options: AuthFlowOpti
       // `skipPrefix` tells the local SDK not to prefix a path; the signed request is strict and its paths are final.
       permissions: options.permissions!.map(({ skipPrefix: _skipPrefix, ...entry }) => entry) as OpenKeyApprovalRequestV1["permissions"],
       ...(options.reason ? { reason: options.reason } : {}), grantLifetimeSeconds: grantLifetimeSeconds(options.expiry),
-      ...(options.renewalLeaseSeconds === undefined ? {} : { renewal: { version: 1 as const, leaseLifetimeSeconds: options.renewalLeaseSeconds } }) };
+      ...(options.renewalLeaseSeconds === undefined ? {} : {
+        renewal: { version: 1 as const, leaseLifetimeSeconds: options.renewalLeaseSeconds },
+        ...(options.renewalPurpose === undefined ? {} : { purpose: options.renewalPurpose }),
+      }) };
   if (options.commandIntent !== undefined && !/^auth-grant:[0-9a-f]{64}$/.test(options.commandIntent)) {
     throw invalid("Invalid approval command intent.");
   }
