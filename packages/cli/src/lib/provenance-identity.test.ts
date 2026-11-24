@@ -1,10 +1,14 @@
 /**
  * The Release identity check against real npm provenance (TC-4276 F1), verified offline with sigstore's own verifier
  * and a pinned trust root. The identity is compared by exact equality: sigstore's SAN policy is an unanchored regex.
+ *
+ * Sigstore runs in a Node child, the CLI's runtime (`bin/tinycloud` is `#!/usr/bin/env node`): Bun before 1.4 has no
+ * default digest for ECDSA, so sigstore's Rekor SET check fails under it and a genuine release would not verify.
  */
 import { describe, expect, test } from "bun:test";
+import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
-import { createRequire } from "node:module";
+import { fileURLToPath } from "node:url";
 import { FakeRegistry, derUtf8 } from "../test-support/self-update-fakes.js";
 import {
   ProvenanceUnavailableError,
@@ -25,14 +29,20 @@ const BUNDLES = new Map<string, unknown>([
 ]);
 
 /** sigstore's verifier (the modules the pinned `sigstore` uses), with no identity policy and an offline trust root. */
-const offlineVerifier: BundleVerifier = (() => {
-  const fromSigstore = createRequire(createRequire(import.meta.url).resolve("sigstore"));
-  const { Verifier, toTrustMaterial, toSignedEntity } = fromSigstore("@sigstore/verify");
-  const { bundleFromJSON } = fromSigstore("@sigstore/bundle");
-  const { TrustedRoot } = fromSigstore("@sigstore/protobuf-specs");
-  const verifier = new Verifier(toTrustMaterial(TrustedRoot.fromJSON(fixture("trusted_root.json"))));
-  return async (bundle) => verifier.verify(toSignedEntity(bundleFromJSON(bundle)), {}).identity as SignerIdentity;
-})();
+const offlineVerifier: BundleVerifier = async (bundle) => {
+  const helper = fileURLToPath(new URL("../test-support/sigstore-verify.cjs", import.meta.url));
+  const child = spawnSync(process.env.NODE_BINARY ?? "node", [helper], { input: JSON.stringify(bundle), encoding: "utf8", timeout: 60_000 });
+  if (child.status !== 0) throw new Error(`sigstore-verify.cjs exited ${child.status}: ${child.stderr}`);
+  const result = JSON.parse(child.stdout) as {
+    runtime: string;
+    error?: string;
+    identity?: { subjectAlternativeName?: string; extensions?: { issuer?: string }; oids: { oid?: { id: number[] }; value: string }[] };
+  };
+  if (!result.runtime.startsWith("node ")) throw new Error(`sigstore ran under ${result.runtime}, not Node`);
+  if (result.error !== undefined) throw new Error(`${result.error} (${result.runtime})`);
+  const identity = result.identity!;
+  return { ...identity, oids: identity.oids.map((entry) => ({ oid: entry.oid, value: new Uint8Array(Buffer.from(entry.value, "base64")) })) };
+};
 
 function registryWith(pkg: { name: string; version: string; integrity: string }): FakeRegistry {
   const registry = new FakeRegistry();
@@ -42,15 +52,19 @@ function registryWith(pkg: { name: string; version: string; integrity: string })
   return registry;
 }
 
+/** "true" when `pkg` verifies; otherwise the refusal's code and message, so each case shows which check refused it. */
 async function verify(pkg: { name: string; version: string; integrity: string }, verifyBundle: BundleVerifier = offlineVerifier): Promise<string> {
   const registry = registryWith(pkg);
   try {
     return String(await verifyProvenance(registry, verifyBundle, await registry.manifest(pkg.name, pkg.version)));
   } catch (error) {
-    if (error instanceof VerificationError) return error.code;
+    if (error instanceof VerificationError) return `${error.code}: ${error.message}`;
     throw error;
   }
 }
+
+/** The refusal of courier 0.8.2 for an identity mismatch: the bundle verified, its signer is not the Release workflow. */
+const identityRefusal = (reason: string) => `PROVENANCE_INVALID: ${COURIER.name}@${COURIER.version}: provenance ${reason}`;
 
 /** The real Release workflow signer of @tinycloud/courier 0.8.2, with `change` applied after verification. */
 function tampered(change: (identity: SignerIdentity) => SignerIdentity): BundleVerifier {
@@ -71,8 +85,21 @@ describe("the Release identity, on real provenance", () => {
     expect(releaseIdentityMismatch(signer)).toBeNull();
   });
 
-  test("a valid bundle from another project's release workflow is refused", async () => {
-    expect(await verify(SIGSTORE)).toBe("PROVENANCE_INVALID");
+  test("a valid bundle from another project's release workflow is refused for its signer", async () => {
+    expect(await verify(SIGSTORE)).toBe(
+      `PROVENANCE_INVALID: ${SIGSTORE.name}@${SIGSTORE.version}: provenance signed by "https://github.com/sigstore/sigstore-js/.github/workflows/release.yml@refs/heads/main", not the Release workflow`,
+    );
+  });
+
+  test("a bundle whose transparency-log promise doesn't verify is refused before any identity is read", async () => {
+    const bundle = structuredClone(BUNDLES.get(`${COURIER.name}@${COURIER.version}`)) as { verificationMaterial: { tlogEntries: { inclusionPromise: { signedEntryTimestamp: string } }[] } };
+    const entry = bundle.verificationMaterial.tlogEntries[0]!;
+    const set = Buffer.from(entry.inclusionPromise.signedEntryTimestamp, "base64");
+    set[set.length - 1] ^= 1;
+    entry.inclusionPromise.signedEntryTimestamp = set.toString("base64");
+    expect(await verify(COURIER, async () => offlineVerifier(bundle))).toStartWith(
+      `PROVENANCE_INVALID: ${COURIER.name}@${COURIER.version}: provenance does not verify: TLOG_INCLUSION_PROMISE_ERROR: inclusion promise could not be verified`,
+    );
   });
 
   const lookalikes = [
@@ -83,21 +110,29 @@ describe("the Release identity, on real provenance", () => {
     "https://github.com/TinyCloudLabs/js-sdk/.github/workflows/other.yml@refs/heads/master",
   ];
   for (const san of lookalikes) {
-    test(`a certificate for ${san.slice("https://github.com/".length)} is refused`, async () => {
+    test(`a certificate for ${san.slice("https://github.com/".length)} is refused for its signer`, async () => {
       // sigstore's own policy check (`signerIdentity.match(policyIdentity)`) would have accepted the first three.
-      expect(await verify(COURIER, tampered((identity) => ({ ...identity, subjectAlternativeName: san })))).toBe("PROVENANCE_INVALID");
+      expect(await verify(COURIER, tampered((identity) => ({ ...identity, subjectAlternativeName: san })))).toBe(
+        identityRefusal(`signed by ${JSON.stringify(san)}, not the Release workflow`),
+      );
     });
   }
 
-  test("another issuer, or a source repository, ref or repository id that differs, is refused", async () => {
-    expect(await verify(COURIER, tampered((identity) => ({ ...identity, extensions: { issuer: "https://token.actions.githubusercontent.com.evil" } })))).toBe("PROVENANCE_INVALID");
-    expect(await verify(COURIER, tampered((identity) => withOid(identity, 12, "https://github.com/TinyCloudLabs/js-sdk-evil")))).toBe("PROVENANCE_INVALID");
-    expect(await verify(COURIER, tampered((identity) => withOid(identity, 14, "refs/heads/master-evil")))).toBe("PROVENANCE_INVALID");
-    expect(await verify(COURIER, tampered((identity) => withOid(identity, 15, "913991043")))).toBe("PROVENANCE_INVALID");
-    expect(await verify(COURIER, tampered((identity) => ({ ...identity, oids: [] })))).toBe("PROVENANCE_INVALID");
+  test("another issuer, or a source repository, ref or repository id that differs, is refused for that field", async () => {
+    expect(await verify(COURIER, tampered((identity) => ({ ...identity, extensions: { issuer: "https://token.actions.githubusercontent.com.evil" } })))).toBe(
+      identityRefusal(`issuer "https://token.actions.githubusercontent.com.evil"`),
+    );
+    const extension = (last: number, found: string[], expected: string) =>
+      identityRefusal(`certificate extension 1.3.6.1.4.1.57264.1.${last} is ${JSON.stringify(found)}, not ${JSON.stringify(expected)}`);
+    expect(await verify(COURIER, tampered((identity) => withOid(identity, 12, "https://github.com/TinyCloudLabs/js-sdk-evil")))).toBe(
+      extension(12, ["https://github.com/TinyCloudLabs/js-sdk-evil"], "https://github.com/TinyCloudLabs/js-sdk"),
+    );
+    expect(await verify(COURIER, tampered((identity) => withOid(identity, 14, "refs/heads/master-evil")))).toBe(extension(14, ["refs/heads/master-evil"], "refs/heads/master"));
+    expect(await verify(COURIER, tampered((identity) => withOid(identity, 15, "913991043")))).toBe(extension(15, ["913991043"], "913991042"));
+    expect(await verify(COURIER, tampered((identity) => ({ ...identity, oids: [] })))).toBe(extension(12, [], "https://github.com/TinyCloudLabs/js-sdk"));
   });
 
   test("a trust root that can't be fetched is PROVENANCE_UNAVAILABLE, not a verdict on the release", async () => {
-    expect(await verify(COURIER, async () => { throw new ProvenanceUnavailableError(new Error("ENOTFOUND tuf-repo-cdn.sigstore.dev")); })).toBe("PROVENANCE_UNAVAILABLE");
+    expect(await verify(COURIER, async () => { throw new ProvenanceUnavailableError(new Error("ENOTFOUND tuf-repo-cdn.sigstore.dev")); })).toStartWith("PROVENANCE_UNAVAILABLE: ");
   });
 });

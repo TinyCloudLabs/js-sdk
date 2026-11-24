@@ -173,7 +173,9 @@ export async function verifyProvenance(registry: ReleaseRegistry, verifyBundle: 
     signer = await verifyBundle(provenance.bundle);
   } catch (error) {
     if (error instanceof ProvenanceUnavailableError) throw new VerificationError("PROVENANCE_UNAVAILABLE", id, error.message);
-    throw new VerificationError("PROVENANCE_INVALID", id, `provenance does not verify: ${(error as Error).message}`);
+    // sigstore's error code (e.g. TLOG_INCLUSION_PROMISE_ERROR) names the failed check in the log and JSON detail.
+    const code = (error as { code?: unknown }).code;
+    throw new VerificationError("PROVENANCE_INVALID", id, `provenance does not verify: ${typeof code === "string" ? `${code}: ` : ""}${(error as Error).message}`);
   }
   const mismatch = releaseIdentityMismatch(signer);
   if (mismatch) throw new VerificationError("PROVENANCE_INVALID", id, `provenance ${mismatch}`);
