@@ -137,6 +137,13 @@ export function dropPendingDelegation(delegationCid: string): void {
   if (kept.length !== records.length) store(kept);
 }
 
+/** Best effort: a failed cleanup must neither replace the error the caller needs to see nor fail a saved grant. */
+export function dropPendingQuietly(delegationCid: string): void {
+  try { dropPendingDelegation(delegationCid); } catch (error) {
+    console.error(`warning: could not remove the saved grant record (${(error as Error).message}); it expires on its own.`);
+  }
+}
+
 /** Delete the record saved for this code (a refused record must not be served again). */
 export function dropPendingForCode(code: string): void {
   const hash = codeHash(code);
