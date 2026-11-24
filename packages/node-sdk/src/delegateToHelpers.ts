@@ -71,10 +71,28 @@ export function legacyParamsToPermissionEntries(
  */
 export const DEFAULT_DELEGATION_EXPIRY_MS = EXPIRY.SESSION_MS;
 
+/** N1 (TC-3801): a grant on any secret's own key (or under `secrets`) lasts 1 h unless asked, and never over 7 d. */
+export const SECRET_KEY_GRANT_DEFAULT_MS = 60 * 60_000;
+export const SECRET_KEY_GRANT_MAX_MS = 7 * 24 * 60 * 60_000;
+const SECRET_KEY_RESOURCE = /^urn:tinycloud:encryption:[^/]+\/secrets(?:\/|$)/;
+
+/** Whether an expanded entry is an encryption grant on a secret's key, or on keys under `secrets`. */
+export function isSecretKeyEntry(entry: PermissionEntry): boolean {
+  return entry.service === "tinycloud.encryption" && SECRET_KEY_RESOURCE.test(entry.path);
+}
+
+/**
+ * A secret-key grant's lifetime in ms: {@link SECRET_KEY_GRANT_DEFAULT_MS} when `expiry` is absent, else `expiry`
+ * (parsed as {@link resolveExpiryMs} does), capped at {@link SECRET_KEY_GRANT_MAX_MS}. Never longer, never refused.
+ */
+export function secretKeyGrantExpiryMs(expiry: string | number | undefined): number {
+  return Math.min(expiry === undefined ? SECRET_KEY_GRANT_DEFAULT_MS : resolveExpiryMs(expiry), SECRET_KEY_GRANT_MAX_MS);
+}
+
 /**
  * Resolve the `expiry` option of {@link DelegateToOptions} into a concrete
  * millisecond duration from now. Default is {@link DEFAULT_DELEGATION_EXPIRY_MS}
- * (30 days, the SESSION tier).
+ * (7 days, the SESSION tier).
  *
  * Accepts:
  *  - `undefined` → {@link DEFAULT_DELEGATION_EXPIRY_MS}

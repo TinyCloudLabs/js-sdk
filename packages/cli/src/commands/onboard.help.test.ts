@@ -12,6 +12,6 @@ describe("onboard --help", () => {
   });
 
   test("says the default lifetime is the shortest of the selected tasks' defaults, with the 30-day cap", () => {
-    expect(help).toContain("at most 30d. Default: the shortest of the selected tasks' defaults (apps 30d, feed 7d), so 7d when --with includes feed");
+    expect(help).toContain("at most 30d. Default 7d, renewing for up to 30 days unless the owner approves without renewal; at 30d there is no renewal");
   });
 });

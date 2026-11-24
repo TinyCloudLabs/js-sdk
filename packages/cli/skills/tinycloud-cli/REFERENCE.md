@@ -5,7 +5,7 @@ This release has **Commander coverage tracked, not complete parity**:
 
 - 5 migrated registration(s).
 - 1 partially migrated registration(s).
-- 153 legacy registration(s) remain Commander-owned.
+- 154 legacy registration(s) remain Commander-owned.
 
 - `auth import [source]` → `tinycloud.auth.import@1` (partial; legacy inputs: v1 delegation artifact, v1 permission artifact without command, bare portable delegation, stored delegation wrapper, cross-user delegation persisted with activated=false).
 - `registry show [account-id]` → `tinycloud.registry.show@1` (migrated).
@@ -41,7 +41,7 @@ tinycloud --version
 ```bash
 tinycloud onboard                         # once; every later task reuses this profile
 tinycloud onboard --timeout 60s           # same, bounded: 0 done, 8 pending (JSON on stdout), 3 request expired
-tinycloud onboard --with feed             # the Feed only (one approval, no account listing, 7 days); --with apps,feed asks for both (7 days); --expiry 12h..30d sets the lifetime
+tinycloud onboard --with feed             # the Feed only (one approval, no account listing); --with apps,feed asks for both; every selection 7 days, renewing for up to 30 days; --expiry 12h..30d sets the lifetime (30d: no renewal)
 tinycloud auth request --cap SPEC --grant --no-popup   # more access: ask once, send the owner the link
 tinycloud auth request --cap SPEC --grant --no-popup --timeout 60s   # same, bounded: 0 done, 8 pending (link in JSON on stdout; run it again to resume), 3 request expired
 tinycloud auth request --cap SPEC --grant --fresh --no-popup   # grant already covers it but ends soon: ask for a new one beside it (old grant kept; JSON lists both CIDs; revoke is by CID, so revoke every listed CID to end access now)
@@ -61,7 +61,7 @@ A resumed approval completes at least one status check of OpenKey whatever the `
 |------|-------------|
 | `--device` | Approve on another device (phone) through OpenKey device authorization. Requires a KV-scoped `--manifest` (no `tinycloud.sql`, no secret decrypt). Prints `Approve on your phone: URL (code XXXX-XXXX)` to stderr and waits for the whole approval window |
 | `--manifest <file>` | Request only this manifest's permissions: one space, plus raw `tinycloud.encryption` network entries (space `encryption`) such as a secrets decrypt grant. Every scoped login adds `tinycloud.capabilities/read` on path `""` in that space when missing (OpenKey requires it to sign). File path, `base64:<json>`, or `builtin:share-publishing` |
-| `--expiry <duration>` | Session lifetime (`1h`, `7d`, milliseconds; at least `1m`) counted from approval; ISO dates are refused because OpenKey signs approval time plus a lifetime. Enforced against the signed session on every login path. Without `--expiry`, a manifest login defaults to `1h` (`7d` for `builtin:share-publishing`, whose Share links end with the session) and a login without a manifest to `7d`; onboarding explicitly requests `30d`. Device login: at most `30d`, default `30d` |
+| `--expiry <duration>` | Session lifetime (`1h`, `7d`, milliseconds; at least `1m`) counted from approval; ISO dates are refused because OpenKey signs approval time plus a lifetime. Enforced against the signed session on every login path. Without `--expiry`, a manifest login defaults to `1h` (`7d` for `builtin:share-publishing`, whose Share links end with the session) and a login without a manifest to `7d`; onboarding explicitly requests `7d`, renewing for up to 30 days. Device login: at most `30d`, default `30d` |
 | `--owner <did>` | Refuse approval by any identity other than this `did:pkh`; must agree with an owner the profile already recorded. OpenKey preselects that owner's key, so this is how to sign in with a key that is not the account's primary key; it works on a plain login without `--manifest` too. Also names the secrets owner for a manifest's `secrets` when the profile has no recorded owner |
 | `--replace-session` | Scoped or device login: replace a live session the new scope would narrow, change or shorten (otherwise `SESSION_IN_USE`); renewals and widenings that last at least as long need no flag |
 | `--replication-prefix <prefix>` | Repeatable login request; adds `get` + `sync` only when an unrestricted covering `get` is already requested. Saves prefixes on the profile and reapplies them on later logins and rotation |
@@ -175,8 +175,10 @@ Secrets are stored as network-encrypted inline envelopes and read through
 identifiers such as `FIREFLIES_API_KEY`. `tinycloud secrets network show` accepts
 either a short network name or a full
 `urn:tinycloud:encryption:<ownerDid>:<network>` identifier, and `tinycloud secrets
-network grant` takes the short name, resolves the network, and issues
-`tinycloud.encryption/decrypt` on that network. Share the decrypt grant
+network grant` takes the short network name, resolves the network, and issues
+`tinycloud.encryption/decrypt` on the whole network: every secret in it, including secrets added later. Your wallet
+signs the grant, so `tinycloud account delegations revoke <cid>` ends it. It lasts 1 hour unless you pass `--expiry`,
+and at most 7 days; a longer value is cut to 7 days. `expiresAt` in the JSON output shows when it ends. Share the decrypt grant
 separately from any KV or SQL reads the app also needs.
 
 ```bash
@@ -566,6 +568,8 @@ On either recovery path, an orphaned `.recover-*` claim can hold a replacement o
 Use `--json` for machine-readable output; interactive commands can render human output. General command errors go to stderr as `{error: {code, message, hint?, recovery?, setup?, progress?, meta?, warnings?}}` (`recovery`, `setup` and `progress` are described under [Secrets](#asking-the-owner-for-a-secret-request-wait-manage)). `meta` contains a typed HTTP `status` and, only when validated as a TinyCloud capability (and against the KV request when available), a `resource` and `requiredAction`. Inspect the structured code, not only the exit status.
 
 General storage/auth exit codes: 0 success, 1 operation error (including `PROFILE_MIGRATION_REQUIRED` and `PROBE_FAILED`), 2 invalid input, 3 authentication required, 4 not found, 5 permission denied, 6 network error, 7 node error, 8 pending (`tinycloud secrets wait`; `onboard` and `auth grant` with `--timeout`, where it is an approval still pending or OpenKey not reachable), 10 storage full, 130 interrupted (`CANCELLED`). `tinycloud share` uses its own: 1 profile lock timeout, sender-history retry or unconfirmed revocation (`PROFILE_LOCK_TIMEOUT`, `SHARE_HISTORY_RETRY`, `SHARE_REVOKE_UNCONFIRMED`), 3 upload authority required, 4 unavailable, expired, revoked bearer link, upload failed or revocation refused (`SHARE_LINK_UNAVAILABLE`, `SHARE_REVOKED`, `SHARE_REVOKE_REJECTED`), 5 permission denied (`PERMISSION_DENIED`, `SHARE_ISSUER_KEY_UNAVAILABLE`) or verification failed, 6 recipient authorization required or network error, 7 byte limit, 8 (unused by share: output conflicts, unsafe filenames and unsafe folder paths are exit 2 `OUTPUT_EXISTS`, `UNSAFE_FILENAME`, `UNSAFE_PATH`), 9 partial success, 10 storage full.
+
+`tinycloud secrets put` seals to the network key by default. Set `TC_SECRETS_NAMED_KEY_WRITES=1` to seal to the secret's own key. With opt-in, a node without `encryption-named-keys-v1` returns `NAMED_KEYS_UNSUPPORTED` (exit 11) before any secret permission request or write. A failed feature check returns `NAMED_KEYS_CHECK_FAILED` (exit 6). Adopt readers for both formats before enabling per-secret keys for writes.
 
 `tinycloud secrets run` exits with its command's status once the command has started. Before that it uses the codes above, plus 126 (the command cannot be executed or started) and 127 (the command does not exist).
 

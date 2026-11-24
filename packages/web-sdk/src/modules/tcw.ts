@@ -33,6 +33,7 @@ import {
   type RegisterPolicyV3Receipt,
   refuseCaveated,
 } from "@tinycloud/node-sdk/core";
+import type { NodeSignOutStatus } from "@tinycloud/node-sdk";
 import {
   resolveReplicationConfig,
   validateReplicationConfig,
@@ -59,6 +60,8 @@ import {
   DelegationError,
   DelegationResult,
   ClientSession,
+  type ClientSignInResult,
+  type SignInResult,
   Extension,
   type TelemetryConfig,
   type RetryPolicy,
@@ -78,7 +81,12 @@ import {
   SignInOptions,
   ACCOUNT_MANIFEST_PERMISSIONS,
   isFirstPartyOrigin,
+  genericAppId,
+  warnOnceWithoutAppHost,
   composeManifestRequest,
+  manifestUsesOwnerPlaceholder,
+  pkhDid,
+  resolveManifestOwner,
   createLocalStorageLocalNodeIdentityStore,
   createLocalStorageRegistrySequenceStore,
   createLocalStorageRegistryCacheStore,
@@ -95,6 +103,7 @@ import {
   validateAdditionalPermissions,
   type RequestPermissionsOptions,
 } from "./requestPermissionsCore";
+import { openKeySignPresentation, type OpenKeySignPresentation } from "./openKeySignPresentation";
 import {
   isPermissionPromptSuppressed,
   suppressPermissionPromptFor30Days,
@@ -119,7 +128,7 @@ import {
   BrowserSessionStorage,
   type BrowserSessionLoadResult,
 } from "../adapters/BrowserSessionStorage";
-import { isPanelResourceSet, rememberRuntimeGrants, reuseRuntimeGrants, serializeRuntimeGrantMutation, type RuntimeGrantStore } from "./runtimeGrantPersistence";
+import { isElevatedResource, isPanelResourceSet, isRememberableResourceSet, isSecretKeyGrant, isSecretKeyResourceSet, rememberAskedGrants, rememberRuntimeGrants, reuseRuntimeGrants, serializeRuntimeGrantMutation, storedGrantAskers, type RuntimeGrantStore } from "./runtimeGrantPersistence";
 import { RPCProviders, ClientConfig, Extension as ExtensionType } from "../providers";
 import { resolveSpaceCreationHandler } from "../authorization/WebSpaceCreationHandler";
 import { resolveOpenKeySigningKey, type OpenKeyConnection } from "../openkey-signing-key";
@@ -134,17 +143,29 @@ declare global {
   }
 }
 
+/** The SIWE domain outside a browser when the app sets no `domain`. */
+const DOMAIN_WITHOUT_HOST = "app.tinycloud.xyz";
+
 // Config
 
-/** Signs a message for a runtime permission grant; see `TinyCloudWeb.setRuntimePermissionSigner`. */
+/**
+ * Signs a message for a runtime permission grant; see `TinyCloudWeb.setRuntimePermissionSigner`. A signer set with
+ * `{ openKey: true }` also receives the `presentation` to pass on to OpenKey's approval; display-only, never signed.
+ */
 export interface RuntimePermissionSigner {
-  signMessage(message: string): Promise<string>;
+  signMessage(message: string, presentation?: OpenKeySignPresentation): Promise<string>;
 }
 
-/** The byte-exact message signing the OpenKey SDK's `OpenKey` class offers beside `authorizeTinyCloud`. The SDK always sends a `keyId`. */
+/**
+ * The byte-exact message signing the OpenKey SDK's `OpenKey` class offers beside `authorizeTinyCloud`. The SDK always sends a `keyId`.
+ * `signMessagePresentation` is 1 on an OpenKey SDK that accepts a `presentation` on the request. `signMessageShowsApproval` is
+ * true when OpenKey's own approval screen shows the request, and false when the connected key signs in an external wallet.
+ */
 interface OpenKeyMessageSigner extends OpenKeyConnection {
+  readonly signMessagePresentation?: number;
+  readonly signMessageShowsApproval?: boolean;
   signMessage?: (
-    request: { message: string; keyId: string },
+    request: { message: string; keyId: string; presentation?: OpenKeySignPresentation },
     opts?: { mode?: "iframe" | "popup" | "redirect" },
   ) => Promise<{ signature: string }>;
 }
@@ -247,7 +268,7 @@ export interface Config extends ClientConfig {
    */
   spaceCreationTimeoutMs?: number;
 
-  /** Session expiration time in milliseconds (default: 30 days, `EXPIRY.SESSION_MS`) */
+  /** Session expiration time in milliseconds (default: 7 days, `EXPIRY.SESSION_MS`) */
   sessionExpirationMs?: number;
 
   /** Persist browser sessions so signIn() can restore before prompting. Default true. */
@@ -277,6 +298,10 @@ export interface Config extends ClientConfig {
    * manifest's `name` and `icon` to title the permission modal. The
    * manifest is forwarded into the underlying {@link TinyCloudNode}
    * so `signIn()` drives its SIWE recap from it directly.
+   *
+   * Without this or `capabilityRequest`, `signIn()` asks only for the app's
+   * own folder (`applications/<reversed host>/`, KV and SQL, 7 days) and
+   * logs a console warning.
    */
   manifest?: Manifest | Manifest[];
   /** Pre-composed manifest request. Takes precedence over `manifest`. */
@@ -427,9 +452,11 @@ export class TinyCloudWeb {
   /** Incremented by signOut; a sign-in that started before it does not complete. */
   private signOutCount = 0;
   /** The signer set with `setRuntimePermissionSigner`, with the session it was set for. */
-  private runtimeSigner?: { readonly signer: RuntimePermissionSigner; readonly address: string; readonly signOuts: number };
+  private runtimeSigner?: { readonly signer: RuntimePermissionSigner; readonly address: string; readonly signOuts: number; readonly openKey: boolean };
   private signOutInFlight = 0;
   private signOutOperation?: { node?: TinyCloudNode; remote?: Promise<void>; result: Promise<void> };
+  /** The node the latest sign-out ended; it holds that sign-out's node status. */
+  private signedOutNode?: TinyCloudNode;
   private persistedRestoreBlocked = false;
   private signOutCleanupFailed = false;
   private remoteSignOutTimeoutMs = 3000;
@@ -553,6 +580,14 @@ export class TinyCloudWeb {
     };
   }
 
+  /** Outside a browser, an app with no domain and no manifest gets the folder every such app shares. */
+  private warnIfWithoutAppHost(): void {
+    if (this._manifest !== undefined || this._capabilityRequest !== undefined) return;
+    if (this.config.domain !== undefined || this.config.siweConfig?.domain !== undefined) return;
+    if (typeof window !== "undefined" && window.location?.host) return;
+    warnOnceWithoutAppHost(genericAppId(DOMAIN_WITHOUT_HOST));
+  }
+
   /**
    * Async initialization: ensure WASM is ready, then create TinyCloudNode.
    * @internal
@@ -591,7 +626,7 @@ export class TinyCloudWeb {
       localNodeIdentityStore:
         this.config.localNodeIdentityStore ??
         createLocalStorageLocalNodeIdentityStore(),
-      domain: this.config.domain ?? loc?.host ?? 'app.tinycloud.xyz',
+      domain: this.config.domain ?? loc?.host ?? DOMAIN_WITHOUT_HOST,
       uri: this.config.domain === undefined ? loc?.origin : undefined,
       prefix: this.config.spacePrefix,
       autoCreateSpace: this.config.autoCreateSpace ?? true,
@@ -610,6 +645,9 @@ export class TinyCloudWeb {
       capabilityRequest: this._capabilityRequest,
       signStrategy: this.config.signStrategy,
       ...this.bootstrapSignInPolicy(),
+      // TC-4082: outside first-party origins an owner with no registry record may sign in once the default node is
+      // shown to host their own `applications` space; the node-sdk refuses anything else.
+      allowHostedOwnerProof: this.bootstrapSignInPolicy().requireExistingAccount,
       telemetry: this.config.telemetry,
       retryPolicy: this.config.retryPolicy,
     };
@@ -801,8 +839,12 @@ export class TinyCloudWeb {
       secrets = new WebSecretsService({
         getService: () => this.node.secretsForSpace(resolvedSpace),
         space: resolvedSpace,
-        getManifest: () => this._manifest,
-        requestPermissions: (additional) => this.requestPermissions(additional),
+        getManifest: () => this._manifest === undefined ? undefined : this.node.capabilityRequest?.manifests,
+        requestPermissions: (additional, options) => options === undefined
+          ? this.requestPermissions(additional)
+          : this.requestPermissions(additional, options),
+        getEncryptionNetworkId: () => this.node.getEncryptionNetworkIdForSpace(resolvedSpace),
+        namedKeysSupported: () => this.node.namedKeysSupported(),
         resolveSpace: (space) => space.startsWith("tinycloud:") ? space : this.node.spaces.get(space).id,
         getUnlockSigner: () => this.walletSigner,
       });
@@ -1123,16 +1165,21 @@ export class TinyCloudWeb {
         await reuseRuntimeGrants(
           grantStore,
           address,
-          (grant) =>
-            activateValidatedRuntimeDelegationOnNode(node, grant, {
+          async (grant) => {
+            const validated = await activateValidatedRuntimeDelegationOnNode(node, grant, {
               host: node.hosts[0]!,
               authorize: (permissions) => {
-                if (!isPanelResourceSet(permissions.map((entry) => ({ ...entry, space: entry.space ?? "" })), owner)) {
-                  throw new RuntimeDelegationRejectedError("authority_invalid", "Stored grant is not a panel grant.");
+                const signed = permissions.map((entry) => ({ ...entry, space: entry.space ?? "" }));
+                if (!isPanelResourceSet(signed, owner) && !isRememberableResourceSet(signed, owner) && !isSecretKeyResourceSet(signed, owner)) {
+                  throw new RuntimeDelegationRejectedError("authority_invalid", "Stored grant is not one that is kept across a reload.");
                 }
                 return true;
               },
-            }),
+            });
+            const askers = storedGrantAskers(grant);
+            if (askers.length > 0) this.grantAskersOf(node).set(validated.cid, new Set(askers));
+            return validated;
+          },
           { isCurrent },
         );
       }
@@ -1246,13 +1293,19 @@ export class TinyCloudWeb {
     }
   }
 
-  private configuredManifestPermissions(node: TinyCloudNode): ResourceCapability[] {
+  private configuredManifestPermissions(
+    node: TinyCloudNode,
+    restored: { readonly address: string; readonly chainId: number },
+  ): ResourceCapability[] {
     if (this._capabilityRequest !== undefined) {
       return this._capabilityRequest.resources;
     }
     if (this._manifest !== undefined) {
+      const manifests = Array.isArray(this._manifest) ? this._manifest : [this._manifest];
+      // A manifest path holding `{owner}` resolves to the restored session's owner, as sign-in resolved it.
+      const ownerDid = manifests.some(manifestUsesOwnerPlaceholder) ? pkhDid(restored.address, restored.chainId) : undefined;
       return composeManifestRequest(
-        Array.isArray(this._manifest) ? this._manifest : [this._manifest],
+        ownerDid === undefined ? manifests : manifests.map((manifest) => resolveManifestOwner(manifest, ownerDid)),
         {
           ...this.bootstrapSignInPolicy(),
         },
@@ -1298,7 +1351,7 @@ export class TinyCloudWeb {
     assertCurrent();
     const node = await this.ensureNode();
     if (restored.status === "restored" && restored.session) {
-      const permissions = this.configuredManifestPermissions(node);
+      const permissions = this.configuredManifestPermissions(node, restored.session);
       if (permissions.length === 0 || node.hasRuntimePermissions(permissions)) {
         await this.restoredNetworkWork?.hosting;
         assertCurrent();
@@ -1327,7 +1380,8 @@ export class TinyCloudWeb {
       : { expiryChangeable: true, maxExpiresAt: openkey.maxExpiresAt };
   }
 
-  signIn = (options?: SignInOptions): Promise<ClientSession> => {
+  signIn = (options?: SignInOptions): Promise<ClientSignInResult> => {
+    this.warnIfWithoutAppHost();
     if (!this.config.openkey) return this.performSignIn(options);
     const client = this.config.openkey.client;
     const state: {
@@ -1364,7 +1418,7 @@ export class TinyCloudWeb {
     handle?: ReturnType<NonNullable<OpenKeyAuthorizeTinyCloud["beginTinyCloudSignIn"]>>;
     pending?: PreparedOpenKeyAuthorization;
     node?: TinyCloudNode;
-  }): Promise<ClientSession> => {
+  }): Promise<ClientSignInResult> => {
     // Refuse a caveated manifest before any restore, signer or network call.
     refuseCaveated(this._capabilityRequest?.manifests ?? this._manifest);
     const signOuts = this.signOutCount;
@@ -1402,7 +1456,7 @@ export class TinyCloudWeb {
       if (restored.status === "restored" && restored.session) {
         const restoredNode = await this.ensureNode();
         assertNotSignedOut();
-        const permissions = this.configuredManifestPermissions(restoredNode);
+        const permissions = this.configuredManifestPermissions(restoredNode, restored.session);
         if (permissions.length === 0 || restoredNode.hasRuntimePermissions(permissions)) {
           await this.restoredNetworkWork?.hosting;
           assertNotSignedOut();
@@ -1420,10 +1474,11 @@ export class TinyCloudWeb {
     this.restoredNetworkWork = undefined;
     this._sessionRestoreStatus = "logging-in";
     const was = node.spaceId;
+    let result: SignInResult | void;
     try {
       if (continuation?.handle) {
         continuation.node = node;
-        const result = await continuation.handle.authorize(async identity => {
+        const signed = await continuation.handle.authorize(async identity => {
           assertNotSignedOut();
           const prepared = await node.prepareOpenKeySignIn(this.openKeySignInOptions(), identity);
           assertNotSignedOut();
@@ -1432,19 +1487,19 @@ export class TinyCloudWeb {
         });
         assertNotSignedOut();
         if (!continuation.pending) throw new Error("OpenKey sign-in was not prepared");
-        await node.signInWithPreparedOpenKey(continuation.pending, async () => result);
+        result = await node.signInWithPreparedOpenKey(continuation.pending, async () => signed);
       } else if (pending) {
-        await node.signInWithPreparedOpenKey(
+        result = await node.signInWithPreparedOpenKey(
           pending.request,
           wireOpenKeyAuthorize(this.config.openkey!.client, { mode: this.config.openkey!.mode ?? "popup" }),
         );
       } else if (this.config.openkey) {
-        await node.signInWithOpenKey(
+        result = await node.signInWithOpenKey(
           wireOpenKeyAuthorize(this.config.openkey.client, { mode: this.config.openkey.mode ?? "popup" }),
           this.openKeySignInOptions(),
         );
       } else {
-        await node.signIn(options);
+        result = await node.signIn(options);
       }
     } finally {
       if (was && was !== node.spaceId && this.signOutCount === signOuts && !this.signOutInFlight) this.uiClient.reset();
@@ -1456,6 +1511,7 @@ export class TinyCloudWeb {
     if (!session) throw new Error("Sign-in completed but no session available");
     // Explicit logout never permits an older tab's persisted proof to satisfy the next sign-in.
     if (!this.signOutCleanupFailed && this.signOutInFlight === 0) this.persistedRestoreBlocked = false;
+    const warnings = result ? result.warnings : undefined;
     return {
       address: session.address,
       walletAddress: session.address,
@@ -1463,6 +1519,7 @@ export class TinyCloudWeb {
       sessionKey: session.sessionKey,
       siwe: session.siwe,
       signature: session.signature,
+      ...(warnings === undefined ? {} : { warnings }),
     };
   };
 
@@ -1624,6 +1681,7 @@ export class TinyCloudWeb {
         }
       })();
       this.signOutOperation = { node, remote, result };
+      if (node) this.signedOutNode = node;
       // A failed node result can precede its cleanup. Repeated calls compare the node's operation identity
       // rather than resolving a new active address and clearing somebody else's session.
       void Promise.all([result, remote]).then(() => {
@@ -1636,6 +1694,15 @@ export class TinyCloudWeb {
       return Promise.reject(error);
     }
   };
+
+  /**
+   * Which nodes stopped accepting the session key at the latest sign-out that ended a session; see
+   * `TinyCloudNode.nodeSignOutStatus()`. Resolves `undefined` before any. `signOut()` does not wait for these node
+   * calls, and only a node's first request, within a 48 KiB keepalive allowance, may outlive a page that unloads
+   * right after it, once the retire code (loaded when the session starts) has loaded.
+   */
+  nodeSignOutStatus = (): Promise<NodeSignOutStatus | undefined> =>
+    this.signedOutNode?.nodeSignOutStatus() ?? Promise.resolve(undefined);
 
   /**
    * Clears the stored session for `address` only while it is the signing-out session (`ownSignature`); a newer
@@ -1680,9 +1747,39 @@ export class TinyCloudWeb {
   address = (): string | undefined => this._node?.address;
   chainId = (): number | undefined => this._node?.session?.chainId;
 
-  /** Returns whether the session or an unexpired runtime grant covers all entries. Never prompts. */
-  hasPermissions(entries: PermissionEntry[]): boolean {
-    return this._node?.hasRuntimePermissions(entries) ?? false;
+  /**
+   * Returns whether the session or an unexpired runtime grant covers all entries. Never prompts. With
+   * `options.onBehalfOf`, only the session's own permissions and the grants approved for that app count; a grant
+   * approved for no app, or for another one, does not. Without it, every grant counts.
+   */
+  hasPermissions(entries: PermissionEntry[], options?: { readonly onBehalfOf?: string }): boolean {
+    const node = this._node;
+    if (!node) return false;
+    const asker = options?.onBehalfOf;
+    return asker === undefined ? node.hasRuntimePermissions(entries) : node.hasRuntimePermissions(entries, { grantCids: this.grantCidsAskedBy(node, asker) });
+  }
+
+  /** The apps each installed grant was approved for, by cid. Per node, so a new sign-in starts empty. */
+  private readonly grantAskers = new WeakMap<TinyCloudNode, Map<string, Set<string>>>();
+
+  private grantAskersOf(node: TinyCloudNode): Map<string, Set<string>> {
+    const known = this.grantAskers.get(node);
+    if (known !== undefined) return known;
+    const created = new Map<string, Set<string>>();
+    this.grantAskers.set(node, created);
+    return created;
+  }
+
+  private grantCidsAskedBy(node: TinyCloudNode, asker: string): string[] {
+    return [...this.grantAskersOf(node)].flatMap(([cid, askers]) => (askers.has(asker) ? [cid] : []));
+  }
+
+  /**
+   * Resolves once the grants kept from before a page reload are active again, or after at most four seconds. Never
+   * rejects. Call it before `hasPermissions` right after a reload, so an app is not under-granted.
+   */
+  async permissionsReady(): Promise<void> {
+    await this.restoredNetworkWork?.grants;
   }
 
   get did(): string { return this.node.did; }
@@ -1927,12 +2024,30 @@ export class TinyCloudWeb {
    * `expiryMs` does not apply to them.
    *
    * `options.onBehalfOf` names the app the permissions are for when this
-   * app asks on its behalf; the prompt names both. `options.allowPromptSuppression: false`
-   * always shows the prompt, ignoring an earlier 30-day opt-out, and offers none.
+   * app asks on its behalf; the prompt names both. With it, only the session's own
+   * permissions and approvals given for that app count as already covering the request,
+   * and a new approval is signed for it even when another app's approval covers the same
+   * access. `options.allowPromptSuppression: false`
+   * always shows the prompt, ignoring an earlier 30-day opt-out, and offers none; a request
+   * to decrypt, create keys or read secrets always does so.
+   *
+   * An approved request that is not elevated (no decrypt or key creation, nothing in the secrets
+   * space, no caveats) is kept with the session and active again after a page reload, with its own
+   * signed expiry. An elevated one is not kept across a reload, except a grant made only of exact keys of the owner's
+   * own secrets (decrypt and/or key creation, any number of keys), which is kept for its signed expiry.
    */
-  async requestPermissions(
+  requestPermissions(
     additional: PermissionEntry[],
     options?: RequestPermissionsOptions,
+  ): Promise<RequestPermissionsResult> {
+    return this.requestPermissionsKeeping(additional, options, true);
+  }
+
+  /** `requestPermissions`; `keep` stores the issued non-elevated grants beside the session. The panel stores its own. */
+  private async requestPermissionsKeeping(
+    additional: PermissionEntry[],
+    options: RequestPermissionsOptions | undefined,
+    keep: boolean,
   ): Promise<RequestPermissionsResult> {
     validateAdditionalPermissions(additional);
 
@@ -1949,42 +2064,110 @@ export class TinyCloudWeb {
     }
 
     const node = await this.ensureNode();
+    const signOuts = this.signOutCount;
+    await this.restoredNetworkWork?.grants;
+    const asker = options?.onBehalfOf;
+    const grantFilter = asker === undefined ? undefined : { grantCids: this.grantCidsAskedBy(node, asker) };
     const hasRuntimePermissions =
       this._testHooks?.hasRuntimePermissions ?? ((requested) =>
-        node.hasRuntimePermissions(requested));
+        grantFilter === undefined ? node.hasRuntimePermissions(requested) : node.hasRuntimePermissions(requested, grantFilter));
     if (hasRuntimePermissions(additional)) {
-      const delegations = node.getRuntimePermissionDelegations(additional);
+      const delegations = grantFilter === undefined
+        ? node.getRuntimePermissionDelegations(additional)
+        : node.getRuntimePermissionDelegations(additional, grantFilter);
       return delegations.length > 0
         ? { approved: true, session: this.session(), delegations }
         : { approved: true, session: this.session() };
     }
 
+    const openKeySigns = this.runtimeSignedByOpenKey();
     const grantPermissions = this._testHooks?.grantPermissions ??
       ((approved: PermissionEntry[], grantOptions?: RequestPermissionsOptions) => {
-        const signMessage = this.runtimeMessageSigner();
+        const signMessage = this.runtimeMessageSigner(openKeySignPresentation(manifest, options?.onBehalfOf));
         const grant = {
           ...(grantOptions?.expiryMs !== undefined ? { expiry: grantOptions.expiryMs } : {}),
           ...(signMessage !== undefined ? { signMessage } : {}),
+          ...(asker !== undefined ? { reuseExisting: false } : {}),
         };
         return node.grantRuntimePermissions(approved, Object.keys(grant).length > 0 ? grant : undefined);
       });
     const result = await requestPermissionsCore(additional, {
       manifest,
       showModal: this._testHooks?.showModal ?? ((options) => showPermissionRequestModal(options, this.uiClient.promptScope)),
+      skipPrompt: openKeySigns && this.openKeyShowsApp(),
       isPromptSuppressed: () => isPermissionPromptSuppressed(manifest),
       suppressPromptFor30Days: () =>
         suppressPermissionPromptFor30Days(manifest),
       grantPermissions,
-    }, options);
-    return result.approved
-      ? {
-          approved: true,
-          session: this.session(),
-          ...(result.delegations !== undefined
-            ? { delegations: result.delegations }
-            : {}),
-        }
-      : result;
+    // An elevated request (decrypt, key creation, secrets) is always asked: the "don't ask again" opt-out never covers it.
+    }, additional.some((entry) => isElevatedResource(entry)) ? { ...options, allowPromptSuppression: false } : options);
+    if (!result.approved) return result;
+    if (result.delegations !== undefined) await this.keepGrants(node, result.delegations, asker, keep, signOuts);
+    return {
+      approved: true,
+      session: this.session(),
+      ...(result.delegations !== undefined ? { delegations: result.delegations } : {}),
+    };
+  }
+
+  /**
+   * Records which app approved each grant. A grant of one of the owner's secrets' own keys is always stored beside the
+   * session (TC-3284); the other non-elevated grants are stored when `keep`.
+   */
+  private async keepGrants(
+    node: TinyCloudNode,
+    delegations: readonly PortableDelegation[],
+    asker: string | undefined,
+    keep: boolean,
+    signOuts: number,
+  ): Promise<void> {
+    if (asker !== undefined) {
+      const askers = this.grantAskersOf(node);
+      for (const delegation of delegations) askers.set(delegation.cid, new Set([...(askers.get(delegation.cid) ?? []), asker]));
+    }
+    const address = node.address;
+    const store = this.runtimeGrantStore();
+    if (store === undefined || address === undefined || this.signOutCount !== signOuts || this.signOutInFlight !== 0) return;
+    const isCurrent = () => this.signOutCount === signOuts && this.signOutInFlight === 0 && this._node === node;
+    await rememberRuntimeGrants(store, address, delegations.filter((grant) => isSecretKeyGrant(grant, address)), isCurrent);
+    if (keep) await rememberAskedGrants(store, address, delegations, asker, isCurrent);
+  }
+
+  /**
+   * The signer a valid `setRuntimePermissionSigner` call bound to the current session, or undefined. A signer bound to a
+   * session that has ended or been replaced is cleared.
+   */
+  private boundRuntimeSigner(): NonNullable<typeof this.runtimeSigner> | undefined {
+    const bound = this.runtimeSigner;
+    if (bound === undefined) return undefined;
+    const current = this._node?.address;
+    const sameSession =
+      bound.signOuts === this.signOutCount &&
+      this.signOutInFlight === 0 &&
+      current !== undefined &&
+      current.toLowerCase() === bound.address.toLowerCase();
+    if (sameSession) return bound;
+    // The session it was set for has ended or been replaced.
+    this.runtimeSigner = undefined;
+    return undefined;
+  }
+
+  /** Whether OpenKey signs the runtime grants: the bound signer declared itself OpenKey, or none is bound and `openkey` is configured. */
+  private runtimeSignedByOpenKey(): boolean {
+    const bound = this.boundRuntimeSigner();
+    return bound !== undefined ? bound.openKey : this.config?.openkey !== undefined;
+  }
+
+  /**
+   * Whether OpenKey's own approval shows the request, so the SDK prompt is skipped: a bound signer that declared itself
+   * OpenKey passes the presentation on; the configured OpenKey client accepts one (`signMessagePresentation` is 1) and
+   * reports its approval screen shows the request (`signMessageShowsApproval` is true, which an external-wallet key is not).
+   * Otherwise the SDK prompt is shown as it is for any other signer, with its 30-day option.
+   */
+  private openKeyShowsApp(): boolean {
+    if (this.boundRuntimeSigner() !== undefined) return true;
+    const client = this.config?.openkey?.client as (OpenKeyAuthorizeTinyCloud & OpenKeyMessageSigner) | undefined;
+    return this._node?.address !== undefined && typeof client?.signMessage === "function" && client.signMessagePresentation === 1 && client.signMessageShowsApproval === true;
   }
 
   /**
@@ -1993,19 +2176,12 @@ export class TinyCloudWeb {
    * `personal_sign`), signing with the keyId of the connected account after connecting the client first when it is not
    * connected; a missing or ambiguous key throws `OpenKeySigningKeyError`. Without an OpenKey client or a session account,
    * undefined: the connected wallet signs. Only `requestPermissions` calls this; sign-in and session setup never do.
+   * `presentation` names the app beside the requesting origin in the OpenKey approval.
    */
-  private runtimeMessageSigner(): ((siwe: string) => Promise<string>) | undefined {
-    const bound = this.runtimeSigner;
+  private runtimeMessageSigner(presentation: OpenKeySignPresentation): ((siwe: string) => Promise<string>) | undefined {
+    const bound = this.boundRuntimeSigner();
     if (bound !== undefined) {
-      const current = this._node?.address;
-      const sameSession =
-        bound.signOuts === this.signOutCount &&
-        this.signOutInFlight === 0 &&
-        current !== undefined &&
-        current.toLowerCase() === bound.address.toLowerCase();
-      if (sameSession) return (siwe) => bound.signer.signMessage(siwe);
-      // The session it was set for has ended or been replaced.
-      this.runtimeSigner = undefined;
+      return (siwe) => bound.openKey ? bound.signer.signMessage(siwe, presentation) : bound.signer.signMessage(siwe);
     }
     const openkey = this.config?.openkey;
     const client = openkey?.client as (OpenKeyAuthorizeTinyCloud & OpenKeyMessageSigner) | undefined;
@@ -2028,7 +2204,10 @@ export class TinyCloudWeb {
     };
     return async (siwe) => {
       const keyId = await resolveOpenKeySigningKey(client, account, mode, assertCurrent);
-      const { signature } = await client.signMessage!({ message: siwe, keyId }, { mode });
+      const { signature } = await client.signMessage!(
+        { message: siwe, keyId, ...(client.signMessagePresentation === 1 ? { presentation } : {}) },
+        { mode },
+      );
       assertCurrent();
       return signature;
     };
@@ -2043,15 +2222,19 @@ export class TinyCloudWeb {
    * Call it after the session is established; it throws without one. It is bound to that session: sign-out, a new
    * sign-in, a restore, or a session for another account clear it. It is never used for sign-in or session setup.
    * Without it, grants sign through the `openkey` client when configured, else the connected wallet.
+   *
+   * `options.openKey: true` declares that the signer signs through OpenKey and passes the `presentation` it receives with
+   * the message on to OpenKey's approval. Permission requests then skip the SDK's own prompt, which OpenKey's approval replaces.
+   * Set it only for a signer that shows its own approval screen for every request; it is read from this call alone.
    */
-  setRuntimePermissionSigner(signer?: RuntimePermissionSigner): void {
+  setRuntimePermissionSigner(signer?: RuntimePermissionSigner, options?: { openKey?: boolean }): void {
     if (signer === undefined) {
       this.runtimeSigner = undefined;
       return;
     }
     const address = this._node?.address;
     if (address === undefined) throw new Error("setRuntimePermissionSigner requires a signed-in session.");
-    this.runtimeSigner = { signer, address, signOuts: this.signOutCount };
+    this.runtimeSigner = { signer, address, signOuts: this.signOutCount, openKey: options?.openKey === true };
   }
 
   /** True when the panel may ask for a permission: a manifest, a page signer and a live session exist. */
@@ -2070,7 +2253,7 @@ export class TinyCloudWeb {
   ): Promise<{ approved: boolean }> {
     await this.restoredNetworkWork?.grants;
     const signOuts = this.signOutCount;
-    const result = await this.requestPermissions(entries, options);
+    const result = await this.requestPermissionsKeeping(entries, options, false);
     const address = this._node?.address;
     const store = this.runtimeGrantStore();
     if (

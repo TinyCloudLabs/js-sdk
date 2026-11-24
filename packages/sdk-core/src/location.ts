@@ -13,6 +13,7 @@ import { bases } from "multiformats/basics";
 import { verifyMessage } from "viem";
 
 import { pkhDid } from "./identity";
+import { PRODUCTION_NODE_ORIGINS } from "./tinycloud-node";
 
 export interface LocationRecordPayload {
   version: 1;
@@ -1334,6 +1335,25 @@ export function exactHttpOrigin(value: string, label: string): string {
     throw new LocationRecordValidationError(`${label} must be an origin without credentials, path, query, or fragment`);
   }
   return url.origin;
+}
+
+function originOrUndefined(value: string | null | undefined): string | undefined {
+  try {
+    return exactHttpOrigin(value ?? "", "node origin");
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * True when `origin` is an exact origin of a known TinyCloud node: one of the
+ * production nodes or one of the recipient-configured `trusted` origins.
+ * Lookalikes, credentials, paths and non-https schemes (loopback http aside,
+ * and only when the recipient configured it) are never known.
+ */
+export function isKnownTinyCloudNode(origin: string, trusted: readonly (string | null | undefined)[] = []): boolean {
+  const exact = originOrUndefined(origin);
+  return exact !== undefined && (PRODUCTION_NODE_ORIGINS.has(exact) || trusted.some((entry) => originOrUndefined(entry) === exact));
 }
 
 function publishedHttpOrigins(record: LocationRecord): string[] {

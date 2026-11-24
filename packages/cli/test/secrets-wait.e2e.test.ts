@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { TinyCloudNode, PrivateKeySigner } from "@tinycloud/node-sdk";
+import { TinyCloudNode, PrivateKeySigner, ownerFullAccess } from "@tinycloud/node-sdk";
 import * as wasm from "@tinycloud/node-sdk-wasm";
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
@@ -232,6 +232,7 @@ describe.skipIf(!NODE_BIN)("tc secrets request/wait against a real local node (S
       autoCreateSpace: true,
       autoBootstrapAccount: false,
       autoDiscoverLocalNode: false,
+      ...ownerFullAccess(),
     });
     // TS-private method; patched so signIn() leaves `secrets` unhosted the way a
     // fresh owner who never used Secret Manager has it. If the method drifts,

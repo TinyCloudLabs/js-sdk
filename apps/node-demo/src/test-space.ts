@@ -4,7 +4,7 @@
  * Used to verify autoCreateSpace behavior.
  */
 
-import { TinyCloudNode } from "@tinycloud/node-sdk";
+import { TinyCloudNode, ownerFullAccess } from "@tinycloud/node-sdk";
 import { Wallet } from "ethers";
 
 const TINYCLOUD_URL = process.env.TINYCLOUD_URL || "http://localhost:8000";
@@ -26,7 +26,7 @@ async function testSpaceCreation() {
   const alice = new TinyCloudNode({
     privateKey,
     host: TINYCLOUD_URL,
-    prefix: "test-space",
+    ...ownerFullAccess("test-space"),
     autoCreateSpace: true,
   });
 
@@ -42,7 +42,7 @@ async function testSpaceCreation() {
   const bob = new TinyCloudNode({
     privateKey: privateKey2,
     host: TINYCLOUD_URL,
-    prefix: "test-space",
+    ...ownerFullAccess("test-space"),
     autoCreateSpace: false,
   });
 

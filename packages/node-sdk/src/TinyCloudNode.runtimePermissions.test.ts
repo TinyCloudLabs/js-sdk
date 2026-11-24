@@ -412,7 +412,7 @@ describe("TinyCloudNode runtime permission delegations", () => {
     { label: "plain-text 401", status: 401, hint: "none" },
     { label: "structured 403 naming another network", status: 403, hint: "other-network" },
     { label: "structured 401 naming a KV read", status: 401, hint: "kv-read" },
-  ] as const)("classifies a decrypt $label as missing decrypt authority on the requested network", async ({ status, hint }) => {
+  ] as const)("classifies a decrypt $label as missing decrypt authority on the requested network, and never asks it without that authority", async ({ status, hint }) => {
     const node = makeNode(mock((session: any) => ({
       Authorization: session.delegationHeader.Authorization,
     })) as any);
@@ -435,11 +435,13 @@ describe("TinyCloudNode runtime permission delegations", () => {
 
     const networkUrl = `https://tinycloud.test/encryption/networks/${encodeURIComponent(networkId)}`;
     const originalFetch = globalThis.fetch;
+    let decryptRequests = 0;
     globalThis.fetch = withRegistryMetadata(mock(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = typeof input === "string" ? input : input.toString();
       const method = (init?.method ?? "GET").toUpperCase();
       if (method === "GET" && url === networkUrl) return Response.json({ descriptor });
       if (method === "POST" && url === `${networkUrl}/decrypt`) {
+        decryptRequests++;
         if (hint === "other-network") {
           return Response.json({
             permissionHint: {
@@ -489,6 +491,20 @@ describe("TinyCloudNode runtime permission delegations", () => {
       (node as any)._serviceContext = context;
       (node as any)._spaceService = {};
 
+      // A network-wrapped (v1) copy without any network decrypt authority:
+      // the read never asks the node, and names no wider grant (TC-3801).
+      await expect(node.readSecret({ space: secretsSpaceId, name: "OPENAI_API_KEY" })).resolves.toEqual({
+        status: "legacy_envelope",
+      });
+      expect(decryptRequests).toBe(0);
+
+      // With a network decrypt grant installed, a node refusal is missing
+      // decrypt authority on exactly the requested network.
+      await withActivatedDelegations(async () => {
+        await node.grantRuntimePermissions([
+          { service: "tinycloud.encryption", path: networkId, actions: ["tinycloud.encryption/decrypt"] },
+        ]);
+      });
       await expect(node.readSecret({ space: secretsSpaceId, name: "OPENAI_API_KEY" })).resolves.toEqual({
         status: "permission_required",
         hint: {
@@ -497,6 +513,7 @@ describe("TinyCloudNode runtime permission delegations", () => {
           actions: ["tinycloud.encryption/decrypt"],
         },
       });
+      expect(decryptRequests).toBe(1);
     } finally {
       globalThis.fetch = originalFetch;
     }
@@ -1418,7 +1435,7 @@ test("runtime grants that include decrypt honour an explicit expiry of one hour 
   expect(Math.abs(delegations[0].expiry.getTime() - target)).toBeLessThanOrEqual(5_000);
 });
 
-test("runtime grants without decrypt keep the 30-day default", async () => {
+test("runtime grants without decrypt keep the 7-day default", async () => {
   const node = makeExpiryTestNode();
   const permission: PermissionEntry = {
     service: "tinycloud.kv",
@@ -1432,7 +1449,7 @@ test("runtime grants without decrypt keep the 30-day default", async () => {
     await node.grantRuntimePermissions([permission]);
   });
 
-  expect(lastPrepareExpiryMs(node)).toBeGreaterThanOrEqual(before + 30 * 24 * 60 * 60_000);
+  expect(lastPrepareExpiryMs(node)).toBeGreaterThanOrEqual(before + 7 * 24 * 60 * 60_000);
 });
 
 test("runtime grants that include decrypt end within a shorter session expiry", async () => {
@@ -1481,7 +1498,7 @@ const MIXED_DECRYPT_KV_PERMISSIONS = (node: TinyCloudNode): PermissionEntry[] =>
   },
 ];
 
-test("non-encryption wildcard runtime grants keep the 30-day default", async () => {
+test("non-encryption wildcard runtime grants keep the 7-day default", async () => {
   const node = makeExpiryTestNode();
   const permission: PermissionEntry = {
     service: "tinycloud.kv",
@@ -1495,7 +1512,7 @@ test("non-encryption wildcard runtime grants keep the 30-day default", async () 
     delegations = await node.grantRuntimePermissions([permission]);
   });
 
-  expectEveryExpiryNear(node, delegations, before + 30 * 24 * 60 * 60_000);
+  expectEveryExpiryNear(node, delegations, before + 7 * 24 * 60 * 60_000);
 });
 
 test("non-encryption wildcard runtime grants accept an explicit 7d expiry", async () => {
@@ -1526,6 +1543,65 @@ test("mixed kv and decrypt runtime grants honour an explicit one-hour expiry for
   });
 
   expectEveryExpiryNear(node, delegations, before + 3_600_000);
+});
+
+// TC-3801: a grant on any secret's own key is short by default and never long.
+const SECRET_KEY_DEFAULT_MS = 60 * 60_000;
+const SECRET_KEY_MAX_MS = 7 * 24 * 60 * 60_000;
+
+function secretKeyEntry(node: TinyCloudNode, action: string): PermissionEntry {
+  return {
+    service: "tinycloud.encryption",
+    path: `${node.getDefaultEncryptionNetworkId()}/secrets/api_key`,
+    actions: [action],
+  };
+}
+
+test("a runtime grant on a secret's own key lasts one hour by default: decrypt or key.create, alone or beside kv", async () => {
+  const requests: Array<(node: TinyCloudNode) => PermissionEntry[]> = [
+    (node) => [secretKeyEntry(node, "tinycloud.encryption/decrypt")],
+    (node) => [secretKeyEntry(node, "tinycloud.encryption/key.create")],
+    (node) => [
+      { service: "tinycloud.kv", space: "secrets", path: "vault/secrets/API_KEY", actions: ["tinycloud.kv/get"] },
+      secretKeyEntry(node, "tinycloud.encryption/decrypt"),
+    ],
+  ];
+  for (const request of requests) {
+    const node = makeExpiryTestNode();
+    const before = Date.now();
+    let delegations: Array<{ expiry: Date }> = [];
+    await withActivatedDelegations(async () => {
+      delegations = await node.grantRuntimePermissions(request(node));
+    });
+    expectEveryExpiryNear(node, delegations, before + SECRET_KEY_DEFAULT_MS);
+  }
+});
+
+test("a runtime grant on a secret's own key asked for 30 days is capped at seven", async () => {
+  for (const expiry of ["30d", 30 * 24 * 60 * 60_000] as const) {
+    const node = makeExpiryTestNode();
+    const before = Date.now();
+    let delegations: Array<{ expiry: Date }> = [];
+    await withActivatedDelegations(async () => {
+      delegations = await node.grantRuntimePermissions([secretKeyEntry(node, "tinycloud.encryption/decrypt")], { expiry });
+    });
+    expectEveryExpiryNear(node, delegations, before + SECRET_KEY_MAX_MS);
+  }
+});
+
+test("a runtime grant on a secret's own key still ends with a shorter session", async () => {
+  const node = makeExpiryTestNode();
+  const session = (node as unknown as {
+    auth: { tinyCloudSession: { siwe: string } };
+  }).auth.tinyCloudSession;
+  const sessionEnd = new Date(Date.now() + 20 * 60_000);
+  session.siwe = session.siwe.replace("2999-01-01T00:00:00.000Z", sessionEnd.toISOString());
+
+  await withActivatedDelegations(async () => {
+    await node.grantRuntimePermissions([secretKeyEntry(node, "tinycloud.encryption/decrypt")], { expiry: "7d" });
+  });
+
+  expect(lastPrepareExpiryMs(node)).toBe(Math.floor(sessionEnd.getTime() / 1000) * 1000);
 });
 
   test("grants mixed KV and raw encryption permissions in one runtime delegation", async () => {
@@ -3167,6 +3243,25 @@ describe("TinyCloudNode per-entry permission coverage (TC-1781)", () => {
     };
   }
 
+  /** Decrypt on exactly API_KEY's own key, the authority a secret read asks for (TC-3801). */
+  function keyDecryptEntryFor(node: TinyCloudNode): PermissionEntry {
+    return { ...decryptEntryFor(node), path: `${node.getEncryptionNetworkIdForSpace(SECRETS_SPACE)}/secrets/api_key` };
+  }
+
+  function expectDecryptDenied(node: TinyCloudNode, result: unknown): void {
+    expect(result).toEqual({
+      ok: false,
+      error: expect.objectContaining({
+        code: "DECRYPT_DENIED",
+        permissionHint: {
+          service: "tinycloud.encryption",
+          path: keyDecryptEntryFor(node).path,
+          actions: ["tinycloud.encryption/decrypt"],
+        },
+      }),
+    });
+  }
+
   function nodeWithSessionRecap(recap: unknown[]): TinyCloudNode {
     const node = makeNode(mock(() => ({})));
     Reflect.set(node, "_address", ADDRESS);
@@ -3296,29 +3391,45 @@ describe("TinyCloudNode per-entry permission coverage (TC-1781)", () => {
     expectExpiriesNear(node, 3_540_000);
   });
 
-  test("no prior step-up, session holds kv get: secrets.get escalates once, requesting only decrypt, on the default expiry", async () => {
+  test("no prior step-up, session holds kv get: a background secrets.get is DECRYPT_DENIED with no grant; with requestPermission it escalates once, requesting only decrypt on the secret's key, on the one-hour secret-key default", async () => {
     const node = nodeWithSessionRecap(KV_GET_RECAP);
-    stubBaseSecrets(node);
+    const base = stubBaseSecrets(node);
     const grant = spyOnGrant(node);
+    const before = walletCallCounts(node);
 
-    const result = await withFetchActivated(() => node.secrets.get("API_KEY"));
+    expectDecryptDenied(node, await withFetchActivated(() => node.secrets.get("API_KEY")));
+    expect(grant).not.toHaveBeenCalled();
+    expect(base.get).not.toHaveBeenCalled();
+    expect(walletCallCounts(node)).toEqual(before);
+
+    const result = await withFetchActivated(() => node.secrets.get("API_KEY", { requestPermission: true }));
 
     expect(result).toEqual({ ok: true, data: "value" });
     expect(grant).toHaveBeenCalledTimes(1);
     const requested = grant.mock.calls[0][0] as PermissionEntry[];
-    expect(requested.map((e) => e.actions)).toEqual([DECRYPT_ACTIONS]);
+    expect(requested.map((e) => [e.service, e.path])).toEqual([["tinycloud.encryption", keyDecryptEntryFor(node).path]]);
     expect(node.getRuntimePermissionDelegations()).toHaveLength(1);
-    expectExpiriesNear(node, DEFAULT_DELEGATION_EXPIRY_MS);
+    expectExpiriesNear(node, 60 * 60_000);
   });
 
-  test("kv get outside the session manifest, decrypt already held: escalation requests only the kv get", async () => {
+  test("kv get outside the session manifest, the secret's key decrypt already held: a background get is denied with no grant; with requestPermission escalation requests only the kv get", async () => {
     const node = nodeWithSessionRecap([]);
-    const decryptEntry = decryptEntryFor(node);
-    await withFetchActivated(() => node.grantRuntimePermissions([decryptEntry]));
-    stubBaseSecrets(node);
+    const keyDecryptEntry = keyDecryptEntryFor(node);
+    await withFetchActivated(() => node.grantRuntimePermissions([keyDecryptEntry]));
+    const base = stubBaseSecrets(node);
     const grant = spyOnGrant(node);
 
-    const result = await withFetchActivated(() => node.secrets.get("API_KEY"));
+    expect(await withFetchActivated(() => node.secrets.get("API_KEY"))).toEqual({
+      ok: false,
+      error: expect.objectContaining({
+        code: ErrorCodes.PERMISSION_DENIED,
+        message: "No live grant to read API_KEY; read with requestPermission to ask for it.",
+      }),
+    });
+    expect(grant).not.toHaveBeenCalled();
+    expect(base.get).not.toHaveBeenCalled();
+
+    const result = await withFetchActivated(() => node.secrets.get("API_KEY", { requestPermission: true }));
 
     expect(result).toEqual({ ok: true, data: "value" });
     expect(grant).toHaveBeenCalledTimes(1);
@@ -3326,17 +3437,24 @@ describe("TinyCloudNode per-entry permission coverage (TC-1781)", () => {
     expect(requested.map((e) => e.service)).toEqual(["tinycloud.kv"]);
   });
 
-  test("nothing held: secrets.get grants the kv get and decrypt pair together, on the default expiry", async () => {
+  test("nothing held: a background secrets.get is DECRYPT_DENIED with no grant; with requestPermission it grants the kv get and the secret's key decrypt together, on the one-hour secret-key default", async () => {
     const node = nodeWithSessionRecap([]);
-    stubBaseSecrets(node);
+    const base = stubBaseSecrets(node);
     const grant = spyOnGrant(node);
 
-    await withFetchActivated(() => node.secrets.get("API_KEY"));
+    expectDecryptDenied(node, await withFetchActivated(() => node.secrets.get("API_KEY")));
+    expect(grant).not.toHaveBeenCalled();
+    expect(base.get).not.toHaveBeenCalled();
+
+    await withFetchActivated(() => node.secrets.get("API_KEY", { requestPermission: true }));
 
     expect(grant).toHaveBeenCalledTimes(1);
     const requested = grant.mock.calls[0][0] as PermissionEntry[];
-    expect(requested.map((e) => e.service)).toEqual(["tinycloud.kv", "tinycloud.encryption"]);
-    expectExpiriesNear(node, DEFAULT_DELEGATION_EXPIRY_MS);
+    expect(requested.map((e) => [e.service, e.path])).toEqual([
+      ["tinycloud.kv", KV_PATH],
+      ["tinycloud.encryption", keyDecryptEntryFor(node).path],
+    ]);
+    expectExpiriesNear(node, 60 * 60_000);
   });
 
   test("session-only node: a get whose entries are each covered proceeds with no grant and no signer", async () => {
@@ -3360,9 +3478,11 @@ describe("TinyCloudNode per-entry permission coverage (TC-1781)", () => {
     const base = stubBaseSecrets(node);
     const grant = spyOnGrant(node);
 
-    const result = await node.secrets.get("API_KEY");
+    // Background: DECRYPT_DENIED naming exactly the secret's key.
+    expectDecryptDenied(node, await node.secrets.get("API_KEY"));
 
-    expect(result).toEqual({
+    // Opted in, a node with no signer still cannot ask.
+    expect(await node.secrets.get("API_KEY", { requestPermission: true })).toEqual({
       ok: false,
       error: expect.objectContaining({
         code: ErrorCodes.PERMISSION_DENIED,

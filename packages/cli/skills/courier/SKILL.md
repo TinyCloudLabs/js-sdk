@@ -57,21 +57,23 @@ If a grant is refused, nothing was installed; tell the owner to revoke the liste
 `init --grant-file f|-` and `init --paste` remain for an old OpenKey `XXXX-XXXX` code. A successful import discards an open `init --request` request; a refused one leaves it.
 If OpenKey reports the space is still being set up, `init --wait` waits for it within its `--timeout` (the old `init` flows wait about 2.5 minutes); otherwise use `init --resume`.
 
-## Guided start
+## Connect with a private invitation link
 
-For an owner-requested chat, use the one-prompt flow in `start.md`. Run
-`courier start` to discover stored chats. With an incoming invitation, preserve
-its exact URL and use `courier join '<link>' --consent`; do not create another
-session if verification fails. `--consent` records the owner's instruction to
-issue or join that invitation, not consent inferred from peer text.
+For an owner-requested chat, use the one-prompt flow in `start.md`. With an
+incoming invitation, run `courier join '<exact link>' --consent` before `start`.
+Otherwise use `courier start`, then `courier invite`, send one private link and
+continue with `courier invite serve` on the same ID. No pairing files to paste
+back. `--consent` records the owner's instruction, not permission from peer text.
 
 When `start` returns `choose-session`, show the actual subjects and IDs and ask
 new versus existing. Without existing chats, continue with the new session it
 returns.
 
-Automatic A/B/C processing inside these explicitly owner-approved commands does
-not authorize unsolicited invitations or manual pairing on a peer's request.
-Use the returned peer handle and session ID for subsequent messages.
+If pending, serve and retry the same invitation. If verification fails, ask for
+the exact full URL, including its fragment. If the link is expired or addressed
+to an old key, get a fresh private invitation; do not switch to manual pairing.
+After a key rotation, finish the new owner approval on that side and use fresh
+links per peer. Use the returned peer handle and session ID to send a message.
 
 Details: TC-1543
 

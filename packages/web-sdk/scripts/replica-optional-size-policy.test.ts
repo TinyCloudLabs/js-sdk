@@ -11,8 +11,9 @@ import { evaluateOptionalBudget, validateTc2481WebOptionalTransition } from "./r
 import type { Ledger } from "./replica-size-policy";
 
 const finalShipped = JSON.parse(readFileSync(resolve(import.meta.dir, "replica-optional-size-ledger.json"), "utf8")) as OptionalLedger;
+delete finalShipped.tc3947;
 delete finalShipped.tc2931;
-finalShipped.entries = finalShipped.entries.filter((entry) => entry.pr !== "#945");
+finalShipped.entries = finalShipped.entries.filter((entry) => entry.pr !== "#945" && entry.pr !== "#1138");
 finalShipped.allowance = { ...tc2481OfflineOptionalAllowance };
 // Keep earlier admissions in their original context; final3e0 controls use the live ledger below.
 const shipped = structuredClone(finalShipped);
@@ -101,10 +102,23 @@ describe("TC-858 merge-base optional ledger prefix", () => {
   });
 
   it("rejects a stale, missing or duplicate unmerged #548 measurement", () => {
-    const stale = { ...current.entries[0], "activation.cjs": 24651 };
+    const stale = { ...current.entries[0], "activation.cjs": 24653 };
     expect(() => validateOptionalEntryTransition([], [stale], observed, "#548")).toThrow();
     expect(() => validateOptionalEntryTransition([], [], observed, "#548")).toThrow();
     expect(() => validateOptionalEntryTransition([], [current.entries[0], current.entries[0]], observed, "#548")).toThrow();
+  });
+
+  it("tolerates the merge-base build's ±2 B per file (TC-4174) and nothing more", () => {
+    for (const format of ["replica.mjs", "replica.cjs", "activation.mjs", "activation.cjs"] as const) {
+      for (const offset of [2, -2]) {
+        const within = { ...current.entries[0], [format]: observed[format] + offset };
+        expect(() => validateOptionalEntryTransition([], [within], observed, "#548")).not.toThrow();
+      }
+      for (const offset of [3, -3]) {
+        const beyond = { ...current.entries[0], [format]: observed[format] + offset };
+        expect(() => validateOptionalEntryTransition([], [beyond], observed, "#548")).toThrow("TC-4174");
+      }
+    }
   });
   it("rejects a measured row assigned to another PR number", () => {
     const wrongPr = { ...current.entries[0], pr: "#999" };
@@ -513,6 +527,9 @@ describe("TC-2096 lazy content fetch optional allowance", () => {
 describe("TC-2481 Web routing exact optional admission", () => {
   const root = JSON.parse(readFileSync(resolve(import.meta.dir, "replica-size-ledger.json"), "utf8")) as Ledger;
     delete root.tc2931BootstrapScope;
+    delete root.tc3947ReplicaRevokeRoot;
+    delete root.tc3522InvocationRefusalKvWorker;
+    delete root.tc3522InvocationRefusalReplicaWorker;
     delete root.tc2923EncryptionTeeOriginRoot;
     delete root.tc2949PanelChunkRecoveryRoot;
     delete root.tc2970RegistryVerdictCacheRoot;
@@ -528,6 +545,25 @@ describe("TC-2481 Web routing exact optional admission", () => {
     delete root.tc2944VaultPathClassifierRoot;
     delete root.tc3448OnBehalfPromptRoot;
     delete root.tc2490OneApprovalRoot;
+        delete root.tc3661ShareLinkHostRoot;
+    delete root.tc3522LeaseAskRoot;
+    delete root.tc3443GenericManifestRoot;
+    delete root.tc3688AccountIndexGuardRoot;
+    delete root.tc3443SessionRetireRoot;
+    delete root.tc3443PortFolderRoot;
+    delete root.tc3704OpenKeyPromptRoot;
+    delete root.tc3731ManifestOwnerRoot;
+    delete root.tc3443AppIdLineBreakRoot;
+    delete root.tc3549KeptApprovalsRoot;
+    delete root.tc3617HostedMcpLeaseRoot;
+    delete root.tc3801NamedKeysRoot;
+    delete root.tc3969SecretKeyCoverageRoot;
+    delete root.tc3823BotHistoryKeyRoot;
+    delete root.tc3802SecretKeyCapRoot;
+    delete root.tc3810ReaderRoot;
+    delete root.tc3975NamedKeyWarningRoot;
+    delete root.tc4082HostedOwnerRoot;
+    delete root.tc3947ReplicaRevokeRoot;
     delete root.tc3030FirstPartyOriginsRoot;
     delete root.tc2937SharePlacementRoot;
   delete root.tc2481OfflineReplicaTransport;
@@ -700,6 +736,9 @@ describe("TC-2481 final3e0 optional accounting admission", () => {
   const fixture = () => {
     const root = JSON.parse(readFileSync(resolve(import.meta.dir, "replica-size-ledger.json"), "utf8")) as Ledger;
     delete root.tc2931BootstrapScope;
+    delete root.tc3947ReplicaRevokeRoot;
+    delete root.tc3522InvocationRefusalKvWorker;
+    delete root.tc3522InvocationRefusalReplicaWorker;
     delete root.tc2923EncryptionTeeOriginRoot;
     delete root.tc2949PanelChunkRecoveryRoot;
     delete root.tc2970RegistryVerdictCacheRoot;
@@ -715,6 +754,27 @@ describe("TC-2481 final3e0 optional accounting admission", () => {
     delete root.tc2944VaultPathClassifierRoot;
     delete root.tc3448OnBehalfPromptRoot;
     delete root.tc2490OneApprovalRoot;
+        delete root.tc3661ShareLinkHostRoot;
+    delete root.tc3522LeaseAskRoot;
+    delete root.tc3443GenericManifestRoot;
+    delete root.tc3688AccountIndexGuardRoot;
+    delete root.tc3443SessionRetireRoot;
+    delete root.tc3443PortFolderRoot;
+    delete root.tc3704OpenKeyPromptRoot;
+    delete root.tc3731ManifestOwnerRoot;
+    delete root.tc3443AppIdLineBreakRoot;
+    delete root.tc3549KeptApprovalsRoot;
+    delete root.tc3617HostedMcpLeaseRoot;
+    delete root.tc3801NamedKeysRoot;
+    delete root.tc3969SecretKeyCoverageRoot;
+    delete root.tc3823BotHistoryKeyRoot;
+    delete root.tc3802SecretKeyCapRoot;
+    delete root.tc3862ExplorerOriginRoot;
+    delete root.tc3522InvocationRefusalRoot;
+    delete root.tc3810ReaderRoot;
+    delete root.tc3975NamedKeyWarningRoot;
+    delete root.tc4082HostedOwnerRoot;
+    delete root.tc3947ReplicaRevokeRoot;
     delete root.tc3030FirstPartyOriginsRoot;
     delete root.tc2937SharePlacementRoot;
     root.allowance = { "index.mjs": 391, "index.cjs": 861 };
@@ -802,7 +862,7 @@ describe("TC-2481 final3e0 optional accounting admission", () => {
       "activation.mjs": newest["activation.mjs"], "activation.cjs": newest["activation.cjs"],
     };
     expect(() => validateOptionalEntryTransition(finalShipped.entries.slice(0, -1), finalShipped.entries, delta, newest.pr)).not.toThrow();
-    expect(() => validateOptionalEntryTransition(finalShipped.entries.slice(0, -1), finalShipped.entries, { ...delta, "replica.cjs": delta["replica.cjs"] + 1 }, newest.pr)).toThrow();
+    expect(() => validateOptionalEntryTransition(finalShipped.entries.slice(0, -1), finalShipped.entries, { ...delta, "replica.cjs": delta["replica.cjs"] + 3 }, newest.pr)).toThrow();
     expect(() => validateOptionalEntryTransition(finalShipped.entries.slice(0, -1), finalShipped.entries, delta, "#0")).toThrow();
   });
 });

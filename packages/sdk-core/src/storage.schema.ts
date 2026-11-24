@@ -101,6 +101,12 @@ export const PersistedSessionDataSchema = z.object({
    * existed — those restore and lazily re-resolve their hosts.
    */
   tinycloudHosts: z.array(z.string()).optional(),
+  /**
+   * Every host this session's delegation was posted to. Sign-out retires the
+   * session key on each of them (TC-3443). Absent for sessions persisted
+   * before this field existed.
+   */
+  activatedHosts: z.array(z.string()).optional(),
   /** Last hosting observation for the primary space on the persisted host. */
   spaceHosting: z.enum(["hosted", "not-hosted"]).optional(),
   /**

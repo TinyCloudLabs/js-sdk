@@ -1,8 +1,9 @@
-import { approvedTc2931Optional, tc2931OptionalAllowance, validateTc2931OptionalTransition } from "./replica-optional-size-policy";
+import { approvedTc2931Optional, approvedTc3947Optional, tc2931OptionalAllowance, tc3947OptionalAllowance, validateTc2931OptionalTransition, validateTc3947OptionalTransition } from "./replica-optional-size-policy";
 import { validateTc2931BootstrapScopeTransition } from "./replica-size-policy";
 import { validateTc2923EncryptionTeeOriginRootTransition } from "./replica-size-policy";
 import { validateTc2934RequestedAccountRootTransition } from "./replica-size-policy";
 import { validateTc2936RestoreCommitRootTransition } from "./replica-size-policy";
+import { validateTc3522InvocationRefusalRootTransition, validateTc3522InvocationRefusalWorkerTransition, validateTc3862ExplorerOriginRootTransition } from "./replica-size-policy";
 import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { cp, mkdtemp, open, readFile, rm } from "node:fs/promises";
@@ -139,7 +140,7 @@ if (ciCorrection) {
   console.log(`Current size toolchain: Bun ${bun}; ${rustc}`);
 }
 validateOptionalLedger(optionalLedger, ledger.fixRequiredRatchet !== undefined, ciCorrection !== undefined,
-  ledger.hardeningRatchet !== undefined, ledger.tc1413Ratchet !== undefined, ledger.tc1432Ratchet !== undefined, ledger.tc1475Ratchet !== undefined, ledger.masterDriftRatchet !== undefined, ledger.tc1789Ratchet !== undefined, ledger.tc2043SyncScopeRatchet !== undefined, ledger.tc1888PurgeLocalCopyRatchet !== undefined, ledger.tc2096RepairBackoffRatchet !== undefined, ledger.tc2096LazyContentRatchet !== undefined, ledger.tc2481WebRouting !== undefined, ledger.tc2481OfflineReplicaTransport, ledger.tc2931BootstrapScope);
+  ledger.hardeningRatchet !== undefined, ledger.tc1413Ratchet !== undefined, ledger.tc1432Ratchet !== undefined, ledger.tc1475Ratchet !== undefined, ledger.masterDriftRatchet !== undefined, ledger.tc1789Ratchet !== undefined, ledger.tc2043SyncScopeRatchet !== undefined, ledger.tc1888PurgeLocalCopyRatchet !== undefined, ledger.tc2096RepairBackoffRatchet !== undefined, ledger.tc2096LazyContentRatchet !== undefined, ledger.tc2481WebRouting !== undefined, ledger.tc2481OfflineReplicaTransport, ledger.tc2931BootstrapScope, ledger.tc3947ReplicaRevokeRoot);
 const optionalCurrent = await measureReplicaOptionalLoaded(distDir);
 for (const reading of evaluateOptionalBudget(optionalLedger, ledger, optionalCurrent)) {
   const { format, raw, effective, direct, ceiling } = reading;
@@ -223,6 +224,27 @@ if (prBaseSha) {
     throw new Error(`Unable to read base ${baseLedgerPath}: ${baseLedgerResult.stderr.trim()}`);
   }
   validateLedger(baseLedger, true);
+  const invocationRefusalRoot = ledger.tc3522InvocationRefusalRoot;
+  validateTc3522InvocationRefusalRootTransition(baseLedger.tc3522InvocationRefusalRoot, invocationRefusalRoot);
+  if (invocationRefusalRoot !== undefined && baseLedger.tc3522InvocationRefusalRoot === undefined &&
+      (baseLedger.tc3862ExplorerOriginRoot === undefined || !hasAncestor(repoRoot, invocationRefusalRoot.sourceCommits.at(-1)!))) {
+    console.error("The TC-3522 invocation-refusal admission requires the merged TC-3862 row and its measured source ancestor.");
+    failed = true;
+  }
+  validateTc3522InvocationRefusalWorkerTransition(baseLedger, ledger);
+  const invocationRefusalWorker = ledger.tc3522InvocationRefusalKvWorker;
+  if (invocationRefusalWorker !== undefined && baseLedger.tc3522InvocationRefusalKvWorker === undefined &&
+      (baseLedger.tc3947ReplicaRevokeRoot === undefined || !hasAncestor(repoRoot, invocationRefusalWorker.sourceCommits.at(-1)!))) {
+    console.error("The TC-3522 worker admissions require the merged TC-3947 worker ceilings and their measured source ancestor.");
+    failed = true;
+  }
+  const explorerOriginRoot = ledger.tc3862ExplorerOriginRoot;
+  validateTc3862ExplorerOriginRootTransition(baseLedger.tc3862ExplorerOriginRoot, explorerOriginRoot);
+  if (explorerOriginRoot !== undefined && baseLedger.tc3862ExplorerOriginRoot === undefined &&
+      (baseLedger.tc3802SecretKeyCapRoot === undefined || !hasAncestor(repoRoot, explorerOriginRoot.sourceCommits.at(-1)!))) {
+    console.error("The TC-3862 admission requires the merged TC-3802 row and its measured source ancestor.");
+    failed = true;
+  }
   validateTc2934RequestedAccountRootTransition(baseLedger.tc2934RequestedAccountRoot, ledger.tc2934RequestedAccountRoot);
   validateTc2936RestoreCommitRootTransition(baseLedger.tc2936RestoreCommitRoot, ledger.tc2936RestoreCommitRoot);
   validateTc2931BootstrapScopeTransition(baseLedger.tc2931BootstrapScope, ledger.tc2931BootstrapScope);
@@ -736,9 +758,10 @@ if (prBaseSha) {
   }
   validateOptionalLedger(baseOptional, baseLedger.fixRequiredRatchet !== undefined,
     baseLedger.canonicalToolchainCorrection !== undefined, baseLedger.hardeningRatchet !== undefined,
-    baseLedger.tc1413Ratchet !== undefined, baseLedger.tc1432Ratchet !== undefined, baseLedger.tc1475Ratchet !== undefined, baseLedger.masterDriftRatchet !== undefined, baseLedger.tc1789Ratchet !== undefined, baseLedger.tc2043SyncScopeRatchet !== undefined, baseLedger.tc1888PurgeLocalCopyRatchet !== undefined, baseLedger.tc2096RepairBackoffRatchet !== undefined, baseLedger.tc2096LazyContentRatchet !== undefined, baseLedger.tc2481WebRouting !== undefined, baseLedger.tc2481OfflineReplicaTransport, baseLedger.tc2931BootstrapScope);
+    baseLedger.tc1413Ratchet !== undefined, baseLedger.tc1432Ratchet !== undefined, baseLedger.tc1475Ratchet !== undefined, baseLedger.masterDriftRatchet !== undefined, baseLedger.tc1789Ratchet !== undefined, baseLedger.tc2043SyncScopeRatchet !== undefined, baseLedger.tc1888PurgeLocalCopyRatchet !== undefined, baseLedger.tc2096RepairBackoffRatchet !== undefined, baseLedger.tc2096LazyContentRatchet !== undefined, baseLedger.tc2481WebRouting !== undefined, baseLedger.tc2481OfflineReplicaTransport, baseLedger.tc2931BootstrapScope, baseLedger.tc3947ReplicaRevokeRoot);
   validateTc2481WebOptionalTransition(baseOptional.tc2481WebRouting, optionalLedger.tc2481WebRouting);
   validateTc2931OptionalTransition(baseOptional.tc2931, optionalLedger.tc2931);
+  validateTc3947OptionalTransition(baseOptional.tc3947, optionalLedger.tc3947);
   validateIntroducedOptionalSources(baseOptional, optionalLedger);
   // Consistency check: each merged row's pin is on the base or was landed by it (see pinLandedOn).
   for (const { row, pin } of mergedPinsNotLandedOn(repoRoot, baseLedger, baseOptional, prBaseSha)) {
@@ -866,8 +889,13 @@ if (prBaseSha) {
       JSON.stringify(optionalLedger.tc2931) === JSON.stringify(approvedTc2931Optional) &&
       ledger.tc2931BootstrapScope !== undefined &&
       optionalFormats.every((format) => optionalLedger.allowance[format] === tc2931OptionalAllowance[format]);
+    const tc3947Transition = baseLedger.tc3617HostedMcpLeaseRoot !== undefined &&
+      baseOptional.tc3947 === undefined && optionalLedger.tc3947 !== undefined &&
+      JSON.stringify(optionalLedger.tc3947) === JSON.stringify(approvedTc3947Optional) &&
+      ledger.tc3947ReplicaRevokeRoot !== undefined &&
+      optionalFormats.every((format) => optionalLedger.allowance[format] === tc3947OptionalAllowance[format]);
     if (!pairedTransition && !measurementCorrection && !reviewedFixTransition && !ciCorrectionTransition &&
-        !compactFixTransition && !hardeningTransition && !tc1413Transition && !tc1432Transition && !tc1475Transition && !masterDriftTransition && !tc1789Transition && !tc2043Transition && !tc1888Transition && !tc2096Transition && !tc2096LazyTransition && !tc2481WebTransition && !tc2481OfflineTransition && !tc2931Transition) {
+        !compactFixTransition && !hardeningTransition && !tc1413Transition && !tc1432Transition && !tc1475Transition && !masterDriftTransition && !tc1789Transition && !tc2043Transition && !tc1888Transition && !tc2096Transition && !tc2096LazyTransition && !tc2481WebTransition && !tc2481OfflineTransition && !tc2931Transition && !tc3947Transition) {
       console.error(`${baseOptionalPath}: optional allowance may increase only with an exact reviewed relocation, toolchain correction, fix-required source row, hardening ratchet, TC-1413 ratchet, TC-1432 ratchet, TC-1475 ratchet, master-drift ratchet, sdk-services 3.3.1 pin ratchet, TC-2043 syncScope ratchet, TC-1888 sign-out ratchet, TC-2096 repair-backoff ratchet, TC-2096 lazy content fetch ratchet, TC-2481 Web routing ratchet or final TC-2481 cold-routing and replica admission.`);
       failed = true;
     }

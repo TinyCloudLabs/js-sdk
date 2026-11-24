@@ -2,7 +2,7 @@
 
 The profile is local session state. The OpenKey signing identity owns the data. Reuse the identity the owner already uses; do not create a different account or reconnect integrations to obtain agent access. Every login below requests an explicit manifest, so the owner sees and approves exactly what this profile may do.
 
-Keep the user's existing profiles: a profile may hold another app's session (for example a TinyChat agent's `applications` session), and logging it in again for a different purpose would drop that authority. Reuse the onboarding profile from `tinycloud onboard`; ask for more with `tinycloud auth request --cap SPEC --grant --no-popup` (or `--manifest FILE --grant --no-popup`), and send the owner the approval link it prints with one line on what it allows. The command finishes on its own once they approve.
+Keep the user's existing profiles: a profile may hold another app's session (for example a TinyCloud One agent's `applications` session), and logging it in again for a different purpose would drop that authority. Reuse the onboarding profile from `tinycloud onboard`; ask for more with `tinycloud auth request --cap SPEC --grant --no-popup` (or `--manifest FILE --grant --no-popup`), and send the owner the approval link it prints with one line on what it allows. The command finishes on its own once they approve.
 
 ## Sign in with an approval link (default)
 

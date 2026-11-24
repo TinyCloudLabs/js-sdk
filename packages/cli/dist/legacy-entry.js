@@ -14,11 +14,11 @@ var __export = (target, all) => {
   for (var name in all)
     __defProp(target, name, { get: all[name], enumerable: true });
 };
-var __copyProps = (to, from5, except, desc) => {
-  if (from5 && typeof from5 === "object" || typeof from5 === "function") {
-    for (let key of __getOwnPropNames(from5))
+var __copyProps = (to, from6, except, desc) => {
+  if (from6 && typeof from6 === "object" || typeof from6 === "function") {
+    for (let key of __getOwnPropNames(from6))
       if (!__hasOwnProp.call(to, key) && key !== except)
-        __defProp(to, key, { get: () => from5[key], enumerable: !(desc = __getOwnPropDesc(from5, key)) || desc.enumerable });
+        __defProp(to, key, { get: () => from6[key], enumerable: !(desc = __getOwnPropDesc(from6, key)) || desc.enumerable });
   }
   return to;
 };
@@ -37,7 +37,7 @@ import {
   tinycloudConfigPath,
   tinycloudHomePath
 } from "@tinycloud/operations/state";
-var CONFIG_DIR, PROFILES_DIR, CONFIG_FILE, DEFAULT_HOST, DEFAULT_OPENKEY_HOST, DEFAULT_OPENKEY_DEVICE_API_HOST, DEFAULT_SHARE_ORIGIN, DEFAULT_PROFILE, DEFAULT_CHAIN_ID, PROFILE_COMMIT_LOCK_TIMEOUT_MS, ExitCode, OPENKEY_SPACE_SETUP_RETRY_HINT;
+var CONFIG_DIR, PROFILES_DIR, CONFIG_FILE, DEFAULT_HOST, DEFAULT_OPENKEY_HOST, DEFAULT_OPENKEY_DEVICE_API_HOST, DEFAULT_SHARE_ORIGIN, DEFAULT_PROFILE, DEFAULT_CHAIN_ID, CLI_DEFAULT_SESSION_EXPIRY_DAYS, CLI_DEFAULT_SESSION_EXPIRY_MS, PROFILE_COMMIT_LOCK_TIMEOUT_MS, ExitCode, OPENKEY_SPACE_SETUP_RETRY_HINT;
 var init_constants = __esm({
   "src/config/constants.ts"() {
     "use strict";
@@ -50,6 +50,8 @@ var init_constants = __esm({
     DEFAULT_SHARE_ORIGIN = "https://share.tinycloud.xyz";
     DEFAULT_PROFILE = "default";
     DEFAULT_CHAIN_ID = 1;
+    CLI_DEFAULT_SESSION_EXPIRY_DAYS = 30;
+    CLI_DEFAULT_SESSION_EXPIRY_MS = CLI_DEFAULT_SESSION_EXPIRY_DAYS * 24 * 60 * 60 * 1e3;
     PROFILE_COMMIT_LOCK_TIMEOUT_MS = 45e3;
     ExitCode = {
       SUCCESS: 0,
@@ -64,6 +66,8 @@ var init_constants = __esm({
       PENDING: 8,
       /** A write was refused because the owner's TinyCloud storage is full. */
       STORAGE_FULL: 10,
+      /** A secrets write was refused because the node has no per-secret keys (`NAMED_KEYS_UNSUPPORTED`); nothing was saved. */
+      NAMED_KEYS_UNSUPPORTED: 11,
       /** Interrupted by SIGINT/SIGTERM (`CANCELLED`). */
       CANCELLED: 130
     };
@@ -355,11 +359,11 @@ function redactDiagnosticLog(input) {
     }
     if (Array.isArray(value4)) return value4.map(redactValue);
     if (value4 && typeof value4 === "object") {
-      const record3 = value4;
-      if (typeof record3.localRedactions === "number" && Number.isFinite(record3.localRedactions)) {
-        count += Math.max(0, record3.localRedactions);
+      const record4 = value4;
+      if (typeof record4.localRedactions === "number" && Number.isFinite(record4.localRedactions)) {
+        count += Math.max(0, record4.localRedactions);
       }
-      return Object.fromEntries(Object.entries(record3).map(([key, child]) => [key, redactValue(child)]));
+      return Object.fromEntries(Object.entries(record4).map(([key, child]) => [key, redactValue(child)]));
     }
     return value4;
   };
@@ -388,9 +392,9 @@ function redactArgs(args) {
       count += 1;
       continue;
     }
-    const equals7 = arg.indexOf("=");
-    const flag = equals7 < 0 ? arg : arg.slice(0, equals7);
-    if (equals7 >= 0) {
+    const equals8 = arg.indexOf("=");
+    const flag = equals8 < 0 ? arg : arg.slice(0, equals8);
+    if (equals8 >= 0) {
       values.push(`${flag}=[REDACTED]`);
       count += 1;
       continue;
@@ -624,8 +628,8 @@ function outputJson(data) {
   process.stdout.write(safeJsonStringify(data, 2) + "\n");
 }
 function warningLine(warnings) {
-  const cached = warnings.some(({ code: code5, reason }) => code5 === "REGISTRY_UNAVAILABLE" && reason === "using_cached_settings");
-  const skipped = warnings.filter(({ code: code5 }) => code5 !== "REGISTRY_UNAVAILABLE");
+  const cached = warnings.some(({ code: code6, reason }) => code6 === "REGISTRY_UNAVAILABLE" && reason === "using_cached_settings");
+  const skipped = warnings.filter(({ code: code6 }) => code6 !== "REGISTRY_UNAVAILABLE");
   const parts = [];
   if (cached) parts.push("Couldn't reach your storage settings, so this used the copy saved on this computer in the last hour.");
   if (skipped.length > 0) {
@@ -635,11 +639,11 @@ function warningLine(warnings) {
   }
   return parts.join(" ");
 }
-function outputError(code5, message, hint, details = {}) {
+function outputError(code6, message, hint, details = {}) {
   const { meta, warnings = [], setup, recovery, progress } = details;
   if (!shouldOutputJson()) {
     process.stderr.write(
-      `${theme.error("\u2717")} ${theme.label(safeInline(code5))}: ${safeBlock(message)}
+      `${theme.error("\u2717")} ${theme.label(safeInline(code6))}: ${safeBlock(message)}
 `
     );
     if (hint) {
@@ -652,7 +656,7 @@ function outputError(code5, message, hint, details = {}) {
 `);
   } else {
     const payload = {
-      error: { code: code5, message }
+      error: { code: code6, message }
     };
     if (hint) payload.error.hint = hint;
     if (recovery) payload.error.recovery = recovery;
@@ -674,11 +678,11 @@ function operationWarnings(value4) {
   if (!Array.isArray(value4)) return [];
   return value4.flatMap((warning) => {
     if (warning === null || typeof warning !== "object") return [];
-    const { code: code5, reason, grantCid } = warning;
-    if (typeof code5 !== "string" || !WARNING_CODE.test(code5) || typeof reason !== "string" || !WARNING_REASON.test(reason)) {
+    const { code: code6, reason, grantCid } = warning;
+    if (typeof code6 !== "string" || !WARNING_CODE.test(code6) || typeof reason !== "string" || !WARNING_REASON.test(reason)) {
       return [];
     }
-    return [{ code: code5, reason, ...typeof grantCid === "string" && DELEGATION_CID.test(grantCid) ? { grantCid } : {} }];
+    return [{ code: code6, reason, ...typeof grantCid === "string" && DELEGATION_CID.test(grantCid) ? { grantCid } : {} }];
   });
 }
 function isInteractive() {
@@ -770,20 +774,20 @@ var init_formatter = __esm({
 function storageRejection(error) {
   let node = error;
   for (let depth = 0; depth < MAX_CAUSE_DEPTH && typeof node === "object" && node !== null; depth += 1) {
-    const record3 = node;
-    let code5;
-    if (record3.code === "STORAGE_QUOTA_EXCEEDED" || record3.code === "STORAGE_LIMIT_REACHED") {
-      code5 = record3.code;
-    } else if (record3.code !== void 0) {
+    const record4 = node;
+    let code6;
+    if (record4.code === "STORAGE_QUOTA_EXCEEDED" || record4.code === "STORAGE_LIMIT_REACHED") {
+      code6 = record4.code;
+    } else if (record4.code !== void 0) {
       return void 0;
-    } else if (isStorageStatus(record3)) {
-      code5 = storageCodeFromText(record3.message);
+    } else if (isStorageStatus(record4)) {
+      code6 = storageCodeFromText(record4.message);
     }
-    if (code5) {
-      const account = accountTotals(record3) ?? accountTotals(record3.meta) ?? accountTotals(record3.metadata);
-      return account ? { code: code5, account } : { code: code5 };
+    if (code6) {
+      const account = accountTotals(record4) ?? accountTotals(record4.meta) ?? accountTotals(record4.metadata);
+      return account ? { code: code6, account } : { code: code6 };
     }
-    node = record3.cause;
+    node = record4.cause;
   }
   return void 0;
 }
@@ -817,11 +821,11 @@ function storageCodeFromText(message) {
   }
   return void 0;
 }
-function isStorageStatus(record3) {
-  const meta = "meta" in record3 && typeof record3.meta === "object" && record3.meta !== null ? record3.meta : {};
+function isStorageStatus(record4) {
+  const meta = "meta" in record4 && typeof record4.meta === "object" && record4.meta !== null ? record4.meta : {};
   const statuses = [
-    "status" in record3 ? record3.status : void 0,
-    "statusCode" in record3 ? record3.statusCode : void 0,
+    "status" in record4 ? record4.status : void 0,
+    "statusCode" in record4 ? record4.statusCode : void 0,
     "status" in meta ? meta.status : void 0
   ];
   return statuses.some((value4) => value4 === 402 || value4 === 413);
@@ -859,7 +863,7 @@ import {
   isValidSecretName,
   SECRET_REQUEST_MAX_NAMES
 } from "@tinycloud/operations/secret-request";
-import { authorizationVerdictOf, parseCapabilityResource, SERVICE_LONG_TO_SHORT, validatedCapabilityOf } from "@tinycloud/sdk-core";
+import { authorizationVerdictOf, NAMED_KEYS_CHECK_FAILED, NAMED_KEYS_CHECK_FAILED_MESSAGE, NAMED_KEYS_UNSUPPORTED, NAMED_KEYS_UNSUPPORTED_MESSAGE, parseCapabilityResource, SERVICE_LONG_TO_SHORT, validatedCapabilityOf } from "@tinycloud/sdk-core";
 import { routingFailure } from "@tinycloud/sdk-services";
 function setActiveProfileName(name) {
   activeProfileName = name;
@@ -882,6 +886,12 @@ function registryUnavailableError(error) {
 }
 function cliErrorFromService(error, message = error.message) {
   if (error instanceof CLIError) return error;
+  if (error.code === NAMED_KEYS_UNSUPPORTED) {
+    return new CLIError(NAMED_KEYS_UNSUPPORTED, NAMED_KEYS_UNSUPPORTED_MESSAGE, ExitCode.NAMED_KEYS_UNSUPPORTED);
+  }
+  if (error.code === NAMED_KEYS_CHECK_FAILED) {
+    return new CLIError(NAMED_KEYS_CHECK_FAILED, NAMED_KEYS_CHECK_FAILED_MESSAGE, ExitCode.NETWORK_ERROR);
+  }
   const nodeRetry = nodeRetryError(error);
   if (nodeRetry) return nodeRetry;
   const storageFull = storageFullError(error);
@@ -913,22 +923,22 @@ function cliErrorFromService(error, message = error.message) {
 }
 function nodeRetryError(error) {
   if (typeof error !== "object" || error === null) return void 0;
-  const { code: code5, meta, metadata } = error;
-  if (code5 !== "NODE_BUSY" && code5 !== "REQUEST_TIMEOUT" && code5 !== "OUTCOME_UNKNOWN") return void 0;
+  const { code: code6, meta, metadata } = error;
+  if (code6 !== "NODE_BUSY" && code6 !== "REQUEST_TIMEOUT" && code6 !== "OUTCOME_UNKNOWN") return void 0;
   const details = typeof meta === "object" && meta !== null ? meta : typeof metadata === "object" && metadata !== null ? metadata : {};
   const retryAfterMs = details.retryAfterMs;
   const wait2 = typeof retryAfterMs === "number" && Number.isFinite(retryAfterMs) && retryAfterMs >= 0 ? `in ${Math.max(1, Math.ceil(retryAfterMs / 1e3))} s` : "shortly";
-  if (code5 === "OUTCOME_UNKNOWN") {
+  if (code6 === "OUTCOME_UNKNOWN") {
     return new CLIError(
-      code5,
+      code6,
       "Outcome unknown: the node may have applied the write. Check before retrying.",
       ExitCode.NODE_ERROR,
       { ...details, hint: "Read the data back before running the command again; repeating a write that already applied can duplicate it." }
     );
   }
   return new CLIError(
-    code5,
-    code5 === "NODE_BUSY" ? `The node is busy, try again ${wait2}.` : `The node timed out before applying anything, try again ${wait2}.`,
+    code6,
+    code6 === "NODE_BUSY" ? `The node is busy, try again ${wait2}.` : `The node timed out before applying anything, try again ${wait2}.`,
     ExitCode.NODE_ERROR,
     details
   );
@@ -1153,9 +1163,9 @@ var init_errors = __esm({
     init_warnings();
     GRANT_REVOKED_EXIT_CODE = ExitCode.PERMISSION_DENIED;
     CLIError = class extends Error {
-      constructor(code5, message, exitCode = ExitCode.ERROR, metadata) {
+      constructor(code6, message, exitCode = ExitCode.ERROR, metadata) {
         super(message);
-        this.code = code5;
+        this.code = code6;
         this.exitCode = exitCode;
         this.metadata = metadata;
         this.name = "CLIError";
@@ -1696,12 +1706,12 @@ var init_md = __esm({
       _cloneInto(to) {
         to || (to = new this.constructor());
         to.set(...this.get());
-        const { blockLen, buffer, length: length5, finished, destroyed, pos } = this;
+        const { blockLen, buffer, length: length6, finished, destroyed, pos } = this;
         to.destroyed = destroyed;
         to.finished = finished;
-        to.length = length5;
+        to.length = length6;
         to.pos = pos;
-        if (length5 % blockLen)
+        if (length6 % blockLen)
           to.buffer.set(buffer);
         return to;
       }
@@ -2213,8 +2223,8 @@ var init_hmac = __esm({
 });
 
 // ../sdk-core/src/manifest.ts
-import { resolveSecretPath, SECRET_NAME_RE, parseNetworkId } from "@tinycloud/sdk-services";
-import { parseEncryptionResource } from "@tinycloud/sdk-services/encryption/resource";
+import { isReservedSecretSpaceKeyPath, resolveSecretPath, SECRET_NAME_RE, parseNetworkId, parseSecretCatalogKey } from "@tinycloud/sdk-services";
+import { formatKeyResource, parseEncryptionResource } from "@tinycloud/sdk-services/encryption/resource";
 function parseExpiry(duration) {
   if (typeof duration !== "string" || duration.length === 0) {
     throw new ManifestValidationError(
@@ -2258,8 +2268,9 @@ function expandEncryptionPermissionEntry(entry) {
     );
   }
   const sharePrefix = entry.path.endsWith("/share/");
-  if (entry.path.includes("/") && !sharePrefix) {
-    throw new ManifestValidationError("named keys go in manifest.keys");
+  const slash = entry.path.indexOf("/");
+  if (slash !== -1 && !sharePrefix) {
+    return [expandSecretKeyPermissionEntry(entry, entry.path.slice(0, slash), entry.path.slice(slash + 1))];
   }
   try {
     const network = parseNetworkId(sharePrefix ? entry.path.slice(0, -"/share/".length) : entry.path);
@@ -2312,6 +2323,53 @@ function expandEncryptionPermissionEntry(entry) {
       ...entry.description !== void 0 ? { description: entry.description } : {}
     }
   ];
+}
+function isSecretKeyPath(keyPath) {
+  const segments = keyPath.split("/");
+  const name = segments[segments.length - 1];
+  if (segments.length < 2 || segments[0] !== "secrets" || !SECRET_KEY_NAME_SEGMENT.test(name)) return false;
+  if (segments.some((segment) => segment.length > 64)) return false;
+  return parseSecretCatalogKey([...segments.slice(1, -1), name.toUpperCase()].join("/")) !== void 0;
+}
+function expandSecretKeyPermissionEntry(entry, networkUrn, keyPath) {
+  if (!isReservedSecretSpaceKeyPath(keyPath) && !isSecretKeyPath(keyPath)) {
+    if (keyPath === "secrets" || keyPath.startsWith("secrets/")) {
+      throw new ManifestValidationError(
+        "secret keys must be exact: secrets/<name> or secrets/scoped/<scope>/<name>, with the name in lower case"
+      );
+    }
+    throw new ManifestValidationError("named keys go in manifest.keys");
+  }
+  let resource;
+  try {
+    const network = parseEncryptionResource(networkUrn);
+    if (network.kind !== "network" || network.network !== "default") throw new Error("not the default network");
+    resource = formatKeyResource(network.networkId, keyPath);
+  } catch {
+    throw new ManifestValidationError("secret key entries require the owner's default network");
+  }
+  const actions = [];
+  for (const action of entry.actions) {
+    const full = action.startsWith("tinycloud.encryption/") ? action : `tinycloud.encryption/${action}`;
+    if (full !== "tinycloud.encryption/decrypt" && full !== "tinycloud.encryption/key.create") {
+      throw new ManifestValidationError(
+        `unknown secret key action ${JSON.stringify(action)}; expected decrypt or key.create`
+      );
+    }
+    if (!actions.includes(full)) actions.push(full);
+  }
+  if (actions.length === 0) {
+    throw new ManifestValidationError("secret key entries need decrypt or key.create");
+  }
+  return {
+    service: ENCRYPTION_PERMISSION_SERVICE,
+    space: ENCRYPTION_MANIFEST_SPACE,
+    path: resource,
+    actions,
+    skipPrefix: true,
+    ...entry.expiry !== void 0 ? { expiry: entry.expiry } : {},
+    ...entry.description !== void 0 ? { description: entry.description } : {}
+  };
 }
 function applyPrefix(prefix, path, skipPrefix) {
   if (skipPrefix) {
@@ -2708,18 +2766,18 @@ function expandVaultPermissionEntry(entry) {
   const byBase = /* @__PURE__ */ new Map();
   for (const action of entry.actions) {
     const expansion = vaultActionExpansion(action);
-    for (const base5 of expansion.bases) {
-      const actions = byBase.get(base5) ?? [];
+    for (const base6 of expansion.bases) {
+      const actions = byBase.get(base6) ?? [];
       if (!actions.includes(expansion.action)) {
         actions.push(expansion.action);
       }
-      byBase.set(base5, actions);
+      byBase.set(base6, actions);
     }
   }
-  return [...byBase.entries()].map(([base5, actions]) => ({
+  return [...byBase.entries()].map(([base6, actions]) => ({
     ...entry,
     service: "tinycloud.kv",
-    path: vaultKVPath(base5, entry.path),
+    path: vaultKVPath(base6, entry.path),
     actions,
     skipPrefix: true
   }));
@@ -2762,9 +2820,9 @@ function normalizeVaultAction(action) {
   }
   return action;
 }
-function vaultKVPath(base5, path) {
+function vaultKVPath(base6, path) {
   const normalized = path.startsWith("/") ? path.slice(1) : path;
-  return `${base5}/${normalized}`;
+  return `${base6}/${normalized}`;
 }
 function cloneResourceCapability(entry) {
   return {
@@ -2818,7 +2876,7 @@ function withCapabilitiesReadForSpaces(resources) {
     ...[...spaces].map(capabilitiesReadPermission)
   ]);
 }
-var import_ms, DEFAULT_KNOWLEDGE_ROOT, ManifestValidationError, DEFAULT_EXPIRY, DEFAULT_DEFAULTS, DEFAULT_MANIFEST_VERSION, DEFAULT_MANIFEST_SPACE, SECRETS_SPACE, VAULT_PERMISSION_SERVICE, SERVICE_SHORT_TO_LONG, ENCRYPTION_PERMISSION_SERVICE, ENCRYPTION_MANIFEST_SPACE, SERVICE_LONG_TO_SHORT2, DEFAULT_STANDARD_ENTRIES, DEFAULT_ADMIN_ENTRIES, DEFAULT_ALL_ENTRIES, KEY_SEGMENT, KEY_APP_ID, KEY_PATH, KEY_ABILITIES;
+var import_ms, DEFAULT_KNOWLEDGE_ROOT, ManifestValidationError, DEFAULT_EXPIRY, DEFAULT_DEFAULTS, DEFAULT_MANIFEST_VERSION, DEFAULT_MANIFEST_SPACE, SECRETS_SPACE, VAULT_PERMISSION_SERVICE, SERVICE_SHORT_TO_LONG, ENCRYPTION_PERMISSION_SERVICE, ENCRYPTION_MANIFEST_SPACE, SERVICE_LONG_TO_SHORT2, DEFAULT_STANDARD_ENTRIES, DEFAULT_ADMIN_ENTRIES, DEFAULT_ALL_ENTRIES, SECRET_KEY_NAME_SEGMENT, KEY_SEGMENT, KEY_APP_ID, KEY_PATH, KEY_ABILITIES;
 var init_manifest = __esm({
   "../sdk-core/src/manifest.ts"() {
     "use strict";
@@ -2830,7 +2888,7 @@ var init_manifest = __esm({
         this.name = "ManifestValidationError";
       }
     };
-    DEFAULT_EXPIRY = "30d";
+    DEFAULT_EXPIRY = "7d";
     DEFAULT_DEFAULTS = true;
     DEFAULT_MANIFEST_VERSION = 1;
     DEFAULT_MANIFEST_SPACE = "applications";
@@ -2901,6 +2959,7 @@ var init_manifest = __esm({
         actions: ["read", "write"]
       }
     ];
+    SECRET_KEY_NAME_SEGMENT = /^[a-z][a-z0-9_]{0,63}$/;
     KEY_SEGMENT = "[a-z0-9][a-z0-9._-]{0,63}";
     KEY_APP_ID = new RegExp(`^${KEY_SEGMENT}$`);
     KEY_PATH = new RegExp(`^${KEY_SEGMENT}(?:/${KEY_SEGMENT}){2,7}$`);
@@ -2908,12 +2967,75 @@ var init_manifest = __esm({
   }
 });
 
+// src/lib/secret-keys.ts
+import { BOT_HISTORY_KEY_PATH, MAX_SECRET_SCOPE_LENGTH, parseSecretCatalogKey as parseSecretCatalogKey2, SECRET_SCOPE_RE, secretKeyPath } from "@tinycloud/sdk-services";
+import { formatKeyResource as formatKeyResource2 } from "@tinycloud/sdk-services/encryption/resource";
+function isBotHistoryScope(scope) {
+  return BOT_HISTORY_KEY_PATH.startsWith(`secrets/scoped/${scope}/`);
+}
+function secretKeyResourceForVaultPath(networkId, vaultPath) {
+  if (!vaultPath.startsWith(VAULT_PREFIX)) return void 0;
+  const parsed = parseSecretCatalogKey2(vaultPath.slice(VAULT_PREFIX.length));
+  return parsed === void 0 ? void 0 : formatKeyResource2(networkId, secretKeyPath(parsed.name, parsed.scope));
+}
+function secretKeyResource(networkId, keyPath) {
+  return formatKeyResource2(networkId, keyPath);
+}
+function unreadableSecretNote(flags) {
+  const cli = `CLI version ${LAST_CLI_WITHOUT_NAME_CAP} or earlier.`;
+  const cannot = "so this version can't read or delete it.";
+  if (flags.nameTooLong && flags.scopeTooLong) {
+    return `Name and scope are longer than 64 characters, ${cannot} Rename it and move it to a shorter scope with ${cli}`;
+  }
+  if (flags.nameTooLong) return `Name is longer than 64 characters, ${cannot} Rename it with ${cli}`;
+  if (flags.scopeTooLong) return `Scope is longer than 64 characters, ${cannot} Move it to a shorter scope with ${cli}`;
+  return void 0;
+}
+function isOverlongStoredScope(rawScope) {
+  const trimmed = rawScope?.trim();
+  return trimmed !== void 0 && trimmed.length > MAX_SECRET_SCOPE_LENGTH && SECRET_SCOPE_RE.test(trimmed);
+}
+var VAULT_PREFIX, LAST_CLI_WITHOUT_NAME_CAP;
+var init_secret_keys = __esm({
+  "src/lib/secret-keys.ts"() {
+    "use strict";
+    VAULT_PREFIX = "vault/secrets/";
+    LAST_CLI_WITHOUT_NAME_CAP = "1.8.0";
+  }
+});
+
 // src/lib/raw-encryption.ts
+import { BOT_HISTORY_KEY_PATH as BOT_HISTORY_KEY_PATH2 } from "@tinycloud/sdk-services";
 function isRawEncryptionPermission(permission2) {
   return (permission2.service === ENCRYPTION_PERMISSION_SERVICE || permission2.service === "encryption") && typeof permission2.path === "string" && permission2.path.startsWith("urn:tinycloud:encryption:");
 }
 function isVerifiedRawEncryptionPermission(permission2) {
   return isRawEncryptionPermission(permission2) && (permission2.space === void 0 || permission2.space === "encryption");
+}
+function isSecretsKeyResource(path) {
+  return /^urn:tinycloud:encryption:did:[^/]+\/secrets(?:\/|$)/.test(path);
+}
+function isBotHistoryKeyResource(path) {
+  const slash = path.indexOf("/");
+  if (slash === -1) return false;
+  const key = path.slice(slash + 1).toLowerCase();
+  const folder = BOT_HISTORY_KEY_FOLDER.toLowerCase();
+  return key === folder || key.startsWith(`${folder}/`);
+}
+function assertNoBotHistoryKey(permissions) {
+  if (permissions.some((permission2) => isRawEncryptionPermission(permission2) && isBotHistoryKeyResource(permission2.path))) {
+    throw new CLIError(
+      "INVALID_SECRET_SCOPE",
+      `Secret scope ${JSON.stringify(BOT_HISTORY_SCOPE)} is reserved; omit scope for global secrets.`,
+      ExitCode.USAGE_ERROR
+    );
+  }
+}
+function isExactSecretKeyPermission(permission2) {
+  return isRawEncryptionPermission(permission2) && EXACT_SECRET_KEY_RESOURCE.test(permission2.path) && !isBotHistoryKeyResource(permission2.path) && permission2.actions.length > 0 && permission2.actions.every((action) => action === "tinycloud.encryption/decrypt" || action === "tinycloud.encryption/key.create") && !permission2.caveats?.length;
+}
+function isDecryptOnlyExactSecretKey(permission2) {
+  return isExactSecretKeyPermission(permission2) && permission2.actions.every((action) => action === "tinycloud.encryption/decrypt");
 }
 function isSharePublishingPrefixDecrypt(permission2) {
   return permission2.service === ENCRYPTION_PERMISSION_SERVICE && permission2.space === "default" && permission2.path === "share/" && permission2.actions.length === 1 && permission2.actions[0] === "tinycloud.encryption/decrypt" && !permission2.caveats?.length;
@@ -2921,28 +3043,35 @@ function isSharePublishingPrefixDecrypt(permission2) {
 function isDeviceDefaultDecrypt(permission2) {
   return permission2.service === ENCRYPTION_PERMISSION_SERVICE && permission2.space === "default" && permission2.path === "" && permission2.actions.length === 1 && permission2.actions[0] === "tinycloud.encryption/decrypt" && !permission2.caveats?.length;
 }
+function isSecretsSpacePermission(permission2) {
+  return permission2.space === "secrets" || permission2.space?.endsWith(":secrets") === true;
+}
 function deviceRefusal(entries) {
   for (const entry of entries) {
-    if (entry.space === "secrets" || entry.space?.endsWith(":secrets") === true) return "secrets";
+    if (isSecretsSpacePermission(entry)) return "secrets";
     if (entry.service === ENCRYPTION_PERMISSION_SERVICE && !isDeviceDefaultDecrypt(entry)) return entry;
   }
   return void 0;
 }
-function deviceRefusalMessage(refused, subject, next) {
+function deviceRefusalMessage(refused, next) {
+  if (refused === "secrets") return DEVICE_SECRETS_REFUSAL;
   const allowed = `The only encryption permission --device can ask for is ${DEVICE_DECRYPT_ALLOWED}.`;
-  if (refused === "secrets") {
-    return `--device can't authorize the secrets space, and ${subject} asks for it. ${allowed} ${next}`;
-  }
   const actions = refused.actions.slice(0, 5).map((action) => safeClipped(action)).join(", ") || "no actions";
   return `--device can't ask for ${actions} on space "${safeClipped(refused.space ?? "")}", path "${safeClipped(refused.path)}"${refused.caveats?.length ? " with extra limits" : ""}. ${allowed} ${next}`;
 }
-var DEVICE_DECRYPT_ALLOWED;
+var EXACT_SECRET_KEY_RESOURCE, BOT_HISTORY_KEY_FOLDER, BOT_HISTORY_SCOPE, DEVICE_DECRYPT_ALLOWED, DEVICE_SECRETS_REFUSAL;
 var init_raw_encryption = __esm({
   "src/lib/raw-encryption.ts"() {
     "use strict";
     init_manifest();
+    init_constants();
+    init_errors();
     init_safe_text();
+    EXACT_SECRET_KEY_RESOURCE = /^urn:tinycloud:encryption:did:[^/]+:default\/secrets\/[a-z0-9][a-z0-9._-]{0,63}(?:\/[a-z0-9][a-z0-9._-]{0,63}){0,6}$/;
+    BOT_HISTORY_KEY_FOLDER = BOT_HISTORY_KEY_PATH2.slice(0, BOT_HISTORY_KEY_PATH2.lastIndexOf("/"));
+    BOT_HISTORY_SCOPE = BOT_HISTORY_KEY_FOLDER.slice(BOT_HISTORY_KEY_FOLDER.lastIndexOf("/") + 1);
     DEVICE_DECRYPT_ALLOWED = 'tinycloud.encryption/decrypt on the default network (space "default", path "")';
+    DEVICE_SECRETS_REFUSAL = "--device can't read secrets yet. Use tinycloud auth login --paste instead.";
   }
 });
 
@@ -2960,8 +3089,12 @@ function canonicalNetworkUrn(path) {
   return match ? `urn:tinycloud:encryption:${canonicalOwnerDid(match[1])}:${match[2]}` : path;
 }
 function rawEncryptionOwnerMatches(path, ownerDid) {
-  const match = /^urn:tinycloud:encryption:(did:pkh:eip155:[1-9]\d*:0x[0-9a-fA-F]{40}):([a-z0-9][a-z0-9-]*)(?:\/share\/(?:[0-9a-f]{32})?)?$/.exec(path);
+  const match = /^urn:tinycloud:encryption:(did:pkh:eip155:[1-9]\d*:0x[0-9a-fA-F]{40}):([a-z0-9][a-z0-9-]*)(?:\/(.*))?$/.exec(path);
   if (!match) return false;
+  const rest = match[3];
+  if (rest !== void 0 && !/^share\/(?:[0-9a-f]{32})?$/.test(rest) && !(match[2] === "default" && isSecretKeyPath(rest))) {
+    return false;
+  }
   try {
     return canonicalOwnerDid(match[1]) === canonicalOwnerDid(ownerDid);
   } catch {
@@ -2973,6 +3106,7 @@ var init_owner_did = __esm({
     "use strict";
     init_constants();
     init_errors();
+    init_manifest();
   }
 });
 
@@ -3154,7 +3288,7 @@ async function appendLocalGrantArtifact(profile, delegation) {
     await ProfileManager.ensureProfileDir(profile);
     await refuseWriteToDeletedProfile(profile);
     const records = await loadLocalGrantArtifacts(profile);
-    if (records.some((record3) => record3.delegationCid === delegation.cid)) return;
+    if (records.some((record4) => record4.delegationCid === delegation.cid)) return;
     await writeJsonAtomic(localGrantArtifactsPath(profile), [
       ...records,
       { delegationCid: delegation.cid, delegation }
@@ -3312,14 +3446,14 @@ async function loadManifestPermissions(source, profile, options = {}) {
   if (options.device && typeof manifest.app_id === "string") {
     const refused = manifest.secrets !== void 0 || manifest.space === "secrets" || typeof manifest.space === "string" && manifest.space.endsWith(":secrets") ? "secrets" : deviceRefusal(appManifestEntries(manifest));
     if (refused !== void 0) {
-      throw new CLIError("DEVICE_AUTH_UNSUPPORTED_SCOPE", deviceRefusalMessage(refused, "this manifest", DEVICE_MANIFEST_NEXT), ExitCode.USAGE_ERROR);
+      throw new CLIError("DEVICE_AUTH_UNSUPPORTED_SCOPE", deviceRefusalMessage(refused, DEVICE_MANIFEST_NEXT), ExitCode.USAGE_ERROR);
     }
   }
   if (typeof manifest.id === "string") {
     const resolved = resolveManifest(manifest);
     const refused = options.device ? deviceRefusal(resolved.resources) : void 0;
     if (refused !== void 0) {
-      throw new CLIError("DEVICE_AUTH_UNSUPPORTED_SCOPE", deviceRefusalMessage(refused, "this manifest", DEVICE_MANIFEST_NEXT), ExitCode.USAGE_ERROR);
+      throw new CLIError("DEVICE_AUTH_UNSUPPORTED_SCOPE", deviceRefusalMessage(refused, DEVICE_MANIFEST_NEXT), ExitCode.USAGE_ERROR);
     }
     return resolvePermissionSpaces(resolved.resources, profile, options);
   }
@@ -3342,7 +3476,7 @@ function appManifestEntry(entry, manifest) {
   const path = String(entry.path ?? "");
   const actions = expandActionShortNames(service, Array.isArray(entry.actions) ? entry.actions.map(String) : []);
   if (isRawEncryptionPermission({ service, path })) {
-    return { service, space: ENCRYPTION_MANIFEST_SPACE, path, actions };
+    return { service, space: ENCRYPTION_MANIFEST_SPACE, ...rawEncryptionEntry(path, actions) };
   }
   const encryption = service === ENCRYPTION_PERMISSION_SERVICE;
   const ownSpace = encryption && typeof entry.space === "string" ? entry.space : void 0;
@@ -3353,6 +3487,18 @@ function appManifestEntry(entry, manifest) {
     actions,
     ...Array.isArray(entry.caveats) ? { caveats: entry.caveats } : {}
   };
+}
+function rawEncryptionEntry(path, actions) {
+  const slash = path.indexOf("/");
+  const rest = slash === -1 ? "" : path.slice(slash);
+  if (rest === "" || /^\/share\/(?:[0-9a-f]{32})?$/.test(rest)) return { path, actions };
+  try {
+    const [entry] = expandPermissionEntry({ service: ENCRYPTION_PERMISSION_SERVICE, path, actions, skipPrefix: true });
+    return { path: entry.path, actions: entry.actions };
+  } catch (error) {
+    if (!(error instanceof ManifestValidationError)) throw error;
+    throw new CLIError("INVALID_MANIFEST", `Manifest encryption entry ${JSON.stringify(path)} is not allowed: ${error.message}.`, ExitCode.USAGE_ERROR);
+  }
 }
 async function secretPermissionsFromAppManifest(manifest, profile, requestedOwner) {
   if (manifest.secrets === void 0) {
@@ -3368,16 +3514,18 @@ async function secretPermissionsFromAppManifest(manifest, profile, requestedOwne
   const permissions = resolved.resources.filter(
     (resource) => resource.service === "tinycloud.kv" && resource.space === "secrets" && resource.path.startsWith("vault/secrets/")
   );
-  const needsDecrypt = permissions.some(
-    (permission2) => permission2.actions.includes("tinycloud.kv/get")
-  );
-  if (needsDecrypt) {
-    permissions.push({
-      service: ENCRYPTION_PERMISSION_SERVICE,
-      space: ENCRYPTION_MANIFEST_SPACE,
-      path: await defaultSecretsNetworkId(profile, requestedOwner),
-      actions: ["tinycloud.encryption/decrypt"]
-    });
+  const reads = permissions.filter((permission2) => permission2.actions.includes("tinycloud.kv/get"));
+  if (reads.length > 0) {
+    const network = await defaultSecretsNetworkId(profile, requestedOwner);
+    const keys = reads.flatMap((permission2) => secretKeyResourceForVaultPath(network, permission2.path) ?? []);
+    for (const path of [network, ...new Set(keys)]) {
+      permissions.push({
+        service: ENCRYPTION_PERMISSION_SERVICE,
+        space: ENCRYPTION_MANIFEST_SPACE,
+        path,
+        actions: ["tinycloud.encryption/decrypt"]
+      });
+    }
   }
   return permissions;
 }
@@ -3437,7 +3585,8 @@ async function resolvePermissionSpaces(entries, profile, options = {}) {
     const actions = expandActionShortNames(service, entry.actions);
     if (isRawEncryptionPermission({ service, path: entry.path })) {
       const { skipPrefix: _skipPrefix, ...raw } = entry;
-      resolved.push({ ...raw, service, space: ENCRYPTION_MANIFEST_SPACE, actions });
+      const checked = isSecretsKeyResource(entry.path) ? rawEncryptionEntry(entry.path, actions) : { path: entry.path, actions };
+      resolved.push({ ...raw, service, space: ENCRYPTION_MANIFEST_SPACE, ...checked });
       continue;
     }
     if (isSharePublishingPrefixDecrypt({ ...entry, service, actions })) {
@@ -3536,6 +3685,7 @@ var init_permissions = __esm({
   "src/lib/permissions.ts"() {
     "use strict";
     init_manifest();
+    init_secret_keys();
     init_storage();
     init_profiles();
     init_errors();
@@ -3825,13 +3975,13 @@ var init_blake2 = __esm({
         return res;
       }
       _cloneInto(to) {
-        const { buffer, length: length5, finished, destroyed, outputLen, pos } = this;
+        const { buffer, length: length6, finished, destroyed, outputLen, pos } = this;
         to || (to = new this.constructor({ dkLen: outputLen }));
         to.set(...this.get());
         to.buffer.set(buffer);
         to.destroyed = destroyed;
         to.finished = finished;
-        to.length = length5;
+        to.length = length6;
         to.pos = pos;
         to.outputLen = outputLen;
         return to;
@@ -4066,13 +4216,13 @@ function _abool2(value4, title = "") {
   }
   return value4;
 }
-function _abytes2(value4, length5, title = "") {
+function _abytes2(value4, length6, title = "") {
   const bytes = isBytes(value4);
   const len = value4?.length;
-  const needsLen = length5 !== void 0;
-  if (!bytes || needsLen && len !== length5) {
+  const needsLen = length6 !== void 0;
+  if (!bytes || needsLen && len !== length6) {
     const prefix = title && `"${title}" `;
-    const ofLen = needsLen ? ` of length ${length5}` : "";
+    const ofLen = needsLen ? ` of length ${length6}` : "";
     const got = bytes ? `length=${len}` : `type=${typeof value4}`;
     throw new Error(prefix + "expected Uint8Array" + ofLen + ", got " + got);
   }
@@ -4535,8 +4685,8 @@ function getFieldBytesLength(fieldOrder) {
   return Math.ceil(bitLength / 8);
 }
 function getMinHashLength(fieldOrder) {
-  const length5 = getFieldBytesLength(fieldOrder);
-  return length5 + Math.ceil(length5 / 2);
+  const length6 = getFieldBytesLength(fieldOrder);
+  return length6 + Math.ceil(length6 / 2);
 }
 function mapHashToField(key, fieldOrder, isLE2 = false) {
   const len = key.length;
@@ -4777,15 +4927,15 @@ var init_curve = __esm({
         const { windows, windowSize } = calcWOpts(W, this.bits);
         const points = [];
         let p = point;
-        let base5 = p;
+        let base6 = p;
         for (let window = 0; window < windows; window++) {
-          base5 = p;
-          points.push(base5);
+          base6 = p;
+          points.push(base6);
           for (let i = 1; i < windowSize; i++) {
-            base5 = base5.add(p);
-            points.push(base5);
+            base6 = base6.add(p);
+            points.push(base6);
           }
-          p = base5.double();
+          p = base6.double();
         }
         return points;
       }
@@ -4974,8 +5124,8 @@ function edwards(params, extraOpts = {}) {
       const y2 = modP(y * y);
       const u = modP(y2 - _1n4);
       const v = modP(d * y2 - a);
-      let { isValid: isValid4, value: x } = uvRatio2(u, v);
-      if (!isValid4)
+      let { isValid: isValid5, value: x } = uvRatio2(u, v);
+      if (!isValid5)
         throw new Error("bad point: invalid y coordinate");
       const isXOdd = (x & _1n4) === _1n4;
       const isLastByteOdd = (lastByte & 128) !== 0;
@@ -5588,7 +5738,7 @@ var init_ed25519 = __esm({
         const u1_2 = mod2(u1 * u1);
         const u2_2 = mod2(u2 * u2);
         const v = mod2(a * d * u1_2 - u2_2);
-        const { isValid: isValid4, value: I } = invertSqrt(mod2(v * u2_2));
+        const { isValid: isValid5, value: I } = invertSqrt(mod2(v * u2_2));
         const Dx = mod2(I * u2);
         const Dy = mod2(I * Dx * v);
         let x = mod2((s + s) * Dx);
@@ -5596,7 +5746,7 @@ var init_ed25519 = __esm({
           x = mod2(-x);
         const y = mod2(u1 * Dy);
         const t = mod2(x * y);
-        if (!isValid4 || isNegativeLE(t, P) || y === _0n5)
+        if (!isValid5 || isNegativeLE(t, P) || y === _0n5)
           throw new Error("invalid ristretto255 encoding 2");
         return new __RistrettoPoint(new ed25519.Point(x, y, _1n5, t));
       }
@@ -5668,8 +5818,8 @@ var init_ed25519 = __esm({
 });
 
 // ../replica/dist/index.js
-function isReplicaError(error, code5) {
-  return typeof error === "object" && error !== null && error[REPLICA_ERROR] === true && (code5 === void 0 || error.code === code5);
+function isReplicaError(error, code6) {
+  return typeof error === "object" && error !== null && error[REPLICA_ERROR] === true && (code6 === void 0 || error.code === code6);
 }
 function assertFolderPrefix(prefix) {
   const validFolder = typeof prefix === "string" && prefix.length > 0 && !prefix.startsWith("/") && !prefix.includes("//") && prefix.endsWith("/");
@@ -5925,8 +6075,8 @@ function kvPathIn(resource, space) {
   for (const root of [`${space}/kv`, `tinycloud://${space}/kv`]) {
     if (resource === root || resource === `${root}/`) return "/";
   }
-  for (const base5 of [`${space}/kv/`, `tinycloud://${space}/kv/`]) {
-    if (resource.startsWith(base5)) return resource.slice(base5.length);
+  for (const base6 of [`${space}/kv/`, `tinycloud://${space}/kv/`]) {
+    if (resource.startsWith(base6)) return resource.slice(base6.length);
   }
   return void 0;
 }
@@ -5994,11 +6144,22 @@ function featuresForHost(host, fetchFn) {
   });
   return discovered;
 }
+function refusalTextOf(body) {
+  if (!body.startsWith("{")) return body;
+  try {
+    const parsed = JSON.parse(body);
+    if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed) && "code" in parsed && typeof parsed.code === "string" && NODE_REVOCATION_CODES.has(parsed.code) && "error" in parsed && typeof parsed.error === "string") {
+      return parsed.error;
+    }
+  } catch {
+  }
+  return body;
+}
 function isRevocation(error, status, request) {
   if (REVOKED_CODES.has(error.code)) return true;
   if (status !== 401 || request === void 0) return false;
   const lead = `${request}: 401 - `;
-  return error.message.startsWith(lead) && REVOKED_BODY.test(error.message.slice(lead.length));
+  return error.message.startsWith(lead) && REVOKED_BODY.test(refusalTextOf(error.message.slice(lead.length)));
 }
 function replicaErrorFromService(error, context2, request) {
   const meta = error.meta ?? {};
@@ -6134,7 +6295,7 @@ function kvSyncTransport(kv3, options = {}) {
     }
   };
 }
-var ReplicaErrorCode, REPLICA_ERROR, ReplicaError, RFC3339, DEFAULT_PAGE_LIMIT, DEFAULT_LEASE_TTL_MS, FETCH_CHUNK, REPAIR_BATCH, REPAIR_MAX_TRIES, REPAIR_BACKOFF_BASE_MS, RETENTION_REVOKED, PENDING_REFUSALS, Replica, BASE58, BASE32, featureCache, REVOKED_CODES, REVOKED_BODY, encoder;
+var ReplicaErrorCode, REPLICA_ERROR, ReplicaError, RFC3339, DEFAULT_PAGE_LIMIT, DEFAULT_LEASE_TTL_MS, FETCH_CHUNK, REPAIR_BATCH, REPAIR_MAX_TRIES, REPAIR_BACKOFF_BASE_MS, RETENTION_REVOKED, PENDING_REFUSALS, Replica, BASE58, BASE32, featureCache, REVOKED_CODES, REVOKED_BODY, NODE_REVOCATION_CODES, encoder;
 var init_dist = __esm({
   "../replica/dist/index.js"() {
     "use strict";
@@ -6210,10 +6371,10 @@ var init_dist = __esm({
       [REPLICA_ERROR] = true;
       code;
       detail;
-      constructor(code5, message, detail, options) {
+      constructor(code6, message, detail, options) {
         super(message, options);
         this.name = "ReplicaError";
-        this.code = code5;
+        this.code = code6;
         if (detail !== void 0) this.detail = detail;
       }
     };
@@ -6654,6 +6815,7 @@ var init_dist = __esm({
     featureCache = /* @__PURE__ */ new Map();
     REVOKED_CODES = /* @__PURE__ */ new Set(["AUTH_DELEGATION_REVOKED", "AUTH_DELEGATION_ANCESTOR_REVOKED"]);
     REVOKED_BODY = /^(?:Invalid invocation: )?(?:delegation-revoked: [A-Za-z0-9]+|delegation-ancestor-revoked: ancestor=[A-Za-z0-9]+ (?:invoked|parent)=[A-Za-z0-9]+)$/;
+    NODE_REVOCATION_CODES = /* @__PURE__ */ new Set(["delegation_revoked", "parent_revoked", "ancestor_revoked"]);
     encoder = new TextEncoder();
   }
 });
@@ -6748,30 +6910,30 @@ function parseState(text2) {
     throw gateRefusal("gate_unavailable", "The replica gate file is not valid JSON.");
   }
   if (typeof raw !== "object" || raw === null) throw gateRefusal("gate_unavailable", "The replica gate file is malformed.");
-  const record3 = raw;
-  if (record3.v !== GATE_FILE_VERSION) throw gateRefusal("gate_unavailable", "The replica gate file has an unknown version.");
-  if (typeof record3.incarnation !== "string" || record3.incarnation.length === 0) {
+  const record4 = raw;
+  if (record4.v !== GATE_FILE_VERSION) throw gateRefusal("gate_unavailable", "The replica gate file has an unknown version.");
+  if (typeof record4.incarnation !== "string" || record4.incarnation.length === 0) {
     throw gateRefusal("gate_unavailable", "The replica gate file has no incarnation.");
   }
-  if (typeof record3.salt !== "string" || Buffer.from(record3.salt, "base64url").toString("base64url") !== record3.salt || Buffer.from(record3.salt, "base64url").length < 32) {
+  if (typeof record4.salt !== "string" || Buffer.from(record4.salt, "base64url").toString("base64url") !== record4.salt || Buffer.from(record4.salt, "base64url").length < 32) {
     throw gateRefusal("gate_unavailable", "The replica gate file has an invalid salt.");
   }
-  if (record3.principalHash !== null && (typeof record3.principalHash !== "string" || !/^[0-9a-f]{64}$/.test(record3.principalHash))) {
+  if (record4.principalHash !== null && (typeof record4.principalHash !== "string" || !/^[0-9a-f]{64}$/.test(record4.principalHash))) {
     throw gateRefusal("gate_unavailable", "The replica gate file has an invalid principal hash.");
   }
-  if (typeof record3.lifecycleEpoch !== "number" || !Number.isSafeInteger(record3.lifecycleEpoch) || record3.lifecycleEpoch < 0) {
+  if (typeof record4.lifecycleEpoch !== "number" || !Number.isSafeInteger(record4.lifecycleEpoch) || record4.lifecycleEpoch < 0) {
     throw gateRefusal("gate_unavailable", "The replica gate file has an invalid lifecycle epoch.");
   }
-  if (record3.deniedAt !== null && (typeof record3.deniedAt !== "number" || !Number.isSafeInteger(record3.deniedAt) || record3.deniedAt < 0)) {
+  if (record4.deniedAt !== null && (typeof record4.deniedAt !== "number" || !Number.isSafeInteger(record4.deniedAt) || record4.deniedAt < 0)) {
     throw gateRefusal("gate_unavailable", "The replica gate file has an invalid deniedAt.");
   }
-  if (!Array.isArray(record3.intents)) throw gateRefusal("gate_unavailable", "The replica gate file has no intents list.");
-  for (const intent of record3.intents) {
+  if (!Array.isArray(record4.intents)) throw gateRefusal("gate_unavailable", "The replica gate file has no intents list.");
+  for (const intent of record4.intents) {
     if (typeof intent !== "object" || intent === null || typeof intent.id !== "string" || !/^[0-9a-f]{64}$/.test(intent.principalHash) || !Number.isSafeInteger(intent.recordedAt) || intent.recordedAt < 0 || (intent.kind === "pending" ? !/^[0-9a-f]{64}$/.test(intent.identityKeyHash) || intent.id !== `pending:${intent.identityKeyHash}` : intent.kind !== "partition" || typeof intent.partitionId !== "string" || intent.partitionId.length === 0 || intent.id !== intent.partitionId)) {
       throw gateRefusal("gate_unavailable", "The replica gate file has an invalid purge intent.");
     }
   }
-  const firstInstall = record3.firstInstall;
+  const firstInstall = record4.firstInstall;
   if (typeof firstInstall !== "object" || firstInstall === null || Array.isArray(firstInstall)) {
     throw gateRefusal("gate_unavailable", "The replica gate file has no valid firstInstall map.");
   }
@@ -6780,7 +6942,7 @@ function parseState(text2) {
       throw gateRefusal("gate_unavailable", "The replica gate file has an invalid firstInstall entry.");
     }
   }
-  const grantInstall = Object.prototype.hasOwnProperty.call(record3, "grantInstall") ? record3.grantInstall : {};
+  const grantInstall = Object.prototype.hasOwnProperty.call(record4, "grantInstall") ? record4.grantInstall : {};
   if (typeof grantInstall !== "object" || grantInstall === null || Array.isArray(grantInstall)) {
     throw gateRefusal("gate_unavailable", "The replica gate has an invalid grantInstall map.");
   }
@@ -6789,7 +6951,7 @@ function parseState(text2) {
       throw gateRefusal("gate_unavailable", "The replica gate has an invalid grant install time.");
     }
   }
-  const pendingGenerations = record3.pendingGenerations;
+  const pendingGenerations = record4.pendingGenerations;
   if (typeof pendingGenerations !== "object" || pendingGenerations === null || Array.isArray(pendingGenerations)) {
     throw gateRefusal("gate_unavailable", "The replica gate file has an invalid pending generation map.");
   }
@@ -6798,18 +6960,18 @@ function parseState(text2) {
       throw gateRefusal("gate_unavailable", "The replica gate file has an invalid pending generation.");
     }
   }
-  const eraseDeferred = Object.prototype.hasOwnProperty.call(record3, "eraseDeferred") ? record3.eraseDeferred : false;
-  const deferredPrincipalHash = Object.prototype.hasOwnProperty.call(record3, "deferredPrincipalHash") ? record3.deferredPrincipalHash : null;
-  if (typeof eraseDeferred !== "boolean" || deferredPrincipalHash !== null && (typeof deferredPrincipalHash !== "string" || !/^[0-9a-f]{64}$/.test(deferredPrincipalHash)) || eraseDeferred && (record3.principalHash !== null || deferredPrincipalHash === null)) {
+  const eraseDeferred = Object.prototype.hasOwnProperty.call(record4, "eraseDeferred") ? record4.eraseDeferred : false;
+  const deferredPrincipalHash = Object.prototype.hasOwnProperty.call(record4, "deferredPrincipalHash") ? record4.deferredPrincipalHash : null;
+  if (typeof eraseDeferred !== "boolean" || deferredPrincipalHash !== null && (typeof deferredPrincipalHash !== "string" || !/^[0-9a-f]{64}$/.test(deferredPrincipalHash)) || eraseDeferred && (record4.principalHash !== null || deferredPrincipalHash === null)) {
     throw gateRefusal("gate_unavailable", "The replica gate has an invalid deferred erase state.");
   }
   return {
-    incarnation: record3.incarnation,
-    salt: record3.salt,
-    principalHash: record3.principalHash,
-    lifecycleEpoch: record3.lifecycleEpoch,
-    deniedAt: record3.deniedAt,
-    intents: record3.intents,
+    incarnation: record4.incarnation,
+    salt: record4.salt,
+    principalHash: record4.principalHash,
+    lifecycleEpoch: record4.lifecycleEpoch,
+    deniedAt: record4.deniedAt,
+    intents: record4.intents,
     firstInstall,
     grantInstall,
     pendingGenerations,
@@ -6831,17 +6993,17 @@ async function readStoredState(profileDir) {
   return parseState(text2);
 }
 async function readDenyFloor(profileDir) {
-  let record3;
+  let record4;
   try {
-    record3 = JSON.parse(await readFile4(join7(profileDir, DENY_FLOOR_FILE), "utf8"));
+    record4 = JSON.parse(await readFile4(join7(profileDir, DENY_FLOOR_FILE), "utf8"));
   } catch (error) {
     if (isNotFound2(error)) return void 0;
     throw gateRefusal("gate_unavailable", "The replica deny floor cannot be read.");
   }
-  if (typeof record3 !== "object" || record3 === null || Array.isArray(record3) || Object.keys(record3).length !== 2 || !("epoch" in record3) || !("deniedAt" in record3) || !Number.isSafeInteger(record3.epoch) || record3.epoch < 1 || !Number.isSafeInteger(record3.deniedAt) || record3.deniedAt < 0) {
+  if (typeof record4 !== "object" || record4 === null || Array.isArray(record4) || Object.keys(record4).length !== 2 || !("epoch" in record4) || !("deniedAt" in record4) || !Number.isSafeInteger(record4.epoch) || record4.epoch < 1 || !Number.isSafeInteger(record4.deniedAt) || record4.deniedAt < 0) {
     throw gateRefusal("gate_unavailable", "The replica deny floor is malformed.");
   }
-  return { epoch: record3.epoch, deniedAt: record3.deniedAt };
+  return { epoch: record4.epoch, deniedAt: record4.deniedAt };
 }
 function behindFloor(state2, floor) {
   return state2.lifecycleEpoch < floor.epoch || state2.deniedAt === null || state2.deniedAt < floor.deniedAt;
@@ -6992,10 +7154,10 @@ var init_profile_gate = __esm({
       [REPLICA_ERROR2] = true;
       code;
       detail;
-      constructor(code5, message, detail, options) {
+      constructor(code6, message, detail, options) {
         super(message, options);
         this.name = "ReplicaError";
-        this.code = code5;
+        this.code = code6;
         if (detail !== void 0) this.detail = detail;
       }
     };
@@ -7023,8 +7185,8 @@ import { dirname as dirname3, join as join22, resolve as resolve2 } from "path";
 import { constants as fsConstants3 } from "fs";
 import { lstat as lstat3, open as open4, readdir as readdir3, rmdir, unlink } from "fs/promises";
 import { join as join8, parse, resolve, sep } from "path";
-function isReplicaError2(error, code5) {
-  return typeof error === "object" && error !== null && error[REPLICA_ERROR3] === true && (code5 === void 0 || error.code === code5);
+function isReplicaError2(error, code6) {
+  return typeof error === "object" && error !== null && error[REPLICA_ERROR3] === true && (code6 === void 0 || error.code === code6);
 }
 function assertFolderPrefix3(prefix) {
   const validFolder = typeof prefix === "string" && prefix.length > 0 && !prefix.startsWith("/") && !prefix.includes("//") && prefix.endsWith("/");
@@ -7512,9 +7674,9 @@ function entryOf(row) {
 }
 function storageError(error, action) {
   if (isReplicaError2(error)) return error;
-  const code5 = errnoOf(error);
+  const code6 = errnoOf(error);
   const message = error instanceof Error ? error.message : String(error);
-  if (code5 === "ENOSPC" || code5 === "EDQUOT" || /SQLITE_FULL|database or disk is full/i.test(`${String(code5)} ${message}`)) {
+  if (code6 === "ENOSPC" || code6 === "EDQUOT" || /SQLITE_FULL|database or disk is full/i.test(`${String(code6)} ${message}`)) {
     return new ReplicaError3(ReplicaErrorCode3.STORAGE_FULL, `${action}: the local disk is full.`, void 0, { cause: error });
   }
   return new ReplicaError3(ReplicaErrorCode3.STORAGE_ERROR, `${action}: ${message}`, void 0, { cause: error });
@@ -7688,10 +7850,10 @@ var init_sqlite = __esm({
       [REPLICA_ERROR3] = true;
       code;
       detail;
-      constructor(code5, message, detail, options) {
+      constructor(code6, message, detail, options) {
         super(message, options);
         this.name = "ReplicaError";
-        this.code = code5;
+        this.code = code6;
         if (detail !== void 0) this.detail = detail;
       }
     };
@@ -8267,8 +8429,8 @@ CREATE TABLE IF NOT EXISTS grant_install (
         if (this.#readonlySnapshot) {
           throw new ReplicaError3(ReplicaErrorCode3.STORAGE_ERROR, "A read-only replica snapshot cannot mutate the shared database.");
         }
-        const read6 = activeReadSection.getStore();
-        if (read6?.active && read6.controller === this) {
+        const read7 = activeReadSection.getStore();
+        if (read7?.active && read7.controller === this) {
           throw new ReplicaError3(
             ReplicaErrorCode3.STORAGE_ERROR,
             "mutation attempted on the same controller while its readTransaction section is active; this would deadlock"
@@ -9288,7 +9450,7 @@ function assertApprovedEntry(profile, path, actual, recorded) {
     throw refuseUnsafeReplicaPath(profile, `legacy path "${path}" changed since the recorded inventory`);
   }
 }
-function assertRecordedChild(profile, name, layout, inventory, empty5) {
+function assertRecordedChild(profile, name, layout, inventory, empty6) {
   const prefix = `replicas/${name}/`;
   const root = inventory.roots.get(`replicas/${name}`);
   if (!root || root.dev !== layout.rootIdentity.dev || root.ino !== layout.rootIdentity.ino) {
@@ -9307,7 +9469,7 @@ function assertRecordedChild(profile, name, layout, inventory, empty5) {
   }
   const database = [...layout.knownEntries, ...layout.unknownEntries].some((entry) => entry.path === "replica.db");
   const missingWasApproved = inventory.missingDatabases.has(prefix + "replica.db");
-  if (missingWasApproved && database || !database && !empty5 && !missingWasApproved) {
+  if (missingWasApproved && database || !database && !empty6 && !missingWasApproved) {
     throw refuseUnsafeReplicaPath(profile, `replica entry "${name}" has a different database than was approved`);
   }
 }
@@ -9389,8 +9551,8 @@ async function removeProfileReplicas(profile, options = {}) {
       const removed = [];
       const opened = [];
       try {
-        for (const { entry, identity: identity2, empty: empty5 } of checked) {
-          if (!empty5) continue;
+        for (const { entry, identity: identity2, empty: empty6 } of checked) {
+          if (!empty6) continue;
           await pinned.assertNamed();
           const current = await safeReplicaEntry(profile, root, entry);
           if (current.identity.dev !== identity2.dev || current.identity.ino !== identity2.ino) {
@@ -9417,8 +9579,8 @@ async function removeProfileReplicas(profile, options = {}) {
           await removeEmptyRoot(removed);
           return removed;
         }
-        for (const { entry, empty: empty5, identity: identity2, layout } of checked) {
-          if (empty5 || !layout?.knownEntries.some((item) => item.path === "replica.db")) continue;
+        for (const { entry, empty: empty6, identity: identity2, layout } of checked) {
+          if (empty6 || !layout?.knownEntries.some((item) => item.path === "replica.db")) continue;
           await pinned.assertNamed();
           const { path: entryPath, identity: expectedDirectory } = await safeReplicaEntry(profile, root, entry);
           if (expectedDirectory.dev !== identity2.dev || expectedDirectory.ino !== identity2.ino) {
@@ -9451,8 +9613,8 @@ async function removeProfileReplicas(profile, options = {}) {
           }
           opened[opened.length - 1].lease = lease;
         }
-        for (const { entry, empty: empty5, path, layout } of checked) {
-          if (empty5) continue;
+        for (const { entry, empty: empty6, path, layout } of checked) {
+          if (empty6) continue;
           await pinned.assertNamed();
           const replica = opened.find(({ name }) => name === entry.name);
           try {
@@ -9579,9 +9741,9 @@ async function finishLegacyReplicaCleanup(name, approval, discardLocalChanges = 
   return removed;
 }
 async function gateHeldByAnotherAccount(name, principal) {
-  const read6 = await readLogoutGate(profilePath4(name));
-  if (read6 === void 0) return false;
-  const { state: state2 } = read6;
+  const read7 = await readLogoutGate(profilePath4(name));
+  if (read7 === void 0) return false;
+  const { state: state2 } = read7;
   const hash = await principalHashOf(state2.salt, principal);
   return state2.principalHash !== null ? state2.principalHash !== hash : state2.eraseDeferred && state2.deferredPrincipalHash !== hash;
 }
@@ -9796,14 +9958,14 @@ async function recoverPendingLogout(name) {
   if (report.failed.length || report.remaining) {
     throw new CLIError(
       "REPLICA_PURGE_FAILED",
-      `A durable logout is pending (${report.failed.map(({ code: code5 }) => code5).join(", ") || `${report.remaining} intents remaining`}). Network restore and replica reads remain blocked; retry this command to complete credential and replica cleanup.`,
+      `A durable logout is pending (${report.failed.map(({ code: code6 }) => code6).join(", ") || `${report.remaining} intents remaining`}). Network restore and replica reads remain blocked; retry this command to complete credential and replica cleanup.`,
       ExitCode.ERROR,
       { failed: report.failed, remaining: report.remaining }
     );
   }
 }
 function refuseRestoredGate(report) {
-  if (report.failed.some(({ code: code5 }) => code5 === "gate_restored")) {
+  if (report.failed.some(({ code: code6 }) => code6 === "gate_restored")) {
     throw new CLIError("REPLICA_GATED", RESTORED_GATE_MESSAGE, ExitCode.ERROR, { failed: report.failed });
   }
 }
@@ -9837,6 +9999,7 @@ __export(sdk_exports, {
 });
 import { createProfileRegistryCacheStore, createProfileRegistrySequenceStore, profilePath as profilePath5 } from "@tinycloud/operations/state";
 import { TinyCloudNode, signedCompactUcanExpiry } from "@tinycloud/node-sdk";
+import { ownerFullAccess } from "@tinycloud/sdk-core";
 import { CLI_NAME as CLI_NAME7 } from "@tinycloud/operations/cli-name";
 import { liveStoredLease, ownerSessionLacksProof, restoreStoredSession } from "@tinycloud/operations/profile";
 function configuredRegistryUrl(contextUrl, profile) {
@@ -9924,7 +10087,8 @@ async function restoreProfileSessionNode(ctx) {
       onRegistryFallback: recordRegistryFallbackWarning,
       ...tinycloudRegistryUrl === void 0 ? {} : { tinycloudRegistryUrl },
       host: ctx.host,
-      ...profile.authMethod === "local" && profile.privateKey ? { privateKey: profile.privateKey } : {}
+      ...profile.authMethod === "local" && profile.privateKey ? { privateKey: profile.privateKey, ...ownerFullAccess() } : {},
+      sessionExpirationMs: CLI_DEFAULT_SESSION_EXPIRY_MS
     });
     await restoreProfileSession(node, ctx.profile, profile, persistedSessionData(ctx.profile, profile, session, key), session);
     return { node };
@@ -9952,7 +10116,8 @@ async function storedSessionVerifiesLocally(profileName2) {
       ...cliRetryPolicy(),
       ...tinycloudRegistryUrl === void 0 ? {} : { tinycloudRegistryUrl },
       host: profile.host ?? DEFAULT_HOST,
-      ...local ? { privateKey: profile.privateKey } : {}
+      ...local ? { privateKey: profile.privateKey, ...ownerFullAccess() } : {},
+      sessionExpirationMs: CLI_DEFAULT_SESSION_EXPIRY_MS
     });
     await restoreProfileSession(node, profileName2, profile, persistedSessionData(profileName2, profile, session, key), session);
     return true;
@@ -10004,6 +10169,9 @@ async function createSDKInstance(ctx, options) {
       ...tinycloudRegistryUrl === void 0 ? {} : { tinycloudRegistryUrl },
       host: ctx.host,
       privateKey: effectivePrivateKey,
+      // The local owner key signs for every action on its own default space.
+      ...ownerFullAccess(),
+      sessionExpirationMs: CLI_DEFAULT_SESSION_EXPIRY_MS,
       ...replication2 ? { replication: replication2 } : {}
     });
     if (node2.replication) registerReplication(ctx.profile, node2.replication);
@@ -10049,6 +10217,8 @@ async function createSDKInstance(ctx, options) {
     ...tinycloudRegistryUrl === void 0 ? {} : { tinycloudRegistryUrl },
     host: ctx.host,
     privateKey: options?.privateKey,
+    ...options?.privateKey ? ownerFullAccess() : {},
+    sessionExpirationMs: CLI_DEFAULT_SESSION_EXPIRY_MS,
     ...replication ? { replication } : {}
   });
   if (node.replication) registerReplication(ctx.profile, node.replication);
@@ -10398,8 +10568,8 @@ import {
   withPinnedProfileDirectory as withPinnedProfileDirectory2
 } from "@tinycloud/operations/state";
 function isTransientProfileEntryError(error) {
-  const code5 = error.code;
-  return code5 === "ENOENT" || code5 === "ENOTDIR" || code5 === "ELOOP" || code5 === "EISDIR";
+  const code6 = error.code;
+  return code6 === "ENOENT" || code6 === "ENOTDIR" || code6 === "ELOOP" || code6 === "EISDIR";
 }
 async function secureProfileDirectory(directory) {
   const rootFlags = fsConstants5.O_RDONLY | fsConstants5.O_DIRECTORY | (process.platform === "linux" ? 0 : fsConstants5.O_NOFOLLOW);
@@ -10770,37 +10940,37 @@ var util2, objectUtil2, ZodParsedType2, getParsedType2;
 var init_util = __esm({
   "../../node_modules/zod/v3/helpers/util.js"() {
     "use strict";
-    (function(util4) {
-      util4.assertEqual = (_) => {
+    (function(util5) {
+      util5.assertEqual = (_) => {
       };
       function assertIs(_arg) {
       }
-      util4.assertIs = assertIs;
+      util5.assertIs = assertIs;
       function assertNever(_x) {
         throw new Error();
       }
-      util4.assertNever = assertNever;
-      util4.arrayToEnum = (items) => {
+      util5.assertNever = assertNever;
+      util5.arrayToEnum = (items) => {
         const obj = {};
         for (const item of items) {
           obj[item] = item;
         }
         return obj;
       };
-      util4.getValidEnumValues = (obj) => {
-        const validKeys = util4.objectKeys(obj).filter((k) => typeof obj[obj[k]] !== "number");
+      util5.getValidEnumValues = (obj) => {
+        const validKeys = util5.objectKeys(obj).filter((k) => typeof obj[obj[k]] !== "number");
         const filtered = {};
         for (const k of validKeys) {
           filtered[k] = obj[k];
         }
-        return util4.objectValues(filtered);
+        return util5.objectValues(filtered);
       };
-      util4.objectValues = (obj) => {
-        return util4.objectKeys(obj).map(function(e) {
+      util5.objectValues = (obj) => {
+        return util5.objectKeys(obj).map(function(e) {
           return obj[e];
         });
       };
-      util4.objectKeys = typeof Object.keys === "function" ? (obj) => Object.keys(obj) : (object3) => {
+      util5.objectKeys = typeof Object.keys === "function" ? (obj) => Object.keys(obj) : (object3) => {
         const keys = [];
         for (const key in object3) {
           if (Object.prototype.hasOwnProperty.call(object3, key)) {
@@ -10809,27 +10979,27 @@ var init_util = __esm({
         }
         return keys;
       };
-      util4.find = (arr, checker) => {
+      util5.find = (arr, checker) => {
         for (const item of arr) {
           if (checker(item))
             return item;
         }
         return void 0;
       };
-      util4.isInteger = typeof Number.isInteger === "function" ? (val) => Number.isInteger(val) : (val) => typeof val === "number" && Number.isFinite(val) && Math.floor(val) === val;
+      util5.isInteger = typeof Number.isInteger === "function" ? (val) => Number.isInteger(val) : (val) => typeof val === "number" && Number.isFinite(val) && Math.floor(val) === val;
       function joinValues(array, separator = " | ") {
         return array.map((val) => typeof val === "string" ? `'${val}'` : val).join(separator);
       }
-      util4.joinValues = joinValues;
-      util4.jsonStringifyReplacer = (_, value4) => {
+      util5.joinValues = joinValues;
+      util5.jsonStringifyReplacer = (_, value4) => {
         if (typeof value4 === "bigint") {
           return value4.toString();
         }
         return value4;
       };
     })(util2 || (util2 = {}));
-    (function(objectUtil4) {
-      objectUtil4.mergeShapes = (first, second) => {
+    (function(objectUtil5) {
+      objectUtil5.mergeShapes = (first, second) => {
         return {
           ...first,
           ...second
@@ -10931,7 +11101,7 @@ var init_ZodError = __esm({
       const json = JSON.stringify(obj, null, 2);
       return json.replace(/"([^"]+)":/g, "$1:");
     };
-    ZodError2 = class _ZodError3 extends Error {
+    ZodError2 = class _ZodError4 extends Error {
       get errors() {
         return this.issues;
       }
@@ -10990,7 +11160,7 @@ var init_ZodError = __esm({
         return fieldErrors;
       }
       static assert(value4) {
-        if (!(value4 instanceof _ZodError3)) {
+        if (!(value4 instanceof _ZodError4)) {
           throw new Error(`Not a ZodError: ${value4}`);
         }
       }
@@ -11207,7 +11377,7 @@ var init_parseUtil = __esm({
       };
     };
     EMPTY_PATH2 = [];
-    ParseStatus2 = class _ParseStatus3 {
+    ParseStatus2 = class _ParseStatus4 {
       constructor() {
         this.value = "valid";
       }
@@ -11240,7 +11410,7 @@ var init_parseUtil = __esm({
             value: value4
           });
         }
-        return _ParseStatus3.mergeObjectSync(status, syncPairs);
+        return _ParseStatus4.mergeObjectSync(status, syncPairs);
       }
       static mergeObjectSync(status, pairs) {
         const finalObject = {};
@@ -11285,9 +11455,9 @@ var errorUtil2;
 var init_errorUtil = __esm({
   "../../node_modules/zod/v3/helpers/errorUtil.js"() {
     "use strict";
-    (function(errorUtil4) {
-      errorUtil4.errToObj = (message) => typeof message === "string" ? { message } : message || {};
-      errorUtil4.toString = (message) => typeof message === "string" ? message : message?.message;
+    (function(errorUtil5) {
+      errorUtil5.errToObj = (message) => typeof message === "string" ? { message } : message || {};
+      errorUtil5.toString = (message) => typeof message === "string" ? message : message?.message;
     })(errorUtil2 || (errorUtil2 = {}));
   }
 });
@@ -11296,12 +11466,12 @@ var init_errorUtil = __esm({
 function processCreateParams2(params) {
   if (!params)
     return {};
-  const { errorMap: errorMap4, invalid_type_error, required_error, description } = params;
-  if (errorMap4 && (invalid_type_error || required_error)) {
+  const { errorMap: errorMap5, invalid_type_error, required_error, description } = params;
+  if (errorMap5 && (invalid_type_error || required_error)) {
     throw new Error(`Can't use "invalid_type_error" or "required_error" in conjunction with custom error map.`);
   }
-  if (errorMap4)
-    return { errorMap: errorMap4, description };
+  if (errorMap5)
+    return { errorMap: errorMap5, description };
   const customMap = (iss, ctx) => {
     const { message } = params;
     if (iss.code === "invalid_enum_value") {
@@ -11354,8 +11524,8 @@ function isValidJWT2(jwt, alg) {
     const [header] = jwt.split(".");
     if (!header)
       return false;
-    const base645 = header.replace(/-/g, "+").replace(/_/g, "/").padEnd(header.length + (4 - header.length % 4) % 4, "=");
-    const decoded = JSON.parse(atob(base645));
+    const base646 = header.replace(/-/g, "+").replace(/_/g, "/").padEnd(header.length + (4 - header.length % 4) % 4, "=");
+    const decoded = JSON.parse(atob(base646));
     if (typeof decoded !== "object" || decoded === null)
       return false;
     if ("typ" in decoded && decoded?.typ !== "JWT")
@@ -11831,7 +12001,7 @@ var init_types2 = __esm({
     base64urlRegex2 = /^([0-9a-zA-Z-_]{4})*(([0-9a-zA-Z-_]{2}(==)?)|([0-9a-zA-Z-_]{3}(=)?))?$/;
     dateRegexSource2 = `((\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-((0[13578]|1[02])-(0[1-9]|[12]\\d|3[01])|(0[469]|11)-(0[1-9]|[12]\\d|30)|(02)-(0[1-9]|1\\d|2[0-8])))`;
     dateRegex2 = new RegExp(`^${dateRegexSource2}$`);
-    ZodString2 = class _ZodString3 extends ZodType2 {
+    ZodString2 = class _ZodString4 extends ZodType2 {
       _parse(input) {
         if (this._def.coerce) {
           input.data = String(input.data);
@@ -12141,7 +12311,7 @@ var init_types2 = __esm({
         });
       }
       _addCheck(check) {
-        return new _ZodString3({
+        return new _ZodString4({
           ...this._def,
           checks: [...this._def.checks, check]
         });
@@ -12283,19 +12453,19 @@ var init_types2 = __esm({
         return this.min(1, errorUtil2.errToObj(message));
       }
       trim() {
-        return new _ZodString3({
+        return new _ZodString4({
           ...this._def,
           checks: [...this._def.checks, { kind: "trim" }]
         });
       }
       toLowerCase() {
-        return new _ZodString3({
+        return new _ZodString4({
           ...this._def,
           checks: [...this._def.checks, { kind: "toLowerCase" }]
         });
       }
       toUpperCase() {
-        return new _ZodString3({
+        return new _ZodString4({
           ...this._def,
           checks: [...this._def.checks, { kind: "toUpperCase" }]
         });
@@ -12377,7 +12547,7 @@ var init_types2 = __esm({
         ...processCreateParams2(params)
       });
     };
-    ZodNumber2 = class _ZodNumber3 extends ZodType2 {
+    ZodNumber2 = class _ZodNumber4 extends ZodType2 {
       constructor() {
         super(...arguments);
         this.min = this.gte;
@@ -12478,7 +12648,7 @@ var init_types2 = __esm({
         return this.setLimit("max", value4, false, errorUtil2.toString(message));
       }
       setLimit(kind, value4, inclusive, message) {
-        return new _ZodNumber3({
+        return new _ZodNumber4({
           ...this._def,
           checks: [
             ...this._def.checks,
@@ -12492,7 +12662,7 @@ var init_types2 = __esm({
         });
       }
       _addCheck(check) {
-        return new _ZodNumber3({
+        return new _ZodNumber4({
           ...this._def,
           checks: [...this._def.checks, check]
         });
@@ -12609,7 +12779,7 @@ var init_types2 = __esm({
         ...processCreateParams2(params)
       });
     };
-    ZodBigInt2 = class _ZodBigInt3 extends ZodType2 {
+    ZodBigInt2 = class _ZodBigInt4 extends ZodType2 {
       constructor() {
         super(...arguments);
         this.min = this.gte;
@@ -12694,7 +12864,7 @@ var init_types2 = __esm({
         return this.setLimit("max", value4, false, errorUtil2.toString(message));
       }
       setLimit(kind, value4, inclusive, message) {
-        return new _ZodBigInt3({
+        return new _ZodBigInt4({
           ...this._def,
           checks: [
             ...this._def.checks,
@@ -12708,7 +12878,7 @@ var init_types2 = __esm({
         });
       }
       _addCheck(check) {
-        return new _ZodBigInt3({
+        return new _ZodBigInt4({
           ...this._def,
           checks: [...this._def.checks, check]
         });
@@ -12806,7 +12976,7 @@ var init_types2 = __esm({
         ...processCreateParams2(params)
       });
     };
-    ZodDate2 = class _ZodDate3 extends ZodType2 {
+    ZodDate2 = class _ZodDate4 extends ZodType2 {
       _parse(input) {
         if (this._def.coerce) {
           input.data = new Date(input.data);
@@ -12867,7 +13037,7 @@ var init_types2 = __esm({
         };
       }
       _addCheck(check) {
-        return new _ZodDate3({
+        return new _ZodDate4({
           ...this._def,
           checks: [...this._def.checks, check]
         });
@@ -13046,7 +13216,7 @@ var init_types2 = __esm({
         ...processCreateParams2(params)
       });
     };
-    ZodArray2 = class _ZodArray3 extends ZodType2 {
+    ZodArray2 = class _ZodArray4 extends ZodType2 {
       _parse(input) {
         const { ctx, status } = this._processInputParams(input);
         const def = this._def;
@@ -13116,19 +13286,19 @@ var init_types2 = __esm({
         return this._def.type;
       }
       min(minLength, message) {
-        return new _ZodArray3({
+        return new _ZodArray4({
           ...this._def,
           minLength: { value: minLength, message: errorUtil2.toString(message) }
         });
       }
       max(maxLength, message) {
-        return new _ZodArray3({
+        return new _ZodArray4({
           ...this._def,
           maxLength: { value: maxLength, message: errorUtil2.toString(message) }
         });
       }
       length(len, message) {
-        return new _ZodArray3({
+        return new _ZodArray4({
           ...this._def,
           exactLength: { value: len, message: errorUtil2.toString(message) }
         });
@@ -13147,7 +13317,7 @@ var init_types2 = __esm({
         ...processCreateParams2(params)
       });
     };
-    ZodObject2 = class _ZodObject3 extends ZodType2 {
+    ZodObject2 = class _ZodObject4 extends ZodType2 {
       constructor() {
         super(...arguments);
         this._cached = null;
@@ -13253,7 +13423,7 @@ var init_types2 = __esm({
       }
       strict(message) {
         errorUtil2.errToObj;
-        return new _ZodObject3({
+        return new _ZodObject4({
           ...this._def,
           unknownKeys: "strict",
           ...message !== void 0 ? {
@@ -13271,13 +13441,13 @@ var init_types2 = __esm({
         });
       }
       strip() {
-        return new _ZodObject3({
+        return new _ZodObject4({
           ...this._def,
           unknownKeys: "strip"
         });
       }
       passthrough() {
-        return new _ZodObject3({
+        return new _ZodObject4({
           ...this._def,
           unknownKeys: "passthrough"
         });
@@ -13300,7 +13470,7 @@ var init_types2 = __esm({
       //     }) as any;
       //   };
       extend(augmentation) {
-        return new _ZodObject3({
+        return new _ZodObject4({
           ...this._def,
           shape: () => ({
             ...this._def.shape(),
@@ -13314,7 +13484,7 @@ var init_types2 = __esm({
        * upgrade if you are experiencing issues.
        */
       merge(merging) {
-        const merged = new _ZodObject3({
+        const merged = new _ZodObject4({
           unknownKeys: merging._def.unknownKeys,
           catchall: merging._def.catchall,
           shape: () => ({
@@ -13385,7 +13555,7 @@ var init_types2 = __esm({
       //   return merged;
       // }
       catchall(index) {
-        return new _ZodObject3({
+        return new _ZodObject4({
           ...this._def,
           catchall: index
         });
@@ -13397,7 +13567,7 @@ var init_types2 = __esm({
             shape[key] = this.shape[key];
           }
         }
-        return new _ZodObject3({
+        return new _ZodObject4({
           ...this._def,
           shape: () => shape
         });
@@ -13409,7 +13579,7 @@ var init_types2 = __esm({
             shape[key] = this.shape[key];
           }
         }
-        return new _ZodObject3({
+        return new _ZodObject4({
           ...this._def,
           shape: () => shape
         });
@@ -13430,7 +13600,7 @@ var init_types2 = __esm({
             newShape[key] = fieldSchema.optional();
           }
         }
-        return new _ZodObject3({
+        return new _ZodObject4({
           ...this._def,
           shape: () => newShape
         });
@@ -13449,7 +13619,7 @@ var init_types2 = __esm({
             newShape[key] = newField;
           }
         }
-        return new _ZodObject3({
+        return new _ZodObject4({
           ...this._def,
           shape: () => newShape
         });
@@ -13607,7 +13777,7 @@ var init_types2 = __esm({
         return [];
       }
     };
-    ZodDiscriminatedUnion2 = class _ZodDiscriminatedUnion3 extends ZodType2 {
+    ZodDiscriminatedUnion2 = class _ZodDiscriminatedUnion4 extends ZodType2 {
       _parse(input) {
         const { ctx } = this._processInputParams(input);
         if (ctx.parsedType !== ZodParsedType2.object) {
@@ -13674,7 +13844,7 @@ var init_types2 = __esm({
             optionsMap.set(value4, type);
           }
         }
-        return new _ZodDiscriminatedUnion3({
+        return new _ZodDiscriminatedUnion4({
           typeName: ZodFirstPartyTypeKind2.ZodDiscriminatedUnion,
           discriminator,
           options,
@@ -13736,7 +13906,7 @@ var init_types2 = __esm({
         ...processCreateParams2(params)
       });
     };
-    ZodTuple2 = class _ZodTuple3 extends ZodType2 {
+    ZodTuple2 = class _ZodTuple4 extends ZodType2 {
       _parse(input) {
         const { status, ctx } = this._processInputParams(input);
         if (ctx.parsedType !== ZodParsedType2.array) {
@@ -13786,7 +13956,7 @@ var init_types2 = __esm({
         return this._def.items;
       }
       rest(rest) {
-        return new _ZodTuple3({
+        return new _ZodTuple4({
           ...this._def,
           rest
         });
@@ -13803,7 +13973,7 @@ var init_types2 = __esm({
         ...processCreateParams2(params)
       });
     };
-    ZodRecord2 = class _ZodRecord3 extends ZodType2 {
+    ZodRecord2 = class _ZodRecord4 extends ZodType2 {
       get keySchema() {
         return this._def.keyType;
       }
@@ -13841,14 +14011,14 @@ var init_types2 = __esm({
       }
       static create(first, second, third) {
         if (second instanceof ZodType2) {
-          return new _ZodRecord3({
+          return new _ZodRecord4({
             keyType: first,
             valueType: second,
             typeName: ZodFirstPartyTypeKind2.ZodRecord,
             ...processCreateParams2(third)
           });
         }
-        return new _ZodRecord3({
+        return new _ZodRecord4({
           keyType: ZodString2.create(),
           valueType: first,
           typeName: ZodFirstPartyTypeKind2.ZodRecord,
@@ -13922,7 +14092,7 @@ var init_types2 = __esm({
         ...processCreateParams2(params)
       });
     };
-    ZodSet2 = class _ZodSet3 extends ZodType2 {
+    ZodSet2 = class _ZodSet4 extends ZodType2 {
       _parse(input) {
         const { status, ctx } = this._processInputParams(input);
         if (ctx.parsedType !== ZodParsedType2.set) {
@@ -13980,13 +14150,13 @@ var init_types2 = __esm({
         }
       }
       min(minSize, message) {
-        return new _ZodSet3({
+        return new _ZodSet4({
           ...this._def,
           minSize: { value: minSize, message: errorUtil2.toString(message) }
         });
       }
       max(maxSize, message) {
-        return new _ZodSet3({
+        return new _ZodSet4({
           ...this._def,
           maxSize: { value: maxSize, message: errorUtil2.toString(message) }
         });
@@ -14007,7 +14177,7 @@ var init_types2 = __esm({
         ...processCreateParams2(params)
       });
     };
-    ZodFunction2 = class _ZodFunction3 extends ZodType2 {
+    ZodFunction2 = class _ZodFunction4 extends ZodType2 {
       constructor() {
         super(...arguments);
         this.validate = this.implement;
@@ -14084,13 +14254,13 @@ var init_types2 = __esm({
         return this._def.returns;
       }
       args(...items) {
-        return new _ZodFunction3({
+        return new _ZodFunction4({
           ...this._def,
           args: ZodTuple2.create(items).rest(ZodUnknown2.create())
         });
       }
       returns(returnType) {
-        return new _ZodFunction3({
+        return new _ZodFunction4({
           ...this._def,
           returns: returnType
         });
@@ -14104,7 +14274,7 @@ var init_types2 = __esm({
         return validatedFunc;
       }
       static create(args, returns, params) {
-        return new _ZodFunction3({
+        return new _ZodFunction4({
           args: args ? args : ZodTuple2.create([]).rest(ZodUnknown2.create()),
           returns: returns || ZodUnknown2.create(),
           typeName: ZodFirstPartyTypeKind2.ZodFunction,
@@ -14153,7 +14323,7 @@ var init_types2 = __esm({
         ...processCreateParams2(params)
       });
     };
-    ZodEnum2 = class _ZodEnum3 extends ZodType2 {
+    ZodEnum2 = class _ZodEnum4 extends ZodType2 {
       _parse(input) {
         if (typeof input.data !== "string") {
           const ctx = this._getOrReturnCtx(input);
@@ -14205,13 +14375,13 @@ var init_types2 = __esm({
         return enumValues;
       }
       extract(values, newDef = this._def) {
-        return _ZodEnum3.create(values, {
+        return _ZodEnum4.create(values, {
           ...this._def,
           ...newDef
         });
       }
       exclude(values, newDef = this._def) {
-        return _ZodEnum3.create(this.options.filter((opt) => !values.includes(opt)), {
+        return _ZodEnum4.create(this.options.filter((opt) => !values.includes(opt)), {
           ...this._def,
           ...newDef
         });
@@ -14383,23 +14553,23 @@ var init_types2 = __esm({
         }
         if (effect.type === "transform") {
           if (ctx.common.async === false) {
-            const base5 = this._def.schema._parseSync({
+            const base6 = this._def.schema._parseSync({
               data: ctx.data,
               path: ctx.path,
               parent: ctx
             });
-            if (!isValid2(base5))
+            if (!isValid2(base6))
               return INVALID2;
-            const result = effect.transform(base5.value, checkCtx);
+            const result = effect.transform(base6.value, checkCtx);
             if (result instanceof Promise) {
               throw new Error(`Asynchronous transform encountered during synchronous parse operation. Use .parseAsync instead.`);
             }
             return { status: status.value, value: result };
           } else {
-            return this._def.schema._parseAsync({ data: ctx.data, path: ctx.path, parent: ctx }).then((base5) => {
-              if (!isValid2(base5))
+            return this._def.schema._parseAsync({ data: ctx.data, path: ctx.path, parent: ctx }).then((base6) => {
+              if (!isValid2(base6))
                 return INVALID2;
-              return Promise.resolve(effect.transform(base5.value, checkCtx)).then((result) => ({
+              return Promise.resolve(effect.transform(base6.value, checkCtx)).then((result) => ({
                 status: status.value,
                 value: result
               }));
@@ -14577,7 +14747,7 @@ var init_types2 = __esm({
         return this._def.type;
       }
     };
-    ZodPipeline2 = class _ZodPipeline3 extends ZodType2 {
+    ZodPipeline2 = class _ZodPipeline4 extends ZodType2 {
       _parse(input) {
         const { status, ctx } = this._processInputParams(input);
         if (ctx.common.async) {
@@ -14625,7 +14795,7 @@ var init_types2 = __esm({
         }
       }
       static create(a, b) {
-        return new _ZodPipeline3({
+        return new _ZodPipeline4({
           in: a,
           out: b,
           typeName: ZodFirstPartyTypeKind2.ZodPipeline
@@ -14657,43 +14827,43 @@ var init_types2 = __esm({
     late2 = {
       object: ZodObject2.lazycreate
     };
-    (function(ZodFirstPartyTypeKind4) {
-      ZodFirstPartyTypeKind4["ZodString"] = "ZodString";
-      ZodFirstPartyTypeKind4["ZodNumber"] = "ZodNumber";
-      ZodFirstPartyTypeKind4["ZodNaN"] = "ZodNaN";
-      ZodFirstPartyTypeKind4["ZodBigInt"] = "ZodBigInt";
-      ZodFirstPartyTypeKind4["ZodBoolean"] = "ZodBoolean";
-      ZodFirstPartyTypeKind4["ZodDate"] = "ZodDate";
-      ZodFirstPartyTypeKind4["ZodSymbol"] = "ZodSymbol";
-      ZodFirstPartyTypeKind4["ZodUndefined"] = "ZodUndefined";
-      ZodFirstPartyTypeKind4["ZodNull"] = "ZodNull";
-      ZodFirstPartyTypeKind4["ZodAny"] = "ZodAny";
-      ZodFirstPartyTypeKind4["ZodUnknown"] = "ZodUnknown";
-      ZodFirstPartyTypeKind4["ZodNever"] = "ZodNever";
-      ZodFirstPartyTypeKind4["ZodVoid"] = "ZodVoid";
-      ZodFirstPartyTypeKind4["ZodArray"] = "ZodArray";
-      ZodFirstPartyTypeKind4["ZodObject"] = "ZodObject";
-      ZodFirstPartyTypeKind4["ZodUnion"] = "ZodUnion";
-      ZodFirstPartyTypeKind4["ZodDiscriminatedUnion"] = "ZodDiscriminatedUnion";
-      ZodFirstPartyTypeKind4["ZodIntersection"] = "ZodIntersection";
-      ZodFirstPartyTypeKind4["ZodTuple"] = "ZodTuple";
-      ZodFirstPartyTypeKind4["ZodRecord"] = "ZodRecord";
-      ZodFirstPartyTypeKind4["ZodMap"] = "ZodMap";
-      ZodFirstPartyTypeKind4["ZodSet"] = "ZodSet";
-      ZodFirstPartyTypeKind4["ZodFunction"] = "ZodFunction";
-      ZodFirstPartyTypeKind4["ZodLazy"] = "ZodLazy";
-      ZodFirstPartyTypeKind4["ZodLiteral"] = "ZodLiteral";
-      ZodFirstPartyTypeKind4["ZodEnum"] = "ZodEnum";
-      ZodFirstPartyTypeKind4["ZodEffects"] = "ZodEffects";
-      ZodFirstPartyTypeKind4["ZodNativeEnum"] = "ZodNativeEnum";
-      ZodFirstPartyTypeKind4["ZodOptional"] = "ZodOptional";
-      ZodFirstPartyTypeKind4["ZodNullable"] = "ZodNullable";
-      ZodFirstPartyTypeKind4["ZodDefault"] = "ZodDefault";
-      ZodFirstPartyTypeKind4["ZodCatch"] = "ZodCatch";
-      ZodFirstPartyTypeKind4["ZodPromise"] = "ZodPromise";
-      ZodFirstPartyTypeKind4["ZodBranded"] = "ZodBranded";
-      ZodFirstPartyTypeKind4["ZodPipeline"] = "ZodPipeline";
-      ZodFirstPartyTypeKind4["ZodReadonly"] = "ZodReadonly";
+    (function(ZodFirstPartyTypeKind5) {
+      ZodFirstPartyTypeKind5["ZodString"] = "ZodString";
+      ZodFirstPartyTypeKind5["ZodNumber"] = "ZodNumber";
+      ZodFirstPartyTypeKind5["ZodNaN"] = "ZodNaN";
+      ZodFirstPartyTypeKind5["ZodBigInt"] = "ZodBigInt";
+      ZodFirstPartyTypeKind5["ZodBoolean"] = "ZodBoolean";
+      ZodFirstPartyTypeKind5["ZodDate"] = "ZodDate";
+      ZodFirstPartyTypeKind5["ZodSymbol"] = "ZodSymbol";
+      ZodFirstPartyTypeKind5["ZodUndefined"] = "ZodUndefined";
+      ZodFirstPartyTypeKind5["ZodNull"] = "ZodNull";
+      ZodFirstPartyTypeKind5["ZodAny"] = "ZodAny";
+      ZodFirstPartyTypeKind5["ZodUnknown"] = "ZodUnknown";
+      ZodFirstPartyTypeKind5["ZodNever"] = "ZodNever";
+      ZodFirstPartyTypeKind5["ZodVoid"] = "ZodVoid";
+      ZodFirstPartyTypeKind5["ZodArray"] = "ZodArray";
+      ZodFirstPartyTypeKind5["ZodObject"] = "ZodObject";
+      ZodFirstPartyTypeKind5["ZodUnion"] = "ZodUnion";
+      ZodFirstPartyTypeKind5["ZodDiscriminatedUnion"] = "ZodDiscriminatedUnion";
+      ZodFirstPartyTypeKind5["ZodIntersection"] = "ZodIntersection";
+      ZodFirstPartyTypeKind5["ZodTuple"] = "ZodTuple";
+      ZodFirstPartyTypeKind5["ZodRecord"] = "ZodRecord";
+      ZodFirstPartyTypeKind5["ZodMap"] = "ZodMap";
+      ZodFirstPartyTypeKind5["ZodSet"] = "ZodSet";
+      ZodFirstPartyTypeKind5["ZodFunction"] = "ZodFunction";
+      ZodFirstPartyTypeKind5["ZodLazy"] = "ZodLazy";
+      ZodFirstPartyTypeKind5["ZodLiteral"] = "ZodLiteral";
+      ZodFirstPartyTypeKind5["ZodEnum"] = "ZodEnum";
+      ZodFirstPartyTypeKind5["ZodEffects"] = "ZodEffects";
+      ZodFirstPartyTypeKind5["ZodNativeEnum"] = "ZodNativeEnum";
+      ZodFirstPartyTypeKind5["ZodOptional"] = "ZodOptional";
+      ZodFirstPartyTypeKind5["ZodNullable"] = "ZodNullable";
+      ZodFirstPartyTypeKind5["ZodDefault"] = "ZodDefault";
+      ZodFirstPartyTypeKind5["ZodCatch"] = "ZodCatch";
+      ZodFirstPartyTypeKind5["ZodPromise"] = "ZodPromise";
+      ZodFirstPartyTypeKind5["ZodBranded"] = "ZodBranded";
+      ZodFirstPartyTypeKind5["ZodPipeline"] = "ZodPipeline";
+      ZodFirstPartyTypeKind5["ZodReadonly"] = "ZodReadonly";
     })(ZodFirstPartyTypeKind2 || (ZodFirstPartyTypeKind2 = {}));
     instanceOfType2 = (cls, params = {
       message: `Input not instance of ${cls.name}`
@@ -14937,7 +15107,7 @@ function base2(ALPHABET, name) {
   var LEADER = ALPHABET.charAt(0);
   var FACTOR = Math.log(BASE) / Math.log(256);
   var iFACTOR = Math.log(256) / Math.log(BASE);
-  function encode7(source) {
+  function encode8(source) {
     if (source instanceof Uint8Array)
       ;
     else if (ArrayBuffer.isView(source)) {
@@ -14952,7 +15122,7 @@ function base2(ALPHABET, name) {
       return "";
     }
     var zeroes = 0;
-    var length5 = 0;
+    var length6 = 0;
     var pbegin = 0;
     var pend = source.length;
     while (pbegin !== pend && source[pbegin] === 0) {
@@ -14964,7 +15134,7 @@ function base2(ALPHABET, name) {
     while (pbegin !== pend) {
       var carry = source[pbegin];
       var i2 = 0;
-      for (var it1 = size - 1; (carry !== 0 || i2 < length5) && it1 !== -1; it1--, i2++) {
+      for (var it1 = size - 1; (carry !== 0 || i2 < length6) && it1 !== -1; it1--, i2++) {
         carry += 256 * b58[it1] >>> 0;
         b58[it1] = carry % BASE >>> 0;
         carry = carry / BASE >>> 0;
@@ -14972,10 +15142,10 @@ function base2(ALPHABET, name) {
       if (carry !== 0) {
         throw new Error("Non-zero carry");
       }
-      length5 = i2;
+      length6 = i2;
       pbegin++;
     }
-    var it2 = size - length5;
+    var it2 = size - length6;
     while (it2 !== size && b58[it2] === 0) {
       it2++;
     }
@@ -14997,7 +15167,7 @@ function base2(ALPHABET, name) {
       return;
     }
     var zeroes = 0;
-    var length5 = 0;
+    var length6 = 0;
     while (source[psz] === LEADER) {
       zeroes++;
       psz++;
@@ -15010,7 +15180,7 @@ function base2(ALPHABET, name) {
         return;
       }
       var i2 = 0;
-      for (var it3 = size - 1; (carry !== 0 || i2 < length5) && it3 !== -1; it3--, i2++) {
+      for (var it3 = size - 1; (carry !== 0 || i2 < length6) && it3 !== -1; it3--, i2++) {
         carry += BASE * b256[it3] >>> 0;
         b256[it3] = carry % 256 >>> 0;
         carry = carry / 256 >>> 0;
@@ -15018,13 +15188,13 @@ function base2(ALPHABET, name) {
       if (carry !== 0) {
         throw new Error("Non-zero carry");
       }
-      length5 = i2;
+      length6 = i2;
       psz++;
     }
     if (source[psz] === " ") {
       return;
     }
-    var it4 = size - length5;
+    var it4 = size - length6;
     while (it4 !== size && b256[it4] === 0) {
       it4++;
     }
@@ -15035,7 +15205,7 @@ function base2(ALPHABET, name) {
     }
     return vch;
   }
-  function decode11(string) {
+  function decode12(string) {
     var buffer = decodeUnsafe(string);
     if (buffer) {
       return buffer;
@@ -15043,9 +15213,9 @@ function base2(ALPHABET, name) {
     throw new Error(`Non-${name} character`);
   }
   return {
-    encode: encode7,
+    encode: encode8,
     decodeUnsafe,
-    decode: decode11
+    decode: decode12
   };
 }
 var src2, _brrp__multiformats_scope_baseX2, base_x_default2;
@@ -15065,16 +15235,16 @@ function or2(left, right) {
     ...right.decoders ?? { [right.prefix]: right }
   });
 }
-function from2({ name, prefix, encode: encode7, decode: decode11 }) {
-  return new Codec2(name, prefix, encode7, decode11);
+function from2({ name, prefix, encode: encode8, decode: decode12 }) {
+  return new Codec2(name, prefix, encode8, decode12);
 }
 function baseX2({ name, prefix, alphabet }) {
-  const { encode: encode7, decode: decode11 } = base_x_default2(alphabet, name);
+  const { encode: encode8, decode: decode12 } = base_x_default2(alphabet, name);
   return from2({
     prefix,
     name,
-    encode: encode7,
-    decode: (text2) => coerce4(decode11(text2))
+    encode: encode8,
+    decode: (text2) => coerce4(decode12(text2))
   });
 }
 function decode5(string, alphabetIdx, bitsPerChar, name) {
@@ -15443,8 +15613,8 @@ var init_varint = __esm({
 
 // ../../node_modules/multiformats/dist/src/varint.js
 function decode7(data, offset = 0) {
-  const code5 = varint_default2.decode(data, offset);
-  return [code5, varint_default2.decode.bytes];
+  const code6 = varint_default2.decode(data, offset);
+  return [code6, varint_default2.decode.bytes];
 }
 function encodeTo2(int, target, offset = 0) {
   varint_default2.encode(int, target, offset);
@@ -15461,25 +15631,25 @@ var init_varint2 = __esm({
 });
 
 // ../../node_modules/multiformats/dist/src/hashes/digest.js
-function create2(code5, digest3) {
+function create2(code6, digest3) {
   const size = digest3.byteLength;
-  const sizeOffset = encodingLength2(code5);
+  const sizeOffset = encodingLength2(code6);
   const digestOffset = sizeOffset + encodingLength2(size);
   const bytes = new Uint8Array(digestOffset + size);
-  encodeTo2(code5, bytes, 0);
+  encodeTo2(code6, bytes, 0);
   encodeTo2(size, bytes, sizeOffset);
   bytes.set(digest3, digestOffset);
-  return new Digest2(code5, size, digest3, bytes);
+  return new Digest2(code6, size, digest3, bytes);
 }
 function decode8(multihash) {
   const bytes = coerce4(multihash);
-  const [code5, sizeOffset] = decode7(bytes);
+  const [code6, sizeOffset] = decode7(bytes);
   const [size, digestOffset] = decode7(bytes.subarray(sizeOffset));
   const digest3 = bytes.subarray(sizeOffset + digestOffset);
   if (digest3.byteLength !== size) {
     throw new Error("Incorrect length");
   }
-  return new Digest2(code5, size, digest3, bytes);
+  return new Digest2(code6, size, digest3, bytes);
 }
 function equals4(a, b) {
   if (a === b) {
@@ -15503,8 +15673,8 @@ var init_digest = __esm({
       /**
        * Creates a multihash digest.
        */
-      constructor(code5, size, digest3, bytes) {
-        this.code = code5;
+      constructor(code6, size, digest3, bytes) {
+        this.code = code6;
         this.size = size;
         this.digest = digest3;
         this.bytes = bytes;
@@ -15521,85 +15691,85 @@ var init_interface = __esm({
 });
 
 // ../../node_modules/multiformats/dist/src/cid.js
-function format2(link5, base5) {
+function format2(link5, base6) {
   const { bytes, version } = link5;
   switch (version) {
     case 0:
-      return toStringV02(bytes, baseCache2(link5), base5 ?? base58btc2.encoder);
+      return toStringV02(bytes, baseCache2(link5), base6 ?? base58btc2.encoder);
     default:
-      return toStringV12(bytes, baseCache2(link5), base5 ?? base322.encoder);
+      return toStringV12(bytes, baseCache2(link5), base6 ?? base322.encoder);
   }
 }
 function baseCache2(cid) {
-  const baseCache5 = cache2.get(cid);
-  if (baseCache5 == null) {
-    const baseCache6 = /* @__PURE__ */ new Map();
-    cache2.set(cid, baseCache6);
-    return baseCache6;
+  const baseCache6 = cache2.get(cid);
+  if (baseCache6 == null) {
+    const baseCache7 = /* @__PURE__ */ new Map();
+    cache2.set(cid, baseCache7);
+    return baseCache7;
   }
-  return baseCache5;
+  return baseCache6;
 }
-function parseCIDtoBytes2(source, base5) {
+function parseCIDtoBytes2(source, base6) {
   switch (source[0]) {
     // CIDv0 is parsed differently
     case "Q": {
-      const decoder = base5 ?? base58btc2;
+      const decoder = base6 ?? base58btc2;
       return [
         base58btc2.prefix,
         decoder.decode(`${base58btc2.prefix}${source}`)
       ];
     }
     case base58btc2.prefix: {
-      const decoder = base5 ?? base58btc2;
+      const decoder = base6 ?? base58btc2;
       return [base58btc2.prefix, decoder.decode(source)];
     }
     case base322.prefix: {
-      const decoder = base5 ?? base322;
+      const decoder = base6 ?? base322;
       return [base322.prefix, decoder.decode(source)];
     }
     case base362.prefix: {
-      const decoder = base5 ?? base362;
+      const decoder = base6 ?? base362;
       return [base362.prefix, decoder.decode(source)];
     }
     default: {
-      if (base5 == null) {
+      if (base6 == null) {
         throw Error("To parse non base32, base36 or base58btc encoded CID multibase decoder must be provided");
       }
-      return [source[0], base5.decode(source)];
+      return [source[0], base6.decode(source)];
     }
   }
 }
-function toStringV02(bytes, cache5, base5) {
-  const { prefix } = base5;
+function toStringV02(bytes, cache6, base6) {
+  const { prefix } = base6;
   if (prefix !== base58btc2.prefix) {
-    throw Error(`Cannot string encode V0 in ${base5.name} encoding`);
+    throw Error(`Cannot string encode V0 in ${base6.name} encoding`);
   }
-  const cid = cache5.get(prefix);
+  const cid = cache6.get(prefix);
   if (cid == null) {
-    const cid2 = base5.encode(bytes).slice(1);
-    cache5.set(prefix, cid2);
+    const cid2 = base6.encode(bytes).slice(1);
+    cache6.set(prefix, cid2);
     return cid2;
   } else {
     return cid;
   }
 }
-function toStringV12(bytes, cache5, base5) {
-  const { prefix } = base5;
-  const cid = cache5.get(prefix);
+function toStringV12(bytes, cache6, base6) {
+  const { prefix } = base6;
+  const cid = cache6.get(prefix);
   if (cid == null) {
-    const cid2 = base5.encode(bytes);
-    cache5.set(prefix, cid2);
+    const cid2 = base6.encode(bytes);
+    cache6.set(prefix, cid2);
     return cid2;
   } else {
     return cid;
   }
 }
-function encodeCID2(version, code5, multihash) {
+function encodeCID2(version, code6, multihash) {
   const codeOffset = encodingLength2(version);
-  const hashOffset = codeOffset + encodingLength2(code5);
+  const hashOffset = codeOffset + encodingLength2(code6);
   const bytes = new Uint8Array(hashOffset + multihash.byteLength);
   encodeTo2(version, bytes, 0);
-  encodeTo2(code5, bytes, codeOffset);
+  encodeTo2(code6, bytes, codeOffset);
   bytes.set(multihash, hashOffset);
   return bytes;
 }
@@ -15615,7 +15785,7 @@ var init_cid = __esm({
     init_varint2();
     init_interface();
     cache2 = /* @__PURE__ */ new WeakMap();
-    CID2 = class _CID4 {
+    CID2 = class _CID5 {
       code;
       version;
       multihash;
@@ -15626,8 +15796,8 @@ var init_cid = __esm({
        * @param code - Code of the codec content is encoded in, see https://github.com/multiformats/multicodec/blob/master/table.csv
        * @param multihash - (Multi)hash of the of the content.
        */
-      constructor(version, code5, multihash, bytes) {
-        this.code = code5;
+      constructor(version, code6, multihash, bytes) {
+        this.code = code6;
         this.version = version;
         this.multihash = multihash;
         this.bytes = bytes;
@@ -15656,14 +15826,14 @@ var init_cid = __esm({
             return this;
           }
           case 1: {
-            const { code: code5, multihash } = this;
-            if (code5 !== DAG_PB_CODE2) {
+            const { code: code6, multihash } = this;
+            if (code6 !== DAG_PB_CODE2) {
               throw new Error("Cannot convert a non dag-pb CID to CIDv0");
             }
             if (multihash.code !== SHA_256_CODE2) {
               throw new Error("Cannot convert non sha2-256 multihash CID to CIDv0");
             }
-            return _CID4.createV0(multihash);
+            return _CID5.createV0(multihash);
           }
           default: {
             throw Error(`Can not convert CID version ${this.version} to version 0. This is a bug please report`);
@@ -15673,9 +15843,9 @@ var init_cid = __esm({
       toV1() {
         switch (this.version) {
           case 0: {
-            const { code: code5, digest: digest3 } = this.multihash;
-            const multihash = create2(code5, digest3);
-            return _CID4.createV1(this.code, multihash);
+            const { code: code6, digest: digest3 } = this.multihash;
+            const multihash = create2(code6, digest3);
+            return _CID5.createV1(this.code, multihash);
           }
           case 1: {
             return this;
@@ -15686,14 +15856,14 @@ var init_cid = __esm({
         }
       }
       equals(other) {
-        return _CID4.equals(this, other);
+        return _CID5.equals(this, other);
       }
       static equals(self, other) {
         const unknown = other;
         return unknown != null && self.code === unknown.code && self.version === unknown.version && equals4(self.multihash, unknown.multihash);
       }
-      toString(base5) {
-        return format2(this, base5);
+      toString(base6) {
+        return format2(this, base6);
       }
       toJSON() {
         return { "/": format2(this) };
@@ -15721,15 +15891,15 @@ var init_cid = __esm({
           return null;
         }
         const value4 = input;
-        if (value4 instanceof _CID4) {
+        if (value4 instanceof _CID5) {
           return value4;
         } else if (value4["/"] != null && value4["/"] === value4.bytes || value4.asCID === value4) {
-          const { version, code: code5, multihash, bytes } = value4;
-          return new _CID4(version, code5, multihash, bytes ?? encodeCID2(version, code5, multihash.bytes));
+          const { version, code: code6, multihash, bytes } = value4;
+          return new _CID5(version, code6, multihash, bytes ?? encodeCID2(version, code6, multihash.bytes));
         } else if (value4[cidSymbol2] === true) {
-          const { version, multihash, code: code5 } = value4;
+          const { version, multihash, code: code6 } = value4;
           const digest3 = decode8(multihash);
-          return _CID4.create(version, code5, digest3);
+          return _CID5.create(version, code6, digest3);
         } else {
           return null;
         }
@@ -15739,8 +15909,8 @@ var init_cid = __esm({
        * @param code - Code of the codec content is encoded in, see https://github.com/multiformats/multicodec/blob/master/table.csv
        * @param digest - (Multi)hash of the of the content.
        */
-      static create(version, code5, digest3) {
-        if (typeof code5 !== "number") {
+      static create(version, code6, digest3) {
+        if (typeof code6 !== "number") {
           throw new Error("String codecs are no longer supported");
         }
         if (!(digest3.bytes instanceof Uint8Array)) {
@@ -15748,15 +15918,15 @@ var init_cid = __esm({
         }
         switch (version) {
           case 0: {
-            if (code5 !== DAG_PB_CODE2) {
+            if (code6 !== DAG_PB_CODE2) {
               throw new Error(`Version 0 CID must use dag-pb (code: ${DAG_PB_CODE2}) block encoding`);
             } else {
-              return new _CID4(version, code5, digest3, digest3.bytes);
+              return new _CID5(version, code6, digest3, digest3.bytes);
             }
           }
           case 1: {
-            const bytes = encodeCID2(version, code5, digest3.bytes);
-            return new _CID4(version, code5, digest3, bytes);
+            const bytes = encodeCID2(version, code6, digest3.bytes);
+            return new _CID5(version, code6, digest3, bytes);
           }
           default: {
             throw new Error("Invalid version");
@@ -15767,7 +15937,7 @@ var init_cid = __esm({
        * Simplified version of `create` for CIDv0.
        */
       static createV0(digest3) {
-        return _CID4.create(0, DAG_PB_CODE2, digest3);
+        return _CID5.create(0, DAG_PB_CODE2, digest3);
       }
       /**
        * Simplified version of `create` for CIDv1.
@@ -15775,8 +15945,8 @@ var init_cid = __esm({
        * @param code - Content encoding format code.
        * @param digest - Multihash of the content.
        */
-      static createV1(code5, digest3) {
-        return _CID4.create(1, code5, digest3);
+      static createV1(code6, digest3) {
+        return _CID5.create(1, code6, digest3);
       }
       /**
        * Decoded a CID from its binary representation. The byte array must contain
@@ -15786,7 +15956,7 @@ var init_cid = __esm({
        * binary representation of a CID.
        */
       static decode(bytes) {
-        const [cid, remainder] = _CID4.decodeFirst(bytes);
+        const [cid, remainder] = _CID5.decodeFirst(bytes);
         if (remainder.length !== 0) {
           throw new Error("Incorrect length");
         }
@@ -15802,7 +15972,7 @@ var init_cid = __esm({
        * binary CID representation.
        */
       static decodeFirst(bytes) {
-        const specs = _CID4.inspectBytes(bytes);
+        const specs = _CID5.inspectBytes(bytes);
         const prefixSize = specs.size - specs.multihashSize;
         const multihashBytes = coerce4(bytes.subarray(prefixSize, prefixSize + specs.multihashSize));
         if (multihashBytes.byteLength !== specs.multihashSize) {
@@ -15810,7 +15980,7 @@ var init_cid = __esm({
         }
         const digestBytes = multihashBytes.subarray(specs.multihashSize - specs.digestSize);
         const digest3 = new Digest2(specs.multihashCode, specs.digestSize, digestBytes, multihashBytes);
-        const cid = specs.version === 0 ? _CID4.createV0(digest3) : _CID4.createV1(specs.codec, digest3);
+        const cid = specs.version === 0 ? _CID5.createV0(digest3) : _CID5.createV1(specs.codec, digest3);
         return [cid, bytes.subarray(specs.size)];
       }
       /**
@@ -15825,8 +15995,8 @@ var init_cid = __esm({
       static inspectBytes(initialBytes) {
         let offset = 0;
         const next = () => {
-          const [i, length5] = decode7(initialBytes.subarray(offset));
-          offset += length5;
+          const [i, length6] = decode7(initialBytes.subarray(offset));
+          offset += length6;
           return i;
         };
         let version = next();
@@ -15853,9 +16023,9 @@ var init_cid = __esm({
        * throw an error if encoding of the CID is not compatible with supplied (or
        * a default decoder).
        */
-      static parse(source, base5) {
-        const [prefix, bytes] = parseCIDtoBytes2(source, base5);
-        const cid = _CID4.decode(bytes);
+      static parse(source, base6) {
+        const [prefix, bytes] = parseCIDtoBytes2(source, base6);
+        const cid = _CID5.decode(bytes);
         if (cid.version === 0 && source[0] !== "Q") {
           throw Error("Version 0 CID string must not include multibase prefix");
         }
@@ -15898,10 +16068,10 @@ function _splitEndoScalar(k, basis, n) {
   }
   return { k1neg, k1, k2neg, k2 };
 }
-function validateSigFormat(format5) {
-  if (!["compact", "recovered", "der"].includes(format5))
+function validateSigFormat(format6) {
+  if (!["compact", "recovered", "der"].includes(format6))
     throw new Error('Signature format must be "compact", "recovered", or "der"');
-  return format5;
+  return format6;
 }
 function validateSigOpts(opts, def) {
   const optsn = {};
@@ -15971,10 +16141,10 @@ function weierstrassN(params, extraOpts = {}) {
   function pointFromBytes(bytes) {
     _abytes2(bytes, void 0, "Point");
     const { publicKey: comp, publicKeyUncompressed: uncomp } = lengths;
-    const length5 = bytes.length;
+    const length6 = bytes.length;
     const head = bytes[0];
     const tail = bytes.subarray(1);
-    if (length5 === comp && (head === 2 || head === 3)) {
+    if (length6 === comp && (head === 2 || head === 3)) {
       const x = Fp2.fromBytes(tail);
       if (!Fp2.isValid(x))
         throw new Error("bad point: is not on curve, wrong x");
@@ -15992,7 +16162,7 @@ function weierstrassN(params, extraOpts = {}) {
       if (isHeadOdd !== isYOdd)
         y = Fp2.neg(y);
       return { x, y };
-    } else if (length5 === uncomp && head === 4) {
+    } else if (length6 === uncomp && head === 4) {
       const L = Fp2.BYTES;
       const x = Fp2.fromBytes(tail.subarray(0, L));
       const y = Fp2.fromBytes(tail.subarray(L, L * 2));
@@ -16000,7 +16170,7 @@ function weierstrassN(params, extraOpts = {}) {
         throw new Error("bad point: is not on curve");
       return { x, y };
     } else {
-      throw new Error(`bad point: got length ${length5}, expected compressed=${comp} or uncompressed=${uncomp}`);
+      throw new Error(`bad point: got length ${length6}, expected compressed=${comp} or uncompressed=${uncomp}`);
     }
   }
   const encodePoint = extraOpts.toBytes || pointToBytes;
@@ -16488,11 +16658,11 @@ function ecdsa(Point, hash, ecdsaOpts = {}) {
       throw new Error(`invalid signature ${title}: out of range 1..Point.Fn.ORDER`);
     return num;
   }
-  function validateSigLength(bytes, format5) {
-    validateSigFormat(format5);
+  function validateSigLength(bytes, format6) {
+    validateSigFormat(format6);
     const size = lengths.signature;
-    const sizer = format5 === "compact" ? size : format5 === "recovered" ? size + 1 : void 0;
-    return _abytes2(bytes, sizer, `${format5} signature`);
+    const sizer = format6 === "compact" ? size : format6 === "recovered" ? size + 1 : void 0;
+    return _abytes2(bytes, sizer, `${format6} signature`);
   }
   class Signature {
     constructor(r, s, recovery) {
@@ -16502,16 +16672,16 @@ function ecdsa(Point, hash, ecdsaOpts = {}) {
         this.recovery = recovery;
       Object.freeze(this);
     }
-    static fromBytes(bytes, format5 = defaultSigOpts_format) {
-      validateSigLength(bytes, format5);
+    static fromBytes(bytes, format6 = defaultSigOpts_format) {
+      validateSigLength(bytes, format6);
       let recid;
-      if (format5 === "der") {
+      if (format6 === "der") {
         const { r: r2, s: s2 } = DER.toSig(_abytes2(bytes));
         return new Signature(r2, s2);
       }
-      if (format5 === "recovered") {
+      if (format6 === "recovered") {
         recid = bytes[0];
-        format5 = "compact";
+        format6 = "compact";
         bytes = bytes.subarray(1);
       }
       const L = Fn2.BYTES;
@@ -16519,8 +16689,8 @@ function ecdsa(Point, hash, ecdsaOpts = {}) {
       const s = bytes.subarray(L, L * 2);
       return new Signature(Fn2.fromBytes(r), Fn2.fromBytes(s), recid);
     }
-    static fromHex(hex2, format5) {
-      return this.fromBytes(hexToBytes(hex2), format5);
+    static fromHex(hex2, format6) {
+      return this.fromBytes(hexToBytes(hex2), format6);
     }
     addRecoveryBit(recovery) {
       return new Signature(this.r, this.s, recovery);
@@ -16552,21 +16722,21 @@ function ecdsa(Point, hash, ecdsaOpts = {}) {
     hasHighS() {
       return isBiggerThanHalfOrder(this.s);
     }
-    toBytes(format5 = defaultSigOpts_format) {
-      validateSigFormat(format5);
-      if (format5 === "der")
+    toBytes(format6 = defaultSigOpts_format) {
+      validateSigFormat(format6);
+      if (format6 === "der")
         return hexToBytes(DER.hexFromSig(this));
       const r = Fn2.toBytes(this.r);
       const s = Fn2.toBytes(this.s);
-      if (format5 === "recovered") {
+      if (format6 === "recovered") {
         if (this.recovery == null)
           throw new Error("recovery bit must be present");
         return concatBytes(Uint8Array.of(this.recovery), r, s);
       }
       return concatBytes(r, s);
     }
-    toHex(format5) {
-      return bytesToHex(this.toBytes(format5));
+    toHex(format6) {
+      return bytesToHex(this.toBytes(format6));
     }
     // TODO: remove
     assertValidity() {
@@ -16683,12 +16853,12 @@ function ecdsa(Point, hash, ecdsaOpts = {}) {
     return sig;
   }
   function verify(signature, message, publicKey, opts = {}) {
-    const { lowS, prehash, format: format5 } = validateSigOpts(opts, defaultSigOpts);
+    const { lowS, prehash, format: format6 } = validateSigOpts(opts, defaultSigOpts);
     publicKey = ensureBytes("publicKey", publicKey);
     message = validateMsgAndHash(ensureBytes("message", message), prehash);
     if ("strict" in opts)
       throw new Error("options.strict was renamed to lowS");
-    const sig = format5 === void 0 ? tryParsingSig(signature) : Signature.fromBytes(ensureBytes("sig", signature), format5);
+    const sig = format6 === void 0 ? tryParsingSig(signature) : Signature.fromBytes(ensureBytes("sig", signature), format6);
     if (sig === false)
       return false;
     try {
@@ -16825,9 +16995,9 @@ var init_weierstrass = __esm({
             throw new E("tlv.decode: wrong tlv");
           const first = data[pos++];
           const isLong = !!(first & 128);
-          let length5 = 0;
+          let length6 = 0;
           if (!isLong)
-            length5 = first;
+            length6 = first;
           else {
             const lenLen = first & 127;
             if (!lenLen)
@@ -16840,15 +17010,15 @@ var init_weierstrass = __esm({
             if (lengthBytes[0] === 0)
               throw new E("tlv.decode(long): zero leftmost byte");
             for (const b of lengthBytes)
-              length5 = length5 << 8 | b;
+              length6 = length6 << 8 | b;
             pos += lenLen;
-            if (length5 < 128)
+            if (length6 < 128)
               throw new E("tlv.decode(long): not minimal encoding");
           }
-          const v = data.subarray(pos, pos + length5);
-          if (v.length !== length5)
+          const v = data.subarray(pos, pos + length6);
+          if (v.length !== length6)
             throw new E("tlv.decode: wrong value length");
-          return { v, l: data.subarray(pos + length5) };
+          return { v, l: data.subarray(pos + length6) };
         }
       },
       // https://crypto.stackexchange.com/a/57734 Leftmost bit of first byte is 'negative' flag,
@@ -16906,8 +17076,8 @@ var init_weierstrass = __esm({
 
 // ../../node_modules/@noble/curves/esm/_shortw_utils.js
 function createCurve(curveDef, defHash) {
-  const create5 = (hash) => weierstrass({ ...curveDef, hash });
-  return { ...create5(defHash), create: create5 };
+  const create6 = (hash) => weierstrass({ ...curveDef, hash });
+  return { ...create6(defHash), create: create6 };
 }
 var init_shortw_utils = __esm({
   "../../node_modules/@noble/curves/esm/_shortw_utils.js"() {
@@ -17260,11 +17430,11 @@ function verifyEd25519Strict(publicKey, message, signature) {
     return false;
   }
 }
-function strictBytes(text2, length5) {
+function strictBytes(text2, length6) {
   if (typeof text2 !== "string" || !/^[A-Za-z0-9_-]*$/.test(text2)) return null;
   try {
     const bytes = fromBase64Url2(text2);
-    return length5 === void 0 || bytes.length === length5 ? bytes : null;
+    return length6 === void 0 || bytes.length === length6 ? bytes : null;
   } catch {
     return null;
   }
@@ -17454,21 +17624,21 @@ function parseLink(href, options) {
   if (raw2 === null) throw new LinkError("record_encoding");
   if (raw2.length > MAX_FULL_RECORD_JSON_BYTES) throw new LinkError("record_json");
   let text2;
-  let record3;
+  let record4;
   try {
     text2 = new TextDecoder("utf-8", { fatal: true }).decode(raw2);
-    record3 = JSON.parse(text2);
+    record4 = JSON.parse(text2);
   } catch {
     throw new LinkError("record_json");
   }
   let canonical;
   try {
-    canonical = canonicalize(record3);
+    canonical = canonicalize(record4);
   } catch {
     throw new LinkError("record_not_canonical");
   }
   if (canonical !== text2) throw new LinkError("record_not_canonical");
-  return { form: "full", origin: url.origin, k, key, record: record3 };
+  return { form: "full", origin: url.origin, k, key, record: record4 };
 }
 function buildShortLink(input) {
   if (!canonicalHttpsOrigin(input.origin)) throw new LinkError("invalid_argument", "the link origin is not a canonical https origin");
@@ -17494,9 +17664,9 @@ function toEpochMs(now) {
   if (Number.isNaN(new Date(ms2).getTime())) throw new LinkError("timestamp_format");
   return ms2;
 }
-async function checkLinkRecord(record3, nowMs) {
-  if (!isPlainObject(record3)) throw new LinkError("record_shape");
-  const fields = record3;
+async function checkLinkRecord(record4, nowMs) {
+  if (!isPlainObject(record4)) throw new LinkError("record_shape");
+  const fields = record4;
   const names = Object.keys(fields).sort().join(",");
   if (names !== "body,header,signature" && names !== "body,header") throw new LinkError("record_fields");
   const signed = "signature" in fields;
@@ -17510,8 +17680,8 @@ async function checkLinkRecord(record3, nowMs) {
   if ((parseLinkTimestamp(header.expiresAt) ?? 0) <= nowMs) throw new LinkError("expired");
   return { header, signature, body };
 }
-async function openRecordChecked(record3, key, nowMs) {
-  const { header, signature, body } = await checkLinkRecord(record3, nowMs);
+async function openRecordChecked(record4, key, nowMs) {
+  const { header, signature, body } = await checkLinkRecord(record4, nowMs);
   if (key.length !== 32) throw new LinkError("invalid_argument", "a link key is 32 bytes");
   let plaintext;
   try {
@@ -17542,8 +17712,8 @@ async function runBodyValidator(opened, validateBody) {
     throw new LinkError("body_validation_failed", "the opened body was refused by the caller's validator", { cause });
   }
 }
-async function openLinkRecord(record3, key, options = {}) {
-  const opened = await openRecordChecked(record3, key, toEpochMs(options.now));
+async function openLinkRecord(record4, key, options = {}) {
+  const opened = await openRecordChecked(record4, key, toEpochMs(options.now));
   await runBodyValidator(opened, options.validateBody);
   return opened;
 }
@@ -17688,13 +17858,13 @@ async function prepareLinkRecord(input) {
   return { record: { header, signature, body: toBase64Url(blob) }, key, bodyCid };
 }
 async function createLink(input) {
-  const { record: record3, key, bodyCid } = await prepareLinkRecord({ ...input, enforceServiceLife: true });
-  const response = await send(`${checkApiOrigin(input.apiOrigin)}/v1/links`, { method: "POST", body: JSON.stringify(record3) }, input, "application/json");
+  const { record: record4, key, bodyCid } = await prepareLinkRecord({ ...input, enforceServiceLife: true });
+  const response = await send(`${checkApiOrigin(input.apiOrigin)}/v1/links`, { method: "POST", body: JSON.stringify(record4) }, input, "application/json");
   if (response.status !== 201) throw await refusal(response);
   const created = createdSchema.safeParse(await readJson2(response));
-  if (!created.success || !LINK_ID_PATTERN.test(created.data.id) || created.data.expiresAt !== record3.header.expiresAt) throw new LinkError("invalid_response");
+  if (!created.success || !LINK_ID_PATTERN.test(created.data.id) || created.data.expiresAt !== record4.header.expiresAt) throw new LinkError("invalid_response");
   const { id } = created.data;
-  return { link: buildShortLink({ origin: input.linkOrigin, type: input.type, id, key, bodyCid }), id, expiresAt: record3.header.expiresAt, bodyCid };
+  return { link: buildShortLink({ origin: input.linkOrigin, type: input.type, id, key, bodyCid }), id, expiresAt: record4.header.expiresAt, bodyCid };
 }
 async function createApprovalRequest(input) {
   const request = parseApprovalRequest(input.request, { issuer: input.issuerKey.did });
@@ -17774,14 +17944,14 @@ async function fetchShortRecord(parsed, input) {
   if (response.status === 404) throw new LinkError("gone", "the link is unknown, expired, deleted or already used", { status: 404, serviceError: "not_found" });
   if (response.status !== 200) throw await refusal(response);
   if (!(response.headers.get("content-type") ?? "").toLowerCase().startsWith("application/octet-stream")) throw new LinkError("invalid_response");
-  const record3 = parseRecordHeader(response.headers.get("x-link-record"));
+  const record4 = parseRecordHeader(response.headers.get("x-link-record"));
   const body = await readCapped(response, MAX_LINK_BODY_BYTES);
-  return { ...record3, body: toBase64Url(body) };
+  return { ...record4, body: toBase64Url(body) };
 }
 async function resolveLink(link5, input) {
   const parsed = parseLink(link5, { trustedOrigins: input.trustedOrigins });
-  const record3 = parsed.form === "short" ? await fetchShortRecord(parsed, input) : parsed.record;
-  const opened = await openRecordChecked(record3, parsed.key, toEpochMs(input.now));
+  const record4 = parsed.form === "short" ? await fetchShortRecord(parsed, input) : parsed.record;
+  const opened = await openRecordChecked(record4, parsed.key, toEpochMs(input.now));
   if (parsed.form === "short") {
     if (parsed.pathType !== opened.type) throw new LinkError("type_path_mismatch");
     if (parsed.c !== opened.header.bodyCid) throw new LinkError("link_cid_mismatch");
@@ -18304,9 +18474,9 @@ async function tryOpenBrowser(url) {
       clearTimeout(timer);
       resolve10(false);
     });
-    launcher.once("exit", (code5) => {
+    launcher.once("exit", (code6) => {
       clearTimeout(timer);
-      resolve10(code5 === 0);
+      resolve10(code6 === 0);
     });
   });
 }
@@ -18326,14 +18496,14 @@ var init_browser = __esm({
 });
 
 // src/lib/apps-agent-preset.ts
-import { DEFAULT_EXPIRY as DEFAULT_EXPIRY2, parseExpiry as parseExpiry2, SERVICE_LONG_TO_SHORT as SERVICE_LONG_TO_SHORT3, VAULT_PERMISSION_SERVICE as VAULT_PERMISSION_SERVICE2 } from "@tinycloud/sdk-core";
+import { parseExpiry as parseExpiry2, SERVICE_LONG_TO_SHORT as SERVICE_LONG_TO_SHORT3, VAULT_PERMISSION_SERVICE as VAULT_PERMISSION_SERVICE2 } from "@tinycloud/sdk-core";
 import { CLI_NAME as CLI_NAME12 } from "@tinycloud/operations/cli-name";
 function isAppId(value4) {
   return value4.length <= 200 && APP_ID.test(value4);
 }
 function appsAgentPermissions(mode, appIds = []) {
   const bases = appIds.length === 0 ? [""] : appIds.map((appId) => `${appId}/`);
-  const grants = APPS_AGENT_VARIANTS[mode].grants.flatMap(({ service, actions, within }) => within.flatMap((folder) => bases.map((base5) => ({ service, space: APPS_AGENT_SPACE, path: `${base5}${folder}`, actions: [...actions] }))));
+  const grants = APPS_AGENT_VARIANTS[mode].grants.flatMap(({ service, actions, within }) => within.flatMap((folder) => bases.map((base6) => ({ service, space: APPS_AGENT_SPACE, path: `${base6}${folder}`, actions: [...actions] }))));
   const schema = APPS_AGENT_VARIANTS[mode].schemaForCatalogApps ? schemaPathsFor(appIds).map((path) => ({ service: "tinycloud.sql", space: APPS_AGENT_SPACE, path, actions: [SCHEMA_ACTION] })) : [];
   return [...grants, ...schema];
 }
@@ -18414,7 +18584,7 @@ function resolveAppsAgentRequest(options) {
 }
 function lifetimeMs(value4) {
   try {
-    if (value4 === void 0) return parseExpiry2(DEFAULT_EXPIRY2);
+    if (value4 === void 0) return CLI_DEFAULT_SESSION_EXPIRY_MS;
     if (typeof value4 === "number") return Number.isFinite(value4) && value4 > 0 ? value4 : void 0;
     return /^\d+$/.test(value4.trim()) ? Number(value4.trim()) : parseExpiry2(value4);
   } catch {
@@ -18741,6 +18911,9 @@ function parseKeysPrefix(input, ownerDid) {
   if (prefix === "apps" || prefix.startsWith("apps/")) {
     throw invalid4("folders under `apps/` belong to apps and can't be used from the CLI.");
   }
+  if (prefix === "secrets" || prefix.startsWith("secrets/")) {
+    throw invalid4("folders under `secrets/` belong to TinyCloud Secrets and can't be used with `--keys`.");
+  }
   try {
     return { prefix, resource: formatPrefixResource(namedKeysNetworkId(ownerDid), prefix) };
   } catch (error) {
@@ -18808,7 +18981,7 @@ var init_named_keys = __esm({
 });
 
 // src/auth/scoped-login.ts
-import { EXPIRY, technicalExpiryRefusal } from "@tinycloud/sdk-core";
+import { technicalExpiryRefusal } from "@tinycloud/sdk-core";
 import { NodeWasmBindings, signedCompactUcanExpiry as signedCompactUcanExpiry2 } from "@tinycloud/node-sdk";
 import { isLocalOwnerProfile as isLocalOwnerProfile2, liveStoredLease as liveStoredLease2, ownerSessionLacksProof as ownerSessionLacksProof2 } from "@tinycloud/operations/profile";
 import { CLI_NAME as CLI_NAME13 } from "@tinycloud/operations/cli-name";
@@ -18828,7 +19001,7 @@ function expiryLimit(expiry) {
   return Date.now() + expiry.durationMs + CLOCK_SKEW_MS;
 }
 function defaultExpiryLimit() {
-  return Date.now() + EXPIRY.SESSION_MS + CLOCK_SKEW_MS;
+  return Date.now() + CLI_DEFAULT_SESSION_EXPIRY_MS + CLOCK_SKEW_MS;
 }
 function outlivesRequestFromIssuedAt(siwe, signedExpiry, expiry) {
   const raw = [...siwe.matchAll(/^Issued At: (.+)$/gm)].at(-1)?.[1];
@@ -18839,7 +19012,7 @@ function sdkMaxExpiryRefusal(error, defaultRequest = false) {
   const message = error instanceof Error ? error.message : "";
   const match = /^OpenKey signedMessage expiry is later than the maximum for this request \(the latest allowed is ([^)]+)\)(?:; choose an earlier expiry)?$/.exec(message);
   if (match === null) return void 0;
-  const requested = defaultRequest ? `the default ${EXPIRY.SESSION_MS / 864e5} day lifetime this login requested` : "the requested --expiry";
+  const requested = defaultRequest ? `the default ${CLI_DEFAULT_SESSION_EXPIRY_DAYS} day lifetime this login requested` : "the requested --expiry";
   return Object.assign(
     new CLIError("OPENKEY_EXPIRY_EXCEEDED", `The signed session outlives ${requested} (the latest allowed is ${match[1]}). Choose an earlier lifetime in OpenKey, or re-run with a longer --expiry. No session was saved.`, ExitCode.PERMISSION_DENIED),
     { cause: error }
@@ -19217,8 +19390,8 @@ import { constants as fsConstants6 } from "fs";
 import { open as open13, rm as rm7 } from "fs/promises";
 import { join as join14 } from "path";
 import { profilePath as profilePath8 } from "@tinycloud/operations/state";
-function hashOf(code5) {
-  return createHash2("sha256").update(code5.trim().toLowerCase()).digest("hex");
+function hashOf(code6) {
+  return createHash2("sha256").update(code6.trim().toLowerCase()).digest("hex");
 }
 function fileOf(profile) {
   return join14(profilePath8(profile), FILE);
@@ -19238,34 +19411,34 @@ async function live(profile) {
     if ((info.mode & 63) !== 0) await handle.chmod(384).catch(() => void 0);
     const stored = JSON.parse(await handle.readFile("utf8"));
     if (stored?.version !== 1 || !Array.isArray(stored.records)) throw new Error("unknown format");
-    records = stored.records.filter((record3) => typeof record3?.codeHash === "string" && Number.isFinite(Date.parse(record3.expiresAt)) && typeof record3.delegation === "object" && record3.delegation !== null);
+    records = stored.records.filter((record4) => typeof record4?.codeHash === "string" && Number.isFinite(Date.parse(record4.expiresAt)) && typeof record4.delegation === "object" && record4.delegation !== null);
   } catch (error) {
-    const code5 = error.code;
-    if (code5 !== "ENOENT" && code5 !== "ELOOP") await rm7(file, { force: true });
+    const code6 = error.code;
+    if (code6 !== "ENOENT" && code6 !== "ELOOP") await rm7(file, { force: true });
     return [];
   } finally {
     await handle?.close();
   }
-  const unexpired = records.filter((record3) => Date.parse(record3.expiresAt) > Date.now());
+  const unexpired = records.filter((record4) => Date.parse(record4.expiresAt) > Date.now());
   if (unexpired.length !== records.length) await write(profile, unexpired);
   return unexpired;
 }
-async function pendingDelegationFor(profile, code5) {
-  const hash = hashOf(code5);
-  return (await live(profile)).find((record3) => record3.codeHash === hash)?.delegation;
+async function pendingDelegationFor(profile, code6) {
+  const hash = hashOf(code6);
+  return (await live(profile)).find((record4) => record4.codeHash === hash)?.delegation;
 }
-async function savePendingDelegation(profile, code5, delegation) {
+async function savePendingDelegation(profile, code6, delegation) {
   const expiresAt = sessionExpiresAt(delegation);
   if (expiresAt === null || Date.parse(expiresAt) <= Date.now()) return;
-  const hash = hashOf(code5);
-  const records = (await live(profile)).filter((record3) => record3.codeHash !== hash);
+  const hash = hashOf(code6);
+  const records = (await live(profile)).filter((record4) => record4.codeHash !== hash);
   records.push({ codeHash: hash, expiresAt, savedAt: (/* @__PURE__ */ new Date()).toISOString(), delegation });
   await write(profile, records);
 }
-async function dropPendingDelegationFor(profile, code5) {
-  const hash = hashOf(code5);
+async function dropPendingDelegationFor(profile, code6) {
+  const hash = hashOf(code6);
   const records = await live(profile);
-  const kept = records.filter((record3) => record3.codeHash !== hash);
+  const kept = records.filter((record4) => record4.codeHash !== hash);
   if (kept.length !== records.length) await write(profile, kept);
 }
 async function dropCommittedDelegation(profile, delegation) {
@@ -19273,7 +19446,7 @@ async function dropCommittedDelegation(profile, delegation) {
   if (!isCid(committed)) return;
   try {
     const records = await live(profile);
-    const kept = records.filter((record3) => record3.delegation.delegationCid !== committed);
+    const kept = records.filter((record4) => record4.delegation.delegationCid !== committed);
     if (kept.length !== records.length) await write(profile, kept);
   } catch (error) {
     console.error(`warning: could not remove the saved delegation code record (${error.message}); it expires on its own.`);
@@ -19294,6 +19467,7 @@ var init_pending_code = __esm({
 import { createProfileRegistryCacheStore as createProfileRegistryCacheStore3, createProfileRegistrySequenceStore as createProfileRegistrySequenceStore3 } from "@tinycloud/operations/state";
 import { TCWSessionManager, importKey, initPanicHook } from "@tinycloud/node-sdk-wasm";
 import { PrivateKeySigner } from "@tinycloud/node-sdk";
+import { ownerFullAccess as ownerFullAccess2 } from "@tinycloud/sdk-core";
 import { randomBytes as randomBytes3 } from "crypto";
 function ensureWasm() {
   if (!wasmInitialized) {
@@ -19349,6 +19523,9 @@ async function localKeySignIn(options) {
     onRegistryFallback: recordRegistryFallbackWarning,
     tinycloudRegistryUrl: process.env.TC_REGISTRY_URL || options.tinycloudRegistryUrl,
     privateKey: options.privateKey,
+    // The local owner key signs for every action on its own default space.
+    ...ownerFullAccess2(),
+    sessionExpirationMs: CLI_DEFAULT_SESSION_EXPIRY_MS,
     host: options.host,
     autoCreateSpace: true,
     ...options.keyAbilities ? { additionalRawAbilities: options.keyAbilities } : {},
@@ -19386,6 +19563,7 @@ var init_local_key = __esm({
     "use strict";
     init_replication_config();
     init_warnings();
+    init_constants();
     wasmInitialized = false;
   }
 });
@@ -19908,7 +20086,7 @@ async function acquireDeviceDelegation(input) {
   if (refused !== void 0) {
     throw new CLIError(
       "DEVICE_AUTH_UNSUPPORTED_SCOPE",
-      deviceRefusalMessage(refused, "this request", "Use another OpenKey approval method for this request."),
+      deviceRefusalMessage(refused, "Use another OpenKey approval method for this request."),
       ExitCode.USAGE_ERROR
     );
   }
@@ -19958,20 +20136,20 @@ async function acquireDeviceDelegation(input) {
   }
   const startValue = await responseJson(startResponse);
   if (!startResponse.ok) {
-    const code5 = errorCode(startValue);
+    const code6 = errorCode(startValue);
     const description = errorDescription(startValue);
-    if (startResponse.status === 429 && code5 === "rate_limited") {
+    if (startResponse.status === 429 && code6 === "rate_limited") {
       throw deviceAuthRateLimit(startResponse);
     }
-    if (code5 === "invalid_scope") {
+    if (code6 === "invalid_scope") {
       throw new CLIError(
         "SCOPE_REJECTED",
         `OpenKey rejected the requested scope${description ? `: ${description}` : "."} Remove that capability from the manifest or use another approval flow.`,
         ExitCode.PERMISSION_DENIED,
-        { openkeyError: code5, ...description ? { capability: description } : {} }
+        { openkeyError: code6, ...description ? { capability: description } : {} }
       );
     }
-    throw new CLIError("DEVICE_AUTH_FAILED", `OpenKey device authorization failed: ${code5 ?? `HTTP ${startResponse.status}`}${description ? ` (${description})` : ""}`, ExitCode.ERROR);
+    throw new CLIError("DEVICE_AUTH_FAILED", `OpenKey device authorization failed: ${code6 ?? `HTTP ${startResponse.status}`}${description ? ` (${description})` : ""}`, ExitCode.ERROR);
   }
   const started = validateStart(startValue, openkeyHost);
   const deadline = Date.now() + started.expiresIn * 1e3;
@@ -19999,20 +20177,20 @@ async function acquireDeviceDelegation(input) {
       continue;
     }
     const value4 = await responseJson(response);
-    const code5 = errorCode(value4);
-    if (response.status >= 500 || response.status === 429 && code5 !== "slow_down") continue;
-    if (code5 === "slow_down") {
+    const code6 = errorCode(value4);
+    if (response.status >= 500 || response.status === 429 && code6 !== "slow_down") continue;
+    if (code6 === "slow_down") {
       interval += 5;
       continue;
     }
-    if (code5 === "authorization_pending") continue;
-    if (code5 === "access_denied") {
+    if (code6 === "authorization_pending") continue;
+    if (code6 === "access_denied") {
       throw new CLIError("DEVICE_AUTH_DENIED", "The owner denied the OpenKey device authorization. No session was saved.", ExitCode.PERMISSION_DENIED);
     }
-    if (code5 === "expired_token") {
+    if (code6 === "expired_token") {
       throw new CLIError("DEVICE_AUTH_EXPIRED", "OpenKey device authorization expired_token: the approval window closed. Run the command again.", ExitCode.AUTH_REQUIRED);
     }
-    if (!response.ok) throw new CLIError("DEVICE_AUTH_FAILED", `OpenKey device authorization failed: ${code5 ?? `HTTP ${response.status}`}`, ExitCode.ERROR);
+    if (!response.ok) throw new CLIError("DEVICE_AUTH_FAILED", `OpenKey device authorization failed: ${code6 ?? `HTTP ${response.status}`}`, ExitCode.ERROR);
     const result = value4;
     if (result?.status === "pending") {
       interval = Math.max(interval, Number.isSafeInteger(result.interval) ? result.interval : interval);
@@ -20348,6 +20526,7 @@ __export(approval_request_exports, {
   acquireApprovalRequest: () => acquireApprovalRequest,
   approvalCommandIntent: () => approvalCommandIntent,
   approvalHoldsKey: () => approvalHoldsKey,
+  approvalRenewalChoiceOf: () => approvalRenewalChoiceOf,
   approvalRenewalOf: () => approvalRenewalOf,
   approvalResultNeedsAck: () => approvalResultNeedsAck,
   approvalSessionProof: () => approvalSessionProof2,
@@ -20355,6 +20534,7 @@ __export(approval_request_exports, {
   completeApprovalResult: () => completeApprovalResult,
   dropApprovalsHoldingKey: () => dropApprovalsHoldingKey,
   dropRefusedApproval: () => dropRefusedApproval,
+  grantLifetimeSeconds: () => grantLifetimeSeconds,
   invitationGrantOf: () => invitationGrantOf,
   pendingApprovalKey: () => pendingApprovalKey,
   pendingInvitationContext: () => pendingInvitationContext,
@@ -20369,7 +20549,7 @@ import { setTimeout as wait } from "timers/promises";
 import { additionalDelegationsPath as additionalDelegationsPath3, profilePath as profilePath11 } from "@tinycloud/operations/state";
 import { principalDidEquals as principalDidEquals2 } from "@tinycloud/node-sdk";
 import { canonicalizeRecapCaveats, parseSignedCompactUcanAttenuation as parseSignedCompactUcanAttenuation3 } from "@tinycloud/sdk-core";
-import { admitOwnerRenewalLease, RENEWAL_LEASE_ORIGINAL_EXPIRED } from "@tinycloud/sdk-core/delegations/renewal";
+import { admitOwnerRenewalLease, RENEWAL_LEASE_ORIGINAL_EXPIRED, RENEWAL_RENEWER_CHANGED } from "@tinycloud/sdk-core/delegations/renewal";
 import { RENEWAL_ADMISSION_LEAD_MS, verifyOwnerRenewalLease } from "@tinycloud/sdk-core/delegations/renewal-receipt";
 function trackApprovalResult(source, verified) {
   const entry = acquisitions.get(source);
@@ -20377,6 +20557,10 @@ function trackApprovalResult(source, verified) {
 }
 function approvalRenewalOf(delegation) {
   return renewals.get(delegation);
+}
+function approvalRenewalChoiceOf(delegation) {
+  if (!acquisitions.get(delegation)?.request.renewal) return void 0;
+  return renewals.has(delegation) ? "leased" : "finite";
 }
 function approvalResultNeedsAck(delegation) {
   return acquisitions.has(delegation);
@@ -20587,19 +20771,19 @@ async function post2(entry, action, signingKey, timeoutMs = 1e4) {
 }
 async function throwRemoteError(profile, entry, response, action) {
   const body = await response.clone().json().catch(() => null);
-  const code5 = typeof body?.code === "string" ? body.code : "";
-  if (code5 === "expired_request") {
+  const code6 = typeof body?.code === "string" ? body.code : "";
+  if (code6 === "expired_request") {
     await updatePending(profile, (items) => items.filter((item) => item.requestId !== entry.requestId));
     throw new CLIError("APPROVAL_REQUEST_EXPIRED", "This approval request expired before it was approved. Start a new request.", ExitCode.AUTH_REQUIRED);
   }
-  if (code5 === "expired_result") {
+  if (code6 === "expired_result") {
     await updatePending(profile, (items) => items.filter((item) => item.requestId !== entry.requestId));
     throw new CLIError("APPROVAL_RESULT_EXPIRED", "The approved result expired before it was saved. Start a new request.", ExitCode.AUTH_REQUIRED);
   }
-  if (code5 === "acknowledged") {
+  if (code6 === "acknowledged") {
     throw new CLIError("APPROVAL_RESULT_ACKNOWLEDGED", "OpenKey has acknowledged this result; its local commit may already be complete.", ExitCode.PENDING);
   }
-  if (code5 === "not_found") {
+  if (code6 === "not_found") {
     await updatePending(profile, (items) => items.filter((item) => item.requestId !== entry.requestId));
     throw new CLIError(
       action === "discover" ? "APPROVAL_REQUEST_NOT_FOUND" : "APPROVAL_RESULT_NOT_FOUND",
@@ -20607,8 +20791,8 @@ async function throwRemoteError(profile, entry, response, action) {
       ExitCode.AUTH_REQUIRED
     );
   }
-  if (code5 === "ack_conflict") throw invalid2("OpenKey rejected a conflicting approval ACK intent.");
-  if (code5 === "request_binding" || code5 === "invalid_proof") {
+  if (code6 === "ack_conflict") throw invalid2("OpenKey rejected a conflicting approval ACK intent.");
+  if (code6 === "request_binding" || code6 === "invalid_proof") {
     const rejected = invalid2("OpenKey rejected the request or requester binding.");
     throw action === "discover" ? markMaybeGranted(rejected) : rejected;
   }
@@ -20706,7 +20890,7 @@ async function admitApprovedRenewal(host, entry, verified) {
     if (error instanceof Error && "code" in error && error.code === RENEWAL_LEASE_ORIGINAL_EXPIRED) {
       throw new CLIError("AUTH_EXPIRED", "The approved session has expired. No session was saved.", ExitCode.AUTH_REQUIRED);
     }
-    if (error instanceof Error && error.message === "Renewal node identity changed") {
+    if (error instanceof Error && "code" in error && error.code === RENEWAL_RENEWER_CHANGED) {
       throw refused("This renewal names a different TinyCloud node than the one you signed in to, so it wasn't turned on. Sign in again for a new approval.");
     }
     throw Object.assign(new CLIError(
@@ -20804,7 +20988,8 @@ async function acquireApprovalRequest(_did, options) {
     targetDid: signer.did,
     targetPublicJwk,
     nodeOrigin: options.host,
-    permissions: options.permissions,
+    // `skipPrefix` tells the local SDK not to prefix a path; the signed request is strict and its paths are final.
+    permissions: options.permissions.map(({ skipPrefix: _skipPrefix, ...entry2 }) => entry2),
     ...options.reason ? { reason: options.reason } : {},
     grantLifetimeSeconds: grantLifetimeSeconds(options.expiry),
     ...options.renewalLeaseSeconds === void 0 ? {} : { renewal: { version: 1, leaseLifetimeSeconds: options.renewalLeaseSeconds } }
@@ -21161,8 +21346,8 @@ function buildAuthUrl(did2, options = {}) {
     params.set("expiryChangeable", "true");
   }
   params.set("protocolVersion", "1");
-  const base5 = options.openkeyHost ?? DEFAULT_OPENKEY_HOST;
-  return `${base5}/delegate?${params.toString()}`;
+  const base6 = options.openkeyHost ?? DEFAULT_OPENKEY_HOST;
+  return `${base6}/delegate?${params.toString()}`;
 }
 function validateDelegationCallbackPayload(value4) {
   if (!value4 || typeof value4 !== "object") return "expected an object";
@@ -21772,7 +21957,7 @@ function tailBytes(text2, maxBytes) {
   const firstLine = tail.indexOf("\n");
   return firstLine < 0 ? "" : tail.slice(firstLine + 1);
 }
-function attachmentError(status, code5) {
+function attachmentError(status, code6) {
   const messages = {
     invalid_attach_token: "That attachment token isn't valid or has expired. Trying again with it won't work.",
     attachment_limit: "This report already has five attachments, the most it can take.",
@@ -21782,7 +21967,7 @@ function attachmentError(status, code5) {
     intake_busy: "The bug service is full for now. Try again later, not right away; your CLI log stays on this computer.",
     too_deep: "The bug service didn't accept this upload. Updating the CLI may fix it."
   };
-  return new CLIError(`BUG_REPORT_${code5.toUpperCase()}`, messages[code5] ?? `The CLI log upload was rejected (${code5}).`, void 0, { status });
+  return new CLIError(`BUG_REPORT_${code6.toUpperCase()}`, messages[code6] ?? `The CLI log upload was rejected (${code6}).`, void 0, { status });
 }
 async function attachLogs(reportId, tokenStdin, dependencies) {
   const output2 = dependencies.write ?? ((text2) => {
@@ -21837,8 +22022,8 @@ async function attachLogs(reportId, tokenStdin, dependencies) {
   }
   if (!response.ok) {
     const receipt2 = await response.json().catch(() => null);
-    const code5 = typeof receipt2?.error?.code === "string" && /^[a-z][a-z0-9_]{1,63}$/i.test(receipt2.error.code) ? receipt2.error.code : `HTTP_${response.status}`;
-    throw attachmentError(response.status, code5);
+    const code6 = typeof receipt2?.error?.code === "string" && /^[a-z][a-z0-9_]{1,63}$/i.test(receipt2.error.code) ? receipt2.error.code : `HTTP_${response.status}`;
+    throw attachmentError(response.status, code6);
   }
   const receipt = await response.json().catch(() => null);
   if (!receipt) {
@@ -21893,9 +22078,9 @@ import { lstat as lstat8, mkdir as mkdir5, readFile as readFile10, writeFile as 
 import { dirname as dirname6, join as join17 } from "path";
 import { createInterface as createInterface5 } from "readline";
 import { TinyCloudNode as TinyCloudNode3, grantAuthRequest, principalDidEquals as principalDidEquals3, REPLICA_LOGOUT_PENDING_FILE as REPLICA_LOGOUT_PENDING_FILE4, signedCompactUcanExpiry as signedCompactUcanExpiry3 } from "@tinycloud/node-sdk";
-import { composeManifestRequest } from "@tinycloud/sdk-core";
+import { composeManifestRequest, ownerFullAccess as ownerFullAccess4 } from "@tinycloud/sdk-core";
 import { invokeOperation } from "@tinycloud/operations";
-import { createProfileRegistryCacheStore as createProfileRegistryCacheStore4, createProfileRegistrySequenceStore as createProfileRegistrySequenceStore4, namedProfilePath as namedProfilePath3, profilePath as profilePath12 } from "@tinycloud/operations/state";
+import { createProfileRegistryCacheStore as createProfileRegistryCacheStore5, createProfileRegistrySequenceStore as createProfileRegistrySequenceStore5, namedProfilePath as namedProfilePath3, profilePath as profilePath12 } from "@tinycloud/operations/state";
 import { REPLICA_GATE_FILE as REPLICA_GATE_FILE3 } from "@tinycloud/sdk-services/kv/replication/contractConstants";
 
 // src/lib/logout-revocation.ts
@@ -21988,9 +22173,9 @@ async function planLogoutRevocations(input) {
       throw inventoryError("artifact file", "invalid JSON");
     }
     if (!Array.isArray(records)) throw inventoryError("artifact file", "expected an array of signed grants");
-    for (const record3 of records) {
-      const cid = record3 && typeof record3 === "object" && "delegationCid" in record3 && typeof record3.delegationCid === "string" ? record3.delegationCid : "artifact entry";
-      const delegation = record3 && typeof record3 === "object" && "delegation" in record3 ? record3.delegation : void 0;
+    for (const record4 of records) {
+      const cid = record4 && typeof record4 === "object" && "delegationCid" in record4 && typeof record4.delegationCid === "string" ? record4.delegationCid : "artifact entry";
+      const delegation = record4 && typeof record4 === "object" && "delegation" in record4 ? record4.delegation : void 0;
       const authorization = delegation && typeof delegation === "object" && "delegationHeader" in delegation && delegation.delegationHeader && typeof delegation.delegationHeader === "object" && "Authorization" in delegation.delegationHeader ? delegation.delegationHeader.Authorization : void 0;
       if (!cid || !delegation || typeof delegation !== "object" || !("cid" in delegation) || delegation.cid !== cid || typeof authorization !== "string") throw inventoryError(cid, "the issued grant record is malformed");
       let owner;
@@ -22019,16 +22204,16 @@ async function planLogoutRevocations(input) {
   const historyText = await optionalFile(join12(root, "auth-grants.jsonl"));
   if (historyText !== null) {
     for (const line of historyText.split("\n").filter((row) => row.trim().length > 0)) {
-      let record3;
+      let record4;
       try {
-        record3 = JSON.parse(line);
+        record4 = JSON.parse(line);
       } catch {
         throw inventoryError("history file", "invalid JSONL");
       }
-      if (!record3 || typeof record3 !== "object" || !("source" in record3) || typeof record3.source !== "string") {
+      if (!record4 || typeof record4 !== "object" || !("source" in record4) || typeof record4.source !== "string") {
         throw inventoryError("history file", "malformed history row");
       }
-      const cid = "delegationCid" in record3 ? record3.delegationCid : void 0;
+      const cid = "delegationCid" in record4 ? record4.delegationCid : void 0;
       if (cid === void 0) continue;
       if (typeof cid !== "string" || !cid) throw inventoryError("history file", "invalid CID");
       if (cid !== sessionCid && !included.has(cid) && !foreign.has(cid)) unresolved.add(cid);
@@ -25724,23 +25909,23 @@ var ZodEffects = class extends ZodType {
     }
     if (effect.type === "transform") {
       if (ctx.common.async === false) {
-        const base23 = this._def.schema._parseSync({
+        const base24 = this._def.schema._parseSync({
           data: ctx.data,
           path: ctx.path,
           parent: ctx
         });
-        if (!isValid(base23))
+        if (!isValid(base24))
           return INVALID;
-        const result = effect.transform(base23.value, checkCtx);
+        const result = effect.transform(base24.value, checkCtx);
         if (result instanceof Promise) {
           throw new Error(`Asynchronous transform encountered during synchronous parse operation. Use .parseAsync instead.`);
         }
         return { status: status.value, value: result };
       } else {
-        return this._def.schema._parseAsync({ data: ctx.data, path: ctx.path, parent: ctx }).then((base23) => {
-          if (!isValid(base23))
+        return this._def.schema._parseAsync({ data: ctx.data, path: ctx.path, parent: ctx }).then((base24) => {
+          if (!isValid(base24))
             return INVALID;
-          return Promise.resolve(effect.transform(base23.value, checkCtx)).then((result) => ({
+          return Promise.resolve(effect.transform(base24.value, checkCtx)).then((result) => ({
             status: status.value,
             value: result
           }));
@@ -26162,7 +26347,7 @@ function base(ALPHABET, name) {
   var LEADER = ALPHABET.charAt(0);
   var FACTOR = Math.log(BASE) / Math.log(256);
   var iFACTOR = Math.log(256) / Math.log(BASE);
-  function encode33(source) {
+  function encode34(source) {
     if (source instanceof Uint8Array)
       ;
     else if (ArrayBuffer.isView(source)) {
@@ -26177,7 +26362,7 @@ function base(ALPHABET, name) {
       return "";
     }
     var zeroes = 0;
-    var length23 = 0;
+    var length24 = 0;
     var pbegin = 0;
     var pend = source.length;
     while (pbegin !== pend && source[pbegin] === 0) {
@@ -26189,7 +26374,7 @@ function base(ALPHABET, name) {
     while (pbegin !== pend) {
       var carry = source[pbegin];
       var i2 = 0;
-      for (var it1 = size - 1; (carry !== 0 || i2 < length23) && it1 !== -1; it1--, i2++) {
+      for (var it1 = size - 1; (carry !== 0 || i2 < length24) && it1 !== -1; it1--, i2++) {
         carry += 256 * b58[it1] >>> 0;
         b58[it1] = carry % BASE >>> 0;
         carry = carry / BASE >>> 0;
@@ -26197,10 +26382,10 @@ function base(ALPHABET, name) {
       if (carry !== 0) {
         throw new Error("Non-zero carry");
       }
-      length23 = i2;
+      length24 = i2;
       pbegin++;
     }
-    var it2 = size - length23;
+    var it2 = size - length24;
     while (it2 !== size && b58[it2] === 0) {
       it2++;
     }
@@ -26222,7 +26407,7 @@ function base(ALPHABET, name) {
       return;
     }
     var zeroes = 0;
-    var length23 = 0;
+    var length24 = 0;
     while (source[psz] === LEADER) {
       zeroes++;
       psz++;
@@ -26235,7 +26420,7 @@ function base(ALPHABET, name) {
         return;
       }
       var i2 = 0;
-      for (var it3 = size - 1; (carry !== 0 || i2 < length23) && it3 !== -1; it3--, i2++) {
+      for (var it3 = size - 1; (carry !== 0 || i2 < length24) && it3 !== -1; it3--, i2++) {
         carry += BASE * b256[it3] >>> 0;
         b256[it3] = carry % 256 >>> 0;
         carry = carry / 256 >>> 0;
@@ -26243,13 +26428,13 @@ function base(ALPHABET, name) {
       if (carry !== 0) {
         throw new Error("Non-zero carry");
       }
-      length23 = i2;
+      length24 = i2;
       psz++;
     }
     if (source[psz] === " ") {
       return;
     }
-    var it4 = size - length23;
+    var it4 = size - length24;
     while (it4 !== size && b256[it4] === 0) {
       it4++;
     }
@@ -26260,7 +26445,7 @@ function base(ALPHABET, name) {
     }
     return vch;
   }
-  function decode53(string) {
+  function decode54(string) {
     var buffer = decodeUnsafe(string);
     if (buffer) {
       return buffer;
@@ -26268,9 +26453,9 @@ function base(ALPHABET, name) {
     throw new Error(`Non-${name} character`);
   }
   return {
-    encode: encode33,
+    encode: encode34,
     decodeUnsafe,
-    decode: decode53
+    decode: decode54
   };
 }
 var src = base;
@@ -26368,16 +26553,16 @@ var Codec = class {
     return this.decoder.decode(input);
   }
 };
-function from({ name, prefix, encode: encode33, decode: decode53 }) {
-  return new Codec(name, prefix, encode33, decode53);
+function from({ name, prefix, encode: encode34, decode: decode54 }) {
+  return new Codec(name, prefix, encode34, decode54);
 }
 function baseX({ name, prefix, alphabet }) {
-  const { encode: encode33, decode: decode53 } = base_x_default(alphabet, name);
+  const { encode: encode34, decode: decode54 } = base_x_default(alphabet, name);
   return from({
     prefix,
     name,
-    encode: encode33,
-    decode: (text2) => coerce2(decode53(text2))
+    encode: encode34,
+    decode: (text2) => coerce2(decode54(text2))
   });
 }
 function decode(string, alphabetIdx, bitsPerChar, name) {
@@ -26635,24 +26820,24 @@ var Digest = class {
     this.bytes = bytes;
   }
 };
-function format(link5, base23) {
+function format(link5, base24) {
   const { bytes, version } = link5;
   switch (version) {
     case 0:
-      return toStringV0(bytes, baseCache(link5), base23 ?? base58btc.encoder);
+      return toStringV0(bytes, baseCache(link5), base24 ?? base58btc.encoder);
     default:
-      return toStringV1(bytes, baseCache(link5), base23 ?? base32.encoder);
+      return toStringV1(bytes, baseCache(link5), base24 ?? base32.encoder);
   }
 }
 var cache = /* @__PURE__ */ new WeakMap();
 function baseCache(cid) {
-  const baseCache23 = cache.get(cid);
-  if (baseCache23 == null) {
+  const baseCache24 = cache.get(cid);
+  if (baseCache24 == null) {
     const baseCache32 = /* @__PURE__ */ new Map();
     cache.set(cid, baseCache32);
     return baseCache32;
   }
-  return baseCache23;
+  return baseCache24;
 }
 var CID = class _CID {
   code;
@@ -26731,8 +26916,8 @@ var CID = class _CID {
     const unknown = other;
     return unknown != null && self.code === unknown.code && self.version === unknown.version && equals2(self.multihash, unknown.multihash);
   }
-  toString(base23) {
-    return format(this, base23);
+  toString(base24) {
+    return format(this, base24);
   }
   toJSON() {
     return { "/": format(this) };
@@ -26864,8 +27049,8 @@ var CID = class _CID {
   static inspectBytes(initialBytes) {
     let offset = 0;
     const next = () => {
-      const [i, length23] = decode3(initialBytes.subarray(offset));
-      offset += length23;
+      const [i, length24] = decode3(initialBytes.subarray(offset));
+      offset += length24;
       return i;
     };
     let version = next();
@@ -26892,8 +27077,8 @@ var CID = class _CID {
    * throw an error if encoding of the CID is not compatible with supplied (or
    * a default decoder).
    */
-  static parse(source, base23) {
-    const [prefix, bytes] = parseCIDtoBytes(source, base23);
+  static parse(source, base24) {
+    const [prefix, bytes] = parseCIDtoBytes(source, base24);
     const cid = _CID.decode(bytes);
     if (cid.version === 0 && source[0] !== "Q") {
       throw Error("Version 0 CID string must not include multibase prefix");
@@ -26902,56 +27087,56 @@ var CID = class _CID {
     return cid;
   }
 };
-function parseCIDtoBytes(source, base23) {
+function parseCIDtoBytes(source, base24) {
   switch (source[0]) {
     // CIDv0 is parsed differently
     case "Q": {
-      const decoder = base23 ?? base58btc;
+      const decoder = base24 ?? base58btc;
       return [
         base58btc.prefix,
         decoder.decode(`${base58btc.prefix}${source}`)
       ];
     }
     case base58btc.prefix: {
-      const decoder = base23 ?? base58btc;
+      const decoder = base24 ?? base58btc;
       return [base58btc.prefix, decoder.decode(source)];
     }
     case base32.prefix: {
-      const decoder = base23 ?? base32;
+      const decoder = base24 ?? base32;
       return [base32.prefix, decoder.decode(source)];
     }
     case base36.prefix: {
-      const decoder = base23 ?? base36;
+      const decoder = base24 ?? base36;
       return [base36.prefix, decoder.decode(source)];
     }
     default: {
-      if (base23 == null) {
+      if (base24 == null) {
         throw Error("To parse non base32, base36 or base58btc encoded CID multibase decoder must be provided");
       }
-      return [source[0], base23.decode(source)];
+      return [source[0], base24.decode(source)];
     }
   }
 }
-function toStringV0(bytes, cache23, base23) {
-  const { prefix } = base23;
+function toStringV0(bytes, cache24, base24) {
+  const { prefix } = base24;
   if (prefix !== base58btc.prefix) {
-    throw Error(`Cannot string encode V0 in ${base23.name} encoding`);
+    throw Error(`Cannot string encode V0 in ${base24.name} encoding`);
   }
-  const cid = cache23.get(prefix);
+  const cid = cache24.get(prefix);
   if (cid == null) {
-    const cid2 = base23.encode(bytes).slice(1);
-    cache23.set(prefix, cid2);
+    const cid2 = base24.encode(bytes).slice(1);
+    cache24.set(prefix, cid2);
     return cid2;
   } else {
     return cid;
   }
 }
-function toStringV1(bytes, cache23, base23) {
-  const { prefix } = base23;
-  const cid = cache23.get(prefix);
+function toStringV1(bytes, cache24, base24) {
+  const { prefix } = base24;
+  const cid = cache24.get(prefix);
   if (cid == null) {
-    const cid2 = base23.encode(bytes);
-    cache23.set(prefix, cid2);
+    const cid2 = base24.encode(bytes);
+    cache24.set(prefix, cid2);
     return cid2;
   } else {
     return cid;
@@ -27478,7 +27663,7 @@ var ArtifactError = class extends Error {
     this.code = code22;
   }
 };
-function newArtifactId(random = (length23) => crypto.getRandomValues(new Uint8Array(length23))) {
+function newArtifactId(random = (length24) => crypto.getRandomValues(new Uint8Array(length24))) {
   return `art_${Array.from(random(8), (byte) => byte.toString(16).padStart(2, "0")).join("")}`;
 }
 function assertArtifactId(value4) {
@@ -27511,15 +27696,15 @@ function parseArtifactManifest(bytes) {
     throw new ArtifactError("corrupt", "artifact manifest is malformed");
   };
   if (value4 === null || typeof value4 !== "object" || Array.isArray(value4)) return fail2();
-  const record3 = value4;
+  const record4 = value4;
   const allowed = ["v", "files", "createdAt", "parent", "note"];
-  if (Object.keys(record3).some((key) => !allowed.includes(key)) || record3.v !== ARTIFACT_MANIFEST_VERSION) return fail2();
-  if (!Array.isArray(record3.files) || record3.files.length === 0) return fail2();
-  if (typeof record3.createdAt !== "string" || Number.isNaN(Date.parse(record3.createdAt))) return fail2();
-  if (record3.parent !== null && (typeof record3.parent !== "number" || !Number.isSafeInteger(record3.parent) || record3.parent < 1)) return fail2();
-  if (record3.note !== void 0 && (typeof record3.note !== "string" || record3.note.length > 1024)) return fail2();
+  if (Object.keys(record4).some((key) => !allowed.includes(key)) || record4.v !== ARTIFACT_MANIFEST_VERSION) return fail2();
+  if (!Array.isArray(record4.files) || record4.files.length === 0) return fail2();
+  if (typeof record4.createdAt !== "string" || Number.isNaN(Date.parse(record4.createdAt))) return fail2();
+  if (record4.parent !== null && (typeof record4.parent !== "number" || !Number.isSafeInteger(record4.parent) || record4.parent < 1)) return fail2();
+  if (record4.note !== void 0 && (typeof record4.note !== "string" || record4.note.length > 1024)) return fail2();
   const seen = /* @__PURE__ */ new Set();
-  const files = record3.files.map((entry) => {
+  const files = record4.files.map((entry) => {
     if (entry === null || typeof entry !== "object" || Array.isArray(entry)) return fail2();
     const file = entry;
     if (Object.keys(file).some((key) => !["path", "sha256", "bytes"].includes(key))) return fail2();
@@ -27537,9 +27722,9 @@ function parseArtifactManifest(bytes) {
   return {
     v: ARTIFACT_MANIFEST_VERSION,
     files,
-    createdAt: record3.createdAt,
-    parent: record3.parent,
-    ...record3.note === void 0 ? {} : { note: record3.note }
+    createdAt: record4.createdAt,
+    parent: record4.parent,
+    ...record4.note === void 0 ? {} : { note: record4.note }
   };
 }
 async function listArtifactVersions(store, artifactId) {
@@ -27625,7 +27810,7 @@ function base3(ALPHABET, name) {
   var LEADER = ALPHABET.charAt(0);
   var FACTOR = Math.log(BASE) / Math.log(256);
   var iFACTOR = Math.log(256) / Math.log(BASE);
-  function encode33(source) {
+  function encode34(source) {
     if (source instanceof Uint8Array)
       ;
     else if (ArrayBuffer.isView(source)) {
@@ -27640,7 +27825,7 @@ function base3(ALPHABET, name) {
       return "";
     }
     var zeroes = 0;
-    var length23 = 0;
+    var length24 = 0;
     var pbegin = 0;
     var pend = source.length;
     while (pbegin !== pend && source[pbegin] === 0) {
@@ -27652,7 +27837,7 @@ function base3(ALPHABET, name) {
     while (pbegin !== pend) {
       var carry = source[pbegin];
       var i2 = 0;
-      for (var it1 = size - 1; (carry !== 0 || i2 < length23) && it1 !== -1; it1--, i2++) {
+      for (var it1 = size - 1; (carry !== 0 || i2 < length24) && it1 !== -1; it1--, i2++) {
         carry += 256 * b58[it1] >>> 0;
         b58[it1] = carry % BASE >>> 0;
         carry = carry / BASE >>> 0;
@@ -27660,10 +27845,10 @@ function base3(ALPHABET, name) {
       if (carry !== 0) {
         throw new Error("Non-zero carry");
       }
-      length23 = i2;
+      length24 = i2;
       pbegin++;
     }
-    var it2 = size - length23;
+    var it2 = size - length24;
     while (it2 !== size && b58[it2] === 0) {
       it2++;
     }
@@ -27685,7 +27870,7 @@ function base3(ALPHABET, name) {
       return;
     }
     var zeroes = 0;
-    var length23 = 0;
+    var length24 = 0;
     while (source[psz] === LEADER) {
       zeroes++;
       psz++;
@@ -27698,7 +27883,7 @@ function base3(ALPHABET, name) {
         return;
       }
       var i2 = 0;
-      for (var it3 = size - 1; (carry !== 0 || i2 < length23) && it3 !== -1; it3--, i2++) {
+      for (var it3 = size - 1; (carry !== 0 || i2 < length24) && it3 !== -1; it3--, i2++) {
         carry += BASE * b256[it3] >>> 0;
         b256[it3] = carry % 256 >>> 0;
         carry = carry / 256 >>> 0;
@@ -27706,13 +27891,13 @@ function base3(ALPHABET, name) {
       if (carry !== 0) {
         throw new Error("Non-zero carry");
       }
-      length23 = i2;
+      length24 = i2;
       psz++;
     }
     if (source[psz] === " ") {
       return;
     }
-    var it4 = size - length23;
+    var it4 = size - length24;
     while (it4 !== size && b256[it4] === 0) {
       it4++;
     }
@@ -27723,7 +27908,7 @@ function base3(ALPHABET, name) {
     }
     return vch;
   }
-  function decode53(string) {
+  function decode54(string) {
     var buffer = decodeUnsafe(string);
     if (buffer) {
       return buffer;
@@ -27731,9 +27916,9 @@ function base3(ALPHABET, name) {
     throw new Error(`Non-${name} character`);
   }
   return {
-    encode: encode33,
+    encode: encode34,
     decodeUnsafe,
-    decode: decode53
+    decode: decode54
   };
 }
 var src3 = base3;
@@ -27831,16 +28016,16 @@ var Codec3 = class {
     return this.decoder.decode(input);
   }
 };
-function from3({ name, prefix, encode: encode33, decode: decode53 }) {
-  return new Codec3(name, prefix, encode33, decode53);
+function from3({ name, prefix, encode: encode34, decode: decode54 }) {
+  return new Codec3(name, prefix, encode34, decode54);
 }
 function baseX3({ name, prefix, alphabet }) {
-  const { encode: encode33, decode: decode53 } = base_x_default3(alphabet, name);
+  const { encode: encode34, decode: decode54 } = base_x_default3(alphabet, name);
   return from3({
     prefix,
     name,
-    encode: encode33,
-    decode: (text2) => coerce5(decode53(text2))
+    encode: encode34,
+    decode: (text2) => coerce5(decode54(text2))
   });
 }
 function decode9(string, alphabetIdx, bitsPerChar, name) {
@@ -28098,24 +28283,24 @@ var Digest3 = class {
     this.bytes = bytes;
   }
 };
-function format3(link5, base23) {
+function format3(link5, base24) {
   const { bytes, version } = link5;
   switch (version) {
     case 0:
-      return toStringV03(bytes, baseCache3(link5), base23 ?? base58btc3.encoder);
+      return toStringV03(bytes, baseCache3(link5), base24 ?? base58btc3.encoder);
     default:
-      return toStringV13(bytes, baseCache3(link5), base23 ?? base323.encoder);
+      return toStringV13(bytes, baseCache3(link5), base24 ?? base323.encoder);
   }
 }
 var cache3 = /* @__PURE__ */ new WeakMap();
 function baseCache3(cid) {
-  const baseCache23 = cache3.get(cid);
-  if (baseCache23 == null) {
+  const baseCache24 = cache3.get(cid);
+  if (baseCache24 == null) {
     const baseCache32 = /* @__PURE__ */ new Map();
     cache3.set(cid, baseCache32);
     return baseCache32;
   }
-  return baseCache23;
+  return baseCache24;
 }
 var CID3 = class _CID2 {
   code;
@@ -28194,8 +28379,8 @@ var CID3 = class _CID2 {
     const unknown = other;
     return unknown != null && self.code === unknown.code && self.version === unknown.version && equals22(self.multihash, unknown.multihash);
   }
-  toString(base23) {
-    return format3(this, base23);
+  toString(base24) {
+    return format3(this, base24);
   }
   toJSON() {
     return { "/": format3(this) };
@@ -28327,8 +28512,8 @@ var CID3 = class _CID2 {
   static inspectBytes(initialBytes) {
     let offset = 0;
     const next = () => {
-      const [i, length23] = decode32(initialBytes.subarray(offset));
-      offset += length23;
+      const [i, length24] = decode32(initialBytes.subarray(offset));
+      offset += length24;
       return i;
     };
     let version = next();
@@ -28355,8 +28540,8 @@ var CID3 = class _CID2 {
    * throw an error if encoding of the CID is not compatible with supplied (or
    * a default decoder).
    */
-  static parse(source, base23) {
-    const [prefix, bytes] = parseCIDtoBytes3(source, base23);
+  static parse(source, base24) {
+    const [prefix, bytes] = parseCIDtoBytes3(source, base24);
     const cid = _CID2.decode(bytes);
     if (cid.version === 0 && source[0] !== "Q") {
       throw Error("Version 0 CID string must not include multibase prefix");
@@ -28365,56 +28550,56 @@ var CID3 = class _CID2 {
     return cid;
   }
 };
-function parseCIDtoBytes3(source, base23) {
+function parseCIDtoBytes3(source, base24) {
   switch (source[0]) {
     // CIDv0 is parsed differently
     case "Q": {
-      const decoder = base23 ?? base58btc3;
+      const decoder = base24 ?? base58btc3;
       return [
         base58btc3.prefix,
         decoder.decode(`${base58btc3.prefix}${source}`)
       ];
     }
     case base58btc3.prefix: {
-      const decoder = base23 ?? base58btc3;
+      const decoder = base24 ?? base58btc3;
       return [base58btc3.prefix, decoder.decode(source)];
     }
     case base323.prefix: {
-      const decoder = base23 ?? base323;
+      const decoder = base24 ?? base323;
       return [base323.prefix, decoder.decode(source)];
     }
     case base363.prefix: {
-      const decoder = base23 ?? base363;
+      const decoder = base24 ?? base363;
       return [base363.prefix, decoder.decode(source)];
     }
     default: {
-      if (base23 == null) {
+      if (base24 == null) {
         throw Error("To parse non base32, base36 or base58btc encoded CID multibase decoder must be provided");
       }
-      return [source[0], base23.decode(source)];
+      return [source[0], base24.decode(source)];
     }
   }
 }
-function toStringV03(bytes, cache23, base23) {
-  const { prefix } = base23;
+function toStringV03(bytes, cache24, base24) {
+  const { prefix } = base24;
   if (prefix !== base58btc3.prefix) {
-    throw Error(`Cannot string encode V0 in ${base23.name} encoding`);
+    throw Error(`Cannot string encode V0 in ${base24.name} encoding`);
   }
-  const cid = cache23.get(prefix);
+  const cid = cache24.get(prefix);
   if (cid == null) {
-    const cid2 = base23.encode(bytes).slice(1);
-    cache23.set(prefix, cid2);
+    const cid2 = base24.encode(bytes).slice(1);
+    cache24.set(prefix, cid2);
     return cid2;
   } else {
     return cid;
   }
 }
-function toStringV13(bytes, cache23, base23) {
-  const { prefix } = base23;
-  const cid = cache23.get(prefix);
+function toStringV13(bytes, cache24, base24) {
+  const { prefix } = base24;
+  const cid = cache24.get(prefix);
   if (cid == null) {
-    const cid2 = base23.encode(bytes);
-    cache23.set(prefix, cid2);
+    const cid2 = base24.encode(bytes);
+    cache24.set(prefix, cid2);
     return cid2;
   } else {
     return cid;
@@ -28986,8 +29171,8 @@ var HISTORY_WRITE_ERROR_CODES = { EACCES: true, EPERM: true, EROFS: true, ENOSPC
 function shareHistoryReason(error) {
   if (error instanceof ShareHistoryUnreadableError) return "HISTORY_UNREADABLE";
   if (error instanceof ShareHistoryReadError) return "HISTORY_READ_FAILED";
-  const code5 = typeof error === "object" && error !== null && "code" in error ? error.code : void 0;
-  return typeof code5 === "string" && HISTORY_WRITE_ERROR_CODES[code5] === true ? "HISTORY_WRITE_FAILED" : "HISTORY_UNAVAILABLE";
+  const code6 = typeof error === "object" && error !== null && "code" in error ? error.code : void 0;
+  return typeof code6 === "string" && HISTORY_WRITE_ERROR_CODES[code6] === true ? "HISTORY_WRITE_FAILED" : "HISTORY_UNAVAILABLE";
 }
 
 // src/share/adapters.ts
@@ -36139,16 +36324,16 @@ var ShareNotifyError = class extends Error {
   }
   code = "delivery-failed";
 };
-function recipientMatchesShareRecord(record3, recipient) {
-  const matcher = record3.recipientMatcher;
+function recipientMatchesShareRecord(record4, recipient) {
+  const matcher = record4.recipientMatcher;
   const mailbox = canonicalMailbox2(recipient);
   if (mailbox === void 0) return false;
   if (matcher.kind === "exactEmail") return canonicalMailbox2(matcher.value)?.email === mailbox.email;
   if (matcher.kind === "emailDomain") return mailbox.domain === matcher.value;
   return false;
 }
-function shareDeliveryWindowExpiresAt(record3) {
-  const expiresAt = Math.min(Date.parse(record3.expiresAt), Date.parse(record3.registeredAt) + 5 * 60 * 1e3);
+function shareDeliveryWindowExpiresAt(record4) {
+  const expiresAt = Math.min(Date.parse(record4.expiresAt), Date.parse(record4.registeredAt) + 5 * 60 * 1e3);
   if (!Number.isFinite(expiresAt)) throw new ShareNotifyError("share delivery history has invalid timestamps");
   return expiresAt;
 }
@@ -36234,17 +36419,17 @@ var ShareRevocationIncompleteError = class extends Error {
     this.name = "ShareRevocationIncompleteError";
   }
 };
-function targetKind2(record3) {
-  if (record3.targetKind !== void 0) return record3.targetKind;
-  return record3.recipientMatcher.kind === "exactEmail" ? "email" : record3.recipientMatcher.kind === "emailDomain" ? "emailDomain" : record3.recipientMatcher.kind === "recipientDid" ? "recipientDid" : "bearer";
+function targetKind2(record4) {
+  if (record4.targetKind !== void 0) return record4.targetKind;
+  return record4.recipientMatcher.kind === "exactEmail" ? "email" : record4.recipientMatcher.kind === "emailDomain" ? "emailDomain" : record4.recipientMatcher.kind === "recipientDid" ? "recipientDid" : "bearer";
 }
-function policyNodeAudience(record3) {
-  const envelope = record3.deliveryMaterial?.envelope;
-  if (typeof envelope !== "object" || envelope === null || Array.isArray(envelope)) return record3.target.nodeAudience;
+function policyNodeAudience(record4) {
+  const envelope = record4.deliveryMaterial?.envelope;
+  if (typeof envelope !== "object" || envelope === null || Array.isArray(envelope)) return record4.target.nodeAudience;
   const binding = envelope.attestedEnforcerBinding;
-  if (typeof binding !== "object" || binding === null || Array.isArray(binding)) return record3.target.nodeAudience;
+  if (typeof binding !== "object" || binding === null || Array.isArray(binding)) return record4.target.nodeAudience;
   const nodeAudience = binding.nodeAudience;
-  return typeof nodeAudience === "string" ? nodeAudience : record3.target.nodeAudience;
+  return typeof nodeAudience === "string" ? nodeAudience : record4.target.nodeAudience;
 }
 async function revokeShare(input) {
   const target = targetKind2(input.record);
@@ -36295,7 +36480,7 @@ async function revokeShare(input) {
   }
   let revokedAt = input.record.revokedAt ?? (input.now?.() ?? /* @__PURE__ */ new Date()).toISOString();
   if (input.records?.update !== void 0) {
-    const updated = await input.records.update(input.record.shareId, (record3) => ({ ...record3, revokedAt: record3.revokedAt ?? revokedAt }));
+    const updated = await input.records.update(input.record.shareId, (record4) => ({ ...record4, revokedAt: record4.revokedAt ?? revokedAt }));
     revokedAt = updated?.revokedAt ?? revokedAt;
   } else if (input.records !== void 0) {
     const latest = await input.records.get(input.record.shareId);
@@ -36304,26 +36489,26 @@ async function revokeShare(input) {
   }
   return { state: "revoked", target, delegationCid, ...roots === void 0 ? {} : { roots }, revokedAt };
 }
-function redactRecord(record3, revealLink, link5) {
-  const matcher = record3.recipientMatcher;
-  const revealedLink = revealLink ? link5 ?? record3.link : void 0;
+function redactRecord(record4, revealLink, link5) {
+  const matcher = record4.recipientMatcher;
+  const revealedLink = revealLink ? link5 ?? record4.link : void 0;
   return {
-    shareId: record3.shareId,
+    shareId: record4.shareId,
     target: matcher.kind === "exactEmail" ? "email" : matcher.kind === "emailDomain" ? "email-domain" : matcher.kind === "recipientDid" ? "recipient-did" : "bearer",
     ...matcher.kind === "exactEmail" ? { recipient: matcher.value } : matcher.kind === "emailDomain" ? { recipient: `*@${matcher.value}` } : matcher.kind === "recipientDid" ? { recipient: matcher.value } : {},
-    expiresAt: record3.expiresAt,
-    revoked: record3.revokedAt !== void 0,
+    expiresAt: record4.expiresAt,
+    revoked: record4.revokedAt !== void 0,
     ...revealedLink === void 0 ? {} : { link: revealedLink }
   };
 }
 async function listShares(storage) {
   const records = await storage.list();
-  return records.map((record3) => redactRecord(record3, false));
+  return records.map((record4) => redactRecord(record4, false));
 }
 async function showShare(input) {
-  const record3 = await input.storage.get(input.shareId);
-  if (record3 === void 0) throw new Error("share not found");
-  return redactRecord(record3, input.revealLink === true, input.link);
+  const record4 = await input.storage.get(input.shareId);
+  if (record4 === void 0) throw new Error("share not found");
+  return redactRecord(record4, input.revealLink === true, input.link);
 }
 var SHARE_V2_PROTOCOL = Object.freeze({
   challengeDomain: "xyz.tinycloud.share/policy-challenge/v2\0",
@@ -36447,7 +36632,7 @@ function createEncryptedProfileHistory(profileName2, sessionSigner) {
     if (salt.length < 16) throw new ShareHistoryUnreadableError();
     return salt;
   };
-  const read6 = async (profile, ready) => {
+  const read7 = async (profile, ready) => {
     const file = await readIfPresent(await path(profile));
     if (file === void 0) {
       const legacy = await readIfPresent(await legacyPath(profile));
@@ -36536,7 +36721,7 @@ function createEncryptedProfileHistory(profileName2, sessionSigner) {
         false,
         ["encrypt", "decrypt"]
       );
-      await read6(profile, { salt, key, legacyKey: keys.legacyKey });
+      await read7(profile, { salt, key, legacyKey: keys.legacyKey });
       return true;
     } catch (error) {
       if (error instanceof ShareHistoryUnreadableError) return false;
@@ -36573,19 +36758,19 @@ function createEncryptedProfileHistory(profileName2, sessionSigner) {
     });
   });
   return {
-    async put(record3) {
+    async put(record4) {
       return locked(async (profile, ready) => {
-        const values = await read6(profile, ready);
-        const index = values.findIndex((value4) => value4.shareId === record3.shareId);
-        if (index >= 0) values[index] = record3;
-        else values.push(record3);
+        const values = await read7(profile, ready);
+        const index = values.findIndex((value4) => value4.shareId === record4.shareId);
+        if (index >= 0) values[index] = record4;
+        else values.push(record4);
         await write2(profile, values, ready);
       }, true);
     },
     async update(shareId, change) {
       return locked(async (profile, ready) => {
-        const values = await read6(profile, ready);
-        const index = values.findIndex((record3) => record3.shareId === shareId);
+        const values = await read7(profile, ready);
+        const index = values.findIndex((record4) => record4.shareId === shareId);
         if (index < 0) return void 0;
         const updated = await change(values[index]);
         values[index] = updated;
@@ -36594,14 +36779,14 @@ function createEncryptedProfileHistory(profileName2, sessionSigner) {
       }, true);
     },
     async list() {
-      return locked((profile, ready) => read6(profile, ready));
+      return locked((profile, ready) => read7(profile, ready));
     },
     async get(shareId) {
-      return locked(async (profile, ready) => (await read6(profile, ready)).find((record3) => record3.shareId === shareId));
+      return locked(async (profile, ready) => (await read7(profile, ready)).find((record4) => record4.shareId === shareId));
     },
     async delete(shareId) {
       return locked(async (profile, ready) => {
-        await write2(profile, (await read6(profile, ready)).filter((record3) => record3.shareId !== shareId), ready);
+        await write2(profile, (await read7(profile, ready)).filter((record4) => record4.shareId !== shareId), ready);
       }, true);
     },
     quarantineUnreadable
@@ -36631,7 +36816,7 @@ async function checkShareHistoryForKeyDrop(profileName2, now = /* @__PURE__ */ n
   let shareIds;
   try {
     const records = await createEncryptedProfileHistory(async () => profileName2, signShareHistoryBytes).list();
-    shareIds = records.filter((record3) => record3.revokedAt === void 0 && !(Date.parse(record3.expiresAt) <= now.getTime())).map((record3) => record3.shareId);
+    shareIds = records.filter((record4) => record4.revokedAt === void 0 && !(Date.parse(record4.expiresAt) <= now.getTime())).map((record4) => record4.shareId);
   } catch (error) {
     return { status: "unavailable", reason: error instanceof ShareHistoryUnreadableError ? "unreadable" : "unavailable" };
   }
@@ -36667,6 +36852,7 @@ init_logout_pending();
 init_formatter();
 init_errors();
 init_warnings();
+init_safe_text();
 init_constants();
 init_types();
 init_browser_auth();
@@ -36698,6 +36884,41 @@ function storedGrantsCovering(stored, requested, ownerDid, now = Date.now()) {
 
 // src/commands/auth.ts
 init_approval_request();
+
+// src/auth/renewal-lease.ts
+init_links();
+init_manifest();
+init_constants();
+init_raw_encryption();
+init_errors();
+init_scoped_login();
+var DEFAULT_RENEWAL_LEASE_SECONDS = 30 * 86400;
+function withoutDefaultRenewal(permissions) {
+  return permissions.some((entry) => entry.service === ENCRYPTION_PERMISSION_SERVICE || entry.service === "encryption" || isSecretsSpacePermission(entry));
+}
+function parseRenewOption(value4) {
+  let durationMs;
+  try {
+    durationMs = parseRequestedExpiry(value4).durationMs;
+  } catch {
+    throw new CLIError("INVALID_RENEW", `Invalid --renew "${value4}". Use a duration such as 30d or 12w.`, ExitCode.USAGE_ERROR);
+  }
+  const seconds = Math.floor(durationMs / 1e3);
+  if (!Number.isSafeInteger(seconds) || seconds <= 0 || seconds > MAX_APPROVAL_LEASE_SECONDS) {
+    throw new CLIError("INVALID_RENEW", "--renew must be a duration of at most one year (365d).", ExitCode.USAGE_ERROR);
+  }
+  return seconds;
+}
+function renewalLeaseFor(choice, grantSeconds) {
+  if (choice === false) return void 0;
+  if (choice === void 0) return grantSeconds < DEFAULT_RENEWAL_LEASE_SECONDS ? DEFAULT_RENEWAL_LEASE_SECONDS : void 0;
+  if (choice <= grantSeconds) {
+    throw new CLIError("INVALID_RENEW", "--renew must be longer than the sign-in's --expiry: a renewal counts from the approval, so a shorter one adds no time.", ExitCode.USAGE_ERROR);
+  }
+  return choice;
+}
+
+// src/commands/auth.ts
 init_device_auth();
 
 // src/auth/space-setup.ts
@@ -36879,6 +37100,50 @@ function createSpaceRecheck() {
 init_scoped_login();
 init_caveat_refusal();
 init_raw_encryption();
+
+// src/lib/exact-key-grant.ts
+init_constants();
+init_errors();
+init_warnings();
+import { ownerFullAccess as ownerFullAccess3 } from "@tinycloud/sdk-core";
+import { createProfileRegistryCacheStore as createProfileRegistryCacheStore4, createProfileRegistrySequenceStore as createProfileRegistrySequenceStore4 } from "@tinycloud/operations/state";
+var MIN_SIGNING_SESSION_MS = 10 * 60 * 1e3;
+async function withExactKeyNode(params, use) {
+  const privateKey = (params.profile?.authMethod === "local" ? params.profile.privateKey : void 0) ?? (process.env.TC_PRIVATE_KEY || void 0);
+  if (!privateKey) {
+    throw new CLIError(
+      "AUTH_REQUIRED",
+      "This profile has no wallet key, and granting access to a secret needs your wallet's own key to sign it. Set `TC_PRIVATE_KEY` and rerun it, or use a profile set up with `tc init --key-only` and `tc auth login --method local`.",
+      ExitCode.AUTH_REQUIRED
+    );
+  }
+  const nodeSdk2 = await import("@tinycloud/node-sdk");
+  const grantMs = nodeSdk2.secretKeyGrantExpiryMs(params.expiry);
+  const keyAbilities = {};
+  for (const entry of params.keyEntries) {
+    keyAbilities[entry.path] = [.../* @__PURE__ */ new Set([...keyAbilities[entry.path] ?? [], ...entry.actions])];
+  }
+  const node = new nodeSdk2.TinyCloudNode({
+    registryCacheStore: createProfileRegistryCacheStore4(params.ctx.profile),
+    registrySequenceStore: createProfileRegistrySequenceStore4(params.ctx.profile),
+    onRegistryFallback: recordRegistryFallbackWarning,
+    tinycloudRegistryUrl: process.env.TC_REGISTRY_URL || params.profile?.tinycloudRegistryUrl,
+    privateKey,
+    ...ownerFullAccess3(),
+    host: params.ctx.host,
+    autoCreateSpace: true,
+    additionalRawAbilities: keyAbilities,
+    sessionExpirationMs: Math.max(grantMs, MIN_SIGNING_SESSION_MS)
+  });
+  try {
+    await node.signIn();
+    return await use(node);
+  } finally {
+    await node.signOut().catch(() => void 0);
+  }
+}
+
+// src/commands/auth.ts
 init_owner_did();
 init_login_commit();
 
@@ -36906,8 +37171,8 @@ import open15 from "open";
 import { publicJwk as publicJwk3 } from "@tinycloud/sdk-core";
 var MAX_BODY_BYTES2 = 1024 * 1024;
 var RESULT_FIELDS = ["address", "permissions", "protocolVersion", "selectedActionKeys", "signature", "signedMessage"];
-function invalid3(code5, message) {
-  return new CLIError(code5, message, ExitCode.AUTH_REQUIRED);
+function invalid3(code6, message) {
+  return new CLIError(code6, message, ExitCode.AUTH_REQUIRED);
 }
 function ownerIdentitySigner(ownerDid) {
   const canonical = canonicalOwnerDid(ownerDid);
@@ -37119,9 +37384,9 @@ async function startPreparedOpenKeyHandoff(options) {
         if (delivered || completed || !input.trim()) return;
         let envelope;
         try {
-          const code5 = input.trim();
-          if (code5.length > MAX_BODY_BYTES2 * 2 || !/^[A-Za-z0-9_-]+$/.test(code5) || Buffer.from(code5, "base64url").toString("base64url") !== code5) throw new Error("Invalid code");
-          envelope = JSON.parse(Buffer.from(code5, "base64url").toString("utf8"));
+          const code6 = input.trim();
+          if (code6.length > MAX_BODY_BYTES2 * 2 || !/^[A-Za-z0-9_-]+$/.test(code6) || Buffer.from(code6, "base64url").toString("base64url") !== code6) throw new Error("Invalid code");
+          envelope = JSON.parse(Buffer.from(code6, "base64url").toString("utf8"));
         } catch {
           console.error("Invalid prepared OpenKey paste code. Try again.");
           return;
@@ -37219,7 +37484,7 @@ function ownerOfSpace(space) {
 }
 function ownerSpaceFromNodeRecords(records, cid, ownerDid, sessionDid) {
   if (records.length > MAX_RECORDS) return void 0;
-  const matches = records.filter((record3) => record3.cid === cid);
+  const matches = records.filter((record4) => record4.cid === cid);
   const target = matches[0];
   if (!target || new Set(matches.map(({ delegatorDid, delegateDid, resources }) => JSON.stringify([delegatorDid, delegateDid, resources]))).size !== 1) return void 0;
   const owner = normalizeDid(ownerDid);
@@ -37233,20 +37498,20 @@ function ownerSpaceFromNodeRecords(records, cid, ownerDid, sessionDid) {
   if (spaces.size !== 1) return void 0;
   const session = sessionDid === void 0 ? void 0 : normalizeDid(sessionDid);
   const byCid = /* @__PURE__ */ new Map();
-  for (const record3 of records) {
-    const sameCid = byCid.get(record3.cid);
-    if (sameCid === void 0) byCid.set(record3.cid, [record3]);
-    else sameCid.push(record3);
+  for (const record4 of records) {
+    const sameCid = byCid.get(record4.cid);
+    if (sameCid === void 0) byCid.set(record4.cid, [record4]);
+    else sameCid.push(record4);
   }
   const verdicts = /* @__PURE__ */ new Map();
-  const rooted = (record3, depth) => {
-    const issuer = normalizeDid(record3.delegatorDid);
+  const rooted = (record4, depth) => {
+    const issuer = normalizeDid(record4.delegatorDid);
     if (issuer === owner || issuer === session) return true;
-    const known = verdicts.get(record3.cid);
+    const known = verdicts.get(record4.cid);
     if (known !== void 0) return known;
-    verdicts.set(record3.cid, false);
-    const verdict = depth < MAX_CHAIN_DEPTH && record3.parents.some((parentCid) => (byCid.get(parentCid) ?? []).some((parent) => normalizeDid(parent.delegateDid) === issuer && rooted(parent, depth + 1)));
-    verdicts.set(record3.cid, verdict);
+    verdicts.set(record4.cid, false);
+    const verdict = depth < MAX_CHAIN_DEPTH && record4.parents.some((parentCid) => (byCid.get(parentCid) ?? []).some((parent) => normalizeDid(parent.delegateDid) === issuer && rooted(parent, depth + 1)));
+    verdicts.set(record4.cid, verdict);
     return verdict;
   };
   return rooted(target, 0) ? [...spaces][0] : void 0;
@@ -37529,8 +37794,8 @@ function ownerDidFromSpace(spaceId) {
   if (!owner) return void 0;
   return owner.startsWith("did:") ? owner : `did:${owner}`;
 }
-async function cidBoundOwnerSpace(record3, ownerDid, node, host) {
-  const { delegation } = record3;
+async function cidBoundOwnerSpace(record4, ownerDid, node, host) {
+  const { delegation } = record4;
   const authorization = delegation.delegationHeader?.Authorization;
   if (typeof authorization !== "string" || typeof delegation.cid !== "string") return void 0;
   if (!delegation.siweProof && withoutBearer3(authorization).split(".").length === 3) {
@@ -37548,7 +37813,7 @@ async function cidBoundOwnerSpace(record3, ownerDid, node, host) {
     return void 0;
   }
   if (!node || !delegation.siweProof) return void 0;
-  const inspected = await inspectStoredDelegation(record3, { node, host: host ?? delegation.host });
+  const inspected = await inspectStoredDelegation(record4, { node, host: host ?? delegation.host });
   if (inspected.local !== "verified" || inspected.cid !== delegation.cid) return void 0;
   for (const permission2 of inspected.effectivePermissions) {
     const space = permission2.space;
@@ -38539,7 +38804,7 @@ async function finishProfileLogout(ctx, options = {}) {
             const signedOut = (await ProfileManager.getProfile(ctx.profile)).authSignedOut === true;
             throw new CLIError(
               "REPLICA_PURGE_FAILED",
-              `Cleanup incomplete (${report.failed.map(({ code: code5 }) => code5).join(", ") || `${report.remaining} intents remaining`}); ` + (signedOut ? "the profile is signed out and the durable marker denies local reads. Re-run `auth logout --discard-local-changes` to review any changed paths and finish cleanup without repeating node revocation." : "the durable marker denies local reads; credentials remain for retry. Re-run `auth logout` after fixing the failure."),
+              `Cleanup incomplete (${report.failed.map(({ code: code6 }) => code6).join(", ") || `${report.remaining} intents remaining`}); ` + (signedOut ? "the profile is signed out and the durable marker denies local reads. Re-run `auth logout --discard-local-changes` to review any changed paths and finish cleanup without repeating node revocation." : "the durable marker denies local reads; credentials remain for retry. Re-run `auth logout` after fixing the failure."),
               ExitCode.ERROR,
               { failed: report.failed, remaining: report.remaining }
             );
@@ -38574,10 +38839,14 @@ async function finishProfileLogout(ctx, options = {}) {
 function registerAuthCommand(program, options) {
   const auth = program.command("auth").description("Authentication management");
   registerAuthGrantsCommand(auth, { openKeyAcquisition: options?.openKeyAcquisition });
-  auth.command("login").description("Authenticate with TinyCloud").option("--device", "Approve on another device (e.g. a phone) through OpenKey device authorization; requires a KV-scoped --manifest (SQL and secret decrypt need browser or --paste login)").option("--paste", "Use manual paste mode; OpenKey return codes expire after 5 minutes").option("--no-popup", "Print the OpenKey URL without opening a browser").option("--method <method>", "Authentication method: local or openkey").option("--manifest <fileOrBase64>", `Request only this manifest's permissions (one space, plus raw encryption network entries such as a secrets decrypt grant); ${SHARE_PUBLISHING_MANIFEST_REF} covers \`${CLI_NAME21} share publish\``).option("--expiry <duration>", `OpenKey session lifetime, e.g. 1h or 7d (with --manifest: default 1h, or 7d for ${SHARE_PUBLISHING_MANIFEST_REF} so Share links keep their 7-day life; device login: at most 30d, default 30d)`).option("--owner <did>", "Sign in as this owner (did:pkh:eip155:CHAIN:ADDRESS): OpenKey preselects that key, e.g. one that is not the account's primary key, and an approval by any other identity is refused. With --manifest, also names the secrets owner for a manifest's `secrets` on a profile with no recorded owner").option("--replace-session", "Scoped or device login: replace this profile's live session even though the new scope would narrow, change or shorten it (prefer a new profile)").option("--force", "Replica-enabled OpenKey login: replace the stored session key even when recorded shares could not be checked or hold unexpired shares that need the current key").option("--keys <folder>", "Also let this sign-in create and use encryption keys in this folder (for example `qa`). The node must support named keys. With OpenKey, the first time on a profile also needs `--owner`.").option("--replication-prefix <prefix>", "Add replication get+sync authority for a folder prefix ending in /, or root (repeatable)", (prefix, values = []) => [...values, prefix]).option("--replication-allow-secrets", "Allow replication of secret material (network-wide decrypt warning)").action(async (options2, cmd) => {
+  auth.command("login").description("Authenticate with TinyCloud").option("--device", "Approve on another device, such as a phone, through OpenKey. Needs a KV-scoped --manifest. It can ask for decrypt on the default network, which covers every encrypted item in it. Secrets and SQL need browser or --paste login.").option("--paste", "Use manual paste mode; OpenKey return codes expire after 5 minutes").option("--no-popup", "Print the OpenKey URL without opening a browser").option("--method <method>", "Authentication method: local or openkey").option("--manifest <fileOrBase64>", `Request only this manifest's permissions (one space, plus raw encryption network entries such as a secrets decrypt grant); ${SHARE_PUBLISHING_MANIFEST_REF} covers \`${CLI_NAME21} share publish\``).option("--expiry <duration>", `OpenKey session lifetime, e.g. 1h or 7d (with --manifest: default 1h, or 7d for ${SHARE_PUBLISHING_MANIFEST_REF} so Share links keep their 7-day life; device login: at most 30d, default 30d)`).option("--renew <duration>", "Ask the owner to let this sign-in renew itself for up to this long after approval, for example 30d. Default 30d, or none when the sign-in asks for encryption or secrets permissions. Must be longer than --expiry and at most 365d. The owner can approve it without renewal.").option("--no-renew", "Ask for a sign-in that ends at its --expiry, with no renewal").option("--owner <did>", "Sign in as this owner (did:pkh:eip155:CHAIN:ADDRESS): OpenKey preselects that key, e.g. one that is not the account's primary key, and an approval by any other identity is refused. With --manifest, also names the secrets owner for a manifest's `secrets` on a profile with no recorded owner").option("--replace-session", "Scoped or device login: replace this profile's live session even though the new scope would narrow, change or shorten it (prefer a new profile)").option("--force", "Replica-enabled OpenKey login: replace the stored session key even when recorded shares could not be checked or hold unexpired shares that need the current key").option("--keys <folder>", "Also let this sign-in create and use encryption keys in this folder (for example `qa`). The node must support named keys. With OpenKey, the first time on a profile also needs `--owner`.").option("--replication-prefix <prefix>", "Add replication get+sync authority for a folder prefix ending in /, or root (repeatable)", (prefix, values = []) => [...values, prefix]).option("--replication-allow-secrets", "Allow replication of secret material (network-wide decrypt warning)").action(async (options2, cmd) => {
     try {
       if (options2.device && options2.paste) {
         throw new CLIError("INVALID_ARGUMENT", "--device and --paste are mutually exclusive.", ExitCode.USAGE_ERROR);
+      }
+      const renew = options2.renew === void 0 || options2.renew === false ? options2.renew : parseRenewOption(options2.renew);
+      if (typeof renew === "number" && (options2.device || options2.paste || options2.method === "local")) {
+        throw new CLIError("INVALID_ARGUMENT", "--renew needs OpenKey sign-in through an approval link: it can't be used with --device, --paste or --method local.", ExitCode.USAGE_ERROR);
       }
       const scoped = options2.device || options2.manifest || options2.expiry || options2.owner;
       if (scoped && options2.method === "local") {
@@ -38656,7 +38925,10 @@ function registerAuthCommand(program, options) {
       } else if (options2.keys !== void 0) {
         method = profileConfig?.authMethod === "openkey" || options2.paste || options2.owner ? "openkey" : "local";
       } else {
-        method = scoped ? "openkey" : await promptAuthMethod();
+        method = scoped || typeof renew === "number" ? "openkey" : await promptAuthMethod();
+      }
+      if (method === "local" && typeof renew === "number") {
+        throw new CLIError("INVALID_ARGUMENT", "--renew needs OpenKey sign-in through an approval link: it can't be used with --method local.", ExitCode.USAGE_ERROR);
       }
       if (method === "openkey" && (options2.keys !== void 0 || replicationOptions.prefixes.length > 0) && !options2.paste && options2.popup !== false && !process.stdin.isTTY && !process.stderr.isTTY) {
         throw new CLIError(
@@ -38688,6 +38960,7 @@ function registerAuthCommand(program, options) {
           persistHost,
           force: options2.force === true,
           keys: options2.keys,
+          ...renew === void 0 ? {} : { renew },
           ...created === void 0 ? {} : { createdProfile: { previousDefaultProfile: created.previousDefaultProfile } }
         });
         if (!preparedCommitted) await persistReplicationLogin(ctx.profile, replicationOptions);
@@ -38833,7 +39106,7 @@ ${signInAgainHint(ctx.profile, posture ?? void 0)}
     []
   ).option("--permission <file>", 'JSON permission request: { "permissions": PermissionEntry[] }').option("--manifest <fileOrBase64>", "Manifest file, base64:<json>, or raw base64 JSON").option(
     "--expiry <duration>",
-    `Lifetime of the granted delegation. ms-format string (e.g. "7d", "30m") or raw milliseconds. Defaults to 7d, capped by the active session's expiry.`
+    "Grant lifetime (e.g. 1h, 7d). Defaults to 30d and never outlasts your session."
   ).option("--emit [file]", "Emit the request artifact to stdout, or write it to file when provided").option("--grant", "Grant the requested permissions immediately with this owner profile").option("--yes", UNNEEDED_YES_DESCRIPTION, false).option("--no-popup", "Print the OpenKey URL without opening a browser when granting with OpenKey").option("--device", "With --grant: approve on another device (e.g. a phone) through OpenKey device authorization (KV-scoped; SQL needs browser login)").option(
     "--preset <name>",
     `Request a named permission set instead of --cap: ${APPS_AGENT_PRESET} is READ-ONLY on the applications space (kv get/list + sql read, ${APPS_AGENT_EXPIRY_DAYS} days); add --write --app <app_id> to also let the agent change that app's data (see --write)`
@@ -39003,7 +39276,7 @@ ${appsAgentScopeNotice(preset.mode, preset.appIds)}
       if (!node) node = await ensureAuthenticated(ctx);
       const delegations = await node.grantRuntimePermissions(
         requested,
-        expiryOption !== void 0 ? { expiry: expiryOption } : void 0
+        { expiry: expiryOption ?? CLI_DEFAULT_SESSION_EXPIRY_MS }
       );
       await persistCurrentLocalSession(ctx.profile, profile, node.restorableSession, node.replicaStamp);
       const delegationCids = [];
@@ -39130,9 +39403,9 @@ ${appsAgentScopeNotice(preset.mode, preset.appIds)}
       let activated = false;
       let permissions = imported.permissions;
       if (targetsSessionKey) {
-        let record3;
+        let record4;
         try {
-          record3 = await activateUnboundImport(
+          record4 = await activateUnboundImport(
             node,
             imported.delegation,
             ctx.host
@@ -39148,21 +39421,21 @@ ${appsAgentScopeNotice(preset.mode, preset.appIds)}
           if (bootstrap) await bootstrap.abandon(refusal2);
           throw refusal2;
         }
-        await appendAdditionalDelegation(ctx.profile, record3);
-        importExpiry = record3.delegation.expiry;
-        permissions = record3.permissions;
+        await appendAdditionalDelegation(ctx.profile, record4);
+        importExpiry = record4.delegation.expiry;
+        permissions = record4.permissions;
         activated = true;
       } else {
-        const record3 = storedAdditionalDelegation(
+        const record4 = storedAdditionalDelegation(
           { ...imported.delegation, expiry: importExpiry },
           imported.permissions
         );
         if (!targetsSessionKey && kind === "compact") {
-          if (!await appendAdditionalDelegationIfUnexpired(ctx.profile, record3, signedExpiry)) {
+          if (!await appendAdditionalDelegationIfUnexpired(ctx.profile, record4, signedExpiry)) {
             throw delegationExpiredError();
           }
         } else {
-          await appendAdditionalDelegation(ctx.profile, record3);
+          await appendAdditionalDelegation(ctx.profile, record4);
         }
       }
       await appendGrantHistory(ctx.profile, {
@@ -39211,6 +39484,7 @@ ${appsAgentScopeNotice(preset.mode, preset.appIds)}
       const requested = finalizeSigningEntries(
         await resolvePermissionSpaces(entriesForSigning(parsed.requested), ctx.profile)
       );
+      assertNoBotHistoryKey(requested);
       if (profile.authMethod === "openkey") assertNoCaveatLimits(requested);
       const [applications] = await resolvePermissionSpaces(
         [{ service: "tinycloud.kv", space: APPS_AGENT_SPACE, path: "", actions: ["tinycloud.kv/get"] }],
@@ -39265,14 +39539,21 @@ ${scope.text}
           return;
         }
       } else {
-        await ensureDelegationAuthority({
-          ctx,
-          profile,
-          node,
-          requested,
-          expiryOption: parsed.requestedExpiry
-        });
-        grant = await grantAuthRequest(node, resolvedRequest);
+        const keyEntries = requested.filter(isExactSecretKeyPermission);
+        const otherEntries = requested.filter((permission2) => !isExactSecretKeyPermission(permission2));
+        const signWith = async (signer) => {
+          if (otherEntries.length > 0) {
+            await ensureDelegationAuthority({
+              ctx,
+              profile,
+              node: signer,
+              requested: otherEntries,
+              expiryOption: parsed.requestedExpiry
+            });
+          }
+          return grantAuthRequest(signer, resolvedRequest);
+        };
+        grant = keyEntries.length === 0 ? await signWith(node) : await withExactKeyNode({ ctx, profile, keyEntries, expiry: parsed.requestedExpiry }, signWith);
       }
       await appendLocalGrantArtifact(ctx.profile, grant.delegation);
       await appendGrantHistory(ctx.profile, {
@@ -39708,8 +39989,8 @@ async function nodeFromOpenKeyApproval(ctx, session) {
   const host = ctx.host;
   const node = new TinyCloudNode3({
     host,
-    registryCacheStore: createProfileRegistryCacheStore4(ctx.profile),
-    registrySequenceStore: createProfileRegistrySequenceStore4(ctx.profile),
+    registryCacheStore: createProfileRegistryCacheStore5(ctx.profile),
+    registrySequenceStore: createProfileRegistrySequenceStore5(ctx.profile),
     onRegistryFallback: recordRegistryFallbackWarning,
     tinycloudRegistryUrl: process.env.TC_REGISTRY_URL || ctx.tinycloudRegistryUrl
   });
@@ -39800,7 +40081,7 @@ async function ensureDelegationAuthority(params) {
   }
   const delegations = await params.node.grantRuntimePermissions(
     params.requested,
-    params.expiryOption !== void 0 ? { expiry: params.expiryOption } : void 0
+    { expiry: params.expiryOption ?? CLI_DEFAULT_SESSION_EXPIRY_MS }
   );
   if (params.persist === false) return delegations[0];
   for (const delegation of delegations) {
@@ -39819,7 +40100,8 @@ async function ensureDelegationAuthority(params) {
 }
 var OPENKEY_AGENT_MAX_LIFETIME_MS = parseRequestedExpiry(APPS_AGENT_EXPIRY).durationMs;
 function assertOpenKeyAgentRequest(requested) {
-  if (requested.some((permission2) => isRawEncryptionPermission(permission2) || isRawCidRevocationPermission(permission2))) {
+  assertNoBotHistoryKey(requested);
+  if (requested.some((permission2) => isRawEncryptionPermission(permission2) && !isDecryptOnlyExactSecretKey(permission2) || isRawCidRevocationPermission(permission2))) {
     throw new CLIError(
       "RAW_RECAP_RESOURCE_UNSUPPORTED",
       "OpenKey cannot approve raw urn:cid or raw encryption authority for an agent request.",
@@ -39842,7 +40124,7 @@ function execCapturedCommand(command) {
       stdio: "inherit"
     });
     child.on("error", reject);
-    child.on("exit", (code5, signal) => {
+    child.on("exit", (code6, signal) => {
       if (signal) {
         reject(new CLIError(
           "COMMAND_SIGNAL",
@@ -39851,8 +40133,8 @@ function execCapturedCommand(command) {
         ));
         return;
       }
-      if (code5 && code5 !== 0) {
-        process.exitCode = code5;
+      if (code6 && code6 !== 0) {
+        process.exitCode = code6;
       }
       resolve10();
     });
@@ -40156,8 +40438,16 @@ async function handleLocalAuth(profileName2, host, options = {}) {
   return { profile: updatedProfile, sessionResult };
 }
 async function handleOpenKeyAuth(profileName2, host, options = {}) {
-  const { profile, delegationData, declined, legacyNested } = await refreshOpenKeySession(profileName2, host, options);
+  const { profile, delegationData, declined, legacyNested, warnings } = await refreshOpenKeySession(profileName2, host, options);
   reportDeclined(declined, legacyNested);
+  for (const warning of warnings ?? []) {
+    process.stderr.write(
+      `${theme.warn("Warning:")} This node does not advertise ${warning.feature}. Sign-in continued without:
+${warning.resources.map((resource) => `  ${safeInline(resource)}`).join("\n")}
+Details: TC-3975
+`
+    );
+  }
   await ensureSpaceSetup({ profile: profileName2, host }, delegationData, delegationData.permissions);
   outputJson({
     authenticated: true,
@@ -40166,6 +40456,7 @@ async function handleOpenKeyAuth(profileName2, host, options = {}) {
     spaceId: delegationData.spaceId,
     ownerDid: profile.ownerDid ?? null,
     authMethod: "openkey",
+    ...warnings === void 0 ? {} : { warnings },
     ...options.permissions ? {
       scoped: true,
       host,
@@ -40233,12 +40524,12 @@ async function refreshPreparedOpenKeySession(params) {
     prefix: "",
     defaults: false,
     includePublicSpace: false,
-    ...expiry ? { expiry: `${expiry.durationMs}ms` } : {},
+    expiry: `${expiry?.durationMs ?? CLI_DEFAULT_SESSION_EXPIRY_MS}ms`,
     permissions
   }], { includeAccountRegistryPermissions: false });
   const node = new TinyCloudNode3({
-    registryCacheStore: createProfileRegistryCacheStore4(profileName2),
-    registrySequenceStore: createProfileRegistrySequenceStore4(profileName2),
+    registryCacheStore: createProfileRegistryCacheStore5(profileName2),
+    registrySequenceStore: createProfileRegistrySequenceStore5(profileName2),
     onRegistryFallback: recordRegistryFallbackWarning,
     tinycloudRegistryUrl: process.env.TC_REGISTRY_URL || profile.tinycloudRegistryUrl,
     host,
@@ -40248,7 +40539,7 @@ async function refreshPreparedOpenKeySession(params) {
     autoBootstrapAccount: false,
     replication: replicationConfig,
     ...namedKeys === void 0 ? {} : { additionalRawAbilities: keyAbilitiesFor(namedKeys) },
-    ...expiry ? { sessionExpirationMs: expiry.durationMs } : {}
+    sessionExpirationMs: expiry?.durationMs ?? CLI_DEFAULT_SESSION_EXPIRY_MS
   });
   let handoff;
   let preparedDid;
@@ -40256,7 +40547,7 @@ async function refreshPreparedOpenKeySession(params) {
   const gateWasActive = await readGateSnapshot(profilePath12(profileName2)).then((gate) => gate !== void 0 && gate.principalHash !== null, () => true);
   try {
     if (namedKeys !== void 0) process.stderr.write(KEYS_APPROVAL_NOTE(namedKeys.prefix));
-    await node.signInWithOpenKey(async (prepared) => {
+    const signIn = await node.signInWithOpenKey(async (prepared) => {
       preparedDid = prepared.verificationMethod;
       handoff = await startPreparedOpenKeyHandoff({
         prepared,
@@ -40269,6 +40560,7 @@ async function refreshPreparedOpenKeySession(params) {
         return result;
       });
     }, preparedSignInOptions(expiry));
+    const warnings = signIn?.warnings;
     const active = node.restorableSession;
     if (!active || !preparedDid || node.sessionDid !== preparedDid || active.verificationMethod !== preparedDid) {
       throw new CLIError("OPENKEY_SESSION_MISMATCH", "OpenKey signed a different SDK session key; no profile or session was saved.", ExitCode.PERMISSION_DENIED);
@@ -40318,11 +40610,13 @@ async function refreshPreparedOpenKeySession(params) {
       if (grant === "both") await readyNamedKeysNetwork(node);
       else process.stderr.write(keysNotGrantedAfterLogin(profileName2));
     }
+    const proposed = warnings === void 0 ? permissions : permissions.filter((permission2) => !isVerifiedRawEncryptionPermission(permission2) || !warnings.some((warning) => warning.resources.includes(permission2.path)));
     return {
       profile: updatedProfile,
       delegationData: session,
-      declined: declinedPermissions(permissions, session.permissions, owner),
-      legacyNested: verified.legacyNested
+      declined: declinedPermissions(proposed, session.permissions, owner),
+      legacyNested: verified.legacyNested,
+      ...warnings === void 0 ? {} : { warnings }
     };
   } catch (error) {
     await handoff?.complete(false);
@@ -40371,16 +40665,18 @@ async function refreshPreparedKeysSession(params) {
   await assertNodeSupportsNamedKeys(host);
   if (options.force !== true) await assertShareHistoryAllowsKeyDrop(profileName2, "login");
   const node = new TinyCloudNode3({
-    registryCacheStore: createProfileRegistryCacheStore4(profileName2),
-    registrySequenceStore: createProfileRegistrySequenceStore4(profileName2),
+    registryCacheStore: createProfileRegistryCacheStore5(profileName2),
+    registrySequenceStore: createProfileRegistrySequenceStore5(profileName2),
     onRegistryFallback: recordRegistryFallbackWarning,
     tinycloudRegistryUrl: process.env.TC_REGISTRY_URL || profile.tinycloudRegistryUrl,
     host,
     signer: ownerIdentitySigner(owner),
+    // The owner login asks OpenKey for every action on the default space, plus the named-key row.
+    ...ownerFullAccess4(),
     additionalRawAbilities: keyAbilitiesFor(namedKeys),
     includeAccountRegistryPermissions: false,
     autoBootstrapAccount: false,
-    ...expiry ? { sessionExpirationMs: expiry.durationMs } : {}
+    sessionExpirationMs: expiry?.durationMs ?? CLI_DEFAULT_SESSION_EXPIRY_MS
   });
   let handoff;
   let preparedDid;
@@ -40483,6 +40779,11 @@ async function refreshOpenKeySession(profileName2, host, options = {}) {
     assertNotLocalOwner(profileName2, profile, "Scoped browser login");
   }
   const plainPasteLink = options.paste === true && replication.prefixes.length === 0 && options.keys === void 0;
+  const approvalRequestPath = options.paste !== true && replication.prefixes.length === 0 && options.keys === void 0;
+  if (!approvalRequestPath && typeof options.renew === "number") {
+    throw new CLIError("INVALID_ARGUMENT", "--renew needs OpenKey sign-in through an approval link: it can't be used with --paste, --keys or --replication-prefix.", ExitCode.USAGE_ERROR);
+  }
+  const renewalLeaseSeconds = approvalRequestPath ? renewalLeaseFor(options.renew ?? (withoutDefaultRenewal(permissions ?? ownerLoginPermissions(expectedOwner)) ? false : void 0), grantLifetimeSeconds(openKeyExpiry)) : void 0;
   if (permissions !== void 0 && options.replaceSession !== true) {
     const estimatedExpiry = expiry === void 0 || plainPasteLink ? void 0 : new Date(Date.now() + expiry.durationMs).toISOString();
     assertSessionReplaceable(profileName2, snapshot, expectedOwner, permissions, estimatedExpiry);
@@ -40532,7 +40833,8 @@ async function refreshOpenKeySession(profileName2, host, options = {}) {
       expiry: openKeyExpiry,
       // The plain paste link lets the user pick the lifetime; the signed result has no `--expiry` ceiling.
       ...plainPasteLink ? { expiryChangeable: true } : {},
-      ...permissions && options.reason ? { reason: options.reason } : {}
+      ...permissions && options.reason ? { reason: options.reason } : {},
+      ...renewalLeaseSeconds === void 0 ? {} : { renewalLeaseSeconds }
     });
     seen.result = delegationData;
     let sanitizedSession;
@@ -40578,7 +40880,12 @@ async function refreshOpenKeySession(profileName2, host, options = {}) {
     });
     return { delegationData, sanitizedSession, verifiedOwner, ownerKeyPrimary, updatedProfile, declined, legacyNested };
   });
+  const renewalChoice = approvalRenewalChoiceOf(committed.delegationData);
   await completeApprovalResult(profileName2, committed.delegationData);
+  if (renewalChoice === "finite") {
+    process.stderr.write(`The owner approved this sign-in without renewal, so it ends at ${String(committed.sanitizedSession.expiresAt)}. Sign in again after that.
+`);
+  }
   warnIfNotPrimaryKey(committed.verifiedOwner, committed.ownerKeyPrimary);
   announceFirstOwner(profileName2, expectedOwner, committed.verifiedOwner);
   return { profile: committed.updatedProfile, delegationData: committed.sanitizedSession, declined: committed.declined, legacyNested: committed.legacyNested };
@@ -41150,9 +41457,9 @@ function errorMessage2(error) {
 }
 var MAX_FILE_BYTES = 1e6;
 var AppsInstallError = class extends Error {
-  constructor(code5, message) {
+  constructor(code6, message) {
     super(message);
-    this.code = code5;
+    this.code = code6;
     this.name = "AppsInstallError";
   }
 };
@@ -41584,7 +41891,7 @@ function runFeedRunner(argv, response, signal) {
       child.stdin.on("error", () => {
         failed = true;
       });
-      child.once("close", (code5, exitSignal) => finish(!interrupted && !failed && code5 === 0 && exitSignal === null ? "delivered" : "unconfirmed"));
+      child.once("close", (code6, exitSignal) => finish(!interrupted && !failed && code6 === 0 && exitSignal === null ? "delivered" : "unconfirmed"));
       stop = () => {
         interrupted = true;
         child.kill("SIGKILL");
@@ -42106,10 +42413,10 @@ function validateBundle(input) {
 }
 function safeError(error) {
   const candidate = object2(error) ? error.code : void 0;
-  const code5 = typeof candidate === "string" && Object.prototype.hasOwnProperty.call(ErrorCodes, candidate) ? candidate : ErrorCodes.SQL_ERROR;
+  const code6 = typeof candidate === "string" && Object.prototype.hasOwnProperty.call(ErrorCodes, candidate) ? candidate : ErrorCodes.SQL_ERROR;
   const meta = object2(error) && object2(error.meta) ? error.meta : object2(error) && object2(error.metadata) ? error.metadata : void 0;
   const status = meta?.status;
-  return cliErrorFromService({ code: code5, message: "Could not import the prepared feed bundle", ...typeof status === "number" && Number.isInteger(status) && status >= 400 && status <= 599 ? { meta: { status } } : {} });
+  return cliErrorFromService({ code: code6, message: "Could not import the prepared feed bundle", ...typeof status === "number" && Number.isInteger(status) && status >= 400 && status <= 599 ? { meta: { status } } : {} });
 }
 function value2(result) {
   if (!result.ok) throw safeError(result.error);
@@ -42500,9 +42807,9 @@ async function showOnce(card, directory, agent) {
 async function cardMdOrDefaultForPublish(db, directory, agent) {
   let card;
   try {
-    const read6 = await readFeedCardMd(db);
-    if (!read6.ok) return {};
-    card = read6.data === null ? DEFAULT_CARD_MD : markDefault(read6.data);
+    const read7 = await readFeedCardMd(db);
+    if (!read7.ok) return {};
+    card = read7.data === null ? DEFAULT_CARD_MD : markDefault(read7.data);
   } catch {
     return {};
   }
@@ -42524,9 +42831,9 @@ var CARD_MD_UPSERT = `INSERT INTO card_md (id, text, version, updated_at) VALUES
 var CARD_MD_INSERT_DEFAULT = `INSERT INTO card_md (id, text, version, updated_at) VALUES (1, ?, ?, ?) ON CONFLICT(id) DO NOTHING`;
 async function copyCardMdToAgent(master, agentResponses) {
   try {
-    const read6 = await readFeedCardMd(master);
-    if (!read6.ok) return false;
-    const statement = read6.data === null ? { sql: CARD_MD_INSERT_DEFAULT, params: [DEFAULT_CARD_MD.text, DEFAULT_CARD_MD.version, (/* @__PURE__ */ new Date()).toISOString()] } : { sql: CARD_MD_UPSERT, params: [read6.data.text, read6.data.version, read6.data.updatedAt] };
+    const read7 = await readFeedCardMd(master);
+    if (!read7.ok) return false;
+    const statement = read7.data === null ? { sql: CARD_MD_INSERT_DEFAULT, params: [DEFAULT_CARD_MD.text, DEFAULT_CARD_MD.version, (/* @__PURE__ */ new Date()).toISOString()] } : { sql: CARD_MD_UPSERT, params: [read7.data.text, read7.data.version, read7.data.updatedAt] };
     const written = await agentResponses.batch([{ sql: CARD_MD_SCHEMA }, statement]);
     return written.ok;
   } catch {
@@ -42576,7 +42883,7 @@ function registerFeedCommand(program) {
   const feed = program.command("feed").description("SQLite agent cards, owner responses and durable runtime handoff").addHelpText("after", `
 Owner connection provisions separate output and response databases and activates one
 bundled delegation. Agent labels and tokens select resources, never confer authority.
-Home's owner grant uses ${FEED_PREFIX2}/ (trailing slash namespace); agent grants
+TinyCloud One's owner grant uses ${FEED_PREFIX2}/ (trailing slash namespace); agent grants
 name exact output, response and response-hook resources. No agent schema or response write.
 
 publish/respond/message/handling read JSON files carrying full card/revision/issuance
@@ -43027,8 +43334,8 @@ async function writePrivateOutput(path, value4, label = "output") {
     await rename4(temp, path);
   } catch (error) {
     if (created) await rm9(temp, { force: true }).catch(() => void 0);
-    const code5 = error instanceof Error && "code" in error && typeof error.code === "string" ? ` (${error.code})` : "";
-    throw new CLIError("ERROR", `Could not write ${label.toLowerCase()} "${path}"${code5}.`, ExitCode.ERROR);
+    const code6 = error instanceof Error && "code" in error && typeof error.code === "string" ? ` (${error.code})` : "";
+    throw new CLIError("ERROR", `Could not write ${label.toLowerCase()} "${path}"${code6}.`, ExitCode.ERROR);
   }
   try {
     const parent = await open17(parentPath, "r");
@@ -43057,8 +43364,8 @@ async function throwKvError(error, spaceUri, profileName2) {
 }
 function assertAddressableKey(key) {
   for (let i = 0; i < key.length; i++) {
-    const code5 = key.charCodeAt(i);
-    if (code5 <= 32 || code5 === 127) {
+    const code6 = key.charCodeAt(i);
+    if (code6 <= 32 || code6 === 127) {
       throw new CLIError("USAGE_ERROR", "KV keys cannot contain spaces or control characters; use a URL-safe key", ExitCode.USAGE_ERROR);
     }
   }
@@ -43675,6 +43982,6453 @@ init_approval_request();
 init_approval_wait();
 import { CLI_NAME as CLI_NAME30 } from "@tinycloud/operations/cli-name";
 
+// src/auth/onboarding-handoff.ts
+import { createHash as createHash8 } from "crypto";
+import { extractSiweExpiration as extractSiweExpiration2 } from "@tinycloud/node-sdk";
+import { makePkhSpaceId as makePkhSpaceId2, pkhDid, principalDid, TERMINAL_DELEGATION_FACT } from "@tinycloud/sdk-core";
+
+// ../share-sdk/dist/share-index.js
+init_links();
+init_ed25519();
+init_blake3();
+var __defProp4 = Object.defineProperty;
+var __export4 = (target, all) => {
+  for (var name in all)
+    __defProp4(target, name, { get: all[name], enumerable: true });
+};
+var external_exports4 = {};
+__export4(external_exports4, {
+  BRAND: () => BRAND4,
+  DIRTY: () => DIRTY4,
+  EMPTY_PATH: () => EMPTY_PATH4,
+  INVALID: () => INVALID4,
+  NEVER: () => NEVER4,
+  OK: () => OK4,
+  ParseStatus: () => ParseStatus4,
+  Schema: () => ZodType4,
+  ZodAny: () => ZodAny4,
+  ZodArray: () => ZodArray4,
+  ZodBigInt: () => ZodBigInt4,
+  ZodBoolean: () => ZodBoolean4,
+  ZodBranded: () => ZodBranded4,
+  ZodCatch: () => ZodCatch4,
+  ZodDate: () => ZodDate4,
+  ZodDefault: () => ZodDefault4,
+  ZodDiscriminatedUnion: () => ZodDiscriminatedUnion4,
+  ZodEffects: () => ZodEffects4,
+  ZodEnum: () => ZodEnum4,
+  ZodError: () => ZodError4,
+  ZodFirstPartyTypeKind: () => ZodFirstPartyTypeKind4,
+  ZodFunction: () => ZodFunction4,
+  ZodIntersection: () => ZodIntersection4,
+  ZodIssueCode: () => ZodIssueCode4,
+  ZodLazy: () => ZodLazy4,
+  ZodLiteral: () => ZodLiteral4,
+  ZodMap: () => ZodMap4,
+  ZodNaN: () => ZodNaN4,
+  ZodNativeEnum: () => ZodNativeEnum4,
+  ZodNever: () => ZodNever4,
+  ZodNull: () => ZodNull4,
+  ZodNullable: () => ZodNullable4,
+  ZodNumber: () => ZodNumber4,
+  ZodObject: () => ZodObject4,
+  ZodOptional: () => ZodOptional4,
+  ZodParsedType: () => ZodParsedType4,
+  ZodPipeline: () => ZodPipeline4,
+  ZodPromise: () => ZodPromise4,
+  ZodReadonly: () => ZodReadonly4,
+  ZodRecord: () => ZodRecord4,
+  ZodSchema: () => ZodType4,
+  ZodSet: () => ZodSet4,
+  ZodString: () => ZodString4,
+  ZodSymbol: () => ZodSymbol4,
+  ZodTransformer: () => ZodEffects4,
+  ZodTuple: () => ZodTuple4,
+  ZodType: () => ZodType4,
+  ZodUndefined: () => ZodUndefined4,
+  ZodUnion: () => ZodUnion4,
+  ZodUnknown: () => ZodUnknown4,
+  ZodVoid: () => ZodVoid4,
+  addIssueToContext: () => addIssueToContext4,
+  any: () => anyType4,
+  array: () => arrayType4,
+  bigint: () => bigIntType4,
+  boolean: () => booleanType4,
+  coerce: () => coerce7,
+  custom: () => custom4,
+  date: () => dateType4,
+  datetimeRegex: () => datetimeRegex4,
+  defaultErrorMap: () => en_default4,
+  discriminatedUnion: () => discriminatedUnionType4,
+  effect: () => effectsType4,
+  enum: () => enumType4,
+  function: () => functionType4,
+  getErrorMap: () => getErrorMap4,
+  getParsedType: () => getParsedType4,
+  instanceof: () => instanceOfType4,
+  intersection: () => intersectionType4,
+  isAborted: () => isAborted4,
+  isAsync: () => isAsync4,
+  isDirty: () => isDirty4,
+  isValid: () => isValid4,
+  late: () => late4,
+  lazy: () => lazyType4,
+  literal: () => literalType4,
+  makeIssue: () => makeIssue4,
+  map: () => mapType4,
+  nan: () => nanType4,
+  nativeEnum: () => nativeEnumType4,
+  never: () => neverType4,
+  null: () => nullType4,
+  nullable: () => nullableType4,
+  number: () => numberType4,
+  object: () => objectType4,
+  objectUtil: () => objectUtil4,
+  oboolean: () => oboolean4,
+  onumber: () => onumber4,
+  optional: () => optionalType4,
+  ostring: () => ostring4,
+  pipeline: () => pipelineType4,
+  preprocess: () => preprocessType4,
+  promise: () => promiseType4,
+  quotelessJson: () => quotelessJson4,
+  record: () => recordType4,
+  set: () => setType4,
+  setErrorMap: () => setErrorMap4,
+  strictObject: () => strictObjectType4,
+  string: () => stringType4,
+  symbol: () => symbolType4,
+  transformer: () => effectsType4,
+  tuple: () => tupleType4,
+  undefined: () => undefinedType4,
+  union: () => unionType4,
+  unknown: () => unknownType4,
+  util: () => util4,
+  void: () => voidType4
+});
+var util4;
+(function(util22) {
+  util22.assertEqual = (_) => {
+  };
+  function assertIs(_arg) {
+  }
+  util22.assertIs = assertIs;
+  function assertNever(_x) {
+    throw new Error();
+  }
+  util22.assertNever = assertNever;
+  util22.arrayToEnum = (items) => {
+    const obj = {};
+    for (const item of items) {
+      obj[item] = item;
+    }
+    return obj;
+  };
+  util22.getValidEnumValues = (obj) => {
+    const validKeys = util22.objectKeys(obj).filter((k) => typeof obj[obj[k]] !== "number");
+    const filtered = {};
+    for (const k of validKeys) {
+      filtered[k] = obj[k];
+    }
+    return util22.objectValues(filtered);
+  };
+  util22.objectValues = (obj) => {
+    return util22.objectKeys(obj).map(function(e) {
+      return obj[e];
+    });
+  };
+  util22.objectKeys = typeof Object.keys === "function" ? (obj) => Object.keys(obj) : (object22) => {
+    const keys = [];
+    for (const key in object22) {
+      if (Object.prototype.hasOwnProperty.call(object22, key)) {
+        keys.push(key);
+      }
+    }
+    return keys;
+  };
+  util22.find = (arr, checker) => {
+    for (const item of arr) {
+      if (checker(item))
+        return item;
+    }
+    return void 0;
+  };
+  util22.isInteger = typeof Number.isInteger === "function" ? (val) => Number.isInteger(val) : (val) => typeof val === "number" && Number.isFinite(val) && Math.floor(val) === val;
+  function joinValues(array, separator = " | ") {
+    return array.map((val) => typeof val === "string" ? `'${val}'` : val).join(separator);
+  }
+  util22.joinValues = joinValues;
+  util22.jsonStringifyReplacer = (_, value4) => {
+    if (typeof value4 === "bigint") {
+      return value4.toString();
+    }
+    return value4;
+  };
+})(util4 || (util4 = {}));
+var objectUtil4;
+(function(objectUtil22) {
+  objectUtil22.mergeShapes = (first, second) => {
+    return {
+      ...first,
+      ...second
+      // second overwrites first
+    };
+  };
+})(objectUtil4 || (objectUtil4 = {}));
+var ZodParsedType4 = util4.arrayToEnum([
+  "string",
+  "nan",
+  "number",
+  "integer",
+  "float",
+  "boolean",
+  "date",
+  "bigint",
+  "symbol",
+  "function",
+  "undefined",
+  "null",
+  "array",
+  "object",
+  "unknown",
+  "promise",
+  "void",
+  "never",
+  "map",
+  "set"
+]);
+var getParsedType4 = (data) => {
+  const t = typeof data;
+  switch (t) {
+    case "undefined":
+      return ZodParsedType4.undefined;
+    case "string":
+      return ZodParsedType4.string;
+    case "number":
+      return Number.isNaN(data) ? ZodParsedType4.nan : ZodParsedType4.number;
+    case "boolean":
+      return ZodParsedType4.boolean;
+    case "function":
+      return ZodParsedType4.function;
+    case "bigint":
+      return ZodParsedType4.bigint;
+    case "symbol":
+      return ZodParsedType4.symbol;
+    case "object":
+      if (Array.isArray(data)) {
+        return ZodParsedType4.array;
+      }
+      if (data === null) {
+        return ZodParsedType4.null;
+      }
+      if (data.then && typeof data.then === "function" && data.catch && typeof data.catch === "function") {
+        return ZodParsedType4.promise;
+      }
+      if (typeof Map !== "undefined" && data instanceof Map) {
+        return ZodParsedType4.map;
+      }
+      if (typeof Set !== "undefined" && data instanceof Set) {
+        return ZodParsedType4.set;
+      }
+      if (typeof Date !== "undefined" && data instanceof Date) {
+        return ZodParsedType4.date;
+      }
+      return ZodParsedType4.object;
+    default:
+      return ZodParsedType4.unknown;
+  }
+};
+var ZodIssueCode4 = util4.arrayToEnum([
+  "invalid_type",
+  "invalid_literal",
+  "custom",
+  "invalid_union",
+  "invalid_union_discriminator",
+  "invalid_enum_value",
+  "unrecognized_keys",
+  "invalid_arguments",
+  "invalid_return_type",
+  "invalid_date",
+  "invalid_string",
+  "too_small",
+  "too_big",
+  "invalid_intersection_types",
+  "not_multiple_of",
+  "not_finite"
+]);
+var quotelessJson4 = (obj) => {
+  const json = JSON.stringify(obj, null, 2);
+  return json.replace(/"([^"]+)":/g, "$1:");
+};
+var ZodError4 = class _ZodError3 extends Error {
+  get errors() {
+    return this.issues;
+  }
+  constructor(issues) {
+    super();
+    this.issues = [];
+    this.addIssue = (sub) => {
+      this.issues = [...this.issues, sub];
+    };
+    this.addIssues = (subs = []) => {
+      this.issues = [...this.issues, ...subs];
+    };
+    const actualProto = new.target.prototype;
+    if (Object.setPrototypeOf) {
+      Object.setPrototypeOf(this, actualProto);
+    } else {
+      this.__proto__ = actualProto;
+    }
+    this.name = "ZodError";
+    this.issues = issues;
+  }
+  format(_mapper) {
+    const mapper = _mapper || function(issue) {
+      return issue.message;
+    };
+    const fieldErrors = { _errors: [] };
+    const processError = (error) => {
+      for (const issue of error.issues) {
+        if (issue.code === "invalid_union") {
+          issue.unionErrors.map(processError);
+        } else if (issue.code === "invalid_return_type") {
+          processError(issue.returnTypeError);
+        } else if (issue.code === "invalid_arguments") {
+          processError(issue.argumentsError);
+        } else if (issue.path.length === 0) {
+          fieldErrors._errors.push(mapper(issue));
+        } else {
+          let curr = fieldErrors;
+          let i = 0;
+          while (i < issue.path.length) {
+            const el = issue.path[i];
+            const terminal = i === issue.path.length - 1;
+            if (!terminal) {
+              curr[el] = curr[el] || { _errors: [] };
+            } else {
+              curr[el] = curr[el] || { _errors: [] };
+              curr[el]._errors.push(mapper(issue));
+            }
+            curr = curr[el];
+            i++;
+          }
+        }
+      }
+    };
+    processError(this);
+    return fieldErrors;
+  }
+  static assert(value4) {
+    if (!(value4 instanceof _ZodError3)) {
+      throw new Error(`Not a ZodError: ${value4}`);
+    }
+  }
+  toString() {
+    return this.message;
+  }
+  get message() {
+    return JSON.stringify(this.issues, util4.jsonStringifyReplacer, 2);
+  }
+  get isEmpty() {
+    return this.issues.length === 0;
+  }
+  flatten(mapper = (issue) => issue.message) {
+    const fieldErrors = {};
+    const formErrors = [];
+    for (const sub of this.issues) {
+      if (sub.path.length > 0) {
+        const firstEl = sub.path[0];
+        fieldErrors[firstEl] = fieldErrors[firstEl] || [];
+        fieldErrors[firstEl].push(mapper(sub));
+      } else {
+        formErrors.push(mapper(sub));
+      }
+    }
+    return { formErrors, fieldErrors };
+  }
+  get formErrors() {
+    return this.flatten();
+  }
+};
+ZodError4.create = (issues) => {
+  const error = new ZodError4(issues);
+  return error;
+};
+var errorMap4 = (issue, _ctx) => {
+  let message;
+  switch (issue.code) {
+    case ZodIssueCode4.invalid_type:
+      if (issue.received === ZodParsedType4.undefined) {
+        message = "Required";
+      } else {
+        message = `Expected ${issue.expected}, received ${issue.received}`;
+      }
+      break;
+    case ZodIssueCode4.invalid_literal:
+      message = `Invalid literal value, expected ${JSON.stringify(issue.expected, util4.jsonStringifyReplacer)}`;
+      break;
+    case ZodIssueCode4.unrecognized_keys:
+      message = `Unrecognized key(s) in object: ${util4.joinValues(issue.keys, ", ")}`;
+      break;
+    case ZodIssueCode4.invalid_union:
+      message = `Invalid input`;
+      break;
+    case ZodIssueCode4.invalid_union_discriminator:
+      message = `Invalid discriminator value. Expected ${util4.joinValues(issue.options)}`;
+      break;
+    case ZodIssueCode4.invalid_enum_value:
+      message = `Invalid enum value. Expected ${util4.joinValues(issue.options)}, received '${issue.received}'`;
+      break;
+    case ZodIssueCode4.invalid_arguments:
+      message = `Invalid function arguments`;
+      break;
+    case ZodIssueCode4.invalid_return_type:
+      message = `Invalid function return type`;
+      break;
+    case ZodIssueCode4.invalid_date:
+      message = `Invalid date`;
+      break;
+    case ZodIssueCode4.invalid_string:
+      if (typeof issue.validation === "object") {
+        if ("includes" in issue.validation) {
+          message = `Invalid input: must include "${issue.validation.includes}"`;
+          if (typeof issue.validation.position === "number") {
+            message = `${message} at one or more positions greater than or equal to ${issue.validation.position}`;
+          }
+        } else if ("startsWith" in issue.validation) {
+          message = `Invalid input: must start with "${issue.validation.startsWith}"`;
+        } else if ("endsWith" in issue.validation) {
+          message = `Invalid input: must end with "${issue.validation.endsWith}"`;
+        } else {
+          util4.assertNever(issue.validation);
+        }
+      } else if (issue.validation !== "regex") {
+        message = `Invalid ${issue.validation}`;
+      } else {
+        message = "Invalid";
+      }
+      break;
+    case ZodIssueCode4.too_small:
+      if (issue.type === "array")
+        message = `Array must contain ${issue.exact ? "exactly" : issue.inclusive ? `at least` : `more than`} ${issue.minimum} element(s)`;
+      else if (issue.type === "string")
+        message = `String must contain ${issue.exact ? "exactly" : issue.inclusive ? `at least` : `over`} ${issue.minimum} character(s)`;
+      else if (issue.type === "number")
+        message = `Number must be ${issue.exact ? `exactly equal to ` : issue.inclusive ? `greater than or equal to ` : `greater than `}${issue.minimum}`;
+      else if (issue.type === "bigint")
+        message = `Number must be ${issue.exact ? `exactly equal to ` : issue.inclusive ? `greater than or equal to ` : `greater than `}${issue.minimum}`;
+      else if (issue.type === "date")
+        message = `Date must be ${issue.exact ? `exactly equal to ` : issue.inclusive ? `greater than or equal to ` : `greater than `}${new Date(Number(issue.minimum))}`;
+      else
+        message = "Invalid input";
+      break;
+    case ZodIssueCode4.too_big:
+      if (issue.type === "array")
+        message = `Array must contain ${issue.exact ? `exactly` : issue.inclusive ? `at most` : `less than`} ${issue.maximum} element(s)`;
+      else if (issue.type === "string")
+        message = `String must contain ${issue.exact ? `exactly` : issue.inclusive ? `at most` : `under`} ${issue.maximum} character(s)`;
+      else if (issue.type === "number")
+        message = `Number must be ${issue.exact ? `exactly` : issue.inclusive ? `less than or equal to` : `less than`} ${issue.maximum}`;
+      else if (issue.type === "bigint")
+        message = `BigInt must be ${issue.exact ? `exactly` : issue.inclusive ? `less than or equal to` : `less than`} ${issue.maximum}`;
+      else if (issue.type === "date")
+        message = `Date must be ${issue.exact ? `exactly` : issue.inclusive ? `smaller than or equal to` : `smaller than`} ${new Date(Number(issue.maximum))}`;
+      else
+        message = "Invalid input";
+      break;
+    case ZodIssueCode4.custom:
+      message = `Invalid input`;
+      break;
+    case ZodIssueCode4.invalid_intersection_types:
+      message = `Intersection results could not be merged`;
+      break;
+    case ZodIssueCode4.not_multiple_of:
+      message = `Number must be a multiple of ${issue.multipleOf}`;
+      break;
+    case ZodIssueCode4.not_finite:
+      message = "Number must be finite";
+      break;
+    default:
+      message = _ctx.defaultError;
+      util4.assertNever(issue);
+  }
+  return { message };
+};
+var en_default4 = errorMap4;
+var overrideErrorMap4 = en_default4;
+function setErrorMap4(map) {
+  overrideErrorMap4 = map;
+}
+function getErrorMap4() {
+  return overrideErrorMap4;
+}
+var makeIssue4 = (params) => {
+  const { data, path, errorMaps, issueData } = params;
+  const fullPath = [...path, ...issueData.path || []];
+  const fullIssue = {
+    ...issueData,
+    path: fullPath
+  };
+  if (issueData.message !== void 0) {
+    return {
+      ...issueData,
+      path: fullPath,
+      message: issueData.message
+    };
+  }
+  let errorMessage3 = "";
+  const maps = errorMaps.filter((m) => !!m).slice().reverse();
+  for (const map of maps) {
+    errorMessage3 = map(fullIssue, { data, defaultError: errorMessage3 }).message;
+  }
+  return {
+    ...issueData,
+    path: fullPath,
+    message: errorMessage3
+  };
+};
+var EMPTY_PATH4 = [];
+function addIssueToContext4(ctx, issueData) {
+  const overrideMap = getErrorMap4();
+  const issue = makeIssue4({
+    issueData,
+    data: ctx.data,
+    path: ctx.path,
+    errorMaps: [
+      ctx.common.contextualErrorMap,
+      // contextual error map is first priority
+      ctx.schemaErrorMap,
+      // then schema-bound map if available
+      overrideMap,
+      // then global override map
+      overrideMap === en_default4 ? void 0 : en_default4
+      // then global default map
+    ].filter((x) => !!x)
+  });
+  ctx.common.issues.push(issue);
+}
+var ParseStatus4 = class _ParseStatus3 {
+  constructor() {
+    this.value = "valid";
+  }
+  dirty() {
+    if (this.value === "valid")
+      this.value = "dirty";
+  }
+  abort() {
+    if (this.value !== "aborted")
+      this.value = "aborted";
+  }
+  static mergeArray(status, results) {
+    const arrayValue = [];
+    for (const s of results) {
+      if (s.status === "aborted")
+        return INVALID4;
+      if (s.status === "dirty")
+        status.dirty();
+      arrayValue.push(s.value);
+    }
+    return { status: status.value, value: arrayValue };
+  }
+  static async mergeObjectAsync(status, pairs) {
+    const syncPairs = [];
+    for (const pair of pairs) {
+      const key = await pair.key;
+      const value4 = await pair.value;
+      syncPairs.push({
+        key,
+        value: value4
+      });
+    }
+    return _ParseStatus3.mergeObjectSync(status, syncPairs);
+  }
+  static mergeObjectSync(status, pairs) {
+    const finalObject = {};
+    for (const pair of pairs) {
+      const { key, value: value4 } = pair;
+      if (key.status === "aborted")
+        return INVALID4;
+      if (value4.status === "aborted")
+        return INVALID4;
+      if (key.status === "dirty")
+        status.dirty();
+      if (value4.status === "dirty")
+        status.dirty();
+      if (key.value !== "__proto__" && (typeof value4.value !== "undefined" || pair.alwaysSet)) {
+        finalObject[key.value] = value4.value;
+      }
+    }
+    return { status: status.value, value: finalObject };
+  }
+};
+var INVALID4 = Object.freeze({
+  status: "aborted"
+});
+var DIRTY4 = (value4) => ({ status: "dirty", value: value4 });
+var OK4 = (value4) => ({ status: "valid", value: value4 });
+var isAborted4 = (x) => x.status === "aborted";
+var isDirty4 = (x) => x.status === "dirty";
+var isValid4 = (x) => x.status === "valid";
+var isAsync4 = (x) => typeof Promise !== "undefined" && x instanceof Promise;
+var errorUtil4;
+(function(errorUtil22) {
+  errorUtil22.errToObj = (message) => typeof message === "string" ? { message } : message || {};
+  errorUtil22.toString = (message) => typeof message === "string" ? message : message?.message;
+})(errorUtil4 || (errorUtil4 = {}));
+var ParseInputLazyPath4 = class {
+  constructor(parent, value4, path, key) {
+    this._cachedPath = [];
+    this.parent = parent;
+    this.data = value4;
+    this._path = path;
+    this._key = key;
+  }
+  get path() {
+    if (!this._cachedPath.length) {
+      if (Array.isArray(this._key)) {
+        this._cachedPath.push(...this._path, ...this._key);
+      } else {
+        this._cachedPath.push(...this._path, this._key);
+      }
+    }
+    return this._cachedPath;
+  }
+};
+var handleResult4 = (ctx, result) => {
+  if (isValid4(result)) {
+    return { success: true, data: result.value };
+  } else {
+    if (!ctx.common.issues.length) {
+      throw new Error("Validation failed but no issues detected.");
+    }
+    return {
+      success: false,
+      get error() {
+        if (this._error)
+          return this._error;
+        const error = new ZodError4(ctx.common.issues);
+        this._error = error;
+        return this._error;
+      }
+    };
+  }
+};
+function processCreateParams4(params) {
+  if (!params)
+    return {};
+  const { errorMap: errorMap22, invalid_type_error, required_error, description } = params;
+  if (errorMap22 && (invalid_type_error || required_error)) {
+    throw new Error(`Can't use "invalid_type_error" or "required_error" in conjunction with custom error map.`);
+  }
+  if (errorMap22)
+    return { errorMap: errorMap22, description };
+  const customMap = (iss, ctx) => {
+    const { message } = params;
+    if (iss.code === "invalid_enum_value") {
+      return { message: message ?? ctx.defaultError };
+    }
+    if (typeof ctx.data === "undefined") {
+      return { message: message ?? required_error ?? ctx.defaultError };
+    }
+    if (iss.code !== "invalid_type")
+      return { message: ctx.defaultError };
+    return { message: message ?? invalid_type_error ?? ctx.defaultError };
+  };
+  return { errorMap: customMap, description };
+}
+var ZodType4 = class {
+  get description() {
+    return this._def.description;
+  }
+  _getType(input) {
+    return getParsedType4(input.data);
+  }
+  _getOrReturnCtx(input, ctx) {
+    return ctx || {
+      common: input.parent.common,
+      data: input.data,
+      parsedType: getParsedType4(input.data),
+      schemaErrorMap: this._def.errorMap,
+      path: input.path,
+      parent: input.parent
+    };
+  }
+  _processInputParams(input) {
+    return {
+      status: new ParseStatus4(),
+      ctx: {
+        common: input.parent.common,
+        data: input.data,
+        parsedType: getParsedType4(input.data),
+        schemaErrorMap: this._def.errorMap,
+        path: input.path,
+        parent: input.parent
+      }
+    };
+  }
+  _parseSync(input) {
+    const result = this._parse(input);
+    if (isAsync4(result)) {
+      throw new Error("Synchronous parse encountered promise.");
+    }
+    return result;
+  }
+  _parseAsync(input) {
+    const result = this._parse(input);
+    return Promise.resolve(result);
+  }
+  parse(data, params) {
+    const result = this.safeParse(data, params);
+    if (result.success)
+      return result.data;
+    throw result.error;
+  }
+  safeParse(data, params) {
+    const ctx = {
+      common: {
+        issues: [],
+        async: params?.async ?? false,
+        contextualErrorMap: params?.errorMap
+      },
+      path: params?.path || [],
+      schemaErrorMap: this._def.errorMap,
+      parent: null,
+      data,
+      parsedType: getParsedType4(data)
+    };
+    const result = this._parseSync({ data, path: ctx.path, parent: ctx });
+    return handleResult4(ctx, result);
+  }
+  "~validate"(data) {
+    const ctx = {
+      common: {
+        issues: [],
+        async: !!this["~standard"].async
+      },
+      path: [],
+      schemaErrorMap: this._def.errorMap,
+      parent: null,
+      data,
+      parsedType: getParsedType4(data)
+    };
+    if (!this["~standard"].async) {
+      try {
+        const result = this._parseSync({ data, path: [], parent: ctx });
+        return isValid4(result) ? {
+          value: result.value
+        } : {
+          issues: ctx.common.issues
+        };
+      } catch (err) {
+        if (err?.message?.toLowerCase()?.includes("encountered")) {
+          this["~standard"].async = true;
+        }
+        ctx.common = {
+          issues: [],
+          async: true
+        };
+      }
+    }
+    return this._parseAsync({ data, path: [], parent: ctx }).then((result) => isValid4(result) ? {
+      value: result.value
+    } : {
+      issues: ctx.common.issues
+    });
+  }
+  async parseAsync(data, params) {
+    const result = await this.safeParseAsync(data, params);
+    if (result.success)
+      return result.data;
+    throw result.error;
+  }
+  async safeParseAsync(data, params) {
+    const ctx = {
+      common: {
+        issues: [],
+        contextualErrorMap: params?.errorMap,
+        async: true
+      },
+      path: params?.path || [],
+      schemaErrorMap: this._def.errorMap,
+      parent: null,
+      data,
+      parsedType: getParsedType4(data)
+    };
+    const maybeAsyncResult = this._parse({ data, path: ctx.path, parent: ctx });
+    const result = await (isAsync4(maybeAsyncResult) ? maybeAsyncResult : Promise.resolve(maybeAsyncResult));
+    return handleResult4(ctx, result);
+  }
+  refine(check, message) {
+    const getIssueProperties = (val) => {
+      if (typeof message === "string" || typeof message === "undefined") {
+        return { message };
+      } else if (typeof message === "function") {
+        return message(val);
+      } else {
+        return message;
+      }
+    };
+    return this._refinement((val, ctx) => {
+      const result = check(val);
+      const setError = () => ctx.addIssue({
+        code: ZodIssueCode4.custom,
+        ...getIssueProperties(val)
+      });
+      if (typeof Promise !== "undefined" && result instanceof Promise) {
+        return result.then((data) => {
+          if (!data) {
+            setError();
+            return false;
+          } else {
+            return true;
+          }
+        });
+      }
+      if (!result) {
+        setError();
+        return false;
+      } else {
+        return true;
+      }
+    });
+  }
+  refinement(check, refinementData) {
+    return this._refinement((val, ctx) => {
+      if (!check(val)) {
+        ctx.addIssue(typeof refinementData === "function" ? refinementData(val, ctx) : refinementData);
+        return false;
+      } else {
+        return true;
+      }
+    });
+  }
+  _refinement(refinement) {
+    return new ZodEffects4({
+      schema: this,
+      typeName: ZodFirstPartyTypeKind4.ZodEffects,
+      effect: { type: "refinement", refinement }
+    });
+  }
+  superRefine(refinement) {
+    return this._refinement(refinement);
+  }
+  constructor(def) {
+    this.spa = this.safeParseAsync;
+    this._def = def;
+    this.parse = this.parse.bind(this);
+    this.safeParse = this.safeParse.bind(this);
+    this.parseAsync = this.parseAsync.bind(this);
+    this.safeParseAsync = this.safeParseAsync.bind(this);
+    this.spa = this.spa.bind(this);
+    this.refine = this.refine.bind(this);
+    this.refinement = this.refinement.bind(this);
+    this.superRefine = this.superRefine.bind(this);
+    this.optional = this.optional.bind(this);
+    this.nullable = this.nullable.bind(this);
+    this.nullish = this.nullish.bind(this);
+    this.array = this.array.bind(this);
+    this.promise = this.promise.bind(this);
+    this.or = this.or.bind(this);
+    this.and = this.and.bind(this);
+    this.transform = this.transform.bind(this);
+    this.brand = this.brand.bind(this);
+    this.default = this.default.bind(this);
+    this.catch = this.catch.bind(this);
+    this.describe = this.describe.bind(this);
+    this.pipe = this.pipe.bind(this);
+    this.readonly = this.readonly.bind(this);
+    this.isNullable = this.isNullable.bind(this);
+    this.isOptional = this.isOptional.bind(this);
+    this["~standard"] = {
+      version: 1,
+      vendor: "zod",
+      validate: (data) => this["~validate"](data)
+    };
+  }
+  optional() {
+    return ZodOptional4.create(this, this._def);
+  }
+  nullable() {
+    return ZodNullable4.create(this, this._def);
+  }
+  nullish() {
+    return this.nullable().optional();
+  }
+  array() {
+    return ZodArray4.create(this);
+  }
+  promise() {
+    return ZodPromise4.create(this, this._def);
+  }
+  or(option) {
+    return ZodUnion4.create([this, option], this._def);
+  }
+  and(incoming) {
+    return ZodIntersection4.create(this, incoming, this._def);
+  }
+  transform(transform) {
+    return new ZodEffects4({
+      ...processCreateParams4(this._def),
+      schema: this,
+      typeName: ZodFirstPartyTypeKind4.ZodEffects,
+      effect: { type: "transform", transform }
+    });
+  }
+  default(def) {
+    const defaultValueFunc = typeof def === "function" ? def : () => def;
+    return new ZodDefault4({
+      ...processCreateParams4(this._def),
+      innerType: this,
+      defaultValue: defaultValueFunc,
+      typeName: ZodFirstPartyTypeKind4.ZodDefault
+    });
+  }
+  brand() {
+    return new ZodBranded4({
+      typeName: ZodFirstPartyTypeKind4.ZodBranded,
+      type: this,
+      ...processCreateParams4(this._def)
+    });
+  }
+  catch(def) {
+    const catchValueFunc = typeof def === "function" ? def : () => def;
+    return new ZodCatch4({
+      ...processCreateParams4(this._def),
+      innerType: this,
+      catchValue: catchValueFunc,
+      typeName: ZodFirstPartyTypeKind4.ZodCatch
+    });
+  }
+  describe(description) {
+    const This = this.constructor;
+    return new This({
+      ...this._def,
+      description
+    });
+  }
+  pipe(target) {
+    return ZodPipeline4.create(this, target);
+  }
+  readonly() {
+    return ZodReadonly4.create(this);
+  }
+  isOptional() {
+    return this.safeParse(void 0).success;
+  }
+  isNullable() {
+    return this.safeParse(null).success;
+  }
+};
+var cuidRegex4 = /^c[^\s-]{8,}$/i;
+var cuid2Regex4 = /^[0-9a-z]+$/;
+var ulidRegex4 = /^[0-9A-HJKMNP-TV-Z]{26}$/i;
+var uuidRegex4 = /^[0-9a-fA-F]{8}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{12}$/i;
+var nanoidRegex4 = /^[a-z0-9_-]{21}$/i;
+var jwtRegex4 = /^[A-Za-z0-9-_]+\.[A-Za-z0-9-_]+\.[A-Za-z0-9-_]*$/;
+var durationRegex4 = /^[-+]?P(?!$)(?:(?:[-+]?\d+Y)|(?:[-+]?\d+[.,]\d+Y$))?(?:(?:[-+]?\d+M)|(?:[-+]?\d+[.,]\d+M$))?(?:(?:[-+]?\d+W)|(?:[-+]?\d+[.,]\d+W$))?(?:(?:[-+]?\d+D)|(?:[-+]?\d+[.,]\d+D$))?(?:T(?=[\d+-])(?:(?:[-+]?\d+H)|(?:[-+]?\d+[.,]\d+H$))?(?:(?:[-+]?\d+M)|(?:[-+]?\d+[.,]\d+M$))?(?:[-+]?\d+(?:[.,]\d+)?S)?)??$/;
+var emailRegex4 = /^(?!\.)(?!.*\.\.)([A-Z0-9_'+\-\.]*)[A-Z0-9_+-]@([A-Z0-9][A-Z0-9\-]*\.)+[A-Z]{2,}$/i;
+var _emojiRegex4 = `^(\\p{Extended_Pictographic}|\\p{Emoji_Component})+$`;
+var emojiRegex4;
+var ipv4Regex4 = /^(?:(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9][0-9]|[0-9])\.){3}(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9][0-9]|[0-9])$/;
+var ipv4CidrRegex4 = /^(?:(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9][0-9]|[0-9])\.){3}(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9][0-9]|[0-9])\/(3[0-2]|[12]?[0-9])$/;
+var ipv6Regex4 = /^(([0-9a-fA-F]{1,4}:){7,7}[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,7}:|([0-9a-fA-F]{1,4}:){1,6}:[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,5}(:[0-9a-fA-F]{1,4}){1,2}|([0-9a-fA-F]{1,4}:){1,4}(:[0-9a-fA-F]{1,4}){1,3}|([0-9a-fA-F]{1,4}:){1,3}(:[0-9a-fA-F]{1,4}){1,4}|([0-9a-fA-F]{1,4}:){1,2}(:[0-9a-fA-F]{1,4}){1,5}|[0-9a-fA-F]{1,4}:((:[0-9a-fA-F]{1,4}){1,6})|:((:[0-9a-fA-F]{1,4}){1,7}|:)|fe80:(:[0-9a-fA-F]{0,4}){0,4}%[0-9a-zA-Z]{1,}|::(ffff(:0{1,4}){0,1}:){0,1}((25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9])\.){3,3}(25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9])|([0-9a-fA-F]{1,4}:){1,4}:((25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9])\.){3,3}(25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9]))$/;
+var ipv6CidrRegex4 = /^(([0-9a-fA-F]{1,4}:){7,7}[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,7}:|([0-9a-fA-F]{1,4}:){1,6}:[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,5}(:[0-9a-fA-F]{1,4}){1,2}|([0-9a-fA-F]{1,4}:){1,4}(:[0-9a-fA-F]{1,4}){1,3}|([0-9a-fA-F]{1,4}:){1,3}(:[0-9a-fA-F]{1,4}){1,4}|([0-9a-fA-F]{1,4}:){1,2}(:[0-9a-fA-F]{1,4}){1,5}|[0-9a-fA-F]{1,4}:((:[0-9a-fA-F]{1,4}){1,6})|:((:[0-9a-fA-F]{1,4}){1,7}|:)|fe80:(:[0-9a-fA-F]{0,4}){0,4}%[0-9a-zA-Z]{1,}|::(ffff(:0{1,4}){0,1}:){0,1}((25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9])\.){3,3}(25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9])|([0-9a-fA-F]{1,4}:){1,4}:((25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9])\.){3,3}(25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9]))\/(12[0-8]|1[01][0-9]|[1-9]?[0-9])$/;
+var base64Regex4 = /^([0-9a-zA-Z+/]{4})*(([0-9a-zA-Z+/]{2}==)|([0-9a-zA-Z+/]{3}=))?$/;
+var base64urlRegex4 = /^([0-9a-zA-Z-_]{4})*(([0-9a-zA-Z-_]{2}(==)?)|([0-9a-zA-Z-_]{3}(=)?))?$/;
+var dateRegexSource4 = `((\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-((0[13578]|1[02])-(0[1-9]|[12]\\d|3[01])|(0[469]|11)-(0[1-9]|[12]\\d|30)|(02)-(0[1-9]|1\\d|2[0-8])))`;
+var dateRegex4 = new RegExp(`^${dateRegexSource4}$`);
+function timeRegexSource4(args) {
+  let secondsRegexSource = `[0-5]\\d`;
+  if (args.precision) {
+    secondsRegexSource = `${secondsRegexSource}\\.\\d{${args.precision}}`;
+  } else if (args.precision == null) {
+    secondsRegexSource = `${secondsRegexSource}(\\.\\d+)?`;
+  }
+  const secondsQuantifier = args.precision ? "+" : "?";
+  return `([01]\\d|2[0-3]):[0-5]\\d(:${secondsRegexSource})${secondsQuantifier}`;
+}
+function timeRegex4(args) {
+  return new RegExp(`^${timeRegexSource4(args)}$`);
+}
+function datetimeRegex4(args) {
+  let regex = `${dateRegexSource4}T${timeRegexSource4(args)}`;
+  const opts = [];
+  opts.push(args.local ? `Z?` : `Z`);
+  if (args.offset)
+    opts.push(`([+-]\\d{2}:?\\d{2})`);
+  regex = `${regex}(${opts.join("|")})`;
+  return new RegExp(`^${regex}$`);
+}
+function isValidIP4(ip, version) {
+  if ((version === "v4" || !version) && ipv4Regex4.test(ip)) {
+    return true;
+  }
+  if ((version === "v6" || !version) && ipv6Regex4.test(ip)) {
+    return true;
+  }
+  return false;
+}
+function isValidJWT4(jwt, alg) {
+  if (!jwtRegex4.test(jwt))
+    return false;
+  try {
+    const [header] = jwt.split(".");
+    if (!header)
+      return false;
+    const base6422 = header.replace(/-/g, "+").replace(/_/g, "/").padEnd(header.length + (4 - header.length % 4) % 4, "=");
+    const decoded = JSON.parse(atob(base6422));
+    if (typeof decoded !== "object" || decoded === null)
+      return false;
+    if ("typ" in decoded && decoded?.typ !== "JWT")
+      return false;
+    if (!decoded.alg)
+      return false;
+    if (alg && decoded.alg !== alg)
+      return false;
+    return true;
+  } catch {
+    return false;
+  }
+}
+function isValidCidr4(ip, version) {
+  if ((version === "v4" || !version) && ipv4CidrRegex4.test(ip)) {
+    return true;
+  }
+  if ((version === "v6" || !version) && ipv6CidrRegex4.test(ip)) {
+    return true;
+  }
+  return false;
+}
+var ZodString4 = class _ZodString3 extends ZodType4 {
+  _parse(input) {
+    if (this._def.coerce) {
+      input.data = String(input.data);
+    }
+    const parsedType = this._getType(input);
+    if (parsedType !== ZodParsedType4.string) {
+      const ctx2 = this._getOrReturnCtx(input);
+      addIssueToContext4(ctx2, {
+        code: ZodIssueCode4.invalid_type,
+        expected: ZodParsedType4.string,
+        received: ctx2.parsedType
+      });
+      return INVALID4;
+    }
+    const status = new ParseStatus4();
+    let ctx = void 0;
+    for (const check of this._def.checks) {
+      if (check.kind === "min") {
+        if (input.data.length < check.value) {
+          ctx = this._getOrReturnCtx(input, ctx);
+          addIssueToContext4(ctx, {
+            code: ZodIssueCode4.too_small,
+            minimum: check.value,
+            type: "string",
+            inclusive: true,
+            exact: false,
+            message: check.message
+          });
+          status.dirty();
+        }
+      } else if (check.kind === "max") {
+        if (input.data.length > check.value) {
+          ctx = this._getOrReturnCtx(input, ctx);
+          addIssueToContext4(ctx, {
+            code: ZodIssueCode4.too_big,
+            maximum: check.value,
+            type: "string",
+            inclusive: true,
+            exact: false,
+            message: check.message
+          });
+          status.dirty();
+        }
+      } else if (check.kind === "length") {
+        const tooBig = input.data.length > check.value;
+        const tooSmall = input.data.length < check.value;
+        if (tooBig || tooSmall) {
+          ctx = this._getOrReturnCtx(input, ctx);
+          if (tooBig) {
+            addIssueToContext4(ctx, {
+              code: ZodIssueCode4.too_big,
+              maximum: check.value,
+              type: "string",
+              inclusive: true,
+              exact: true,
+              message: check.message
+            });
+          } else if (tooSmall) {
+            addIssueToContext4(ctx, {
+              code: ZodIssueCode4.too_small,
+              minimum: check.value,
+              type: "string",
+              inclusive: true,
+              exact: true,
+              message: check.message
+            });
+          }
+          status.dirty();
+        }
+      } else if (check.kind === "email") {
+        if (!emailRegex4.test(input.data)) {
+          ctx = this._getOrReturnCtx(input, ctx);
+          addIssueToContext4(ctx, {
+            validation: "email",
+            code: ZodIssueCode4.invalid_string,
+            message: check.message
+          });
+          status.dirty();
+        }
+      } else if (check.kind === "emoji") {
+        if (!emojiRegex4) {
+          emojiRegex4 = new RegExp(_emojiRegex4, "u");
+        }
+        if (!emojiRegex4.test(input.data)) {
+          ctx = this._getOrReturnCtx(input, ctx);
+          addIssueToContext4(ctx, {
+            validation: "emoji",
+            code: ZodIssueCode4.invalid_string,
+            message: check.message
+          });
+          status.dirty();
+        }
+      } else if (check.kind === "uuid") {
+        if (!uuidRegex4.test(input.data)) {
+          ctx = this._getOrReturnCtx(input, ctx);
+          addIssueToContext4(ctx, {
+            validation: "uuid",
+            code: ZodIssueCode4.invalid_string,
+            message: check.message
+          });
+          status.dirty();
+        }
+      } else if (check.kind === "nanoid") {
+        if (!nanoidRegex4.test(input.data)) {
+          ctx = this._getOrReturnCtx(input, ctx);
+          addIssueToContext4(ctx, {
+            validation: "nanoid",
+            code: ZodIssueCode4.invalid_string,
+            message: check.message
+          });
+          status.dirty();
+        }
+      } else if (check.kind === "cuid") {
+        if (!cuidRegex4.test(input.data)) {
+          ctx = this._getOrReturnCtx(input, ctx);
+          addIssueToContext4(ctx, {
+            validation: "cuid",
+            code: ZodIssueCode4.invalid_string,
+            message: check.message
+          });
+          status.dirty();
+        }
+      } else if (check.kind === "cuid2") {
+        if (!cuid2Regex4.test(input.data)) {
+          ctx = this._getOrReturnCtx(input, ctx);
+          addIssueToContext4(ctx, {
+            validation: "cuid2",
+            code: ZodIssueCode4.invalid_string,
+            message: check.message
+          });
+          status.dirty();
+        }
+      } else if (check.kind === "ulid") {
+        if (!ulidRegex4.test(input.data)) {
+          ctx = this._getOrReturnCtx(input, ctx);
+          addIssueToContext4(ctx, {
+            validation: "ulid",
+            code: ZodIssueCode4.invalid_string,
+            message: check.message
+          });
+          status.dirty();
+        }
+      } else if (check.kind === "url") {
+        try {
+          new URL(input.data);
+        } catch {
+          ctx = this._getOrReturnCtx(input, ctx);
+          addIssueToContext4(ctx, {
+            validation: "url",
+            code: ZodIssueCode4.invalid_string,
+            message: check.message
+          });
+          status.dirty();
+        }
+      } else if (check.kind === "regex") {
+        check.regex.lastIndex = 0;
+        const testResult = check.regex.test(input.data);
+        if (!testResult) {
+          ctx = this._getOrReturnCtx(input, ctx);
+          addIssueToContext4(ctx, {
+            validation: "regex",
+            code: ZodIssueCode4.invalid_string,
+            message: check.message
+          });
+          status.dirty();
+        }
+      } else if (check.kind === "trim") {
+        input.data = input.data.trim();
+      } else if (check.kind === "includes") {
+        if (!input.data.includes(check.value, check.position)) {
+          ctx = this._getOrReturnCtx(input, ctx);
+          addIssueToContext4(ctx, {
+            code: ZodIssueCode4.invalid_string,
+            validation: { includes: check.value, position: check.position },
+            message: check.message
+          });
+          status.dirty();
+        }
+      } else if (check.kind === "toLowerCase") {
+        input.data = input.data.toLowerCase();
+      } else if (check.kind === "toUpperCase") {
+        input.data = input.data.toUpperCase();
+      } else if (check.kind === "startsWith") {
+        if (!input.data.startsWith(check.value)) {
+          ctx = this._getOrReturnCtx(input, ctx);
+          addIssueToContext4(ctx, {
+            code: ZodIssueCode4.invalid_string,
+            validation: { startsWith: check.value },
+            message: check.message
+          });
+          status.dirty();
+        }
+      } else if (check.kind === "endsWith") {
+        if (!input.data.endsWith(check.value)) {
+          ctx = this._getOrReturnCtx(input, ctx);
+          addIssueToContext4(ctx, {
+            code: ZodIssueCode4.invalid_string,
+            validation: { endsWith: check.value },
+            message: check.message
+          });
+          status.dirty();
+        }
+      } else if (check.kind === "datetime") {
+        const regex = datetimeRegex4(check);
+        if (!regex.test(input.data)) {
+          ctx = this._getOrReturnCtx(input, ctx);
+          addIssueToContext4(ctx, {
+            code: ZodIssueCode4.invalid_string,
+            validation: "datetime",
+            message: check.message
+          });
+          status.dirty();
+        }
+      } else if (check.kind === "date") {
+        const regex = dateRegex4;
+        if (!regex.test(input.data)) {
+          ctx = this._getOrReturnCtx(input, ctx);
+          addIssueToContext4(ctx, {
+            code: ZodIssueCode4.invalid_string,
+            validation: "date",
+            message: check.message
+          });
+          status.dirty();
+        }
+      } else if (check.kind === "time") {
+        const regex = timeRegex4(check);
+        if (!regex.test(input.data)) {
+          ctx = this._getOrReturnCtx(input, ctx);
+          addIssueToContext4(ctx, {
+            code: ZodIssueCode4.invalid_string,
+            validation: "time",
+            message: check.message
+          });
+          status.dirty();
+        }
+      } else if (check.kind === "duration") {
+        if (!durationRegex4.test(input.data)) {
+          ctx = this._getOrReturnCtx(input, ctx);
+          addIssueToContext4(ctx, {
+            validation: "duration",
+            code: ZodIssueCode4.invalid_string,
+            message: check.message
+          });
+          status.dirty();
+        }
+      } else if (check.kind === "ip") {
+        if (!isValidIP4(input.data, check.version)) {
+          ctx = this._getOrReturnCtx(input, ctx);
+          addIssueToContext4(ctx, {
+            validation: "ip",
+            code: ZodIssueCode4.invalid_string,
+            message: check.message
+          });
+          status.dirty();
+        }
+      } else if (check.kind === "jwt") {
+        if (!isValidJWT4(input.data, check.alg)) {
+          ctx = this._getOrReturnCtx(input, ctx);
+          addIssueToContext4(ctx, {
+            validation: "jwt",
+            code: ZodIssueCode4.invalid_string,
+            message: check.message
+          });
+          status.dirty();
+        }
+      } else if (check.kind === "cidr") {
+        if (!isValidCidr4(input.data, check.version)) {
+          ctx = this._getOrReturnCtx(input, ctx);
+          addIssueToContext4(ctx, {
+            validation: "cidr",
+            code: ZodIssueCode4.invalid_string,
+            message: check.message
+          });
+          status.dirty();
+        }
+      } else if (check.kind === "base64") {
+        if (!base64Regex4.test(input.data)) {
+          ctx = this._getOrReturnCtx(input, ctx);
+          addIssueToContext4(ctx, {
+            validation: "base64",
+            code: ZodIssueCode4.invalid_string,
+            message: check.message
+          });
+          status.dirty();
+        }
+      } else if (check.kind === "base64url") {
+        if (!base64urlRegex4.test(input.data)) {
+          ctx = this._getOrReturnCtx(input, ctx);
+          addIssueToContext4(ctx, {
+            validation: "base64url",
+            code: ZodIssueCode4.invalid_string,
+            message: check.message
+          });
+          status.dirty();
+        }
+      } else {
+        util4.assertNever(check);
+      }
+    }
+    return { status: status.value, value: input.data };
+  }
+  _regex(regex, validation, message) {
+    return this.refinement((data) => regex.test(data), {
+      validation,
+      code: ZodIssueCode4.invalid_string,
+      ...errorUtil4.errToObj(message)
+    });
+  }
+  _addCheck(check) {
+    return new _ZodString3({
+      ...this._def,
+      checks: [...this._def.checks, check]
+    });
+  }
+  email(message) {
+    return this._addCheck({ kind: "email", ...errorUtil4.errToObj(message) });
+  }
+  url(message) {
+    return this._addCheck({ kind: "url", ...errorUtil4.errToObj(message) });
+  }
+  emoji(message) {
+    return this._addCheck({ kind: "emoji", ...errorUtil4.errToObj(message) });
+  }
+  uuid(message) {
+    return this._addCheck({ kind: "uuid", ...errorUtil4.errToObj(message) });
+  }
+  nanoid(message) {
+    return this._addCheck({ kind: "nanoid", ...errorUtil4.errToObj(message) });
+  }
+  cuid(message) {
+    return this._addCheck({ kind: "cuid", ...errorUtil4.errToObj(message) });
+  }
+  cuid2(message) {
+    return this._addCheck({ kind: "cuid2", ...errorUtil4.errToObj(message) });
+  }
+  ulid(message) {
+    return this._addCheck({ kind: "ulid", ...errorUtil4.errToObj(message) });
+  }
+  base64(message) {
+    return this._addCheck({ kind: "base64", ...errorUtil4.errToObj(message) });
+  }
+  base64url(message) {
+    return this._addCheck({
+      kind: "base64url",
+      ...errorUtil4.errToObj(message)
+    });
+  }
+  jwt(options) {
+    return this._addCheck({ kind: "jwt", ...errorUtil4.errToObj(options) });
+  }
+  ip(options) {
+    return this._addCheck({ kind: "ip", ...errorUtil4.errToObj(options) });
+  }
+  cidr(options) {
+    return this._addCheck({ kind: "cidr", ...errorUtil4.errToObj(options) });
+  }
+  datetime(options) {
+    if (typeof options === "string") {
+      return this._addCheck({
+        kind: "datetime",
+        precision: null,
+        offset: false,
+        local: false,
+        message: options
+      });
+    }
+    return this._addCheck({
+      kind: "datetime",
+      precision: typeof options?.precision === "undefined" ? null : options?.precision,
+      offset: options?.offset ?? false,
+      local: options?.local ?? false,
+      ...errorUtil4.errToObj(options?.message)
+    });
+  }
+  date(message) {
+    return this._addCheck({ kind: "date", message });
+  }
+  time(options) {
+    if (typeof options === "string") {
+      return this._addCheck({
+        kind: "time",
+        precision: null,
+        message: options
+      });
+    }
+    return this._addCheck({
+      kind: "time",
+      precision: typeof options?.precision === "undefined" ? null : options?.precision,
+      ...errorUtil4.errToObj(options?.message)
+    });
+  }
+  duration(message) {
+    return this._addCheck({ kind: "duration", ...errorUtil4.errToObj(message) });
+  }
+  regex(regex, message) {
+    return this._addCheck({
+      kind: "regex",
+      regex,
+      ...errorUtil4.errToObj(message)
+    });
+  }
+  includes(value4, options) {
+    return this._addCheck({
+      kind: "includes",
+      value: value4,
+      position: options?.position,
+      ...errorUtil4.errToObj(options?.message)
+    });
+  }
+  startsWith(value4, message) {
+    return this._addCheck({
+      kind: "startsWith",
+      value: value4,
+      ...errorUtil4.errToObj(message)
+    });
+  }
+  endsWith(value4, message) {
+    return this._addCheck({
+      kind: "endsWith",
+      value: value4,
+      ...errorUtil4.errToObj(message)
+    });
+  }
+  min(minLength, message) {
+    return this._addCheck({
+      kind: "min",
+      value: minLength,
+      ...errorUtil4.errToObj(message)
+    });
+  }
+  max(maxLength, message) {
+    return this._addCheck({
+      kind: "max",
+      value: maxLength,
+      ...errorUtil4.errToObj(message)
+    });
+  }
+  length(len, message) {
+    return this._addCheck({
+      kind: "length",
+      value: len,
+      ...errorUtil4.errToObj(message)
+    });
+  }
+  /**
+   * Equivalent to `.min(1)`
+   */
+  nonempty(message) {
+    return this.min(1, errorUtil4.errToObj(message));
+  }
+  trim() {
+    return new _ZodString3({
+      ...this._def,
+      checks: [...this._def.checks, { kind: "trim" }]
+    });
+  }
+  toLowerCase() {
+    return new _ZodString3({
+      ...this._def,
+      checks: [...this._def.checks, { kind: "toLowerCase" }]
+    });
+  }
+  toUpperCase() {
+    return new _ZodString3({
+      ...this._def,
+      checks: [...this._def.checks, { kind: "toUpperCase" }]
+    });
+  }
+  get isDatetime() {
+    return !!this._def.checks.find((ch) => ch.kind === "datetime");
+  }
+  get isDate() {
+    return !!this._def.checks.find((ch) => ch.kind === "date");
+  }
+  get isTime() {
+    return !!this._def.checks.find((ch) => ch.kind === "time");
+  }
+  get isDuration() {
+    return !!this._def.checks.find((ch) => ch.kind === "duration");
+  }
+  get isEmail() {
+    return !!this._def.checks.find((ch) => ch.kind === "email");
+  }
+  get isURL() {
+    return !!this._def.checks.find((ch) => ch.kind === "url");
+  }
+  get isEmoji() {
+    return !!this._def.checks.find((ch) => ch.kind === "emoji");
+  }
+  get isUUID() {
+    return !!this._def.checks.find((ch) => ch.kind === "uuid");
+  }
+  get isNANOID() {
+    return !!this._def.checks.find((ch) => ch.kind === "nanoid");
+  }
+  get isCUID() {
+    return !!this._def.checks.find((ch) => ch.kind === "cuid");
+  }
+  get isCUID2() {
+    return !!this._def.checks.find((ch) => ch.kind === "cuid2");
+  }
+  get isULID() {
+    return !!this._def.checks.find((ch) => ch.kind === "ulid");
+  }
+  get isIP() {
+    return !!this._def.checks.find((ch) => ch.kind === "ip");
+  }
+  get isCIDR() {
+    return !!this._def.checks.find((ch) => ch.kind === "cidr");
+  }
+  get isBase64() {
+    return !!this._def.checks.find((ch) => ch.kind === "base64");
+  }
+  get isBase64url() {
+    return !!this._def.checks.find((ch) => ch.kind === "base64url");
+  }
+  get minLength() {
+    let min = null;
+    for (const ch of this._def.checks) {
+      if (ch.kind === "min") {
+        if (min === null || ch.value > min)
+          min = ch.value;
+      }
+    }
+    return min;
+  }
+  get maxLength() {
+    let max = null;
+    for (const ch of this._def.checks) {
+      if (ch.kind === "max") {
+        if (max === null || ch.value < max)
+          max = ch.value;
+      }
+    }
+    return max;
+  }
+};
+ZodString4.create = (params) => {
+  return new ZodString4({
+    checks: [],
+    typeName: ZodFirstPartyTypeKind4.ZodString,
+    coerce: params?.coerce ?? false,
+    ...processCreateParams4(params)
+  });
+};
+function floatSafeRemainder4(val, step) {
+  const valDecCount = (val.toString().split(".")[1] || "").length;
+  const stepDecCount = (step.toString().split(".")[1] || "").length;
+  const decCount = valDecCount > stepDecCount ? valDecCount : stepDecCount;
+  const valInt = Number.parseInt(val.toFixed(decCount).replace(".", ""));
+  const stepInt = Number.parseInt(step.toFixed(decCount).replace(".", ""));
+  return valInt % stepInt / 10 ** decCount;
+}
+var ZodNumber4 = class _ZodNumber3 extends ZodType4 {
+  constructor() {
+    super(...arguments);
+    this.min = this.gte;
+    this.max = this.lte;
+    this.step = this.multipleOf;
+  }
+  _parse(input) {
+    if (this._def.coerce) {
+      input.data = Number(input.data);
+    }
+    const parsedType = this._getType(input);
+    if (parsedType !== ZodParsedType4.number) {
+      const ctx2 = this._getOrReturnCtx(input);
+      addIssueToContext4(ctx2, {
+        code: ZodIssueCode4.invalid_type,
+        expected: ZodParsedType4.number,
+        received: ctx2.parsedType
+      });
+      return INVALID4;
+    }
+    let ctx = void 0;
+    const status = new ParseStatus4();
+    for (const check of this._def.checks) {
+      if (check.kind === "int") {
+        if (!util4.isInteger(input.data)) {
+          ctx = this._getOrReturnCtx(input, ctx);
+          addIssueToContext4(ctx, {
+            code: ZodIssueCode4.invalid_type,
+            expected: "integer",
+            received: "float",
+            message: check.message
+          });
+          status.dirty();
+        }
+      } else if (check.kind === "min") {
+        const tooSmall = check.inclusive ? input.data < check.value : input.data <= check.value;
+        if (tooSmall) {
+          ctx = this._getOrReturnCtx(input, ctx);
+          addIssueToContext4(ctx, {
+            code: ZodIssueCode4.too_small,
+            minimum: check.value,
+            type: "number",
+            inclusive: check.inclusive,
+            exact: false,
+            message: check.message
+          });
+          status.dirty();
+        }
+      } else if (check.kind === "max") {
+        const tooBig = check.inclusive ? input.data > check.value : input.data >= check.value;
+        if (tooBig) {
+          ctx = this._getOrReturnCtx(input, ctx);
+          addIssueToContext4(ctx, {
+            code: ZodIssueCode4.too_big,
+            maximum: check.value,
+            type: "number",
+            inclusive: check.inclusive,
+            exact: false,
+            message: check.message
+          });
+          status.dirty();
+        }
+      } else if (check.kind === "multipleOf") {
+        if (floatSafeRemainder4(input.data, check.value) !== 0) {
+          ctx = this._getOrReturnCtx(input, ctx);
+          addIssueToContext4(ctx, {
+            code: ZodIssueCode4.not_multiple_of,
+            multipleOf: check.value,
+            message: check.message
+          });
+          status.dirty();
+        }
+      } else if (check.kind === "finite") {
+        if (!Number.isFinite(input.data)) {
+          ctx = this._getOrReturnCtx(input, ctx);
+          addIssueToContext4(ctx, {
+            code: ZodIssueCode4.not_finite,
+            message: check.message
+          });
+          status.dirty();
+        }
+      } else {
+        util4.assertNever(check);
+      }
+    }
+    return { status: status.value, value: input.data };
+  }
+  gte(value4, message) {
+    return this.setLimit("min", value4, true, errorUtil4.toString(message));
+  }
+  gt(value4, message) {
+    return this.setLimit("min", value4, false, errorUtil4.toString(message));
+  }
+  lte(value4, message) {
+    return this.setLimit("max", value4, true, errorUtil4.toString(message));
+  }
+  lt(value4, message) {
+    return this.setLimit("max", value4, false, errorUtil4.toString(message));
+  }
+  setLimit(kind, value4, inclusive, message) {
+    return new _ZodNumber3({
+      ...this._def,
+      checks: [
+        ...this._def.checks,
+        {
+          kind,
+          value: value4,
+          inclusive,
+          message: errorUtil4.toString(message)
+        }
+      ]
+    });
+  }
+  _addCheck(check) {
+    return new _ZodNumber3({
+      ...this._def,
+      checks: [...this._def.checks, check]
+    });
+  }
+  int(message) {
+    return this._addCheck({
+      kind: "int",
+      message: errorUtil4.toString(message)
+    });
+  }
+  positive(message) {
+    return this._addCheck({
+      kind: "min",
+      value: 0,
+      inclusive: false,
+      message: errorUtil4.toString(message)
+    });
+  }
+  negative(message) {
+    return this._addCheck({
+      kind: "max",
+      value: 0,
+      inclusive: false,
+      message: errorUtil4.toString(message)
+    });
+  }
+  nonpositive(message) {
+    return this._addCheck({
+      kind: "max",
+      value: 0,
+      inclusive: true,
+      message: errorUtil4.toString(message)
+    });
+  }
+  nonnegative(message) {
+    return this._addCheck({
+      kind: "min",
+      value: 0,
+      inclusive: true,
+      message: errorUtil4.toString(message)
+    });
+  }
+  multipleOf(value4, message) {
+    return this._addCheck({
+      kind: "multipleOf",
+      value: value4,
+      message: errorUtil4.toString(message)
+    });
+  }
+  finite(message) {
+    return this._addCheck({
+      kind: "finite",
+      message: errorUtil4.toString(message)
+    });
+  }
+  safe(message) {
+    return this._addCheck({
+      kind: "min",
+      inclusive: true,
+      value: Number.MIN_SAFE_INTEGER,
+      message: errorUtil4.toString(message)
+    })._addCheck({
+      kind: "max",
+      inclusive: true,
+      value: Number.MAX_SAFE_INTEGER,
+      message: errorUtil4.toString(message)
+    });
+  }
+  get minValue() {
+    let min = null;
+    for (const ch of this._def.checks) {
+      if (ch.kind === "min") {
+        if (min === null || ch.value > min)
+          min = ch.value;
+      }
+    }
+    return min;
+  }
+  get maxValue() {
+    let max = null;
+    for (const ch of this._def.checks) {
+      if (ch.kind === "max") {
+        if (max === null || ch.value < max)
+          max = ch.value;
+      }
+    }
+    return max;
+  }
+  get isInt() {
+    return !!this._def.checks.find((ch) => ch.kind === "int" || ch.kind === "multipleOf" && util4.isInteger(ch.value));
+  }
+  get isFinite() {
+    let max = null;
+    let min = null;
+    for (const ch of this._def.checks) {
+      if (ch.kind === "finite" || ch.kind === "int" || ch.kind === "multipleOf") {
+        return true;
+      } else if (ch.kind === "min") {
+        if (min === null || ch.value > min)
+          min = ch.value;
+      } else if (ch.kind === "max") {
+        if (max === null || ch.value < max)
+          max = ch.value;
+      }
+    }
+    return Number.isFinite(min) && Number.isFinite(max);
+  }
+};
+ZodNumber4.create = (params) => {
+  return new ZodNumber4({
+    checks: [],
+    typeName: ZodFirstPartyTypeKind4.ZodNumber,
+    coerce: params?.coerce || false,
+    ...processCreateParams4(params)
+  });
+};
+var ZodBigInt4 = class _ZodBigInt3 extends ZodType4 {
+  constructor() {
+    super(...arguments);
+    this.min = this.gte;
+    this.max = this.lte;
+  }
+  _parse(input) {
+    if (this._def.coerce) {
+      try {
+        input.data = BigInt(input.data);
+      } catch {
+        return this._getInvalidInput(input);
+      }
+    }
+    const parsedType = this._getType(input);
+    if (parsedType !== ZodParsedType4.bigint) {
+      return this._getInvalidInput(input);
+    }
+    let ctx = void 0;
+    const status = new ParseStatus4();
+    for (const check of this._def.checks) {
+      if (check.kind === "min") {
+        const tooSmall = check.inclusive ? input.data < check.value : input.data <= check.value;
+        if (tooSmall) {
+          ctx = this._getOrReturnCtx(input, ctx);
+          addIssueToContext4(ctx, {
+            code: ZodIssueCode4.too_small,
+            type: "bigint",
+            minimum: check.value,
+            inclusive: check.inclusive,
+            message: check.message
+          });
+          status.dirty();
+        }
+      } else if (check.kind === "max") {
+        const tooBig = check.inclusive ? input.data > check.value : input.data >= check.value;
+        if (tooBig) {
+          ctx = this._getOrReturnCtx(input, ctx);
+          addIssueToContext4(ctx, {
+            code: ZodIssueCode4.too_big,
+            type: "bigint",
+            maximum: check.value,
+            inclusive: check.inclusive,
+            message: check.message
+          });
+          status.dirty();
+        }
+      } else if (check.kind === "multipleOf") {
+        if (input.data % check.value !== BigInt(0)) {
+          ctx = this._getOrReturnCtx(input, ctx);
+          addIssueToContext4(ctx, {
+            code: ZodIssueCode4.not_multiple_of,
+            multipleOf: check.value,
+            message: check.message
+          });
+          status.dirty();
+        }
+      } else {
+        util4.assertNever(check);
+      }
+    }
+    return { status: status.value, value: input.data };
+  }
+  _getInvalidInput(input) {
+    const ctx = this._getOrReturnCtx(input);
+    addIssueToContext4(ctx, {
+      code: ZodIssueCode4.invalid_type,
+      expected: ZodParsedType4.bigint,
+      received: ctx.parsedType
+    });
+    return INVALID4;
+  }
+  gte(value4, message) {
+    return this.setLimit("min", value4, true, errorUtil4.toString(message));
+  }
+  gt(value4, message) {
+    return this.setLimit("min", value4, false, errorUtil4.toString(message));
+  }
+  lte(value4, message) {
+    return this.setLimit("max", value4, true, errorUtil4.toString(message));
+  }
+  lt(value4, message) {
+    return this.setLimit("max", value4, false, errorUtil4.toString(message));
+  }
+  setLimit(kind, value4, inclusive, message) {
+    return new _ZodBigInt3({
+      ...this._def,
+      checks: [
+        ...this._def.checks,
+        {
+          kind,
+          value: value4,
+          inclusive,
+          message: errorUtil4.toString(message)
+        }
+      ]
+    });
+  }
+  _addCheck(check) {
+    return new _ZodBigInt3({
+      ...this._def,
+      checks: [...this._def.checks, check]
+    });
+  }
+  positive(message) {
+    return this._addCheck({
+      kind: "min",
+      value: BigInt(0),
+      inclusive: false,
+      message: errorUtil4.toString(message)
+    });
+  }
+  negative(message) {
+    return this._addCheck({
+      kind: "max",
+      value: BigInt(0),
+      inclusive: false,
+      message: errorUtil4.toString(message)
+    });
+  }
+  nonpositive(message) {
+    return this._addCheck({
+      kind: "max",
+      value: BigInt(0),
+      inclusive: true,
+      message: errorUtil4.toString(message)
+    });
+  }
+  nonnegative(message) {
+    return this._addCheck({
+      kind: "min",
+      value: BigInt(0),
+      inclusive: true,
+      message: errorUtil4.toString(message)
+    });
+  }
+  multipleOf(value4, message) {
+    return this._addCheck({
+      kind: "multipleOf",
+      value: value4,
+      message: errorUtil4.toString(message)
+    });
+  }
+  get minValue() {
+    let min = null;
+    for (const ch of this._def.checks) {
+      if (ch.kind === "min") {
+        if (min === null || ch.value > min)
+          min = ch.value;
+      }
+    }
+    return min;
+  }
+  get maxValue() {
+    let max = null;
+    for (const ch of this._def.checks) {
+      if (ch.kind === "max") {
+        if (max === null || ch.value < max)
+          max = ch.value;
+      }
+    }
+    return max;
+  }
+};
+ZodBigInt4.create = (params) => {
+  return new ZodBigInt4({
+    checks: [],
+    typeName: ZodFirstPartyTypeKind4.ZodBigInt,
+    coerce: params?.coerce ?? false,
+    ...processCreateParams4(params)
+  });
+};
+var ZodBoolean4 = class extends ZodType4 {
+  _parse(input) {
+    if (this._def.coerce) {
+      input.data = Boolean(input.data);
+    }
+    const parsedType = this._getType(input);
+    if (parsedType !== ZodParsedType4.boolean) {
+      const ctx = this._getOrReturnCtx(input);
+      addIssueToContext4(ctx, {
+        code: ZodIssueCode4.invalid_type,
+        expected: ZodParsedType4.boolean,
+        received: ctx.parsedType
+      });
+      return INVALID4;
+    }
+    return OK4(input.data);
+  }
+};
+ZodBoolean4.create = (params) => {
+  return new ZodBoolean4({
+    typeName: ZodFirstPartyTypeKind4.ZodBoolean,
+    coerce: params?.coerce || false,
+    ...processCreateParams4(params)
+  });
+};
+var ZodDate4 = class _ZodDate3 extends ZodType4 {
+  _parse(input) {
+    if (this._def.coerce) {
+      input.data = new Date(input.data);
+    }
+    const parsedType = this._getType(input);
+    if (parsedType !== ZodParsedType4.date) {
+      const ctx2 = this._getOrReturnCtx(input);
+      addIssueToContext4(ctx2, {
+        code: ZodIssueCode4.invalid_type,
+        expected: ZodParsedType4.date,
+        received: ctx2.parsedType
+      });
+      return INVALID4;
+    }
+    if (Number.isNaN(input.data.getTime())) {
+      const ctx2 = this._getOrReturnCtx(input);
+      addIssueToContext4(ctx2, {
+        code: ZodIssueCode4.invalid_date
+      });
+      return INVALID4;
+    }
+    const status = new ParseStatus4();
+    let ctx = void 0;
+    for (const check of this._def.checks) {
+      if (check.kind === "min") {
+        if (input.data.getTime() < check.value) {
+          ctx = this._getOrReturnCtx(input, ctx);
+          addIssueToContext4(ctx, {
+            code: ZodIssueCode4.too_small,
+            message: check.message,
+            inclusive: true,
+            exact: false,
+            minimum: check.value,
+            type: "date"
+          });
+          status.dirty();
+        }
+      } else if (check.kind === "max") {
+        if (input.data.getTime() > check.value) {
+          ctx = this._getOrReturnCtx(input, ctx);
+          addIssueToContext4(ctx, {
+            code: ZodIssueCode4.too_big,
+            message: check.message,
+            inclusive: true,
+            exact: false,
+            maximum: check.value,
+            type: "date"
+          });
+          status.dirty();
+        }
+      } else {
+        util4.assertNever(check);
+      }
+    }
+    return {
+      status: status.value,
+      value: new Date(input.data.getTime())
+    };
+  }
+  _addCheck(check) {
+    return new _ZodDate3({
+      ...this._def,
+      checks: [...this._def.checks, check]
+    });
+  }
+  min(minDate, message) {
+    return this._addCheck({
+      kind: "min",
+      value: minDate.getTime(),
+      message: errorUtil4.toString(message)
+    });
+  }
+  max(maxDate, message) {
+    return this._addCheck({
+      kind: "max",
+      value: maxDate.getTime(),
+      message: errorUtil4.toString(message)
+    });
+  }
+  get minDate() {
+    let min = null;
+    for (const ch of this._def.checks) {
+      if (ch.kind === "min") {
+        if (min === null || ch.value > min)
+          min = ch.value;
+      }
+    }
+    return min != null ? new Date(min) : null;
+  }
+  get maxDate() {
+    let max = null;
+    for (const ch of this._def.checks) {
+      if (ch.kind === "max") {
+        if (max === null || ch.value < max)
+          max = ch.value;
+      }
+    }
+    return max != null ? new Date(max) : null;
+  }
+};
+ZodDate4.create = (params) => {
+  return new ZodDate4({
+    checks: [],
+    coerce: params?.coerce || false,
+    typeName: ZodFirstPartyTypeKind4.ZodDate,
+    ...processCreateParams4(params)
+  });
+};
+var ZodSymbol4 = class extends ZodType4 {
+  _parse(input) {
+    const parsedType = this._getType(input);
+    if (parsedType !== ZodParsedType4.symbol) {
+      const ctx = this._getOrReturnCtx(input);
+      addIssueToContext4(ctx, {
+        code: ZodIssueCode4.invalid_type,
+        expected: ZodParsedType4.symbol,
+        received: ctx.parsedType
+      });
+      return INVALID4;
+    }
+    return OK4(input.data);
+  }
+};
+ZodSymbol4.create = (params) => {
+  return new ZodSymbol4({
+    typeName: ZodFirstPartyTypeKind4.ZodSymbol,
+    ...processCreateParams4(params)
+  });
+};
+var ZodUndefined4 = class extends ZodType4 {
+  _parse(input) {
+    const parsedType = this._getType(input);
+    if (parsedType !== ZodParsedType4.undefined) {
+      const ctx = this._getOrReturnCtx(input);
+      addIssueToContext4(ctx, {
+        code: ZodIssueCode4.invalid_type,
+        expected: ZodParsedType4.undefined,
+        received: ctx.parsedType
+      });
+      return INVALID4;
+    }
+    return OK4(input.data);
+  }
+};
+ZodUndefined4.create = (params) => {
+  return new ZodUndefined4({
+    typeName: ZodFirstPartyTypeKind4.ZodUndefined,
+    ...processCreateParams4(params)
+  });
+};
+var ZodNull4 = class extends ZodType4 {
+  _parse(input) {
+    const parsedType = this._getType(input);
+    if (parsedType !== ZodParsedType4.null) {
+      const ctx = this._getOrReturnCtx(input);
+      addIssueToContext4(ctx, {
+        code: ZodIssueCode4.invalid_type,
+        expected: ZodParsedType4.null,
+        received: ctx.parsedType
+      });
+      return INVALID4;
+    }
+    return OK4(input.data);
+  }
+};
+ZodNull4.create = (params) => {
+  return new ZodNull4({
+    typeName: ZodFirstPartyTypeKind4.ZodNull,
+    ...processCreateParams4(params)
+  });
+};
+var ZodAny4 = class extends ZodType4 {
+  constructor() {
+    super(...arguments);
+    this._any = true;
+  }
+  _parse(input) {
+    return OK4(input.data);
+  }
+};
+ZodAny4.create = (params) => {
+  return new ZodAny4({
+    typeName: ZodFirstPartyTypeKind4.ZodAny,
+    ...processCreateParams4(params)
+  });
+};
+var ZodUnknown4 = class extends ZodType4 {
+  constructor() {
+    super(...arguments);
+    this._unknown = true;
+  }
+  _parse(input) {
+    return OK4(input.data);
+  }
+};
+ZodUnknown4.create = (params) => {
+  return new ZodUnknown4({
+    typeName: ZodFirstPartyTypeKind4.ZodUnknown,
+    ...processCreateParams4(params)
+  });
+};
+var ZodNever4 = class extends ZodType4 {
+  _parse(input) {
+    const ctx = this._getOrReturnCtx(input);
+    addIssueToContext4(ctx, {
+      code: ZodIssueCode4.invalid_type,
+      expected: ZodParsedType4.never,
+      received: ctx.parsedType
+    });
+    return INVALID4;
+  }
+};
+ZodNever4.create = (params) => {
+  return new ZodNever4({
+    typeName: ZodFirstPartyTypeKind4.ZodNever,
+    ...processCreateParams4(params)
+  });
+};
+var ZodVoid4 = class extends ZodType4 {
+  _parse(input) {
+    const parsedType = this._getType(input);
+    if (parsedType !== ZodParsedType4.undefined) {
+      const ctx = this._getOrReturnCtx(input);
+      addIssueToContext4(ctx, {
+        code: ZodIssueCode4.invalid_type,
+        expected: ZodParsedType4.void,
+        received: ctx.parsedType
+      });
+      return INVALID4;
+    }
+    return OK4(input.data);
+  }
+};
+ZodVoid4.create = (params) => {
+  return new ZodVoid4({
+    typeName: ZodFirstPartyTypeKind4.ZodVoid,
+    ...processCreateParams4(params)
+  });
+};
+var ZodArray4 = class _ZodArray3 extends ZodType4 {
+  _parse(input) {
+    const { ctx, status } = this._processInputParams(input);
+    const def = this._def;
+    if (ctx.parsedType !== ZodParsedType4.array) {
+      addIssueToContext4(ctx, {
+        code: ZodIssueCode4.invalid_type,
+        expected: ZodParsedType4.array,
+        received: ctx.parsedType
+      });
+      return INVALID4;
+    }
+    if (def.exactLength !== null) {
+      const tooBig = ctx.data.length > def.exactLength.value;
+      const tooSmall = ctx.data.length < def.exactLength.value;
+      if (tooBig || tooSmall) {
+        addIssueToContext4(ctx, {
+          code: tooBig ? ZodIssueCode4.too_big : ZodIssueCode4.too_small,
+          minimum: tooSmall ? def.exactLength.value : void 0,
+          maximum: tooBig ? def.exactLength.value : void 0,
+          type: "array",
+          inclusive: true,
+          exact: true,
+          message: def.exactLength.message
+        });
+        status.dirty();
+      }
+    }
+    if (def.minLength !== null) {
+      if (ctx.data.length < def.minLength.value) {
+        addIssueToContext4(ctx, {
+          code: ZodIssueCode4.too_small,
+          minimum: def.minLength.value,
+          type: "array",
+          inclusive: true,
+          exact: false,
+          message: def.minLength.message
+        });
+        status.dirty();
+      }
+    }
+    if (def.maxLength !== null) {
+      if (ctx.data.length > def.maxLength.value) {
+        addIssueToContext4(ctx, {
+          code: ZodIssueCode4.too_big,
+          maximum: def.maxLength.value,
+          type: "array",
+          inclusive: true,
+          exact: false,
+          message: def.maxLength.message
+        });
+        status.dirty();
+      }
+    }
+    if (ctx.common.async) {
+      return Promise.all([...ctx.data].map((item, i) => {
+        return def.type._parseAsync(new ParseInputLazyPath4(ctx, item, ctx.path, i));
+      })).then((result2) => {
+        return ParseStatus4.mergeArray(status, result2);
+      });
+    }
+    const result = [...ctx.data].map((item, i) => {
+      return def.type._parseSync(new ParseInputLazyPath4(ctx, item, ctx.path, i));
+    });
+    return ParseStatus4.mergeArray(status, result);
+  }
+  get element() {
+    return this._def.type;
+  }
+  min(minLength, message) {
+    return new _ZodArray3({
+      ...this._def,
+      minLength: { value: minLength, message: errorUtil4.toString(message) }
+    });
+  }
+  max(maxLength, message) {
+    return new _ZodArray3({
+      ...this._def,
+      maxLength: { value: maxLength, message: errorUtil4.toString(message) }
+    });
+  }
+  length(len, message) {
+    return new _ZodArray3({
+      ...this._def,
+      exactLength: { value: len, message: errorUtil4.toString(message) }
+    });
+  }
+  nonempty(message) {
+    return this.min(1, message);
+  }
+};
+ZodArray4.create = (schema, params) => {
+  return new ZodArray4({
+    type: schema,
+    minLength: null,
+    maxLength: null,
+    exactLength: null,
+    typeName: ZodFirstPartyTypeKind4.ZodArray,
+    ...processCreateParams4(params)
+  });
+};
+function deepPartialify4(schema) {
+  if (schema instanceof ZodObject4) {
+    const newShape = {};
+    for (const key in schema.shape) {
+      const fieldSchema = schema.shape[key];
+      newShape[key] = ZodOptional4.create(deepPartialify4(fieldSchema));
+    }
+    return new ZodObject4({
+      ...schema._def,
+      shape: () => newShape
+    });
+  } else if (schema instanceof ZodArray4) {
+    return new ZodArray4({
+      ...schema._def,
+      type: deepPartialify4(schema.element)
+    });
+  } else if (schema instanceof ZodOptional4) {
+    return ZodOptional4.create(deepPartialify4(schema.unwrap()));
+  } else if (schema instanceof ZodNullable4) {
+    return ZodNullable4.create(deepPartialify4(schema.unwrap()));
+  } else if (schema instanceof ZodTuple4) {
+    return ZodTuple4.create(schema.items.map((item) => deepPartialify4(item)));
+  } else {
+    return schema;
+  }
+}
+var ZodObject4 = class _ZodObject3 extends ZodType4 {
+  constructor() {
+    super(...arguments);
+    this._cached = null;
+    this.nonstrict = this.passthrough;
+    this.augment = this.extend;
+  }
+  _getCached() {
+    if (this._cached !== null)
+      return this._cached;
+    const shape = this._def.shape();
+    const keys = util4.objectKeys(shape);
+    this._cached = { shape, keys };
+    return this._cached;
+  }
+  _parse(input) {
+    const parsedType = this._getType(input);
+    if (parsedType !== ZodParsedType4.object) {
+      const ctx2 = this._getOrReturnCtx(input);
+      addIssueToContext4(ctx2, {
+        code: ZodIssueCode4.invalid_type,
+        expected: ZodParsedType4.object,
+        received: ctx2.parsedType
+      });
+      return INVALID4;
+    }
+    const { status, ctx } = this._processInputParams(input);
+    const { shape, keys: shapeKeys } = this._getCached();
+    const extraKeys = [];
+    if (!(this._def.catchall instanceof ZodNever4 && this._def.unknownKeys === "strip")) {
+      for (const key in ctx.data) {
+        if (!shapeKeys.includes(key)) {
+          extraKeys.push(key);
+        }
+      }
+    }
+    const pairs = [];
+    for (const key of shapeKeys) {
+      const keyValidator = shape[key];
+      const value4 = ctx.data[key];
+      pairs.push({
+        key: { status: "valid", value: key },
+        value: keyValidator._parse(new ParseInputLazyPath4(ctx, value4, ctx.path, key)),
+        alwaysSet: key in ctx.data
+      });
+    }
+    if (this._def.catchall instanceof ZodNever4) {
+      const unknownKeys = this._def.unknownKeys;
+      if (unknownKeys === "passthrough") {
+        for (const key of extraKeys) {
+          pairs.push({
+            key: { status: "valid", value: key },
+            value: { status: "valid", value: ctx.data[key] }
+          });
+        }
+      } else if (unknownKeys === "strict") {
+        if (extraKeys.length > 0) {
+          addIssueToContext4(ctx, {
+            code: ZodIssueCode4.unrecognized_keys,
+            keys: extraKeys
+          });
+          status.dirty();
+        }
+      } else if (unknownKeys === "strip") {
+      } else {
+        throw new Error(`Internal ZodObject error: invalid unknownKeys value.`);
+      }
+    } else {
+      const catchall = this._def.catchall;
+      for (const key of extraKeys) {
+        const value4 = ctx.data[key];
+        pairs.push({
+          key: { status: "valid", value: key },
+          value: catchall._parse(
+            new ParseInputLazyPath4(ctx, value4, ctx.path, key)
+            //, ctx.child(key), value, getParsedType(value)
+          ),
+          alwaysSet: key in ctx.data
+        });
+      }
+    }
+    if (ctx.common.async) {
+      return Promise.resolve().then(async () => {
+        const syncPairs = [];
+        for (const pair of pairs) {
+          const key = await pair.key;
+          const value4 = await pair.value;
+          syncPairs.push({
+            key,
+            value: value4,
+            alwaysSet: pair.alwaysSet
+          });
+        }
+        return syncPairs;
+      }).then((syncPairs) => {
+        return ParseStatus4.mergeObjectSync(status, syncPairs);
+      });
+    } else {
+      return ParseStatus4.mergeObjectSync(status, pairs);
+    }
+  }
+  get shape() {
+    return this._def.shape();
+  }
+  strict(message) {
+    errorUtil4.errToObj;
+    return new _ZodObject3({
+      ...this._def,
+      unknownKeys: "strict",
+      ...message !== void 0 ? {
+        errorMap: (issue, ctx) => {
+          const defaultError = this._def.errorMap?.(issue, ctx).message ?? ctx.defaultError;
+          if (issue.code === "unrecognized_keys")
+            return {
+              message: errorUtil4.errToObj(message).message ?? defaultError
+            };
+          return {
+            message: defaultError
+          };
+        }
+      } : {}
+    });
+  }
+  strip() {
+    return new _ZodObject3({
+      ...this._def,
+      unknownKeys: "strip"
+    });
+  }
+  passthrough() {
+    return new _ZodObject3({
+      ...this._def,
+      unknownKeys: "passthrough"
+    });
+  }
+  // const AugmentFactory =
+  //   <Def extends ZodObjectDef>(def: Def) =>
+  //   <Augmentation extends ZodRawShape>(
+  //     augmentation: Augmentation
+  //   ): ZodObject<
+  //     extendShape<ReturnType<Def["shape"]>, Augmentation>,
+  //     Def["unknownKeys"],
+  //     Def["catchall"]
+  //   > => {
+  //     return new ZodObject({
+  //       ...def,
+  //       shape: () => ({
+  //         ...def.shape(),
+  //         ...augmentation,
+  //       }),
+  //     }) as any;
+  //   };
+  extend(augmentation) {
+    return new _ZodObject3({
+      ...this._def,
+      shape: () => ({
+        ...this._def.shape(),
+        ...augmentation
+      })
+    });
+  }
+  /**
+   * Prior to zod@1.0.12 there was a bug in the
+   * inferred type of merged objects. Please
+   * upgrade if you are experiencing issues.
+   */
+  merge(merging) {
+    const merged = new _ZodObject3({
+      unknownKeys: merging._def.unknownKeys,
+      catchall: merging._def.catchall,
+      shape: () => ({
+        ...this._def.shape(),
+        ...merging._def.shape()
+      }),
+      typeName: ZodFirstPartyTypeKind4.ZodObject
+    });
+    return merged;
+  }
+  // merge<
+  //   Incoming extends AnyZodObject,
+  //   Augmentation extends Incoming["shape"],
+  //   NewOutput extends {
+  //     [k in keyof Augmentation | keyof Output]: k extends keyof Augmentation
+  //       ? Augmentation[k]["_output"]
+  //       : k extends keyof Output
+  //       ? Output[k]
+  //       : never;
+  //   },
+  //   NewInput extends {
+  //     [k in keyof Augmentation | keyof Input]: k extends keyof Augmentation
+  //       ? Augmentation[k]["_input"]
+  //       : k extends keyof Input
+  //       ? Input[k]
+  //       : never;
+  //   }
+  // >(
+  //   merging: Incoming
+  // ): ZodObject<
+  //   extendShape<T, ReturnType<Incoming["_def"]["shape"]>>,
+  //   Incoming["_def"]["unknownKeys"],
+  //   Incoming["_def"]["catchall"],
+  //   NewOutput,
+  //   NewInput
+  // > {
+  //   const merged: any = new ZodObject({
+  //     unknownKeys: merging._def.unknownKeys,
+  //     catchall: merging._def.catchall,
+  //     shape: () =>
+  //       objectUtil.mergeShapes(this._def.shape(), merging._def.shape()),
+  //     typeName: ZodFirstPartyTypeKind.ZodObject,
+  //   }) as any;
+  //   return merged;
+  // }
+  setKey(key, schema) {
+    return this.augment({ [key]: schema });
+  }
+  // merge<Incoming extends AnyZodObject>(
+  //   merging: Incoming
+  // ): //ZodObject<T & Incoming["_shape"], UnknownKeys, Catchall> = (merging) => {
+  // ZodObject<
+  //   extendShape<T, ReturnType<Incoming["_def"]["shape"]>>,
+  //   Incoming["_def"]["unknownKeys"],
+  //   Incoming["_def"]["catchall"]
+  // > {
+  //   // const mergedShape = objectUtil.mergeShapes(
+  //   //   this._def.shape(),
+  //   //   merging._def.shape()
+  //   // );
+  //   const merged: any = new ZodObject({
+  //     unknownKeys: merging._def.unknownKeys,
+  //     catchall: merging._def.catchall,
+  //     shape: () =>
+  //       objectUtil.mergeShapes(this._def.shape(), merging._def.shape()),
+  //     typeName: ZodFirstPartyTypeKind.ZodObject,
+  //   }) as any;
+  //   return merged;
+  // }
+  catchall(index) {
+    return new _ZodObject3({
+      ...this._def,
+      catchall: index
+    });
+  }
+  pick(mask) {
+    const shape = {};
+    for (const key of util4.objectKeys(mask)) {
+      if (mask[key] && this.shape[key]) {
+        shape[key] = this.shape[key];
+      }
+    }
+    return new _ZodObject3({
+      ...this._def,
+      shape: () => shape
+    });
+  }
+  omit(mask) {
+    const shape = {};
+    for (const key of util4.objectKeys(this.shape)) {
+      if (!mask[key]) {
+        shape[key] = this.shape[key];
+      }
+    }
+    return new _ZodObject3({
+      ...this._def,
+      shape: () => shape
+    });
+  }
+  /**
+   * @deprecated
+   */
+  deepPartial() {
+    return deepPartialify4(this);
+  }
+  partial(mask) {
+    const newShape = {};
+    for (const key of util4.objectKeys(this.shape)) {
+      const fieldSchema = this.shape[key];
+      if (mask && !mask[key]) {
+        newShape[key] = fieldSchema;
+      } else {
+        newShape[key] = fieldSchema.optional();
+      }
+    }
+    return new _ZodObject3({
+      ...this._def,
+      shape: () => newShape
+    });
+  }
+  required(mask) {
+    const newShape = {};
+    for (const key of util4.objectKeys(this.shape)) {
+      if (mask && !mask[key]) {
+        newShape[key] = this.shape[key];
+      } else {
+        const fieldSchema = this.shape[key];
+        let newField = fieldSchema;
+        while (newField instanceof ZodOptional4) {
+          newField = newField._def.innerType;
+        }
+        newShape[key] = newField;
+      }
+    }
+    return new _ZodObject3({
+      ...this._def,
+      shape: () => newShape
+    });
+  }
+  keyof() {
+    return createZodEnum4(util4.objectKeys(this.shape));
+  }
+};
+ZodObject4.create = (shape, params) => {
+  return new ZodObject4({
+    shape: () => shape,
+    unknownKeys: "strip",
+    catchall: ZodNever4.create(),
+    typeName: ZodFirstPartyTypeKind4.ZodObject,
+    ...processCreateParams4(params)
+  });
+};
+ZodObject4.strictCreate = (shape, params) => {
+  return new ZodObject4({
+    shape: () => shape,
+    unknownKeys: "strict",
+    catchall: ZodNever4.create(),
+    typeName: ZodFirstPartyTypeKind4.ZodObject,
+    ...processCreateParams4(params)
+  });
+};
+ZodObject4.lazycreate = (shape, params) => {
+  return new ZodObject4({
+    shape,
+    unknownKeys: "strip",
+    catchall: ZodNever4.create(),
+    typeName: ZodFirstPartyTypeKind4.ZodObject,
+    ...processCreateParams4(params)
+  });
+};
+var ZodUnion4 = class extends ZodType4 {
+  _parse(input) {
+    const { ctx } = this._processInputParams(input);
+    const options = this._def.options;
+    function handleResults(results) {
+      for (const result of results) {
+        if (result.result.status === "valid") {
+          return result.result;
+        }
+      }
+      for (const result of results) {
+        if (result.result.status === "dirty") {
+          ctx.common.issues.push(...result.ctx.common.issues);
+          return result.result;
+        }
+      }
+      const unionErrors = results.map((result) => new ZodError4(result.ctx.common.issues));
+      addIssueToContext4(ctx, {
+        code: ZodIssueCode4.invalid_union,
+        unionErrors
+      });
+      return INVALID4;
+    }
+    if (ctx.common.async) {
+      return Promise.all(options.map(async (option) => {
+        const childCtx = {
+          ...ctx,
+          common: {
+            ...ctx.common,
+            issues: []
+          },
+          parent: null
+        };
+        return {
+          result: await option._parseAsync({
+            data: ctx.data,
+            path: ctx.path,
+            parent: childCtx
+          }),
+          ctx: childCtx
+        };
+      })).then(handleResults);
+    } else {
+      let dirty = void 0;
+      const issues = [];
+      for (const option of options) {
+        const childCtx = {
+          ...ctx,
+          common: {
+            ...ctx.common,
+            issues: []
+          },
+          parent: null
+        };
+        const result = option._parseSync({
+          data: ctx.data,
+          path: ctx.path,
+          parent: childCtx
+        });
+        if (result.status === "valid") {
+          return result;
+        } else if (result.status === "dirty" && !dirty) {
+          dirty = { result, ctx: childCtx };
+        }
+        if (childCtx.common.issues.length) {
+          issues.push(childCtx.common.issues);
+        }
+      }
+      if (dirty) {
+        ctx.common.issues.push(...dirty.ctx.common.issues);
+        return dirty.result;
+      }
+      const unionErrors = issues.map((issues2) => new ZodError4(issues2));
+      addIssueToContext4(ctx, {
+        code: ZodIssueCode4.invalid_union,
+        unionErrors
+      });
+      return INVALID4;
+    }
+  }
+  get options() {
+    return this._def.options;
+  }
+};
+ZodUnion4.create = (types, params) => {
+  return new ZodUnion4({
+    options: types,
+    typeName: ZodFirstPartyTypeKind4.ZodUnion,
+    ...processCreateParams4(params)
+  });
+};
+var getDiscriminator4 = (type) => {
+  if (type instanceof ZodLazy4) {
+    return getDiscriminator4(type.schema);
+  } else if (type instanceof ZodEffects4) {
+    return getDiscriminator4(type.innerType());
+  } else if (type instanceof ZodLiteral4) {
+    return [type.value];
+  } else if (type instanceof ZodEnum4) {
+    return type.options;
+  } else if (type instanceof ZodNativeEnum4) {
+    return util4.objectValues(type.enum);
+  } else if (type instanceof ZodDefault4) {
+    return getDiscriminator4(type._def.innerType);
+  } else if (type instanceof ZodUndefined4) {
+    return [void 0];
+  } else if (type instanceof ZodNull4) {
+    return [null];
+  } else if (type instanceof ZodOptional4) {
+    return [void 0, ...getDiscriminator4(type.unwrap())];
+  } else if (type instanceof ZodNullable4) {
+    return [null, ...getDiscriminator4(type.unwrap())];
+  } else if (type instanceof ZodBranded4) {
+    return getDiscriminator4(type.unwrap());
+  } else if (type instanceof ZodReadonly4) {
+    return getDiscriminator4(type.unwrap());
+  } else if (type instanceof ZodCatch4) {
+    return getDiscriminator4(type._def.innerType);
+  } else {
+    return [];
+  }
+};
+var ZodDiscriminatedUnion4 = class _ZodDiscriminatedUnion3 extends ZodType4 {
+  _parse(input) {
+    const { ctx } = this._processInputParams(input);
+    if (ctx.parsedType !== ZodParsedType4.object) {
+      addIssueToContext4(ctx, {
+        code: ZodIssueCode4.invalid_type,
+        expected: ZodParsedType4.object,
+        received: ctx.parsedType
+      });
+      return INVALID4;
+    }
+    const discriminator = this.discriminator;
+    const discriminatorValue = ctx.data[discriminator];
+    const option = this.optionsMap.get(discriminatorValue);
+    if (!option) {
+      addIssueToContext4(ctx, {
+        code: ZodIssueCode4.invalid_union_discriminator,
+        options: Array.from(this.optionsMap.keys()),
+        path: [discriminator]
+      });
+      return INVALID4;
+    }
+    if (ctx.common.async) {
+      return option._parseAsync({
+        data: ctx.data,
+        path: ctx.path,
+        parent: ctx
+      });
+    } else {
+      return option._parseSync({
+        data: ctx.data,
+        path: ctx.path,
+        parent: ctx
+      });
+    }
+  }
+  get discriminator() {
+    return this._def.discriminator;
+  }
+  get options() {
+    return this._def.options;
+  }
+  get optionsMap() {
+    return this._def.optionsMap;
+  }
+  /**
+   * The constructor of the discriminated union schema. Its behaviour is very similar to that of the normal z.union() constructor.
+   * However, it only allows a union of objects, all of which need to share a discriminator property. This property must
+   * have a different value for each object in the union.
+   * @param discriminator the name of the discriminator property
+   * @param types an array of object schemas
+   * @param params
+   */
+  static create(discriminator, options, params) {
+    const optionsMap = /* @__PURE__ */ new Map();
+    for (const type of options) {
+      const discriminatorValues = getDiscriminator4(type.shape[discriminator]);
+      if (!discriminatorValues.length) {
+        throw new Error(`A discriminator value for key \`${discriminator}\` could not be extracted from all schema options`);
+      }
+      for (const value4 of discriminatorValues) {
+        if (optionsMap.has(value4)) {
+          throw new Error(`Discriminator property ${String(discriminator)} has duplicate value ${String(value4)}`);
+        }
+        optionsMap.set(value4, type);
+      }
+    }
+    return new _ZodDiscriminatedUnion3({
+      typeName: ZodFirstPartyTypeKind4.ZodDiscriminatedUnion,
+      discriminator,
+      options,
+      optionsMap,
+      ...processCreateParams4(params)
+    });
+  }
+};
+function mergeValues4(a, b) {
+  const aType = getParsedType4(a);
+  const bType = getParsedType4(b);
+  if (a === b) {
+    return { valid: true, data: a };
+  } else if (aType === ZodParsedType4.object && bType === ZodParsedType4.object) {
+    const bKeys = util4.objectKeys(b);
+    const sharedKeys = util4.objectKeys(a).filter((key) => bKeys.indexOf(key) !== -1);
+    const newObj = { ...a, ...b };
+    for (const key of sharedKeys) {
+      const sharedValue = mergeValues4(a[key], b[key]);
+      if (!sharedValue.valid) {
+        return { valid: false };
+      }
+      newObj[key] = sharedValue.data;
+    }
+    return { valid: true, data: newObj };
+  } else if (aType === ZodParsedType4.array && bType === ZodParsedType4.array) {
+    if (a.length !== b.length) {
+      return { valid: false };
+    }
+    const newArray = [];
+    for (let index = 0; index < a.length; index++) {
+      const itemA = a[index];
+      const itemB = b[index];
+      const sharedValue = mergeValues4(itemA, itemB);
+      if (!sharedValue.valid) {
+        return { valid: false };
+      }
+      newArray.push(sharedValue.data);
+    }
+    return { valid: true, data: newArray };
+  } else if (aType === ZodParsedType4.date && bType === ZodParsedType4.date && +a === +b) {
+    return { valid: true, data: a };
+  } else {
+    return { valid: false };
+  }
+}
+var ZodIntersection4 = class extends ZodType4 {
+  _parse(input) {
+    const { status, ctx } = this._processInputParams(input);
+    const handleParsed = (parsedLeft, parsedRight) => {
+      if (isAborted4(parsedLeft) || isAborted4(parsedRight)) {
+        return INVALID4;
+      }
+      const merged = mergeValues4(parsedLeft.value, parsedRight.value);
+      if (!merged.valid) {
+        addIssueToContext4(ctx, {
+          code: ZodIssueCode4.invalid_intersection_types
+        });
+        return INVALID4;
+      }
+      if (isDirty4(parsedLeft) || isDirty4(parsedRight)) {
+        status.dirty();
+      }
+      return { status: status.value, value: merged.data };
+    };
+    if (ctx.common.async) {
+      return Promise.all([
+        this._def.left._parseAsync({
+          data: ctx.data,
+          path: ctx.path,
+          parent: ctx
+        }),
+        this._def.right._parseAsync({
+          data: ctx.data,
+          path: ctx.path,
+          parent: ctx
+        })
+      ]).then(([left, right]) => handleParsed(left, right));
+    } else {
+      return handleParsed(this._def.left._parseSync({
+        data: ctx.data,
+        path: ctx.path,
+        parent: ctx
+      }), this._def.right._parseSync({
+        data: ctx.data,
+        path: ctx.path,
+        parent: ctx
+      }));
+    }
+  }
+};
+ZodIntersection4.create = (left, right, params) => {
+  return new ZodIntersection4({
+    left,
+    right,
+    typeName: ZodFirstPartyTypeKind4.ZodIntersection,
+    ...processCreateParams4(params)
+  });
+};
+var ZodTuple4 = class _ZodTuple3 extends ZodType4 {
+  _parse(input) {
+    const { status, ctx } = this._processInputParams(input);
+    if (ctx.parsedType !== ZodParsedType4.array) {
+      addIssueToContext4(ctx, {
+        code: ZodIssueCode4.invalid_type,
+        expected: ZodParsedType4.array,
+        received: ctx.parsedType
+      });
+      return INVALID4;
+    }
+    if (ctx.data.length < this._def.items.length) {
+      addIssueToContext4(ctx, {
+        code: ZodIssueCode4.too_small,
+        minimum: this._def.items.length,
+        inclusive: true,
+        exact: false,
+        type: "array"
+      });
+      return INVALID4;
+    }
+    const rest = this._def.rest;
+    if (!rest && ctx.data.length > this._def.items.length) {
+      addIssueToContext4(ctx, {
+        code: ZodIssueCode4.too_big,
+        maximum: this._def.items.length,
+        inclusive: true,
+        exact: false,
+        type: "array"
+      });
+      status.dirty();
+    }
+    const items = [...ctx.data].map((item, itemIndex) => {
+      const schema = this._def.items[itemIndex] || this._def.rest;
+      if (!schema)
+        return null;
+      return schema._parse(new ParseInputLazyPath4(ctx, item, ctx.path, itemIndex));
+    }).filter((x) => !!x);
+    if (ctx.common.async) {
+      return Promise.all(items).then((results) => {
+        return ParseStatus4.mergeArray(status, results);
+      });
+    } else {
+      return ParseStatus4.mergeArray(status, items);
+    }
+  }
+  get items() {
+    return this._def.items;
+  }
+  rest(rest) {
+    return new _ZodTuple3({
+      ...this._def,
+      rest
+    });
+  }
+};
+ZodTuple4.create = (schemas, params) => {
+  if (!Array.isArray(schemas)) {
+    throw new Error("You must pass an array of schemas to z.tuple([ ... ])");
+  }
+  return new ZodTuple4({
+    items: schemas,
+    typeName: ZodFirstPartyTypeKind4.ZodTuple,
+    rest: null,
+    ...processCreateParams4(params)
+  });
+};
+var ZodRecord4 = class _ZodRecord3 extends ZodType4 {
+  get keySchema() {
+    return this._def.keyType;
+  }
+  get valueSchema() {
+    return this._def.valueType;
+  }
+  _parse(input) {
+    const { status, ctx } = this._processInputParams(input);
+    if (ctx.parsedType !== ZodParsedType4.object) {
+      addIssueToContext4(ctx, {
+        code: ZodIssueCode4.invalid_type,
+        expected: ZodParsedType4.object,
+        received: ctx.parsedType
+      });
+      return INVALID4;
+    }
+    const pairs = [];
+    const keyType = this._def.keyType;
+    const valueType = this._def.valueType;
+    for (const key in ctx.data) {
+      pairs.push({
+        key: keyType._parse(new ParseInputLazyPath4(ctx, key, ctx.path, key)),
+        value: valueType._parse(new ParseInputLazyPath4(ctx, ctx.data[key], ctx.path, key)),
+        alwaysSet: key in ctx.data
+      });
+    }
+    if (ctx.common.async) {
+      return ParseStatus4.mergeObjectAsync(status, pairs);
+    } else {
+      return ParseStatus4.mergeObjectSync(status, pairs);
+    }
+  }
+  get element() {
+    return this._def.valueType;
+  }
+  static create(first, second, third) {
+    if (second instanceof ZodType4) {
+      return new _ZodRecord3({
+        keyType: first,
+        valueType: second,
+        typeName: ZodFirstPartyTypeKind4.ZodRecord,
+        ...processCreateParams4(third)
+      });
+    }
+    return new _ZodRecord3({
+      keyType: ZodString4.create(),
+      valueType: first,
+      typeName: ZodFirstPartyTypeKind4.ZodRecord,
+      ...processCreateParams4(second)
+    });
+  }
+};
+var ZodMap4 = class extends ZodType4 {
+  get keySchema() {
+    return this._def.keyType;
+  }
+  get valueSchema() {
+    return this._def.valueType;
+  }
+  _parse(input) {
+    const { status, ctx } = this._processInputParams(input);
+    if (ctx.parsedType !== ZodParsedType4.map) {
+      addIssueToContext4(ctx, {
+        code: ZodIssueCode4.invalid_type,
+        expected: ZodParsedType4.map,
+        received: ctx.parsedType
+      });
+      return INVALID4;
+    }
+    const keyType = this._def.keyType;
+    const valueType = this._def.valueType;
+    const pairs = [...ctx.data.entries()].map(([key, value4], index) => {
+      return {
+        key: keyType._parse(new ParseInputLazyPath4(ctx, key, ctx.path, [index, "key"])),
+        value: valueType._parse(new ParseInputLazyPath4(ctx, value4, ctx.path, [index, "value"]))
+      };
+    });
+    if (ctx.common.async) {
+      const finalMap = /* @__PURE__ */ new Map();
+      return Promise.resolve().then(async () => {
+        for (const pair of pairs) {
+          const key = await pair.key;
+          const value4 = await pair.value;
+          if (key.status === "aborted" || value4.status === "aborted") {
+            return INVALID4;
+          }
+          if (key.status === "dirty" || value4.status === "dirty") {
+            status.dirty();
+          }
+          finalMap.set(key.value, value4.value);
+        }
+        return { status: status.value, value: finalMap };
+      });
+    } else {
+      const finalMap = /* @__PURE__ */ new Map();
+      for (const pair of pairs) {
+        const key = pair.key;
+        const value4 = pair.value;
+        if (key.status === "aborted" || value4.status === "aborted") {
+          return INVALID4;
+        }
+        if (key.status === "dirty" || value4.status === "dirty") {
+          status.dirty();
+        }
+        finalMap.set(key.value, value4.value);
+      }
+      return { status: status.value, value: finalMap };
+    }
+  }
+};
+ZodMap4.create = (keyType, valueType, params) => {
+  return new ZodMap4({
+    valueType,
+    keyType,
+    typeName: ZodFirstPartyTypeKind4.ZodMap,
+    ...processCreateParams4(params)
+  });
+};
+var ZodSet4 = class _ZodSet3 extends ZodType4 {
+  _parse(input) {
+    const { status, ctx } = this._processInputParams(input);
+    if (ctx.parsedType !== ZodParsedType4.set) {
+      addIssueToContext4(ctx, {
+        code: ZodIssueCode4.invalid_type,
+        expected: ZodParsedType4.set,
+        received: ctx.parsedType
+      });
+      return INVALID4;
+    }
+    const def = this._def;
+    if (def.minSize !== null) {
+      if (ctx.data.size < def.minSize.value) {
+        addIssueToContext4(ctx, {
+          code: ZodIssueCode4.too_small,
+          minimum: def.minSize.value,
+          type: "set",
+          inclusive: true,
+          exact: false,
+          message: def.minSize.message
+        });
+        status.dirty();
+      }
+    }
+    if (def.maxSize !== null) {
+      if (ctx.data.size > def.maxSize.value) {
+        addIssueToContext4(ctx, {
+          code: ZodIssueCode4.too_big,
+          maximum: def.maxSize.value,
+          type: "set",
+          inclusive: true,
+          exact: false,
+          message: def.maxSize.message
+        });
+        status.dirty();
+      }
+    }
+    const valueType = this._def.valueType;
+    function finalizeSet(elements2) {
+      const parsedSet = /* @__PURE__ */ new Set();
+      for (const element of elements2) {
+        if (element.status === "aborted")
+          return INVALID4;
+        if (element.status === "dirty")
+          status.dirty();
+        parsedSet.add(element.value);
+      }
+      return { status: status.value, value: parsedSet };
+    }
+    const elements = [...ctx.data.values()].map((item, i) => valueType._parse(new ParseInputLazyPath4(ctx, item, ctx.path, i)));
+    if (ctx.common.async) {
+      return Promise.all(elements).then((elements2) => finalizeSet(elements2));
+    } else {
+      return finalizeSet(elements);
+    }
+  }
+  min(minSize, message) {
+    return new _ZodSet3({
+      ...this._def,
+      minSize: { value: minSize, message: errorUtil4.toString(message) }
+    });
+  }
+  max(maxSize, message) {
+    return new _ZodSet3({
+      ...this._def,
+      maxSize: { value: maxSize, message: errorUtil4.toString(message) }
+    });
+  }
+  size(size, message) {
+    return this.min(size, message).max(size, message);
+  }
+  nonempty(message) {
+    return this.min(1, message);
+  }
+};
+ZodSet4.create = (valueType, params) => {
+  return new ZodSet4({
+    valueType,
+    minSize: null,
+    maxSize: null,
+    typeName: ZodFirstPartyTypeKind4.ZodSet,
+    ...processCreateParams4(params)
+  });
+};
+var ZodFunction4 = class _ZodFunction3 extends ZodType4 {
+  constructor() {
+    super(...arguments);
+    this.validate = this.implement;
+  }
+  _parse(input) {
+    const { ctx } = this._processInputParams(input);
+    if (ctx.parsedType !== ZodParsedType4.function) {
+      addIssueToContext4(ctx, {
+        code: ZodIssueCode4.invalid_type,
+        expected: ZodParsedType4.function,
+        received: ctx.parsedType
+      });
+      return INVALID4;
+    }
+    function makeArgsIssue(args, error) {
+      return makeIssue4({
+        data: args,
+        path: ctx.path,
+        errorMaps: [ctx.common.contextualErrorMap, ctx.schemaErrorMap, getErrorMap4(), en_default4].filter((x) => !!x),
+        issueData: {
+          code: ZodIssueCode4.invalid_arguments,
+          argumentsError: error
+        }
+      });
+    }
+    function makeReturnsIssue(returns, error) {
+      return makeIssue4({
+        data: returns,
+        path: ctx.path,
+        errorMaps: [ctx.common.contextualErrorMap, ctx.schemaErrorMap, getErrorMap4(), en_default4].filter((x) => !!x),
+        issueData: {
+          code: ZodIssueCode4.invalid_return_type,
+          returnTypeError: error
+        }
+      });
+    }
+    const params = { errorMap: ctx.common.contextualErrorMap };
+    const fn = ctx.data;
+    if (this._def.returns instanceof ZodPromise4) {
+      const me = this;
+      return OK4(async function(...args) {
+        const error = new ZodError4([]);
+        const parsedArgs = await me._def.args.parseAsync(args, params).catch((e) => {
+          error.addIssue(makeArgsIssue(args, e));
+          throw error;
+        });
+        const result = await Reflect.apply(fn, this, parsedArgs);
+        const parsedReturns = await me._def.returns._def.type.parseAsync(result, params).catch((e) => {
+          error.addIssue(makeReturnsIssue(result, e));
+          throw error;
+        });
+        return parsedReturns;
+      });
+    } else {
+      const me = this;
+      return OK4(function(...args) {
+        const parsedArgs = me._def.args.safeParse(args, params);
+        if (!parsedArgs.success) {
+          throw new ZodError4([makeArgsIssue(args, parsedArgs.error)]);
+        }
+        const result = Reflect.apply(fn, this, parsedArgs.data);
+        const parsedReturns = me._def.returns.safeParse(result, params);
+        if (!parsedReturns.success) {
+          throw new ZodError4([makeReturnsIssue(result, parsedReturns.error)]);
+        }
+        return parsedReturns.data;
+      });
+    }
+  }
+  parameters() {
+    return this._def.args;
+  }
+  returnType() {
+    return this._def.returns;
+  }
+  args(...items) {
+    return new _ZodFunction3({
+      ...this._def,
+      args: ZodTuple4.create(items).rest(ZodUnknown4.create())
+    });
+  }
+  returns(returnType) {
+    return new _ZodFunction3({
+      ...this._def,
+      returns: returnType
+    });
+  }
+  implement(func) {
+    const validatedFunc = this.parse(func);
+    return validatedFunc;
+  }
+  strictImplement(func) {
+    const validatedFunc = this.parse(func);
+    return validatedFunc;
+  }
+  static create(args, returns, params) {
+    return new _ZodFunction3({
+      args: args ? args : ZodTuple4.create([]).rest(ZodUnknown4.create()),
+      returns: returns || ZodUnknown4.create(),
+      typeName: ZodFirstPartyTypeKind4.ZodFunction,
+      ...processCreateParams4(params)
+    });
+  }
+};
+var ZodLazy4 = class extends ZodType4 {
+  get schema() {
+    return this._def.getter();
+  }
+  _parse(input) {
+    const { ctx } = this._processInputParams(input);
+    const lazySchema = this._def.getter();
+    return lazySchema._parse({ data: ctx.data, path: ctx.path, parent: ctx });
+  }
+};
+ZodLazy4.create = (getter, params) => {
+  return new ZodLazy4({
+    getter,
+    typeName: ZodFirstPartyTypeKind4.ZodLazy,
+    ...processCreateParams4(params)
+  });
+};
+var ZodLiteral4 = class extends ZodType4 {
+  _parse(input) {
+    if (input.data !== this._def.value) {
+      const ctx = this._getOrReturnCtx(input);
+      addIssueToContext4(ctx, {
+        received: ctx.data,
+        code: ZodIssueCode4.invalid_literal,
+        expected: this._def.value
+      });
+      return INVALID4;
+    }
+    return { status: "valid", value: input.data };
+  }
+  get value() {
+    return this._def.value;
+  }
+};
+ZodLiteral4.create = (value4, params) => {
+  return new ZodLiteral4({
+    value: value4,
+    typeName: ZodFirstPartyTypeKind4.ZodLiteral,
+    ...processCreateParams4(params)
+  });
+};
+function createZodEnum4(values, params) {
+  return new ZodEnum4({
+    values,
+    typeName: ZodFirstPartyTypeKind4.ZodEnum,
+    ...processCreateParams4(params)
+  });
+}
+var ZodEnum4 = class _ZodEnum3 extends ZodType4 {
+  _parse(input) {
+    if (typeof input.data !== "string") {
+      const ctx = this._getOrReturnCtx(input);
+      const expectedValues = this._def.values;
+      addIssueToContext4(ctx, {
+        expected: util4.joinValues(expectedValues),
+        received: ctx.parsedType,
+        code: ZodIssueCode4.invalid_type
+      });
+      return INVALID4;
+    }
+    if (!this._cache) {
+      this._cache = new Set(this._def.values);
+    }
+    if (!this._cache.has(input.data)) {
+      const ctx = this._getOrReturnCtx(input);
+      const expectedValues = this._def.values;
+      addIssueToContext4(ctx, {
+        received: ctx.data,
+        code: ZodIssueCode4.invalid_enum_value,
+        options: expectedValues
+      });
+      return INVALID4;
+    }
+    return OK4(input.data);
+  }
+  get options() {
+    return this._def.values;
+  }
+  get enum() {
+    const enumValues = {};
+    for (const val of this._def.values) {
+      enumValues[val] = val;
+    }
+    return enumValues;
+  }
+  get Values() {
+    const enumValues = {};
+    for (const val of this._def.values) {
+      enumValues[val] = val;
+    }
+    return enumValues;
+  }
+  get Enum() {
+    const enumValues = {};
+    for (const val of this._def.values) {
+      enumValues[val] = val;
+    }
+    return enumValues;
+  }
+  extract(values, newDef = this._def) {
+    return _ZodEnum3.create(values, {
+      ...this._def,
+      ...newDef
+    });
+  }
+  exclude(values, newDef = this._def) {
+    return _ZodEnum3.create(this.options.filter((opt) => !values.includes(opt)), {
+      ...this._def,
+      ...newDef
+    });
+  }
+};
+ZodEnum4.create = createZodEnum4;
+var ZodNativeEnum4 = class extends ZodType4 {
+  _parse(input) {
+    const nativeEnumValues = util4.getValidEnumValues(this._def.values);
+    const ctx = this._getOrReturnCtx(input);
+    if (ctx.parsedType !== ZodParsedType4.string && ctx.parsedType !== ZodParsedType4.number) {
+      const expectedValues = util4.objectValues(nativeEnumValues);
+      addIssueToContext4(ctx, {
+        expected: util4.joinValues(expectedValues),
+        received: ctx.parsedType,
+        code: ZodIssueCode4.invalid_type
+      });
+      return INVALID4;
+    }
+    if (!this._cache) {
+      this._cache = new Set(util4.getValidEnumValues(this._def.values));
+    }
+    if (!this._cache.has(input.data)) {
+      const expectedValues = util4.objectValues(nativeEnumValues);
+      addIssueToContext4(ctx, {
+        received: ctx.data,
+        code: ZodIssueCode4.invalid_enum_value,
+        options: expectedValues
+      });
+      return INVALID4;
+    }
+    return OK4(input.data);
+  }
+  get enum() {
+    return this._def.values;
+  }
+};
+ZodNativeEnum4.create = (values, params) => {
+  return new ZodNativeEnum4({
+    values,
+    typeName: ZodFirstPartyTypeKind4.ZodNativeEnum,
+    ...processCreateParams4(params)
+  });
+};
+var ZodPromise4 = class extends ZodType4 {
+  unwrap() {
+    return this._def.type;
+  }
+  _parse(input) {
+    const { ctx } = this._processInputParams(input);
+    if (ctx.parsedType !== ZodParsedType4.promise && ctx.common.async === false) {
+      addIssueToContext4(ctx, {
+        code: ZodIssueCode4.invalid_type,
+        expected: ZodParsedType4.promise,
+        received: ctx.parsedType
+      });
+      return INVALID4;
+    }
+    const promisified = ctx.parsedType === ZodParsedType4.promise ? ctx.data : Promise.resolve(ctx.data);
+    return OK4(promisified.then((data) => {
+      return this._def.type.parseAsync(data, {
+        path: ctx.path,
+        errorMap: ctx.common.contextualErrorMap
+      });
+    }));
+  }
+};
+ZodPromise4.create = (schema, params) => {
+  return new ZodPromise4({
+    type: schema,
+    typeName: ZodFirstPartyTypeKind4.ZodPromise,
+    ...processCreateParams4(params)
+  });
+};
+var ZodEffects4 = class extends ZodType4 {
+  innerType() {
+    return this._def.schema;
+  }
+  sourceType() {
+    return this._def.schema._def.typeName === ZodFirstPartyTypeKind4.ZodEffects ? this._def.schema.sourceType() : this._def.schema;
+  }
+  _parse(input) {
+    const { status, ctx } = this._processInputParams(input);
+    const effect = this._def.effect || null;
+    const checkCtx = {
+      addIssue: (arg) => {
+        addIssueToContext4(ctx, arg);
+        if (arg.fatal) {
+          status.abort();
+        } else {
+          status.dirty();
+        }
+      },
+      get path() {
+        return ctx.path;
+      }
+    };
+    checkCtx.addIssue = checkCtx.addIssue.bind(checkCtx);
+    if (effect.type === "preprocess") {
+      const processed = effect.transform(ctx.data, checkCtx);
+      if (ctx.common.async) {
+        return Promise.resolve(processed).then(async (processed2) => {
+          if (status.value === "aborted")
+            return INVALID4;
+          const result = await this._def.schema._parseAsync({
+            data: processed2,
+            path: ctx.path,
+            parent: ctx
+          });
+          if (result.status === "aborted")
+            return INVALID4;
+          if (result.status === "dirty")
+            return DIRTY4(result.value);
+          if (status.value === "dirty")
+            return DIRTY4(result.value);
+          return result;
+        });
+      } else {
+        if (status.value === "aborted")
+          return INVALID4;
+        const result = this._def.schema._parseSync({
+          data: processed,
+          path: ctx.path,
+          parent: ctx
+        });
+        if (result.status === "aborted")
+          return INVALID4;
+        if (result.status === "dirty")
+          return DIRTY4(result.value);
+        if (status.value === "dirty")
+          return DIRTY4(result.value);
+        return result;
+      }
+    }
+    if (effect.type === "refinement") {
+      const executeRefinement = (acc) => {
+        const result = effect.refinement(acc, checkCtx);
+        if (ctx.common.async) {
+          return Promise.resolve(result);
+        }
+        if (result instanceof Promise) {
+          throw new Error("Async refinement encountered during synchronous parse operation. Use .parseAsync instead.");
+        }
+        return acc;
+      };
+      if (ctx.common.async === false) {
+        const inner = this._def.schema._parseSync({
+          data: ctx.data,
+          path: ctx.path,
+          parent: ctx
+        });
+        if (inner.status === "aborted")
+          return INVALID4;
+        if (inner.status === "dirty")
+          status.dirty();
+        executeRefinement(inner.value);
+        return { status: status.value, value: inner.value };
+      } else {
+        return this._def.schema._parseAsync({ data: ctx.data, path: ctx.path, parent: ctx }).then((inner) => {
+          if (inner.status === "aborted")
+            return INVALID4;
+          if (inner.status === "dirty")
+            status.dirty();
+          return executeRefinement(inner.value).then(() => {
+            return { status: status.value, value: inner.value };
+          });
+        });
+      }
+    }
+    if (effect.type === "transform") {
+      if (ctx.common.async === false) {
+        const base33 = this._def.schema._parseSync({
+          data: ctx.data,
+          path: ctx.path,
+          parent: ctx
+        });
+        if (!isValid4(base33))
+          return INVALID4;
+        const result = effect.transform(base33.value, checkCtx);
+        if (result instanceof Promise) {
+          throw new Error(`Asynchronous transform encountered during synchronous parse operation. Use .parseAsync instead.`);
+        }
+        return { status: status.value, value: result };
+      } else {
+        return this._def.schema._parseAsync({ data: ctx.data, path: ctx.path, parent: ctx }).then((base33) => {
+          if (!isValid4(base33))
+            return INVALID4;
+          return Promise.resolve(effect.transform(base33.value, checkCtx)).then((result) => ({
+            status: status.value,
+            value: result
+          }));
+        });
+      }
+    }
+    util4.assertNever(effect);
+  }
+};
+ZodEffects4.create = (schema, effect, params) => {
+  return new ZodEffects4({
+    schema,
+    typeName: ZodFirstPartyTypeKind4.ZodEffects,
+    effect,
+    ...processCreateParams4(params)
+  });
+};
+ZodEffects4.createWithPreprocess = (preprocess, schema, params) => {
+  return new ZodEffects4({
+    schema,
+    effect: { type: "preprocess", transform: preprocess },
+    typeName: ZodFirstPartyTypeKind4.ZodEffects,
+    ...processCreateParams4(params)
+  });
+};
+var ZodOptional4 = class extends ZodType4 {
+  _parse(input) {
+    const parsedType = this._getType(input);
+    if (parsedType === ZodParsedType4.undefined) {
+      return OK4(void 0);
+    }
+    return this._def.innerType._parse(input);
+  }
+  unwrap() {
+    return this._def.innerType;
+  }
+};
+ZodOptional4.create = (type, params) => {
+  return new ZodOptional4({
+    innerType: type,
+    typeName: ZodFirstPartyTypeKind4.ZodOptional,
+    ...processCreateParams4(params)
+  });
+};
+var ZodNullable4 = class extends ZodType4 {
+  _parse(input) {
+    const parsedType = this._getType(input);
+    if (parsedType === ZodParsedType4.null) {
+      return OK4(null);
+    }
+    return this._def.innerType._parse(input);
+  }
+  unwrap() {
+    return this._def.innerType;
+  }
+};
+ZodNullable4.create = (type, params) => {
+  return new ZodNullable4({
+    innerType: type,
+    typeName: ZodFirstPartyTypeKind4.ZodNullable,
+    ...processCreateParams4(params)
+  });
+};
+var ZodDefault4 = class extends ZodType4 {
+  _parse(input) {
+    const { ctx } = this._processInputParams(input);
+    let data = ctx.data;
+    if (ctx.parsedType === ZodParsedType4.undefined) {
+      data = this._def.defaultValue();
+    }
+    return this._def.innerType._parse({
+      data,
+      path: ctx.path,
+      parent: ctx
+    });
+  }
+  removeDefault() {
+    return this._def.innerType;
+  }
+};
+ZodDefault4.create = (type, params) => {
+  return new ZodDefault4({
+    innerType: type,
+    typeName: ZodFirstPartyTypeKind4.ZodDefault,
+    defaultValue: typeof params.default === "function" ? params.default : () => params.default,
+    ...processCreateParams4(params)
+  });
+};
+var ZodCatch4 = class extends ZodType4 {
+  _parse(input) {
+    const { ctx } = this._processInputParams(input);
+    const newCtx = {
+      ...ctx,
+      common: {
+        ...ctx.common,
+        issues: []
+      }
+    };
+    const result = this._def.innerType._parse({
+      data: newCtx.data,
+      path: newCtx.path,
+      parent: {
+        ...newCtx
+      }
+    });
+    if (isAsync4(result)) {
+      return result.then((result2) => {
+        return {
+          status: "valid",
+          value: result2.status === "valid" ? result2.value : this._def.catchValue({
+            get error() {
+              return new ZodError4(newCtx.common.issues);
+            },
+            input: newCtx.data
+          })
+        };
+      });
+    } else {
+      return {
+        status: "valid",
+        value: result.status === "valid" ? result.value : this._def.catchValue({
+          get error() {
+            return new ZodError4(newCtx.common.issues);
+          },
+          input: newCtx.data
+        })
+      };
+    }
+  }
+  removeCatch() {
+    return this._def.innerType;
+  }
+};
+ZodCatch4.create = (type, params) => {
+  return new ZodCatch4({
+    innerType: type,
+    typeName: ZodFirstPartyTypeKind4.ZodCatch,
+    catchValue: typeof params.catch === "function" ? params.catch : () => params.catch,
+    ...processCreateParams4(params)
+  });
+};
+var ZodNaN4 = class extends ZodType4 {
+  _parse(input) {
+    const parsedType = this._getType(input);
+    if (parsedType !== ZodParsedType4.nan) {
+      const ctx = this._getOrReturnCtx(input);
+      addIssueToContext4(ctx, {
+        code: ZodIssueCode4.invalid_type,
+        expected: ZodParsedType4.nan,
+        received: ctx.parsedType
+      });
+      return INVALID4;
+    }
+    return { status: "valid", value: input.data };
+  }
+};
+ZodNaN4.create = (params) => {
+  return new ZodNaN4({
+    typeName: ZodFirstPartyTypeKind4.ZodNaN,
+    ...processCreateParams4(params)
+  });
+};
+var BRAND4 = /* @__PURE__ */ Symbol("zod_brand");
+var ZodBranded4 = class extends ZodType4 {
+  _parse(input) {
+    const { ctx } = this._processInputParams(input);
+    const data = ctx.data;
+    return this._def.type._parse({
+      data,
+      path: ctx.path,
+      parent: ctx
+    });
+  }
+  unwrap() {
+    return this._def.type;
+  }
+};
+var ZodPipeline4 = class _ZodPipeline3 extends ZodType4 {
+  _parse(input) {
+    const { status, ctx } = this._processInputParams(input);
+    if (ctx.common.async) {
+      const handleAsync = async () => {
+        const inResult = await this._def.in._parseAsync({
+          data: ctx.data,
+          path: ctx.path,
+          parent: ctx
+        });
+        if (inResult.status === "aborted")
+          return INVALID4;
+        if (inResult.status === "dirty") {
+          status.dirty();
+          return DIRTY4(inResult.value);
+        } else {
+          return this._def.out._parseAsync({
+            data: inResult.value,
+            path: ctx.path,
+            parent: ctx
+          });
+        }
+      };
+      return handleAsync();
+    } else {
+      const inResult = this._def.in._parseSync({
+        data: ctx.data,
+        path: ctx.path,
+        parent: ctx
+      });
+      if (inResult.status === "aborted")
+        return INVALID4;
+      if (inResult.status === "dirty") {
+        status.dirty();
+        return {
+          status: "dirty",
+          value: inResult.value
+        };
+      } else {
+        return this._def.out._parseSync({
+          data: inResult.value,
+          path: ctx.path,
+          parent: ctx
+        });
+      }
+    }
+  }
+  static create(a, b) {
+    return new _ZodPipeline3({
+      in: a,
+      out: b,
+      typeName: ZodFirstPartyTypeKind4.ZodPipeline
+    });
+  }
+};
+var ZodReadonly4 = class extends ZodType4 {
+  _parse(input) {
+    const result = this._def.innerType._parse(input);
+    const freeze = (data) => {
+      if (isValid4(data)) {
+        data.value = Object.freeze(data.value);
+      }
+      return data;
+    };
+    return isAsync4(result) ? result.then((data) => freeze(data)) : freeze(result);
+  }
+  unwrap() {
+    return this._def.innerType;
+  }
+};
+ZodReadonly4.create = (type, params) => {
+  return new ZodReadonly4({
+    innerType: type,
+    typeName: ZodFirstPartyTypeKind4.ZodReadonly,
+    ...processCreateParams4(params)
+  });
+};
+function cleanParams4(params, data) {
+  const p = typeof params === "function" ? params(data) : typeof params === "string" ? { message: params } : params;
+  const p2 = typeof p === "string" ? { message: p } : p;
+  return p2;
+}
+function custom4(check, _params = {}, fatal) {
+  if (check)
+    return ZodAny4.create().superRefine((data, ctx) => {
+      const r = check(data);
+      if (r instanceof Promise) {
+        return r.then((r2) => {
+          if (!r2) {
+            const params = cleanParams4(_params, data);
+            const _fatal = params.fatal ?? fatal ?? true;
+            ctx.addIssue({ code: "custom", ...params, fatal: _fatal });
+          }
+        });
+      }
+      if (!r) {
+        const params = cleanParams4(_params, data);
+        const _fatal = params.fatal ?? fatal ?? true;
+        ctx.addIssue({ code: "custom", ...params, fatal: _fatal });
+      }
+      return;
+    });
+  return ZodAny4.create();
+}
+var late4 = {
+  object: ZodObject4.lazycreate
+};
+var ZodFirstPartyTypeKind4;
+(function(ZodFirstPartyTypeKind22) {
+  ZodFirstPartyTypeKind22["ZodString"] = "ZodString";
+  ZodFirstPartyTypeKind22["ZodNumber"] = "ZodNumber";
+  ZodFirstPartyTypeKind22["ZodNaN"] = "ZodNaN";
+  ZodFirstPartyTypeKind22["ZodBigInt"] = "ZodBigInt";
+  ZodFirstPartyTypeKind22["ZodBoolean"] = "ZodBoolean";
+  ZodFirstPartyTypeKind22["ZodDate"] = "ZodDate";
+  ZodFirstPartyTypeKind22["ZodSymbol"] = "ZodSymbol";
+  ZodFirstPartyTypeKind22["ZodUndefined"] = "ZodUndefined";
+  ZodFirstPartyTypeKind22["ZodNull"] = "ZodNull";
+  ZodFirstPartyTypeKind22["ZodAny"] = "ZodAny";
+  ZodFirstPartyTypeKind22["ZodUnknown"] = "ZodUnknown";
+  ZodFirstPartyTypeKind22["ZodNever"] = "ZodNever";
+  ZodFirstPartyTypeKind22["ZodVoid"] = "ZodVoid";
+  ZodFirstPartyTypeKind22["ZodArray"] = "ZodArray";
+  ZodFirstPartyTypeKind22["ZodObject"] = "ZodObject";
+  ZodFirstPartyTypeKind22["ZodUnion"] = "ZodUnion";
+  ZodFirstPartyTypeKind22["ZodDiscriminatedUnion"] = "ZodDiscriminatedUnion";
+  ZodFirstPartyTypeKind22["ZodIntersection"] = "ZodIntersection";
+  ZodFirstPartyTypeKind22["ZodTuple"] = "ZodTuple";
+  ZodFirstPartyTypeKind22["ZodRecord"] = "ZodRecord";
+  ZodFirstPartyTypeKind22["ZodMap"] = "ZodMap";
+  ZodFirstPartyTypeKind22["ZodSet"] = "ZodSet";
+  ZodFirstPartyTypeKind22["ZodFunction"] = "ZodFunction";
+  ZodFirstPartyTypeKind22["ZodLazy"] = "ZodLazy";
+  ZodFirstPartyTypeKind22["ZodLiteral"] = "ZodLiteral";
+  ZodFirstPartyTypeKind22["ZodEnum"] = "ZodEnum";
+  ZodFirstPartyTypeKind22["ZodEffects"] = "ZodEffects";
+  ZodFirstPartyTypeKind22["ZodNativeEnum"] = "ZodNativeEnum";
+  ZodFirstPartyTypeKind22["ZodOptional"] = "ZodOptional";
+  ZodFirstPartyTypeKind22["ZodNullable"] = "ZodNullable";
+  ZodFirstPartyTypeKind22["ZodDefault"] = "ZodDefault";
+  ZodFirstPartyTypeKind22["ZodCatch"] = "ZodCatch";
+  ZodFirstPartyTypeKind22["ZodPromise"] = "ZodPromise";
+  ZodFirstPartyTypeKind22["ZodBranded"] = "ZodBranded";
+  ZodFirstPartyTypeKind22["ZodPipeline"] = "ZodPipeline";
+  ZodFirstPartyTypeKind22["ZodReadonly"] = "ZodReadonly";
+})(ZodFirstPartyTypeKind4 || (ZodFirstPartyTypeKind4 = {}));
+var instanceOfType4 = (cls, params = {
+  message: `Input not instance of ${cls.name}`
+}) => custom4((data) => data instanceof cls, params);
+var stringType4 = ZodString4.create;
+var numberType4 = ZodNumber4.create;
+var nanType4 = ZodNaN4.create;
+var bigIntType4 = ZodBigInt4.create;
+var booleanType4 = ZodBoolean4.create;
+var dateType4 = ZodDate4.create;
+var symbolType4 = ZodSymbol4.create;
+var undefinedType4 = ZodUndefined4.create;
+var nullType4 = ZodNull4.create;
+var anyType4 = ZodAny4.create;
+var unknownType4 = ZodUnknown4.create;
+var neverType4 = ZodNever4.create;
+var voidType4 = ZodVoid4.create;
+var arrayType4 = ZodArray4.create;
+var objectType4 = ZodObject4.create;
+var strictObjectType4 = ZodObject4.strictCreate;
+var unionType4 = ZodUnion4.create;
+var discriminatedUnionType4 = ZodDiscriminatedUnion4.create;
+var intersectionType4 = ZodIntersection4.create;
+var tupleType4 = ZodTuple4.create;
+var recordType4 = ZodRecord4.create;
+var mapType4 = ZodMap4.create;
+var setType4 = ZodSet4.create;
+var functionType4 = ZodFunction4.create;
+var lazyType4 = ZodLazy4.create;
+var literalType4 = ZodLiteral4.create;
+var enumType4 = ZodEnum4.create;
+var nativeEnumType4 = ZodNativeEnum4.create;
+var promiseType4 = ZodPromise4.create;
+var effectsType4 = ZodEffects4.create;
+var optionalType4 = ZodOptional4.create;
+var nullableType4 = ZodNullable4.create;
+var preprocessType4 = ZodEffects4.createWithPreprocess;
+var pipelineType4 = ZodPipeline4.create;
+var ostring4 = () => stringType4().optional();
+var onumber4 = () => numberType4().optional();
+var oboolean4 = () => booleanType4().optional();
+var coerce7 = {
+  string: ((arg) => ZodString4.create({ ...arg, coerce: true })),
+  number: ((arg) => ZodNumber4.create({ ...arg, coerce: true })),
+  boolean: ((arg) => ZodBoolean4.create({
+    ...arg,
+    coerce: true
+  })),
+  bigint: ((arg) => ZodBigInt4.create({ ...arg, coerce: true })),
+  date: ((arg) => ZodDate4.create({ ...arg, coerce: true }))
+};
+var NEVER4 = INVALID4;
+var empty5 = new Uint8Array(0);
+function equals7(aa, bb) {
+  if (aa === bb) {
+    return true;
+  }
+  if (aa.byteLength !== bb.byteLength) {
+    return false;
+  }
+  for (let ii = 0; ii < aa.byteLength; ii++) {
+    if (aa[ii] !== bb[ii]) {
+      return false;
+    }
+  }
+  return true;
+}
+function coerce23(o) {
+  if (o instanceof Uint8Array && o.constructor.name === "Uint8Array") {
+    return o;
+  }
+  if (o instanceof ArrayBuffer) {
+    return new Uint8Array(o);
+  }
+  if (ArrayBuffer.isView(o)) {
+    return new Uint8Array(o.buffer, o.byteOffset, o.byteLength);
+  }
+  throw new Error("Unknown type, must be binary type");
+}
+function base5(ALPHABET, name) {
+  if (ALPHABET.length >= 255) {
+    throw new TypeError("Alphabet too long");
+  }
+  var BASE_MAP = new Uint8Array(256);
+  for (var j = 0; j < BASE_MAP.length; j++) {
+    BASE_MAP[j] = 255;
+  }
+  for (var i = 0; i < ALPHABET.length; i++) {
+    var x = ALPHABET.charAt(i);
+    var xc = x.charCodeAt(0);
+    if (BASE_MAP[xc] !== 255) {
+      throw new TypeError(x + " is ambiguous");
+    }
+    BASE_MAP[xc] = i;
+  }
+  var BASE = ALPHABET.length;
+  var LEADER = ALPHABET.charAt(0);
+  var FACTOR = Math.log(BASE) / Math.log(256);
+  var iFACTOR = Math.log(256) / Math.log(BASE);
+  function encode322(source) {
+    if (source instanceof Uint8Array)
+      ;
+    else if (ArrayBuffer.isView(source)) {
+      source = new Uint8Array(source.buffer, source.byteOffset, source.byteLength);
+    } else if (Array.isArray(source)) {
+      source = Uint8Array.from(source);
+    }
+    if (!(source instanceof Uint8Array)) {
+      throw new TypeError("Expected Uint8Array");
+    }
+    if (source.length === 0) {
+      return "";
+    }
+    var zeroes = 0;
+    var length222 = 0;
+    var pbegin = 0;
+    var pend = source.length;
+    while (pbegin !== pend && source[pbegin] === 0) {
+      pbegin++;
+      zeroes++;
+    }
+    var size = (pend - pbegin) * iFACTOR + 1 >>> 0;
+    var b58 = new Uint8Array(size);
+    while (pbegin !== pend) {
+      var carry = source[pbegin];
+      var i2 = 0;
+      for (var it1 = size - 1; (carry !== 0 || i2 < length222) && it1 !== -1; it1--, i2++) {
+        carry += 256 * b58[it1] >>> 0;
+        b58[it1] = carry % BASE >>> 0;
+        carry = carry / BASE >>> 0;
+      }
+      if (carry !== 0) {
+        throw new Error("Non-zero carry");
+      }
+      length222 = i2;
+      pbegin++;
+    }
+    var it2 = size - length222;
+    while (it2 !== size && b58[it2] === 0) {
+      it2++;
+    }
+    var str = LEADER.repeat(zeroes);
+    for (; it2 < size; ++it2) {
+      str += ALPHABET.charAt(b58[it2]);
+    }
+    return str;
+  }
+  function decodeUnsafe(source) {
+    if (typeof source !== "string") {
+      throw new TypeError("Expected String");
+    }
+    if (source.length === 0) {
+      return new Uint8Array();
+    }
+    var psz = 0;
+    if (source[psz] === " ") {
+      return;
+    }
+    var zeroes = 0;
+    var length222 = 0;
+    while (source[psz] === LEADER) {
+      zeroes++;
+      psz++;
+    }
+    var size = (source.length - psz) * FACTOR + 1 >>> 0;
+    var b256 = new Uint8Array(size);
+    while (source[psz]) {
+      var carry = BASE_MAP[source.charCodeAt(psz)];
+      if (carry === 255) {
+        return;
+      }
+      var i2 = 0;
+      for (var it3 = size - 1; (carry !== 0 || i2 < length222) && it3 !== -1; it3--, i2++) {
+        carry += BASE * b256[it3] >>> 0;
+        b256[it3] = carry % 256 >>> 0;
+        carry = carry / 256 >>> 0;
+      }
+      if (carry !== 0) {
+        throw new Error("Non-zero carry");
+      }
+      length222 = i2;
+      psz++;
+    }
+    if (source[psz] === " ") {
+      return;
+    }
+    var it4 = size - length222;
+    while (it4 !== size && b256[it4] === 0) {
+      it4++;
+    }
+    var vch = new Uint8Array(zeroes + (size - it4));
+    var j2 = zeroes;
+    while (it4 !== size) {
+      vch[j2++] = b256[it4++];
+    }
+    return vch;
+  }
+  function decode522(string) {
+    var buffer = decodeUnsafe(string);
+    if (buffer) {
+      return buffer;
+    }
+    throw new Error(`Non-${name} character`);
+  }
+  return {
+    encode: encode322,
+    decodeUnsafe,
+    decode: decode522
+  };
+}
+var src5 = base5;
+var _brrp__multiformats_scope_baseX5 = src5;
+var base_x_default5 = _brrp__multiformats_scope_baseX5;
+var Encoder5 = class {
+  name;
+  prefix;
+  baseEncode;
+  constructor(name, prefix, baseEncode) {
+    this.name = name;
+    this.prefix = prefix;
+    this.baseEncode = baseEncode;
+  }
+  encode(bytes) {
+    if (bytes instanceof Uint8Array) {
+      return `${this.prefix}${this.baseEncode(bytes)}`;
+    } else {
+      throw Error("Unknown type, must be binary type");
+    }
+  }
+};
+var Decoder5 = class {
+  name;
+  prefix;
+  baseDecode;
+  prefixCodePoint;
+  constructor(name, prefix, baseDecode) {
+    this.name = name;
+    this.prefix = prefix;
+    const prefixCodePoint = prefix.codePointAt(0);
+    if (prefixCodePoint === void 0) {
+      throw new Error("Invalid prefix character");
+    }
+    this.prefixCodePoint = prefixCodePoint;
+    this.baseDecode = baseDecode;
+  }
+  decode(text2) {
+    if (typeof text2 === "string") {
+      if (text2.codePointAt(0) !== this.prefixCodePoint) {
+        throw Error(`Unable to decode multibase string ${JSON.stringify(text2)}, ${this.name} decoder only supports inputs prefixed with ${this.prefix}`);
+      }
+      return this.baseDecode(text2.slice(this.prefix.length));
+    } else {
+      throw Error("Can only multibase decode strings");
+    }
+  }
+  or(decoder) {
+    return or5(this, decoder);
+  }
+};
+var ComposedDecoder5 = class {
+  decoders;
+  constructor(decoders) {
+    this.decoders = decoders;
+  }
+  or(decoder) {
+    return or5(this, decoder);
+  }
+  decode(input) {
+    const prefix = input[0];
+    const decoder = this.decoders[prefix];
+    if (decoder != null) {
+      return decoder.decode(input);
+    } else {
+      throw RangeError(`Unable to decode multibase string ${JSON.stringify(input)}, only inputs prefixed with ${Object.keys(this.decoders)} are supported`);
+    }
+  }
+};
+function or5(left, right) {
+  return new ComposedDecoder5({
+    ...left.decoders ?? { [left.prefix]: left },
+    ...right.decoders ?? { [right.prefix]: right }
+  });
+}
+var Codec5 = class {
+  name;
+  prefix;
+  baseEncode;
+  baseDecode;
+  encoder;
+  decoder;
+  constructor(name, prefix, baseEncode, baseDecode) {
+    this.name = name;
+    this.prefix = prefix;
+    this.baseEncode = baseEncode;
+    this.baseDecode = baseDecode;
+    this.encoder = new Encoder5(name, prefix, baseEncode);
+    this.decoder = new Decoder5(name, prefix, baseDecode);
+  }
+  encode(input) {
+    return this.encoder.encode(input);
+  }
+  decode(input) {
+    return this.decoder.decode(input);
+  }
+};
+function from5({ name, prefix, encode: encode322, decode: decode522 }) {
+  return new Codec5(name, prefix, encode322, decode522);
+}
+function baseX5({ name, prefix, alphabet }) {
+  const { encode: encode322, decode: decode522 } = base_x_default5(alphabet, name);
+  return from5({
+    prefix,
+    name,
+    encode: encode322,
+    decode: (text2) => coerce23(decode522(text2))
+  });
+}
+function decode11(string, alphabetIdx, bitsPerChar, name) {
+  let end = string.length;
+  while (string[end - 1] === "=") {
+    --end;
+  }
+  const out = new Uint8Array(end * bitsPerChar / 8 | 0);
+  let bits = 0;
+  let buffer = 0;
+  let written = 0;
+  for (let i = 0; i < end; ++i) {
+    const value4 = alphabetIdx[string[i]];
+    if (value4 === void 0) {
+      throw new SyntaxError(`Non-${name} character`);
+    }
+    buffer = buffer << bitsPerChar | value4;
+    bits += bitsPerChar;
+    if (bits >= 8) {
+      bits -= 8;
+      out[written++] = 255 & buffer >> bits;
+    }
+  }
+  if (bits >= bitsPerChar || (255 & buffer << 8 - bits) !== 0) {
+    throw new SyntaxError("Unexpected end of data");
+  }
+  return out;
+}
+function encode7(data, alphabet, bitsPerChar) {
+  const pad = alphabet[alphabet.length - 1] === "=";
+  const mask = (1 << bitsPerChar) - 1;
+  let out = "";
+  let bits = 0;
+  let buffer = 0;
+  for (let i = 0; i < data.length; ++i) {
+    buffer = buffer << 8 | data[i];
+    bits += 8;
+    while (bits > bitsPerChar) {
+      bits -= bitsPerChar;
+      out += alphabet[mask & buffer >> bits];
+    }
+  }
+  if (bits !== 0) {
+    out += alphabet[mask & buffer << bitsPerChar - bits];
+  }
+  if (pad) {
+    while ((out.length * bitsPerChar & 7) !== 0) {
+      out += "=";
+    }
+  }
+  return out;
+}
+function createAlphabetIdx5(alphabet) {
+  const alphabetIdx = {};
+  for (let i = 0; i < alphabet.length; ++i) {
+    alphabetIdx[alphabet[i]] = i;
+  }
+  return alphabetIdx;
+}
+function rfc46485({ name, prefix, bitsPerChar, alphabet }) {
+  const alphabetIdx = createAlphabetIdx5(alphabet);
+  return from5({
+    prefix,
+    name,
+    encode(input) {
+      return encode7(input, alphabet, bitsPerChar);
+    },
+    decode(input) {
+      return decode11(input, alphabetIdx, bitsPerChar, name);
+    }
+  });
+}
+var base325 = rfc46485({
+  prefix: "b",
+  name: "base32",
+  alphabet: "abcdefghijklmnopqrstuvwxyz234567",
+  bitsPerChar: 5
+});
+var base32upper5 = rfc46485({
+  prefix: "B",
+  name: "base32upper",
+  alphabet: "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567",
+  bitsPerChar: 5
+});
+var base32pad5 = rfc46485({
+  prefix: "c",
+  name: "base32pad",
+  alphabet: "abcdefghijklmnopqrstuvwxyz234567=",
+  bitsPerChar: 5
+});
+var base32padupper5 = rfc46485({
+  prefix: "C",
+  name: "base32padupper",
+  alphabet: "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567=",
+  bitsPerChar: 5
+});
+var base32hex5 = rfc46485({
+  prefix: "v",
+  name: "base32hex",
+  alphabet: "0123456789abcdefghijklmnopqrstuv",
+  bitsPerChar: 5
+});
+var base32hexupper5 = rfc46485({
+  prefix: "V",
+  name: "base32hexupper",
+  alphabet: "0123456789ABCDEFGHIJKLMNOPQRSTUV",
+  bitsPerChar: 5
+});
+var base32hexpad5 = rfc46485({
+  prefix: "t",
+  name: "base32hexpad",
+  alphabet: "0123456789abcdefghijklmnopqrstuv=",
+  bitsPerChar: 5
+});
+var base32hexpadupper5 = rfc46485({
+  prefix: "T",
+  name: "base32hexpadupper",
+  alphabet: "0123456789ABCDEFGHIJKLMNOPQRSTUV=",
+  bitsPerChar: 5
+});
+var base32z5 = rfc46485({
+  prefix: "h",
+  name: "base32z",
+  alphabet: "ybndrfg8ejkmcpqxot1uwisza345h769",
+  bitsPerChar: 5
+});
+var base365 = baseX5({
+  prefix: "k",
+  name: "base36",
+  alphabet: "0123456789abcdefghijklmnopqrstuvwxyz"
+});
+var base36upper5 = baseX5({
+  prefix: "K",
+  name: "base36upper",
+  alphabet: "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+});
+var base58btc5 = baseX5({
+  name: "base58btc",
+  prefix: "z",
+  alphabet: "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
+});
+var base58flickr5 = baseX5({
+  name: "base58flickr",
+  prefix: "Z",
+  alphabet: "123456789abcdefghijkmnopqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ"
+});
+var encode_15 = encode24;
+var MSB5 = 128;
+var REST5 = 127;
+var MSBALL5 = ~REST5;
+var INT5 = Math.pow(2, 31);
+function encode24(num, out, offset) {
+  out = out || [];
+  offset = offset || 0;
+  var oldOffset = offset;
+  while (num >= INT5) {
+    out[offset++] = num & 255 | MSB5;
+    num /= 128;
+  }
+  while (num & MSBALL5) {
+    out[offset++] = num & 255 | MSB5;
+    num >>>= 7;
+  }
+  out[offset] = num | 0;
+  encode24.bytes = offset - oldOffset + 1;
+  return out;
+}
+var decode24 = read6;
+var MSB$15 = 128;
+var REST$15 = 127;
+function read6(buf, offset) {
+  var res = 0, offset = offset || 0, shift = 0, counter = offset, b, l = buf.length;
+  do {
+    if (counter >= l) {
+      read6.bytes = 0;
+      throw new RangeError("Could not decode varint");
+    }
+    b = buf[counter++];
+    res += shift < 28 ? (b & REST$15) << shift : (b & REST$15) * Math.pow(2, shift);
+    shift += 7;
+  } while (b >= MSB$15);
+  read6.bytes = counter - offset;
+  return res;
+}
+var N15 = Math.pow(2, 7);
+var N25 = Math.pow(2, 14);
+var N35 = Math.pow(2, 21);
+var N45 = Math.pow(2, 28);
+var N55 = Math.pow(2, 35);
+var N65 = Math.pow(2, 42);
+var N75 = Math.pow(2, 49);
+var N85 = Math.pow(2, 56);
+var N95 = Math.pow(2, 63);
+var length5 = function(value4) {
+  return value4 < N15 ? 1 : value4 < N25 ? 2 : value4 < N35 ? 3 : value4 < N45 ? 4 : value4 < N55 ? 5 : value4 < N65 ? 6 : value4 < N75 ? 7 : value4 < N85 ? 8 : value4 < N95 ? 9 : 10;
+};
+var varint5 = {
+  encode: encode_15,
+  decode: decode24,
+  encodingLength: length5
+};
+var _brrp_varint5 = varint5;
+var varint_default5 = _brrp_varint5;
+function decode34(data, offset = 0) {
+  const code22 = varint_default5.decode(data, offset);
+  return [code22, varint_default5.decode.bytes];
+}
+function encodeTo5(int, target, offset = 0) {
+  varint_default5.encode(int, target, offset);
+  return target;
+}
+function encodingLength5(int) {
+  return varint_default5.encodingLength(int);
+}
+function create5(code22, digest3) {
+  const size = digest3.byteLength;
+  const sizeOffset = encodingLength5(code22);
+  const digestOffset = sizeOffset + encodingLength5(size);
+  const bytes = new Uint8Array(digestOffset + size);
+  encodeTo5(code22, bytes, 0);
+  encodeTo5(size, bytes, sizeOffset);
+  bytes.set(digest3, digestOffset);
+  return new Digest5(code22, size, digest3, bytes);
+}
+function decode44(multihash) {
+  const bytes = coerce23(multihash);
+  const [code22, sizeOffset] = decode34(bytes);
+  const [size, digestOffset] = decode34(bytes.subarray(sizeOffset));
+  const digest3 = bytes.subarray(sizeOffset + digestOffset);
+  if (digest3.byteLength !== size) {
+    throw new Error("Incorrect length");
+  }
+  return new Digest5(code22, size, digest3, bytes);
+}
+function equals24(a, b) {
+  if (a === b) {
+    return true;
+  } else {
+    const data = b;
+    return a.code === data.code && a.size === data.size && data.bytes instanceof Uint8Array && equals7(a.bytes, data.bytes);
+  }
+}
+var Digest5 = class {
+  code;
+  size;
+  digest;
+  bytes;
+  /**
+   * Creates a multihash digest.
+   */
+  constructor(code22, size, digest3, bytes) {
+    this.code = code22;
+    this.size = size;
+    this.digest = digest3;
+    this.bytes = bytes;
+  }
+};
+function format5(link5, base222) {
+  const { bytes, version } = link5;
+  switch (version) {
+    case 0:
+      return toStringV05(bytes, baseCache5(link5), base222 ?? base58btc5.encoder);
+    default:
+      return toStringV15(bytes, baseCache5(link5), base222 ?? base325.encoder);
+  }
+}
+var cache5 = /* @__PURE__ */ new WeakMap();
+function baseCache5(cid2) {
+  const baseCache222 = cache5.get(cid2);
+  if (baseCache222 == null) {
+    const baseCache32 = /* @__PURE__ */ new Map();
+    cache5.set(cid2, baseCache32);
+    return baseCache32;
+  }
+  return baseCache222;
+}
+var CID7 = class _CID4 {
+  code;
+  version;
+  multihash;
+  bytes;
+  "/";
+  /**
+   * @param version - Version of the CID
+   * @param code - Code of the codec content is encoded in, see https://github.com/multiformats/multicodec/blob/master/table.csv
+   * @param multihash - (Multi)hash of the of the content.
+   */
+  constructor(version, code22, multihash, bytes) {
+    this.code = code22;
+    this.version = version;
+    this.multihash = multihash;
+    this.bytes = bytes;
+    this["/"] = bytes;
+  }
+  /**
+   * Signalling `cid.asCID === cid` has been replaced with `cid['/'] === cid.bytes`
+   * please either use `CID.asCID(cid)` or switch to new signalling mechanism
+   *
+   * @deprecated
+   */
+  get asCID() {
+    return this;
+  }
+  // ArrayBufferView
+  get byteOffset() {
+    return this.bytes.byteOffset;
+  }
+  // ArrayBufferView
+  get byteLength() {
+    return this.bytes.byteLength;
+  }
+  toV0() {
+    switch (this.version) {
+      case 0: {
+        return this;
+      }
+      case 1: {
+        const { code: code22, multihash } = this;
+        if (code22 !== DAG_PB_CODE5) {
+          throw new Error("Cannot convert a non dag-pb CID to CIDv0");
+        }
+        if (multihash.code !== SHA_256_CODE5) {
+          throw new Error("Cannot convert non sha2-256 multihash CID to CIDv0");
+        }
+        return _CID4.createV0(multihash);
+      }
+      default: {
+        throw Error(`Can not convert CID version ${this.version} to version 0. This is a bug please report`);
+      }
+    }
+  }
+  toV1() {
+    switch (this.version) {
+      case 0: {
+        const { code: code22, digest: digest3 } = this.multihash;
+        const multihash = create5(code22, digest3);
+        return _CID4.createV1(this.code, multihash);
+      }
+      case 1: {
+        return this;
+      }
+      default: {
+        throw Error(`Can not convert CID version ${this.version} to version 1. This is a bug please report`);
+      }
+    }
+  }
+  equals(other) {
+    return _CID4.equals(this, other);
+  }
+  static equals(self, other) {
+    const unknown = other;
+    return unknown != null && self.code === unknown.code && self.version === unknown.version && equals24(self.multihash, unknown.multihash);
+  }
+  toString(base222) {
+    return format5(this, base222);
+  }
+  toJSON() {
+    return { "/": format5(this) };
+  }
+  link() {
+    return this;
+  }
+  [Symbol.toStringTag] = "CID";
+  // Legacy
+  [/* @__PURE__ */ Symbol.for("nodejs.util.inspect.custom")]() {
+    return `CID(${this.toString()})`;
+  }
+  /**
+   * Takes any input `value` and returns a `CID` instance if it was
+   * a `CID` otherwise returns `null`. If `value` is instanceof `CID`
+   * it will return value back. If `value` is not instance of this CID
+   * class, but is compatible CID it will return new instance of this
+   * `CID` class. Otherwise returns null.
+   *
+   * This allows two different incompatible versions of CID library to
+   * co-exist and interop as long as binary interface is compatible.
+   */
+  static asCID(input) {
+    if (input == null) {
+      return null;
+    }
+    const value4 = input;
+    if (value4 instanceof _CID4) {
+      return value4;
+    } else if (value4["/"] != null && value4["/"] === value4.bytes || value4.asCID === value4) {
+      const { version, code: code22, multihash, bytes } = value4;
+      return new _CID4(version, code22, multihash, bytes ?? encodeCID5(version, code22, multihash.bytes));
+    } else if (value4[cidSymbol5] === true) {
+      const { version, multihash, code: code22 } = value4;
+      const digest3 = decode44(multihash);
+      return _CID4.create(version, code22, digest3);
+    } else {
+      return null;
+    }
+  }
+  /**
+   * @param version - Version of the CID
+   * @param code - Code of the codec content is encoded in, see https://github.com/multiformats/multicodec/blob/master/table.csv
+   * @param digest - (Multi)hash of the of the content.
+   */
+  static create(version, code22, digest3) {
+    if (typeof code22 !== "number") {
+      throw new Error("String codecs are no longer supported");
+    }
+    if (!(digest3.bytes instanceof Uint8Array)) {
+      throw new Error("Invalid digest");
+    }
+    switch (version) {
+      case 0: {
+        if (code22 !== DAG_PB_CODE5) {
+          throw new Error(`Version 0 CID must use dag-pb (code: ${DAG_PB_CODE5}) block encoding`);
+        } else {
+          return new _CID4(version, code22, digest3, digest3.bytes);
+        }
+      }
+      case 1: {
+        const bytes = encodeCID5(version, code22, digest3.bytes);
+        return new _CID4(version, code22, digest3, bytes);
+      }
+      default: {
+        throw new Error("Invalid version");
+      }
+    }
+  }
+  /**
+   * Simplified version of `create` for CIDv0.
+   */
+  static createV0(digest3) {
+    return _CID4.create(0, DAG_PB_CODE5, digest3);
+  }
+  /**
+   * Simplified version of `create` for CIDv1.
+   *
+   * @param code - Content encoding format code.
+   * @param digest - Multihash of the content.
+   */
+  static createV1(code22, digest3) {
+    return _CID4.create(1, code22, digest3);
+  }
+  /**
+   * Decoded a CID from its binary representation. The byte array must contain
+   * only the CID with no additional bytes.
+   *
+   * An error will be thrown if the bytes provided do not contain a valid
+   * binary representation of a CID.
+   */
+  static decode(bytes) {
+    const [cid2, remainder] = _CID4.decodeFirst(bytes);
+    if (remainder.length !== 0) {
+      throw new Error("Incorrect length");
+    }
+    return cid2;
+  }
+  /**
+   * Decoded a CID from its binary representation at the beginning of a byte
+   * array.
+   *
+   * Returns an array with the first element containing the CID and the second
+   * element containing the remainder of the original byte array. The remainder
+   * will be a zero-length byte array if the provided bytes only contained a
+   * binary CID representation.
+   */
+  static decodeFirst(bytes) {
+    const specs = _CID4.inspectBytes(bytes);
+    const prefixSize = specs.size - specs.multihashSize;
+    const multihashBytes = coerce23(bytes.subarray(prefixSize, prefixSize + specs.multihashSize));
+    if (multihashBytes.byteLength !== specs.multihashSize) {
+      throw new Error("Incorrect length");
+    }
+    const digestBytes = multihashBytes.subarray(specs.multihashSize - specs.digestSize);
+    const digest3 = new Digest5(specs.multihashCode, specs.digestSize, digestBytes, multihashBytes);
+    const cid2 = specs.version === 0 ? _CID4.createV0(digest3) : _CID4.createV1(specs.codec, digest3);
+    return [cid2, bytes.subarray(specs.size)];
+  }
+  /**
+   * Inspect the initial bytes of a CID to determine its properties.
+   *
+   * Involves decoding up to 4 varints. Typically this will require only 4 to 6
+   * bytes but for larger multicodec code values and larger multihash digest
+   * lengths these varints can be quite large. It is recommended that at least
+   * 10 bytes be made available in the `initialBytes` argument for a complete
+   * inspection.
+   */
+  static inspectBytes(initialBytes) {
+    let offset = 0;
+    const next = () => {
+      const [i, length222] = decode34(initialBytes.subarray(offset));
+      offset += length222;
+      return i;
+    };
+    let version = next();
+    let codec = DAG_PB_CODE5;
+    if (version === 18) {
+      version = 0;
+      offset = 0;
+    } else {
+      codec = next();
+    }
+    if (version !== 0 && version !== 1) {
+      throw new RangeError(`Invalid CID version ${version}`);
+    }
+    const prefixSize = offset;
+    const multihashCode = next();
+    const digestSize = next();
+    const size = offset + digestSize;
+    const multihashSize = size - prefixSize;
+    return { version, codec, multihashCode, digestSize, multihashSize, size };
+  }
+  /**
+   * Takes cid in a string representation and creates an instance. If `base`
+   * decoder is not provided will use a default from the configuration. It will
+   * throw an error if encoding of the CID is not compatible with supplied (or
+   * a default decoder).
+   */
+  static parse(source, base222) {
+    const [prefix, bytes] = parseCIDtoBytes5(source, base222);
+    const cid2 = _CID4.decode(bytes);
+    if (cid2.version === 0 && source[0] !== "Q") {
+      throw Error("Version 0 CID string must not include multibase prefix");
+    }
+    baseCache5(cid2).set(prefix, source);
+    return cid2;
+  }
+};
+function parseCIDtoBytes5(source, base222) {
+  switch (source[0]) {
+    // CIDv0 is parsed differently
+    case "Q": {
+      const decoder = base222 ?? base58btc5;
+      return [
+        base58btc5.prefix,
+        decoder.decode(`${base58btc5.prefix}${source}`)
+      ];
+    }
+    case base58btc5.prefix: {
+      const decoder = base222 ?? base58btc5;
+      return [base58btc5.prefix, decoder.decode(source)];
+    }
+    case base325.prefix: {
+      const decoder = base222 ?? base325;
+      return [base325.prefix, decoder.decode(source)];
+    }
+    case base365.prefix: {
+      const decoder = base222 ?? base365;
+      return [base365.prefix, decoder.decode(source)];
+    }
+    default: {
+      if (base222 == null) {
+        throw Error("To parse non base32, base36 or base58btc encoded CID multibase decoder must be provided");
+      }
+      return [source[0], base222.decode(source)];
+    }
+  }
+}
+function toStringV05(bytes, cache222, base222) {
+  const { prefix } = base222;
+  if (prefix !== base58btc5.prefix) {
+    throw Error(`Cannot string encode V0 in ${base222.name} encoding`);
+  }
+  const cid2 = cache222.get(prefix);
+  if (cid2 == null) {
+    const cid22 = base222.encode(bytes).slice(1);
+    cache222.set(prefix, cid22);
+    return cid22;
+  } else {
+    return cid2;
+  }
+}
+function toStringV15(bytes, cache222, base222) {
+  const { prefix } = base222;
+  const cid2 = cache222.get(prefix);
+  if (cid2 == null) {
+    const cid22 = base222.encode(bytes);
+    cache222.set(prefix, cid22);
+    return cid22;
+  } else {
+    return cid2;
+  }
+}
+var DAG_PB_CODE5 = 112;
+var SHA_256_CODE5 = 18;
+function encodeCID5(version, code22, multihash) {
+  const codeOffset = encodingLength5(version);
+  const hashOffset = codeOffset + encodingLength5(code22);
+  const bytes = new Uint8Array(hashOffset + multihash.byteLength);
+  encodeTo5(version, bytes, 0);
+  encodeTo5(code22, bytes, codeOffset);
+  bytes.set(multihash, hashOffset);
+  return bytes;
+}
+var cidSymbol5 = /* @__PURE__ */ Symbol.for("@ipld/js-cid/CID");
+var code5 = 85;
+var SHA256_CODE5 = 18;
+function isCanonicalRawCid5(cidString) {
+  let cid2;
+  try {
+    cid2 = CID7.parse(cidString);
+  } catch {
+    return false;
+  }
+  return cid2.version === 1 && cid2.code === code5 && cid2.multihash.code === SHA256_CODE5 && // `toString` of a parsed CID gives back the string it was parsed from; a fresh CID is encoded again.
+  CID7.createV1(cid2.code, cid2.multihash).toString() === cidString;
+}
+var base645 = rfc46485({
+  prefix: "m",
+  name: "base64",
+  alphabet: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/",
+  bitsPerChar: 6
+});
+var base64pad5 = rfc46485({
+  prefix: "M",
+  name: "base64pad",
+  alphabet: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=",
+  bitsPerChar: 6
+});
+var base64url5 = rfc46485({
+  prefix: "u",
+  name: "base64url",
+  alphabet: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_",
+  bitsPerChar: 6
+});
+var base64urlpad5 = rfc46485({
+  prefix: "U",
+  name: "base64urlpad",
+  alphabet: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_=",
+  bitsPerChar: 6
+});
+function fromBase64Url5(text2) {
+  const bytes = base64url5.baseDecode(text2);
+  if (base64url5.baseEncode(bytes) !== text2) {
+    throw new TypeError("non-canonical base64url input");
+  }
+  return bytes;
+}
+function utf8Bytes5(text2) {
+  return new TextEncoder().encode(text2);
+}
+var ED25519_MULTICODEC_PREFIX5 = Uint8Array.of(237, 1);
+var PUBLIC_KEY_LENGTH3 = 32;
+function ed25519PublicKeyFromDidKey3(did2) {
+  if (!did2.startsWith("did:key:")) {
+    throw new TypeError(`not a did:key: ${did2}`);
+  }
+  const multibase = did2.slice("did:key:".length);
+  const prefixed = base58btc5.decode(multibase);
+  if (prefixed.length !== ED25519_MULTICODEC_PREFIX5.length + PUBLIC_KEY_LENGTH3 || prefixed[0] !== ED25519_MULTICODEC_PREFIX5[0] || prefixed[1] !== ED25519_MULTICODEC_PREFIX5[1]) {
+    throw new TypeError("did:key does not encode an ed25519 public key");
+  }
+  return prefixed.slice(ED25519_MULTICODEC_PREFIX5.length);
+}
+function decodeBase64UrlOrNull4(value4) {
+  try {
+    return fromBase64Url5(value4);
+  } catch {
+    return null;
+  }
+}
+var base64UrlString4 = () => external_exports4.string().refine((value4) => decodeBase64UrlOrNull4(value4) !== null, {
+  message: "expected strictly-decodable unpadded base64url"
+});
+function isCanonicalHttpsOrigin4(value4) {
+  let url;
+  try {
+    url = new URL(value4);
+  } catch {
+    return false;
+  }
+  return url.protocol === "https:" && url.origin === value4;
+}
+var sessionJwkCommonFields4 = {
+  alg: external_exports4.string().min(1).optional(),
+  use: external_exports4.string().min(1).optional(),
+  key_ops: external_exports4.array(external_exports4.string().min(1)).optional(),
+  kid: external_exports4.string().min(1).optional(),
+  ext: external_exports4.boolean().optional()
+};
+var okpPrivateJwkSchema4 = external_exports4.object({
+  kty: external_exports4.literal("OKP"),
+  crv: external_exports4.string().min(1),
+  x: base64UrlString4(),
+  d: base64UrlString4(),
+  ...sessionJwkCommonFields4
+}).strict();
+var ecPrivateJwkSchema4 = external_exports4.object({
+  kty: external_exports4.literal("EC"),
+  crv: external_exports4.string().min(1),
+  x: base64UrlString4(),
+  y: base64UrlString4(),
+  d: base64UrlString4(),
+  ...sessionJwkCommonFields4
+}).strict();
+var sessionJwkSchema4 = external_exports4.discriminatedUnion("kty", [
+  okpPrivateJwkSchema4,
+  ecPrivateJwkSchema4
+]);
+var policyTargetSchema4 = external_exports4.object({
+  kind: external_exports4.literal("policy"),
+  policyCid: external_exports4.string().min(1),
+  /** Canonical policy bytes, base64url-encoded (bytes are not JSON). */
+  policyBytes: base64UrlString4()
+}).strict();
+var bearerKeyTargetSchema4 = external_exports4.object({
+  kind: external_exports4.literal("bearerKey"),
+  sessionJwk: sessionJwkSchema4
+}).strict();
+var recipientDidTargetSchema4 = external_exports4.object({
+  kind: external_exports4.literal("recipientDid"),
+  did: external_exports4.string().regex(/^did:[a-z0-9]+:.+$/, "expected a DID")
+}).strict();
+var authorizationTargetSchema4 = external_exports4.discriminatedUnion("kind", [
+  policyTargetSchema4,
+  bearerKeyTargetSchema4,
+  recipientDidTargetSchema4
+]);
+function isCanonicalResourcePath4(value4) {
+  if (value4.length === 0) return false;
+  if (/[\u0000-\u001f\u007f\\]/.test(value4)) return false;
+  if (/%2f|%5c|%2e/i.test(value4)) return false;
+  return value4.split("/").every((segment) => segment.length > 0 && segment !== "." && segment !== "..");
+}
+function isCanonicalPathSegment4(value4) {
+  return isCanonicalResourcePath4(value4) && !value4.includes("/");
+}
+var resourceSelectorSchema4 = external_exports4.object({
+  kind: external_exports4.union([external_exports4.literal("exact"), external_exports4.literal("prefix")]),
+  path: external_exports4.string().min(1)
+}).strict().superRefine((selector, ctx) => {
+  const body = selector.kind === "prefix" && selector.path.endsWith("/") ? selector.path.slice(0, -1) : selector.path;
+  if (!isCanonicalResourcePath4(body)) {
+    ctx.addIssue({
+      code: external_exports4.ZodIssueCode.custom,
+      path: ["path"],
+      message: "expected a canonical resource path (non-empty segments, no . or .. segments, no //, no backslash, no %2f/%5c/%2e, no control chars)"
+    });
+  }
+});
+var targetSchema4 = external_exports4.object({
+  origin: external_exports4.string().refine(isCanonicalHttpsOrigin4, {
+    message: "expected a canonical https origin (https://host[:port], nothing else)"
+  }),
+  nodeAudience: external_exports4.string().min(1),
+  spaceId: external_exports4.string().refine(isCanonicalPathSegment4, {
+    message: "expected a single canonical path segment (spaceId joins the resource URI; separators/traversal would alias grants)"
+  }),
+  resource: resourceSelectorSchema4
+}).strict();
+var displaySchema4 = external_exports4.object({
+  senderName: external_exports4.string().optional(),
+  filename: external_exports4.string().optional(),
+  recipientHint: external_exports4.string().optional(),
+  /**
+   * Presentation preference only (viewer spec §1): may narrow, never widen;
+   * capabilities always win.
+   */
+  mode: external_exports4.union([external_exports4.literal("document"), external_exports4.literal("source"), external_exports4.literal("folder")]).optional()
+}).strict();
+var contentPointerSchema4 = external_exports4.object({
+  cid: external_exports4.string().refine(isCanonicalRawCid5, {
+    message: "expected a canonical CIDv1 raw sha2-256 base32 CID"
+  }),
+  key: external_exports4.string().refine((value4) => decodeBase64UrlOrNull4(value4)?.length === 32, {
+    message: "expected base64url decoding to exactly 32 bytes"
+  })
+}).strict();
+var signatureSchema4 = external_exports4.object({
+  /** did:key of the sender's ed25519 signing key. */
+  signerDid: external_exports4.string().regex(/^did:key:z[1-9A-HJ-NP-Za-km-z]+$/, "expected a did:key"),
+  algorithm: external_exports4.literal("Ed25519"),
+  /** base64url-encoded ed25519 signature over the JCS bytes of all other fields. */
+  value: external_exports4.string().refine((value4) => decodeBase64UrlOrNull4(value4)?.length === 64, {
+    message: "expected base64url decoding to exactly 64 bytes"
+  })
+}).strict();
+var unsignedShareEnvelopeSchema4 = external_exports4.object({
+  version: external_exports4.literal(1),
+  shareId: external_exports4.string().min(1),
+  /** Full signed delegation chain, opaque serialized form. */
+  delegation: external_exports4.string().min(1),
+  authorizationTarget: authorizationTargetSchema4,
+  target: targetSchema4,
+  display: displaySchema4,
+  /** ISO 8601 UTC datetime. Advisory here; enforcement is the delegation's. */
+  expiry: external_exports4.string().datetime(),
+  /** Bearer-slice sealed-content pointer (see contentPointerSchema). */
+  content: contentPointerSchema4.optional()
+}).strict();
+var shareEnvelopeSchema4 = unsignedShareEnvelopeSchema4.extend({ signature: signatureSchema4 }).strict();
+var recipientMatcherSchema4 = external_exports4.discriminatedUnion("kind", [
+  external_exports4.object({ kind: external_exports4.literal("exactEmail"), value: external_exports4.string().min(3).regex(/^[^@\s]+@[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*$/) }).strict(),
+  external_exports4.object({ kind: external_exports4.literal("emailDomain"), value: external_exports4.string().regex(/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*$/) }).strict(),
+  external_exports4.object({ kind: external_exports4.literal("recipientDid"), value: external_exports4.string().regex(/^did:[a-z0-9]+:.+$/) }).strict(),
+  external_exports4.object({ kind: external_exports4.literal("policyDigest"), value: external_exports4.string().regex(/^[A-Za-z0-9_-]{43}$/) }).strict(),
+  external_exports4.object({ kind: external_exports4.literal("bearer") }).strict()
+]);
+var shareActionSchema4 = external_exports4.union([external_exports4.literal("read"), external_exports4.literal("list"), external_exports4.literal("edit")]);
+var kvContentSourceSchema4 = external_exports4.object({
+  kind: external_exports4.literal("kv"),
+  space: external_exports4.string().min(1),
+  path: external_exports4.string().min(1),
+  action: external_exports4.literal("tinycloud.kv/get")
+}).strict();
+var sqlContentSourceSchema4 = external_exports4.object({
+  kind: external_exports4.literal("sql"),
+  space: external_exports4.string().min(1),
+  database: external_exports4.string().min(1),
+  path: external_exports4.string().min(1),
+  statement: external_exports4.string().min(1),
+  arguments: external_exports4.record(external_exports4.string(), external_exports4.number().int()),
+  argumentsDigest: external_exports4.string().regex(/^[A-Za-z0-9_-]{43}$/),
+  action: external_exports4.literal("tinycloud.sql/read")
+}).strict();
+var contentSourceSchema4 = external_exports4.discriminatedUnion("kind", [kvContentSourceSchema4, sqlContentSourceSchema4]);
+var v2TargetSchema4 = external_exports4.object({
+  origin: external_exports4.string().refine(isCanonicalHttpsOrigin4, { message: "expected a canonical https origin" }),
+  nodeAudience: external_exports4.string().min(1),
+  spaceId: external_exports4.string().refine(isCanonicalPathSegment4, { message: "expected a canonical space id" })
+}).strict();
+var shareDecryptionSchema4 = external_exports4.object({
+  networkId: external_exports4.string().min(1),
+  action: external_exports4.literal("tinycloud.encryption/decrypt")
+}).strict();
+var ownerAuthoritySchema4 = external_exports4.object({
+  registrationCid: external_exports4.string().min(1),
+  shareCid: external_exports4.string().min(1),
+  envelopeCid: external_exports4.string().min(1),
+  enforcementDelegation: external_exports4.record(external_exports4.string(), external_exports4.unknown()),
+  outerEnvelope: external_exports4.record(external_exports4.string(), external_exports4.unknown()),
+  /** Node-signed registration evidence; required by trusted policy adapters. */
+  registrationReceipt: external_exports4.object({
+    registration: external_exports4.record(external_exports4.string(), external_exports4.unknown()),
+    proof: external_exports4.record(external_exports4.string(), external_exports4.unknown())
+  }).strict().optional()
+}).strict();
+var contentMetadataSchema4 = external_exports4.object({
+  mediaType: external_exports4.string().min(1).max(128).optional(),
+  byteLength: external_exports4.number().int().nonnegative().max(100 * 1024 * 1024).optional(),
+  filename: external_exports4.string().min(1).max(255).optional(),
+  encoding: external_exports4.literal("utf-8").optional(),
+  /** Encrypted presentation discriminator. The fixed entry point is index.html. */
+  artifact: external_exports4.literal("html").optional()
+}).strict();
+var deliveryEmailSchema4 = external_exports4.string().email();
+var unsignedShareEnvelopeV2BaseSchema4 = external_exports4.object({
+  version: external_exports4.literal(2),
+  shareId: external_exports4.string().min(1),
+  recipientMatcher: recipientMatcherSchema4,
+  deliveryEmail: deliveryEmailSchema4.optional(),
+  actions: external_exports4.array(shareActionSchema4).min(1).max(3),
+  resource: resourceSelectorSchema4,
+  target: v2TargetSchema4,
+  delegationCid: external_exports4.string().min(1),
+  authorityMaterialHandle: external_exports4.string().min(1),
+  authorityMaterialDigest: external_exports4.string().regex(/^[A-Za-z0-9_-]{43}$/),
+  decryption: shareDecryptionSchema4.optional(),
+  contentSource: contentSourceSchema4,
+  contentSourceDigest: external_exports4.string().regex(/^[A-Za-z0-9_-]{43}$/),
+  authorizationTarget: authorizationTargetSchema4,
+  display: displaySchema4,
+  expiry: external_exports4.string().datetime(),
+  encrypted: external_exports4.boolean(),
+  content: contentPointerSchema4.optional(),
+  metadata: contentMetadataSchema4,
+  ownerAuthority: ownerAuthoritySchema4.optional()
+}).strict();
+function validateV2Invariants4(value4, ctx) {
+  const actions = [...value4.actions];
+  if (new Set(actions).size !== actions.length) ctx.addIssue({ code: external_exports4.ZodIssueCode.custom, path: ["actions"], message: "actions must be unique" });
+  if (actions.some((action, index) => action !== ["read", "list", "edit"].filter((candidate) => actions.includes(candidate))[index])) ctx.addIssue({ code: external_exports4.ZodIssueCode.custom, path: ["actions"], message: "actions must be canonically ordered" });
+  if (!value4.encrypted && value4.recipientMatcher.kind !== "policyDigest") ctx.addIssue({ code: external_exports4.ZodIssueCode.custom, path: ["recipientMatcher"], message: "safe plaintext must carry only a matcher digest" });
+  if (!value4.encrypted && value4.authorizationTarget.kind !== "policy") ctx.addIssue({ code: external_exports4.ZodIssueCode.custom, path: ["encrypted"], message: "unencrypted content requires a policy target" });
+  if (!value4.encrypted && value4.content !== void 0) ctx.addIssue({ code: external_exports4.ZodIssueCode.custom, path: ["content"], message: "policy-only plaintext cannot carry content" });
+  if (value4.encrypted && (value4.metadata.mediaType === void 0 || value4.metadata.filename === void 0 || value4.metadata.byteLength === void 0)) ctx.addIssue({ code: external_exports4.ZodIssueCode.custom, path: ["metadata"], message: "encrypted shares must describe their content" });
+  if (!value4.encrypted && Object.keys(value4.metadata).length !== 0) ctx.addIssue({ code: external_exports4.ZodIssueCode.custom, path: ["metadata"], message: "policy-only plaintext cannot describe content" });
+  if (!value4.encrypted && value4.metadata.encoding !== void 0) ctx.addIssue({ code: external_exports4.ZodIssueCode.custom, path: ["metadata", "encoding"], message: "policy-only plaintext cannot carry content encoding" });
+  if (value4.metadata.artifact === "html" && (!value4.encrypted || value4.resource.kind !== "prefix" || !value4.actions.includes("read") || !value4.actions.includes("list"))) ctx.addIssue({ code: external_exports4.ZodIssueCode.custom, path: ["metadata", "artifact"], message: "html artifacts require an encrypted readable prefix" });
+  if (!value4.encrypted && (value4.display.senderName !== void 0 || value4.display.filename !== void 0 || value4.display.recipientHint !== void 0)) ctx.addIssue({ code: external_exports4.ZodIssueCode.custom, path: ["display"], message: "policy-only plaintext cannot carry display metadata" });
+  if (!value4.encrypted && value4.deliveryEmail !== void 0) ctx.addIssue({ code: external_exports4.ZodIssueCode.custom, path: ["deliveryEmail"], message: "policy-only plaintext cannot carry delivery metadata" });
+  if (value4.recipientMatcher.kind === "exactEmail" && value4.deliveryEmail !== void 0 && value4.deliveryEmail !== value4.recipientMatcher.value) ctx.addIssue({ code: external_exports4.ZodIssueCode.custom, path: ["deliveryEmail"], message: "delivery email must match the exact matcher" });
+  if (value4.recipientMatcher.kind === "emailDomain" && value4.deliveryEmail !== void 0 && value4.deliveryEmail.toLowerCase().endsWith(`@${value4.recipientMatcher.value}`) === false) ctx.addIssue({ code: external_exports4.ZodIssueCode.custom, path: ["deliveryEmail"], message: "delivery email must belong to the matcher domain" });
+  if (value4.contentSource.kind === "kv" && value4.contentSource.action !== "tinycloud.kv/get") ctx.addIssue({ code: external_exports4.ZodIssueCode.custom, path: ["contentSource"], message: "source action mismatch" });
+  if (value4.contentSource.kind === "sql" && value4.contentSource.action !== "tinycloud.sql/read") ctx.addIssue({ code: external_exports4.ZodIssueCode.custom, path: ["contentSource"], message: "source action mismatch" });
+}
+var unsignedShareEnvelopeV2Schema4 = unsignedShareEnvelopeV2BaseSchema4.superRefine(validateV2Invariants4);
+var shareEnvelopeV2Schema4 = unsignedShareEnvelopeV2BaseSchema4.extend({ signature: signatureSchema4 }).strict().superRefine(validateV2Invariants4);
+var unifiedResourceSchema4 = external_exports4.string().refine((value4) => {
+  const marker = value4.indexOf("/kv/");
+  if (marker < 1) return false;
+  const space = value4.slice(0, marker);
+  const legacy = space.startsWith("tinycloud://");
+  if (legacy ? /[:/?#%]/.test(space.slice("tinycloud://".length)) : !space.startsWith("tinycloud:") || /[/?#%]/.test(space)) return false;
+  const path = value4.slice(marker + 4);
+  return !path.startsWith("/") && !path.endsWith("/") && !path.includes("//") && path.split("/").every((segment) => segment.length > 0 && segment !== "." && segment !== "..");
+}, { message: "expected canonical TinyCloud KV resource" });
+var unifiedEncryptionNetworkSchema4 = external_exports4.string().refine((value4) => {
+  if (!value4.startsWith("urn:tinycloud:encryption:")) return false;
+  const rest = value4.slice("urn:tinycloud:encryption:".length);
+  const separator = rest.lastIndexOf(":");
+  const owner = separator < 0 ? "" : rest.slice(0, separator);
+  const network = separator < 0 ? "" : rest.slice(separator + 1);
+  return owner.startsWith("did:") && owner.length > 4 && network.length > 0 && !/[:/%?#\s]/.test(network);
+}, { message: "expected canonical TinyCloud encryption network" });
+var unifiedEncryptionResourceSchema4 = external_exports4.string().refine((value4) => {
+  const prefix = "urn:tinycloud:encryption:";
+  if (!value4.startsWith(prefix)) return false;
+  const match = /^(did:.+):([^/:?#\s]+)(?:\/(.+))?$/.exec(value4.slice(prefix.length));
+  if (match === null) return false;
+  const path = match[3];
+  return path === void 0 || path.split("/").every(
+    (segment) => segment.length > 0 && segment !== "." && segment !== ".." && !/[\\:%?#\s]/.test(segment)
+  );
+}, { message: "expected a canonical TinyCloud encryption resource" });
+var unifiedEncryptionKeyPathSchema4 = external_exports4.string().regex(/^share\/[^/]+$/).refine(
+  (value4) => {
+    const segment = value4.slice("share/".length);
+    return segment !== "." && segment !== ".." && !/[\\:%?#\s]/.test(segment);
+  },
+  { message: "expected an exact share key path" }
+);
+var unifiedKvCapabilitySchema4 = external_exports4.object({
+  kind: external_exports4.literal("kv"),
+  resource: unifiedResourceSchema4,
+  selector: external_exports4.union([external_exports4.literal("exact"), external_exports4.literal("prefix")]),
+  actions: external_exports4.array(external_exports4.union([
+    external_exports4.literal("tinycloud.kv/get"),
+    external_exports4.literal("tinycloud.kv/list"),
+    external_exports4.literal("tinycloud.kv/metadata"),
+    external_exports4.literal("tinycloud.kv/put")
+  ])).min(1)
+}).strict();
+var unifiedEncryptionCapabilitySchema4 = external_exports4.object({
+  kind: external_exports4.literal("encryption"),
+  resource: unifiedEncryptionResourceSchema4,
+  action: external_exports4.literal("tinycloud.encryption/decrypt")
+}).strict();
+var unifiedCapabilitySchema4 = external_exports4.union([unifiedKvCapabilitySchema4, unifiedEncryptionCapabilitySchema4]);
+var unifiedContentSourceSchema4 = external_exports4.object({
+  shareId: external_exports4.string().min(1),
+  kvResource: unifiedResourceSchema4,
+  selector: external_exports4.union([external_exports4.literal("exact"), external_exports4.literal("prefix")]),
+  encryptionNetwork: unifiedEncryptionNetworkSchema4,
+  encryptionKeyPath: unifiedEncryptionKeyPathSchema4.optional(),
+  encryptedSymmetricKeyDigestHex: external_exports4.string().regex(/^[0-9a-f]{64}$/),
+  keyVersion: external_exports4.number().int().positive(),
+  mode: external_exports4.union([external_exports4.literal("mutable"), external_exports4.literal("immutable")]),
+  initialCiphertextDigestHex: external_exports4.string().regex(/^[0-9a-f]{64}$/).optional()
+}).strict();
+var unifiedPolicyV1Schema4 = external_exports4.object({
+  schema: external_exports4.literal("xyz.tinycloud.policy/policy/v1"),
+  policyId: external_exports4.string().regex(/^pol_[a-z2-7]+$/),
+  ownerDid: external_exports4.string().min(1),
+  createdAt: external_exports4.string().datetime({ offset: true }),
+  expiresAt: external_exports4.string().datetime({ offset: true }).optional(),
+  contentSource: unifiedContentSourceSchema4,
+  capabilityCeiling: external_exports4.array(unifiedCapabilitySchema4).min(2),
+  signature: external_exports4.object({ suite: external_exports4.string().min(1), signerDid: external_exports4.string().min(1), value: external_exports4.string().min(1) }).strict()
+}).strict();
+var policyCredentialRequirementV1Schema4 = external_exports4.object({
+  type: external_exports4.literal("TinyCloudPolicyCredentialRequirement"),
+  version: external_exports4.literal(1),
+  requirementDigest: external_exports4.string().regex(/^[A-Za-z0-9_-]{43}$/),
+  descriptorDigest: external_exports4.string().regex(/^[A-Za-z0-9_-]{43}$/),
+  issuerDid: external_exports4.string().min(1),
+  issuerKid: external_exports4.string().min(1),
+  profile: external_exports4.object({ id: external_exports4.string().min(1), version: external_exports4.literal(1) }).strict(),
+  credentialType: external_exports4.object({ id: external_exports4.string().min(1), version: external_exports4.literal(1) }).strict()
+}).strict();
+var unifiedPolicyV2Schema4 = external_exports4.object({
+  schema: external_exports4.literal("xyz.tinycloud.policy/policy/v2"),
+  policyId: external_exports4.string().regex(/^pol_[a-z2-7]+$/),
+  ownerDid: external_exports4.string().min(1),
+  createdAt: external_exports4.string().datetime({ offset: true }),
+  expiresAt: external_exports4.string().datetime({ offset: true }).optional(),
+  contentSource: unifiedContentSourceSchema4,
+  capabilityCeiling: external_exports4.array(unifiedCapabilitySchema4).min(2),
+  credentialRequirement: policyCredentialRequirementV1Schema4,
+  signature: external_exports4.object({ suite: external_exports4.literal("Ed25519"), signerDid: external_exports4.string().min(1), value: external_exports4.string().min(1) }).strict()
+}).strict();
+var unifiedPolicySchema4 = external_exports4.discriminatedUnion("schema", [
+  unifiedPolicyV1Schema4,
+  unifiedPolicyV2Schema4
+]);
+var unifiedRootSchema4 = external_exports4.object({
+  cid: external_exports4.string().min(1),
+  authorization: external_exports4.string().regex(/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/),
+  role: external_exports4.union([external_exports4.literal("policy-authority"), external_exports4.literal("policy-enforcement")])
+}).strict();
+var attestedEnforcerBindingV2Schema4 = external_exports4.object({
+  schema: external_exports4.literal("xyz.tinycloud.policy/attested-enforcer/v2"),
+  enforcerDid: external_exports4.string().regex(/^did:key:z[1-9A-HJ-NP-Za-km-z]+$/),
+  nodeAudience: external_exports4.string().min(1),
+  attestationBindingDigestHex: external_exports4.string().regex(/^[0-9a-f]{64}$/),
+  issuedAt: external_exports4.string().datetime({ offset: true }),
+  expiresAt: external_exports4.string().datetime({ offset: true }),
+  signature: external_exports4.object({ suite: external_exports4.literal("Ed25519"), signerDid: external_exports4.string().min(1), value: base64UrlString4() }).strict()
+}).strict();
+var v3TargetSchema4 = external_exports4.object({
+  origin: external_exports4.string().refine(isCanonicalHttpsOrigin4, { message: "expected a canonical https origin" }),
+  nodeAudience: external_exports4.string().min(1),
+  spaceId: external_exports4.string().refine(isCanonicalPathSegment4, { message: "expected a canonical space id" })
+}).strict();
+var ARTIFACT_ID_PATTERN4 = /^[a-z0-9][a-z0-9_-]{2,62}$/;
+var artifactPinSchema4 = external_exports4.object({
+  v: external_exports4.literal(1),
+  artifactId: external_exports4.string().regex(ARTIFACT_ID_PATTERN4),
+  version: external_exports4.number().int().min(1).max(Number.MAX_SAFE_INTEGER),
+  /** SHA-256 (lowercase hex) of the exact `manifest.json` bytes. The manifest itself stays an owner-side record. */
+  manifestSha256: external_exports4.string().regex(/^[0-9a-f]{64}$/),
+  /** An addressed share reads one exact file, so exactly one entry: the stored bytes (ciphertext) it will fetch. */
+  files: external_exports4.array(external_exports4.object({
+    path: external_exports4.string().min(1).max(255),
+    sha256: external_exports4.string().regex(/^[0-9a-f]{64}$/),
+    bytes: external_exports4.number().int().nonnegative()
+  }).strict()).length(1)
+}).strict();
+var unsignedShareEnvelopeV3BaseSchema4 = external_exports4.object({
+  version: external_exports4.literal(3),
+  shareId: external_exports4.string().min(1),
+  recipientMatcher: recipientMatcherSchema4,
+  deliveryEmail: deliveryEmailSchema4.optional(),
+  actions: external_exports4.array(shareActionSchema4).min(1).max(3),
+  resource: resourceSelectorSchema4,
+  target: v3TargetSchema4,
+  policy: unifiedPolicySchema4,
+  policyCid: external_exports4.string().min(1),
+  policyRoot: unifiedRootSchema4,
+  enforcementRoot: unifiedRootSchema4,
+  attestedEnforcerBinding: attestedEnforcerBindingV2Schema4,
+  contentSource: unifiedContentSourceSchema4,
+  contentSourceDigestHex: external_exports4.string().regex(/^[0-9a-f]{64}$/),
+  encryptionNetwork: unifiedEncryptionNetworkSchema4,
+  expiry: external_exports4.string().datetime({ offset: true }),
+  display: displaySchema4,
+  encrypted: external_exports4.literal(true),
+  metadata: contentMetadataSchema4,
+  /**
+   * TC-1428: an owner-signed statement that this share reads one write-once artifact version. Additive: absent on
+   * every other share, and covered by the envelope signature because the signature spans the whole unsigned object.
+   * The shape is checked here; its binding to the content source is `verifyArtifactShare` in share-sdk.
+   */
+  artifactPin: artifactPinSchema4.optional()
+}).strict();
+function validateV3Invariants4(value4, ctx) {
+  const actions = [...value4.actions];
+  if (new Set(actions).size !== actions.length || actions.some((action, index) => action !== ["read", "list", "edit"].filter((candidate) => actions.includes(candidate))[index])) {
+    ctx.addIssue({ code: external_exports4.ZodIssueCode.custom, path: ["actions"], message: "actions must be unique and canonically ordered" });
+  }
+  if (value4.policyRoot.role !== "policy-authority" || value4.enforcementRoot.role !== "policy-enforcement") {
+    ctx.addIssue({ code: external_exports4.ZodIssueCode.custom, path: ["policyRoot", "role"], message: "root roles are fixed" });
+  }
+  if (value4.policyCid.length === 0 || value4.policyCid === value4.policyRoot.cid || value4.policyCid === value4.enforcementRoot.cid) {
+    ctx.addIssue({ code: external_exports4.ZodIssueCode.custom, path: ["policyCid"], message: "policy CID must be distinct from both roots" });
+  }
+  if (value4.contentSource.encryptionNetwork !== value4.encryptionNetwork) {
+    ctx.addIssue({ code: external_exports4.ZodIssueCode.custom, path: ["encryptionNetwork"], message: "encryption network is not bound to the source" });
+  }
+  if (value4.attestedEnforcerBinding.nodeAudience !== value4.target.nodeAudience || value4.attestedEnforcerBinding.signature.signerDid !== value4.attestedEnforcerBinding.nodeAudience || Date.parse(value4.attestedEnforcerBinding.expiresAt) < Date.parse(value4.expiry)) {
+    ctx.addIssue({ code: external_exports4.ZodIssueCode.custom, path: ["attestedEnforcerBinding"], message: "enforcer binding does not cover the target and share lifetime" });
+  }
+  const encryptionKeyPath = value4.contentSource.encryptionKeyPath;
+  if (encryptionKeyPath !== void 0 && encryptionKeyPath !== `share/${value4.contentSource.shareId}`) {
+    ctx.addIssue({ code: external_exports4.ZodIssueCode.custom, path: ["contentSource", "encryptionKeyPath"], message: "share key path must name this share" });
+  }
+  if (value4.policy.contentSource.shareId !== value4.contentSource.shareId || value4.policy.contentSource.kvResource !== value4.contentSource.kvResource || value4.policy.contentSource.selector !== value4.contentSource.selector || value4.policy.contentSource.encryptionNetwork !== value4.encryptionNetwork || value4.policy.contentSource.encryptionKeyPath !== encryptionKeyPath || value4.policy.contentSource.encryptedSymmetricKeyDigestHex !== value4.contentSource.encryptedSymmetricKeyDigestHex || value4.policy.contentSource.keyVersion !== value4.contentSource.keyVersion || value4.policy.contentSource.mode !== value4.contentSource.mode || value4.policy.contentSource.initialCiphertextDigestHex !== value4.contentSource.initialCiphertextDigestHex) {
+    ctx.addIssue({ code: external_exports4.ZodIssueCode.custom, path: ["contentSource"], message: "content source is not bound to policy" });
+  }
+  if (value4.policy.signature.suite !== "Ed25519" || value4.policy.signature.signerDid !== value4.policy.ownerDid) {
+    ctx.addIssue({ code: external_exports4.ZodIssueCode.custom, path: ["policy", "signature"], message: "policy must be signed by its owner" });
+  }
+  const kvCapabilities = value4.policy.capabilityCeiling.filter((capability) => capability.kind === "kv");
+  const expectedEncryptionResource = encryptionKeyPath === void 0 ? value4.encryptionNetwork : `${value4.encryptionNetwork}/${encryptionKeyPath}`;
+  const decryptCapabilities = value4.policy.capabilityCeiling.filter((capability) => capability.kind === "encryption" && capability.resource === expectedEncryptionResource && capability.action === "tinycloud.encryption/decrypt");
+  if (value4.policy.capabilityCeiling.length !== 2 || kvCapabilities.length !== 1 || decryptCapabilities.length !== 1 || kvCapabilities[0]?.resource !== value4.contentSource.kvResource || kvCapabilities[0]?.selector !== value4.contentSource.selector) {
+    ctx.addIssue({ code: external_exports4.ZodIssueCode.custom, path: ["policy", "capabilityCeiling"], message: "policy ceiling must contain the exact decrypt resource" });
+  }
+}
+var unsignedShareEnvelopeV3Schema4 = unsignedShareEnvelopeV3BaseSchema4.superRefine(validateV3Invariants4);
+var shareEnvelopeV3Schema4 = unsignedShareEnvelopeV3BaseSchema4.extend({ signature: signatureSchema4 }).strict().superRefine(validateV3Invariants4);
+var ENVELOPE_AAD_LABEL5 = "tinycloud-share-envelope-v1";
+var AAD5 = utf8Bytes5(ENVELOPE_AAD_LABEL5);
+var POLICY_ROOT_MAX_LIFETIME_SECONDS4 = 31 * 24 * 60 * 60;
+var MAX_LINK_LENGTH = 12 * 1024;
+var MAX_FULL_LINK_LENGTH = Math.ceil(MAX_LINK_REQUEST_BYTES * 4 / 3) + 512;
+var KEK_SALT = new TextEncoder().encode("xyz.tinycloud.share/agent-kek/v1");
+var MAX_AGENT_RECORD_BYTES = 32 * 1024;
+var encoder2 = new TextEncoder();
+var REGISTERED_AT_SKEW_MS = 24 * 60 * 60 * 1e3;
+var FUTURE_SKEW_MS = 5 * 60 * 1e3;
+var empty23 = new Uint8Array(0);
+function equals33(aa, bb) {
+  if (aa === bb) {
+    return true;
+  }
+  if (aa.byteLength !== bb.byteLength) {
+    return false;
+  }
+  for (let ii = 0; ii < aa.byteLength; ii++) {
+    if (aa[ii] !== bb[ii]) {
+      return false;
+    }
+  }
+  return true;
+}
+function coerce33(o) {
+  if (o instanceof Uint8Array && o.constructor.name === "Uint8Array") {
+    return o;
+  }
+  if (o instanceof ArrayBuffer) {
+    return new Uint8Array(o);
+  }
+  if (ArrayBuffer.isView(o)) {
+    return new Uint8Array(o.buffer, o.byteOffset, o.byteLength);
+  }
+  throw new Error("Unknown type, must be binary type");
+}
+function base23(ALPHABET, name) {
+  if (ALPHABET.length >= 255) {
+    throw new TypeError("Alphabet too long");
+  }
+  var BASE_MAP = new Uint8Array(256);
+  for (var j = 0; j < BASE_MAP.length; j++) {
+    BASE_MAP[j] = 255;
+  }
+  for (var i = 0; i < ALPHABET.length; i++) {
+    var x = ALPHABET.charAt(i);
+    var xc = x.charCodeAt(0);
+    if (BASE_MAP[xc] !== 255) {
+      throw new TypeError(x + " is ambiguous");
+    }
+    BASE_MAP[xc] = i;
+  }
+  var BASE = ALPHABET.length;
+  var LEADER = ALPHABET.charAt(0);
+  var FACTOR = Math.log(BASE) / Math.log(256);
+  var iFACTOR = Math.log(256) / Math.log(BASE);
+  function encode52(source) {
+    if (source instanceof Uint8Array)
+      ;
+    else if (ArrayBuffer.isView(source)) {
+      source = new Uint8Array(source.buffer, source.byteOffset, source.byteLength);
+    } else if (Array.isArray(source)) {
+      source = Uint8Array.from(source);
+    }
+    if (!(source instanceof Uint8Array)) {
+      throw new TypeError("Expected Uint8Array");
+    }
+    if (source.length === 0) {
+      return "";
+    }
+    var zeroes = 0;
+    var length32 = 0;
+    var pbegin = 0;
+    var pend = source.length;
+    while (pbegin !== pend && source[pbegin] === 0) {
+      pbegin++;
+      zeroes++;
+    }
+    var size = (pend - pbegin) * iFACTOR + 1 >>> 0;
+    var b58 = new Uint8Array(size);
+    while (pbegin !== pend) {
+      var carry = source[pbegin];
+      var i2 = 0;
+      for (var it1 = size - 1; (carry !== 0 || i2 < length32) && it1 !== -1; it1--, i2++) {
+        carry += 256 * b58[it1] >>> 0;
+        b58[it1] = carry % BASE >>> 0;
+        carry = carry / BASE >>> 0;
+      }
+      if (carry !== 0) {
+        throw new Error("Non-zero carry");
+      }
+      length32 = i2;
+      pbegin++;
+    }
+    var it2 = size - length32;
+    while (it2 !== size && b58[it2] === 0) {
+      it2++;
+    }
+    var str = LEADER.repeat(zeroes);
+    for (; it2 < size; ++it2) {
+      str += ALPHABET.charAt(b58[it2]);
+    }
+    return str;
+  }
+  function decodeUnsafe(source) {
+    if (typeof source !== "string") {
+      throw new TypeError("Expected String");
+    }
+    if (source.length === 0) {
+      return new Uint8Array();
+    }
+    var psz = 0;
+    if (source[psz] === " ") {
+      return;
+    }
+    var zeroes = 0;
+    var length32 = 0;
+    while (source[psz] === LEADER) {
+      zeroes++;
+      psz++;
+    }
+    var size = (source.length - psz) * FACTOR + 1 >>> 0;
+    var b256 = new Uint8Array(size);
+    while (source[psz]) {
+      var carry = BASE_MAP[source.charCodeAt(psz)];
+      if (carry === 255) {
+        return;
+      }
+      var i2 = 0;
+      for (var it3 = size - 1; (carry !== 0 || i2 < length32) && it3 !== -1; it3--, i2++) {
+        carry += BASE * b256[it3] >>> 0;
+        b256[it3] = carry % 256 >>> 0;
+        carry = carry / 256 >>> 0;
+      }
+      if (carry !== 0) {
+        throw new Error("Non-zero carry");
+      }
+      length32 = i2;
+      psz++;
+    }
+    if (source[psz] === " ") {
+      return;
+    }
+    var it4 = size - length32;
+    while (it4 !== size && b256[it4] === 0) {
+      it4++;
+    }
+    var vch = new Uint8Array(zeroes + (size - it4));
+    var j2 = zeroes;
+    while (it4 !== size) {
+      vch[j2++] = b256[it4++];
+    }
+    return vch;
+  }
+  function decode102(string) {
+    var buffer = decodeUnsafe(string);
+    if (buffer) {
+      return buffer;
+    }
+    throw new Error(`Non-${name} character`);
+  }
+  return {
+    encode: encode52,
+    decodeUnsafe,
+    decode: decode102
+  };
+}
+var src23 = base23;
+var _brrp__multiformats_scope_baseX23 = src23;
+var base_x_default23 = _brrp__multiformats_scope_baseX23;
+var Encoder23 = class {
+  name;
+  prefix;
+  baseEncode;
+  constructor(name, prefix, baseEncode) {
+    this.name = name;
+    this.prefix = prefix;
+    this.baseEncode = baseEncode;
+  }
+  encode(bytes) {
+    if (bytes instanceof Uint8Array) {
+      return `${this.prefix}${this.baseEncode(bytes)}`;
+    } else {
+      throw Error("Unknown type, must be binary type");
+    }
+  }
+};
+var Decoder23 = class {
+  name;
+  prefix;
+  baseDecode;
+  prefixCodePoint;
+  constructor(name, prefix, baseDecode) {
+    this.name = name;
+    this.prefix = prefix;
+    const prefixCodePoint = prefix.codePointAt(0);
+    if (prefixCodePoint === void 0) {
+      throw new Error("Invalid prefix character");
+    }
+    this.prefixCodePoint = prefixCodePoint;
+    this.baseDecode = baseDecode;
+  }
+  decode(text2) {
+    if (typeof text2 === "string") {
+      if (text2.codePointAt(0) !== this.prefixCodePoint) {
+        throw Error(`Unable to decode multibase string ${JSON.stringify(text2)}, ${this.name} decoder only supports inputs prefixed with ${this.prefix}`);
+      }
+      return this.baseDecode(text2.slice(this.prefix.length));
+    } else {
+      throw Error("Can only multibase decode strings");
+    }
+  }
+  or(decoder) {
+    return or23(this, decoder);
+  }
+};
+var ComposedDecoder23 = class {
+  decoders;
+  constructor(decoders) {
+    this.decoders = decoders;
+  }
+  or(decoder) {
+    return or23(this, decoder);
+  }
+  decode(input) {
+    const prefix = input[0];
+    const decoder = this.decoders[prefix];
+    if (decoder != null) {
+      return decoder.decode(input);
+    } else {
+      throw RangeError(`Unable to decode multibase string ${JSON.stringify(input)}, only inputs prefixed with ${Object.keys(this.decoders)} are supported`);
+    }
+  }
+};
+function or23(left, right) {
+  return new ComposedDecoder23({
+    ...left.decoders ?? { [left.prefix]: left },
+    ...right.decoders ?? { [right.prefix]: right }
+  });
+}
+var Codec23 = class {
+  name;
+  prefix;
+  baseEncode;
+  baseDecode;
+  encoder;
+  decoder;
+  constructor(name, prefix, baseEncode, baseDecode) {
+    this.name = name;
+    this.prefix = prefix;
+    this.baseEncode = baseEncode;
+    this.baseDecode = baseDecode;
+    this.encoder = new Encoder23(name, prefix, baseEncode);
+    this.decoder = new Decoder23(name, prefix, baseDecode);
+  }
+  encode(input) {
+    return this.encoder.encode(input);
+  }
+  decode(input) {
+    return this.decoder.decode(input);
+  }
+};
+function from23({ name, prefix, encode: encode52, decode: decode102 }) {
+  return new Codec23(name, prefix, encode52, decode102);
+}
+function baseX23({ name, prefix, alphabet }) {
+  const { encode: encode52, decode: decode102 } = base_x_default23(alphabet, name);
+  return from23({
+    prefix,
+    name,
+    encode: encode52,
+    decode: (text2) => coerce33(decode102(text2))
+  });
+}
+function decode53(string, alphabetIdx, bitsPerChar, name) {
+  let end = string.length;
+  while (string[end - 1] === "=") {
+    --end;
+  }
+  const out = new Uint8Array(end * bitsPerChar / 8 | 0);
+  let bits = 0;
+  let buffer = 0;
+  let written = 0;
+  for (let i = 0; i < end; ++i) {
+    const value4 = alphabetIdx[string[i]];
+    if (value4 === void 0) {
+      throw new SyntaxError(`Non-${name} character`);
+    }
+    buffer = buffer << bitsPerChar | value4;
+    bits += bitsPerChar;
+    if (bits >= 8) {
+      bits -= 8;
+      out[written++] = 255 & buffer >> bits;
+    }
+  }
+  if (bits >= bitsPerChar || (255 & buffer << 8 - bits) !== 0) {
+    throw new SyntaxError("Unexpected end of data");
+  }
+  return out;
+}
+function encode33(data, alphabet, bitsPerChar) {
+  const pad = alphabet[alphabet.length - 1] === "=";
+  const mask = (1 << bitsPerChar) - 1;
+  let out = "";
+  let bits = 0;
+  let buffer = 0;
+  for (let i = 0; i < data.length; ++i) {
+    buffer = buffer << 8 | data[i];
+    bits += 8;
+    while (bits > bitsPerChar) {
+      bits -= bitsPerChar;
+      out += alphabet[mask & buffer >> bits];
+    }
+  }
+  if (bits !== 0) {
+    out += alphabet[mask & buffer << bitsPerChar - bits];
+  }
+  if (pad) {
+    while ((out.length * bitsPerChar & 7) !== 0) {
+      out += "=";
+    }
+  }
+  return out;
+}
+function createAlphabetIdx23(alphabet) {
+  const alphabetIdx = {};
+  for (let i = 0; i < alphabet.length; ++i) {
+    alphabetIdx[alphabet[i]] = i;
+  }
+  return alphabetIdx;
+}
+function rfc464823({ name, prefix, bitsPerChar, alphabet }) {
+  const alphabetIdx = createAlphabetIdx23(alphabet);
+  return from23({
+    prefix,
+    name,
+    encode(input) {
+      return encode33(input, alphabet, bitsPerChar);
+    },
+    decode(input) {
+      return decode53(input, alphabetIdx, bitsPerChar, name);
+    }
+  });
+}
+var base3223 = rfc464823({
+  prefix: "b",
+  name: "base32",
+  alphabet: "abcdefghijklmnopqrstuvwxyz234567",
+  bitsPerChar: 5
+});
+var base32upper23 = rfc464823({
+  prefix: "B",
+  name: "base32upper",
+  alphabet: "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567",
+  bitsPerChar: 5
+});
+var base32pad23 = rfc464823({
+  prefix: "c",
+  name: "base32pad",
+  alphabet: "abcdefghijklmnopqrstuvwxyz234567=",
+  bitsPerChar: 5
+});
+var base32padupper23 = rfc464823({
+  prefix: "C",
+  name: "base32padupper",
+  alphabet: "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567=",
+  bitsPerChar: 5
+});
+var base32hex23 = rfc464823({
+  prefix: "v",
+  name: "base32hex",
+  alphabet: "0123456789abcdefghijklmnopqrstuv",
+  bitsPerChar: 5
+});
+var base32hexupper23 = rfc464823({
+  prefix: "V",
+  name: "base32hexupper",
+  alphabet: "0123456789ABCDEFGHIJKLMNOPQRSTUV",
+  bitsPerChar: 5
+});
+var base32hexpad23 = rfc464823({
+  prefix: "t",
+  name: "base32hexpad",
+  alphabet: "0123456789abcdefghijklmnopqrstuv=",
+  bitsPerChar: 5
+});
+var base32hexpadupper23 = rfc464823({
+  prefix: "T",
+  name: "base32hexpadupper",
+  alphabet: "0123456789ABCDEFGHIJKLMNOPQRSTUV=",
+  bitsPerChar: 5
+});
+var base32z23 = rfc464823({
+  prefix: "h",
+  name: "base32z",
+  alphabet: "ybndrfg8ejkmcpqxot1uwisza345h769",
+  bitsPerChar: 5
+});
+var base3623 = baseX23({
+  prefix: "k",
+  name: "base36",
+  alphabet: "0123456789abcdefghijklmnopqrstuvwxyz"
+});
+var base36upper23 = baseX23({
+  prefix: "K",
+  name: "base36upper",
+  alphabet: "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+});
+var base58btc23 = baseX23({
+  name: "base58btc",
+  prefix: "z",
+  alphabet: "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
+});
+var base58flickr23 = baseX23({
+  name: "base58flickr",
+  prefix: "Z",
+  alphabet: "123456789abcdefghijkmnopqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ"
+});
+var encode_123 = encode43;
+var MSB23 = 128;
+var REST23 = 127;
+var MSBALL23 = ~REST23;
+var INT23 = Math.pow(2, 31);
+function encode43(num, out, offset) {
+  out = out || [];
+  offset = offset || 0;
+  var oldOffset = offset;
+  while (num >= INT23) {
+    out[offset++] = num & 255 | MSB23;
+    num /= 128;
+  }
+  while (num & MSBALL23) {
+    out[offset++] = num & 255 | MSB23;
+    num >>>= 7;
+  }
+  out[offset] = num | 0;
+  encode43.bytes = offset - oldOffset + 1;
+  return out;
+}
+var decode63 = read23;
+var MSB$123 = 128;
+var REST$123 = 127;
+function read23(buf, offset) {
+  var res = 0, offset = offset || 0, shift = 0, counter = offset, b, l = buf.length;
+  do {
+    if (counter >= l) {
+      read23.bytes = 0;
+      throw new RangeError("Could not decode varint");
+    }
+    b = buf[counter++];
+    res += shift < 28 ? (b & REST$123) << shift : (b & REST$123) * Math.pow(2, shift);
+    shift += 7;
+  } while (b >= MSB$123);
+  read23.bytes = counter - offset;
+  return res;
+}
+var N123 = Math.pow(2, 7);
+var N223 = Math.pow(2, 14);
+var N323 = Math.pow(2, 21);
+var N423 = Math.pow(2, 28);
+var N523 = Math.pow(2, 35);
+var N623 = Math.pow(2, 42);
+var N723 = Math.pow(2, 49);
+var N823 = Math.pow(2, 56);
+var N923 = Math.pow(2, 63);
+var length23 = function(value4) {
+  return value4 < N123 ? 1 : value4 < N223 ? 2 : value4 < N323 ? 3 : value4 < N423 ? 4 : value4 < N523 ? 5 : value4 < N623 ? 6 : value4 < N723 ? 7 : value4 < N823 ? 8 : value4 < N923 ? 9 : 10;
+};
+var varint23 = {
+  encode: encode_123,
+  decode: decode63,
+  encodingLength: length23
+};
+var _brrp_varint23 = varint23;
+var varint_default23 = _brrp_varint23;
+function decode73(data, offset = 0) {
+  const code32 = varint_default23.decode(data, offset);
+  return [code32, varint_default23.decode.bytes];
+}
+function encodeTo23(int, target, offset = 0) {
+  varint_default23.encode(int, target, offset);
+  return target;
+}
+function encodingLength23(int) {
+  return varint_default23.encodingLength(int);
+}
+function create23(code32, digest3) {
+  const size = digest3.byteLength;
+  const sizeOffset = encodingLength23(code32);
+  const digestOffset = sizeOffset + encodingLength23(size);
+  const bytes = new Uint8Array(digestOffset + size);
+  encodeTo23(code32, bytes, 0);
+  encodeTo23(size, bytes, sizeOffset);
+  bytes.set(digest3, digestOffset);
+  return new Digest23(code32, size, digest3, bytes);
+}
+function decode83(multihash) {
+  const bytes = coerce33(multihash);
+  const [code32, sizeOffset] = decode73(bytes);
+  const [size, digestOffset] = decode73(bytes.subarray(sizeOffset));
+  const digest3 = bytes.subarray(sizeOffset + digestOffset);
+  if (digest3.byteLength !== size) {
+    throw new Error("Incorrect length");
+  }
+  return new Digest23(code32, size, digest3, bytes);
+}
+function equals43(a, b) {
+  if (a === b) {
+    return true;
+  } else {
+    const data = b;
+    return a.code === data.code && a.size === data.size && data.bytes instanceof Uint8Array && equals33(a.bytes, data.bytes);
+  }
+}
+var Digest23 = class {
+  code;
+  size;
+  digest;
+  bytes;
+  /**
+   * Creates a multihash digest.
+   */
+  constructor(code32, size, digest3, bytes) {
+    this.code = code32;
+    this.size = size;
+    this.digest = digest3;
+    this.bytes = bytes;
+  }
+};
+function format23(link5, base33) {
+  const { bytes, version } = link5;
+  switch (version) {
+    case 0:
+      return toStringV023(bytes, baseCache23(link5), base33 ?? base58btc23.encoder);
+    default:
+      return toStringV123(bytes, baseCache23(link5), base33 ?? base3223.encoder);
+  }
+}
+var cache23 = /* @__PURE__ */ new WeakMap();
+function baseCache23(cid2) {
+  const baseCache32 = cache23.get(cid2);
+  if (baseCache32 == null) {
+    const baseCache42 = /* @__PURE__ */ new Map();
+    cache23.set(cid2, baseCache42);
+    return baseCache42;
+  }
+  return baseCache32;
+}
+var CID23 = class _CID23 {
+  code;
+  version;
+  multihash;
+  bytes;
+  "/";
+  /**
+   * @param version - Version of the CID
+   * @param code - Code of the codec content is encoded in, see https://github.com/multiformats/multicodec/blob/master/table.csv
+   * @param multihash - (Multi)hash of the of the content.
+   */
+  constructor(version, code32, multihash, bytes) {
+    this.code = code32;
+    this.version = version;
+    this.multihash = multihash;
+    this.bytes = bytes;
+    this["/"] = bytes;
+  }
+  /**
+   * Signalling `cid.asCID === cid` has been replaced with `cid['/'] === cid.bytes`
+   * please either use `CID.asCID(cid)` or switch to new signalling mechanism
+   *
+   * @deprecated
+   */
+  get asCID() {
+    return this;
+  }
+  // ArrayBufferView
+  get byteOffset() {
+    return this.bytes.byteOffset;
+  }
+  // ArrayBufferView
+  get byteLength() {
+    return this.bytes.byteLength;
+  }
+  toV0() {
+    switch (this.version) {
+      case 0: {
+        return this;
+      }
+      case 1: {
+        const { code: code32, multihash } = this;
+        if (code32 !== DAG_PB_CODE23) {
+          throw new Error("Cannot convert a non dag-pb CID to CIDv0");
+        }
+        if (multihash.code !== SHA_256_CODE23) {
+          throw new Error("Cannot convert non sha2-256 multihash CID to CIDv0");
+        }
+        return _CID23.createV0(multihash);
+      }
+      default: {
+        throw Error(`Can not convert CID version ${this.version} to version 0. This is a bug please report`);
+      }
+    }
+  }
+  toV1() {
+    switch (this.version) {
+      case 0: {
+        const { code: code32, digest: digest3 } = this.multihash;
+        const multihash = create23(code32, digest3);
+        return _CID23.createV1(this.code, multihash);
+      }
+      case 1: {
+        return this;
+      }
+      default: {
+        throw Error(`Can not convert CID version ${this.version} to version 1. This is a bug please report`);
+      }
+    }
+  }
+  equals(other) {
+    return _CID23.equals(this, other);
+  }
+  static equals(self, other) {
+    const unknown = other;
+    return unknown != null && self.code === unknown.code && self.version === unknown.version && equals43(self.multihash, unknown.multihash);
+  }
+  toString(base33) {
+    return format23(this, base33);
+  }
+  toJSON() {
+    return { "/": format23(this) };
+  }
+  link() {
+    return this;
+  }
+  [Symbol.toStringTag] = "CID";
+  // Legacy
+  [/* @__PURE__ */ Symbol.for("nodejs.util.inspect.custom")]() {
+    return `CID(${this.toString()})`;
+  }
+  /**
+   * Takes any input `value` and returns a `CID` instance if it was
+   * a `CID` otherwise returns `null`. If `value` is instanceof `CID`
+   * it will return value back. If `value` is not instance of this CID
+   * class, but is compatible CID it will return new instance of this
+   * `CID` class. Otherwise returns null.
+   *
+   * This allows two different incompatible versions of CID library to
+   * co-exist and interop as long as binary interface is compatible.
+   */
+  static asCID(input) {
+    if (input == null) {
+      return null;
+    }
+    const value4 = input;
+    if (value4 instanceof _CID23) {
+      return value4;
+    } else if (value4["/"] != null && value4["/"] === value4.bytes || value4.asCID === value4) {
+      const { version, code: code32, multihash, bytes } = value4;
+      return new _CID23(version, code32, multihash, bytes ?? encodeCID23(version, code32, multihash.bytes));
+    } else if (value4[cidSymbol23] === true) {
+      const { version, multihash, code: code32 } = value4;
+      const digest3 = decode83(multihash);
+      return _CID23.create(version, code32, digest3);
+    } else {
+      return null;
+    }
+  }
+  /**
+   * @param version - Version of the CID
+   * @param code - Code of the codec content is encoded in, see https://github.com/multiformats/multicodec/blob/master/table.csv
+   * @param digest - (Multi)hash of the of the content.
+   */
+  static create(version, code32, digest3) {
+    if (typeof code32 !== "number") {
+      throw new Error("String codecs are no longer supported");
+    }
+    if (!(digest3.bytes instanceof Uint8Array)) {
+      throw new Error("Invalid digest");
+    }
+    switch (version) {
+      case 0: {
+        if (code32 !== DAG_PB_CODE23) {
+          throw new Error(`Version 0 CID must use dag-pb (code: ${DAG_PB_CODE23}) block encoding`);
+        } else {
+          return new _CID23(version, code32, digest3, digest3.bytes);
+        }
+      }
+      case 1: {
+        const bytes = encodeCID23(version, code32, digest3.bytes);
+        return new _CID23(version, code32, digest3, bytes);
+      }
+      default: {
+        throw new Error("Invalid version");
+      }
+    }
+  }
+  /**
+   * Simplified version of `create` for CIDv0.
+   */
+  static createV0(digest3) {
+    return _CID23.create(0, DAG_PB_CODE23, digest3);
+  }
+  /**
+   * Simplified version of `create` for CIDv1.
+   *
+   * @param code - Content encoding format code.
+   * @param digest - Multihash of the content.
+   */
+  static createV1(code32, digest3) {
+    return _CID23.create(1, code32, digest3);
+  }
+  /**
+   * Decoded a CID from its binary representation. The byte array must contain
+   * only the CID with no additional bytes.
+   *
+   * An error will be thrown if the bytes provided do not contain a valid
+   * binary representation of a CID.
+   */
+  static decode(bytes) {
+    const [cid2, remainder] = _CID23.decodeFirst(bytes);
+    if (remainder.length !== 0) {
+      throw new Error("Incorrect length");
+    }
+    return cid2;
+  }
+  /**
+   * Decoded a CID from its binary representation at the beginning of a byte
+   * array.
+   *
+   * Returns an array with the first element containing the CID and the second
+   * element containing the remainder of the original byte array. The remainder
+   * will be a zero-length byte array if the provided bytes only contained a
+   * binary CID representation.
+   */
+  static decodeFirst(bytes) {
+    const specs = _CID23.inspectBytes(bytes);
+    const prefixSize = specs.size - specs.multihashSize;
+    const multihashBytes = coerce33(bytes.subarray(prefixSize, prefixSize + specs.multihashSize));
+    if (multihashBytes.byteLength !== specs.multihashSize) {
+      throw new Error("Incorrect length");
+    }
+    const digestBytes = multihashBytes.subarray(specs.multihashSize - specs.digestSize);
+    const digest3 = new Digest23(specs.multihashCode, specs.digestSize, digestBytes, multihashBytes);
+    const cid2 = specs.version === 0 ? _CID23.createV0(digest3) : _CID23.createV1(specs.codec, digest3);
+    return [cid2, bytes.subarray(specs.size)];
+  }
+  /**
+   * Inspect the initial bytes of a CID to determine its properties.
+   *
+   * Involves decoding up to 4 varints. Typically this will require only 4 to 6
+   * bytes but for larger multicodec code values and larger multihash digest
+   * lengths these varints can be quite large. It is recommended that at least
+   * 10 bytes be made available in the `initialBytes` argument for a complete
+   * inspection.
+   */
+  static inspectBytes(initialBytes) {
+    let offset = 0;
+    const next = () => {
+      const [i, length32] = decode73(initialBytes.subarray(offset));
+      offset += length32;
+      return i;
+    };
+    let version = next();
+    let codec = DAG_PB_CODE23;
+    if (version === 18) {
+      version = 0;
+      offset = 0;
+    } else {
+      codec = next();
+    }
+    if (version !== 0 && version !== 1) {
+      throw new RangeError(`Invalid CID version ${version}`);
+    }
+    const prefixSize = offset;
+    const multihashCode = next();
+    const digestSize = next();
+    const size = offset + digestSize;
+    const multihashSize = size - prefixSize;
+    return { version, codec, multihashCode, digestSize, multihashSize, size };
+  }
+  /**
+   * Takes cid in a string representation and creates an instance. If `base`
+   * decoder is not provided will use a default from the configuration. It will
+   * throw an error if encoding of the CID is not compatible with supplied (or
+   * a default decoder).
+   */
+  static parse(source, base33) {
+    const [prefix, bytes] = parseCIDtoBytes23(source, base33);
+    const cid2 = _CID23.decode(bytes);
+    if (cid2.version === 0 && source[0] !== "Q") {
+      throw Error("Version 0 CID string must not include multibase prefix");
+    }
+    baseCache23(cid2).set(prefix, source);
+    return cid2;
+  }
+};
+function parseCIDtoBytes23(source, base33) {
+  switch (source[0]) {
+    // CIDv0 is parsed differently
+    case "Q": {
+      const decoder = base33 ?? base58btc23;
+      return [
+        base58btc23.prefix,
+        decoder.decode(`${base58btc23.prefix}${source}`)
+      ];
+    }
+    case base58btc23.prefix: {
+      const decoder = base33 ?? base58btc23;
+      return [base58btc23.prefix, decoder.decode(source)];
+    }
+    case base3223.prefix: {
+      const decoder = base33 ?? base3223;
+      return [base3223.prefix, decoder.decode(source)];
+    }
+    case base3623.prefix: {
+      const decoder = base33 ?? base3623;
+      return [base3623.prefix, decoder.decode(source)];
+    }
+    default: {
+      if (base33 == null) {
+        throw Error("To parse non base32, base36 or base58btc encoded CID multibase decoder must be provided");
+      }
+      return [source[0], base33.decode(source)];
+    }
+  }
+}
+function toStringV023(bytes, cache32, base33) {
+  const { prefix } = base33;
+  if (prefix !== base58btc23.prefix) {
+    throw Error(`Cannot string encode V0 in ${base33.name} encoding`);
+  }
+  const cid2 = cache32.get(prefix);
+  if (cid2 == null) {
+    const cid3 = base33.encode(bytes).slice(1);
+    cache32.set(prefix, cid3);
+    return cid3;
+  } else {
+    return cid2;
+  }
+}
+function toStringV123(bytes, cache32, base33) {
+  const { prefix } = base33;
+  const cid2 = cache32.get(prefix);
+  if (cid2 == null) {
+    const cid3 = base33.encode(bytes);
+    cache32.set(prefix, cid3);
+    return cid3;
+  } else {
+    return cid2;
+  }
+}
+var DAG_PB_CODE23 = 112;
+var SHA_256_CODE23 = 18;
+function encodeCID23(version, code32, multihash) {
+  const codeOffset = encodingLength23(version);
+  const hashOffset = codeOffset + encodingLength23(code32);
+  const bytes = new Uint8Array(hashOffset + multihash.byteLength);
+  encodeTo23(version, bytes, 0);
+  encodeTo23(code32, bytes, codeOffset);
+  bytes.set(multihash, hashOffset);
+  return bytes;
+}
+var cidSymbol23 = /* @__PURE__ */ Symbol.for("@ipld/js-cid/CID");
+var MAX_CONTENT_BYTES3 = 100 * 1024 * 1024;
+var MAX_UCAN_LENGTH = 32 * 1024;
+function record2(value4) {
+  return value4 !== null && typeof value4 === "object" && !Array.isArray(value4);
+}
+function principalOf(did2) {
+  return did2.split("#", 1)[0];
+}
+function ucanCid2(authorization) {
+  return CID23.createV1(85, create23(30, blake3(new TextEncoder().encode(authorization)))).toString();
+}
+function parseSignedUcan(authorization, expectedCid) {
+  if (typeof authorization !== "string" || authorization.length > MAX_UCAN_LENGTH || /\s/.test(authorization)) throw new Error("UCAN must be compact bytes");
+  const segments = authorization.split(".");
+  if (segments.length !== 3 || segments.some((segment) => segment.length === 0)) throw new Error("UCAN must have three segments");
+  const [headerSegment, payloadSegment, signatureSegment] = segments;
+  const decoder = new TextDecoder("utf-8", { fatal: true });
+  let header;
+  let payload;
+  try {
+    header = JSON.parse(decoder.decode(fromBase64Url5(headerSegment)));
+    payload = JSON.parse(decoder.decode(fromBase64Url5(payloadSegment)));
+  } catch {
+    throw new Error("UCAN segments are not JSON");
+  }
+  if (!record2(header) || !record2(header.jwk) || header.alg !== "EdDSA" || header.typ !== "JWT" || header.ucv !== "0.10.0" || header.jwk.kty !== "OKP" || header.jwk.crv !== "Ed25519" || typeof header.jwk.x !== "string") throw new Error("UCAN header is invalid");
+  if (!record2(payload) || typeof payload.iss !== "string" || typeof payload.aud !== "string" || payload.aud.length === 0) throw new Error("UCAN issuer or audience is invalid");
+  const issuer = principalOf(payload.iss);
+  const publicKey = ed25519PublicKeyFromDidKey3(issuer);
+  const jwkKey = fromBase64Url5(header.jwk.x);
+  if (jwkKey.length !== publicKey.length || jwkKey.some((byte, index) => byte !== publicKey[index])) throw new Error("UCAN JWK does not bind the issuer");
+  const signature = fromBase64Url5(signatureSegment);
+  if (signature.length !== 64 || !ed25519.verify(signature, new TextEncoder().encode(`${headerSegment}.${payloadSegment}`), publicKey, { zip215: false })) throw new Error("UCAN signature is invalid");
+  const cid2 = ucanCid2(authorization);
+  if (expectedCid !== void 0 && cid2 !== expectedCid) throw new Error("UCAN CID does not match its exact bytes");
+  const att = payload.att;
+  if (!record2(att) || Object.keys(att).length === 0 || !Object.values(att).every((abilities) => record2(abilities) && Object.keys(abilities).length > 0 && Object.values(abilities).every((caveats) => Array.isArray(caveats) && caveats.length > 0))) throw new Error("UCAN attenuation is invalid");
+  const prf = payload.prf ?? [];
+  if (!Array.isArray(prf) || !prf.every((item) => typeof item === "string")) throw new Error("UCAN proofs are invalid");
+  if (!Number.isSafeInteger(payload.exp) || payload.nbf !== void 0 && (!Number.isSafeInteger(payload.nbf) || payload.nbf >= payload.exp)) throw new Error("UCAN validity window is invalid");
+  if (payload.fct !== void 0 && !Array.isArray(payload.fct)) throw new Error("UCAN facts are invalid");
+  return {
+    cid: cid2,
+    issuer,
+    audience: principalOf(payload.aud),
+    attenuation: att,
+    proofs: prf,
+    ...payload.nbf === void 0 ? {} : { notBefore: payload.nbf },
+    expiresAt: payload.exp,
+    ...payload.fct === void 0 ? {} : { facts: payload.fct }
+  };
+}
+var NOT_BEFORE_SKEW_MS = 5 * 60 * 1e3;
+var DAY_MS4 = 24 * 60 * 60 * 1e3;
+var DEFAULT_SHARE_INDEX_LIMITS = {
+  listPagesPerPass: 10,
+  fetchesPerPass: 200,
+  newRowsPerAgentPerPass: 50,
+  liveRowsPerAgent: 500,
+  rejectionsBeforePause: 100,
+  agentRowShare: 0.5,
+  mainRowBytes: 1024 * 1024,
+  headerBytes: 64 * 1024,
+  maxAgentRecordBytes: MAX_AGENT_RECORD_BYTES,
+  tombstoneTtlMs: 30 * DAY_MS4,
+  archiveAgeMs: 90 * DAY_MS4,
+  statusChecksPerSync: 200
+};
+
+// src/auth/onboarding-handoff.ts
+init_permissions();
+init_space();
+init_local_key();
+init_scoped_login();
+var RECORD_PREFIX = "xyz.tinycloud.one/handoff/v1/";
+var APPS_PREFIX = "applications/";
+var BUILTIN_APPS = new Set(["default", "applications", "account", "secrets", "public", "agents"].map((name) => `xyz.tinycloud.${name}`));
+var IDENTITY_LABELS = { agent: "TinyCloud agent", machinePrefix: "Computer " };
+var HANDOFF_URL_PREFIX = "https://tinycloud.one/handoff#tch1";
+var LINK_MAX_LENGTH = 1800;
+var LINK_LIFETIME_MS = 24 * 60 * 60 * 1e3;
+var CROCKFORD = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+var KV_GET = "tinycloud.kv/get";
+var FEED_ONLY = "Your Feed is set up. This setup doesn't give your agent access to your app list, so there's no setup link.";
+var NO_HANDOFF = "You're set up. Sign in at tinycloud.one to get started.";
+function sha256Hex3(text2) {
+  return createHash8("sha256").update(text2).digest("hex");
+}
+function encodeLink(seed, ucan) {
+  if (seed.length !== 32 || !/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(ucan) || HANDOFF_URL_PREFIX.length + Math.ceil((seed.length + ucan.length) * 8 / 5) > LINK_MAX_LENGTH) {
+    throw new Error("Invalid handoff link payload");
+  }
+  let url = HANDOFF_URL_PREFIX;
+  let bits = 0;
+  let pending = 0;
+  for (let i = 0; i < seed.length + ucan.length; i++) {
+    pending = pending << 8 | (i < seed.length ? seed[i] : ucan.charCodeAt(i - seed.length));
+    bits += 8;
+    while (bits >= 5) url += CROCKFORD[pending >>> (bits -= 5) & 31];
+  }
+  if (bits !== 0) url += CROCKFORD[pending << 5 - bits & 31];
+  return url;
+}
+async function snapshotApps(node, space) {
+  const kv3 = node.kvForSpace(space);
+  const ids = [];
+  const cursors = /* @__PURE__ */ new Set();
+  let cursor;
+  let truncated = false;
+  do {
+    const result = await kv3.list({ prefix: APPS_PREFIX, source: "network", limit: 1e3, cursor });
+    if (!result.ok) throw new Error("Could not list apps for handoff");
+    for (const key of result.data.keys) {
+      if (!key.startsWith(APPS_PREFIX)) continue;
+      const id = key.slice(APPS_PREFIX.length);
+      if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,95}$/.test(id) || BUILTIN_APPS.has(id) || ids.includes(id)) continue;
+      if (ids.length === 32) {
+        truncated = true;
+        if (id > ids[31]) continue;
+        ids.pop();
+      }
+      ids.push(id);
+      ids.sort();
+    }
+    cursor = result.data.nextCursor;
+    if (cursor ? cursors.has(cursor) : result.data.truncated) throw new Error("Incomplete app list for handoff");
+    if (cursor) cursors.add(cursor);
+  } while (cursor);
+  return { app_ids: ids, apps_truncated: truncated };
+}
+async function createHandoff(node, permissions, parentCid) {
+  const session = node.restorableSession;
+  if (!session || !node.isSessionOnly) return { message: NO_HANDOFF };
+  const issuer = principalDid(session.verificationMethod);
+  const owner = pkhDid(session.address, session.chainId);
+  const space = makePkhSpaceId2(session.address, session.chainId, "applications");
+  const primary = session.delegationCid === parentCid;
+  const additional = primary ? void 0 : node.getRuntimePermissionDelegations().find((grant) => grant.cid === parentCid);
+  if (!primary && (!additional || normalizePkhIdentifier(additional.spaceId) !== normalizePkhIdentifier(space))) {
+    return { message: NO_HANDOFF };
+  }
+  const parentSiwe = primary ? session.siwe : additional?.siweProof?.siwe;
+  const parentExpiresAt = parentSiwe ? extractSiweExpiration2(parentSiwe) : void 0;
+  if (parentExpiresAt === void 0 || parentExpiresAt.getTime() <= Date.now() || !scopeCovers(additional ? permissionsFromDelegation(additional) : node.getVerifiedSessionCapabilities(), permissions, owner)) {
+    return { message: NO_HANDOFF };
+  }
+  const key = RECORD_PREFIX + sha256Hex3(`${issuer}
+${parentCid}`).slice(0, 32);
+  const kv3 = node.kvForSpace(space);
+  const descendants = await kv3.list({ prefix: `${key}/`, source: "network", limit: 1 });
+  if (!descendants.ok || descendants.data.keys.length !== 0 || descendants.data.truncated || descendants.data.nextCursor) {
+    return { message: NO_HANDOFF };
+  }
+  const apps = await snapshotApps(node, makePkhSpaceId2(session.address, session.chainId, "account"));
+  const recipient = generateKey2();
+  const audience = principalDid(recipient.did);
+  if (!("d" in recipient.jwk) || typeof recipient.jwk.d !== "string") return { message: NO_HANDOFF };
+  const seed = Buffer.from(recipient.jwk.d, "base64url");
+  let handoff;
+  const expiry = Math.min(LINK_LIFETIME_MS, parentExpiresAt.getTime() - Date.now());
+  if (expiry <= 0) return { message: NO_HANDOFF };
+  const result = await node.delegateTo(audience, [{ service: "tinycloud.kv", space, path: key, actions: [KV_GET] }], {
+    expiry,
+    requireActivation: true,
+    disableSubDelegation: true,
+    onPrepared: async (prepared) => {
+      const ucan = prepared.delegationHeader.Authorization;
+      const proof = parseSignedUcan(ucan, prepared.cid);
+      const now = Date.now();
+      const maxExpiry = Math.floor(Math.min(now + LINK_LIFETIME_MS, parentExpiresAt.getTime()) / 1e3);
+      const [resource] = Object.keys(proof.attenuation);
+      const actions = resource === void 0 ? void 0 : proof.attenuation[resource];
+      const caveats = actions?.[KV_GET];
+      const expectedResource = `${normalizePkhIdentifier(space)}/kv/${key}`;
+      if (proof.issuer !== issuer || proof.audience !== audience || proof.proofs.length !== 1 || proof.proofs[0] !== parentCid || proof.expiresAt <= Math.floor(now / 1e3) || proof.expiresAt > maxExpiry || prepared.expiry.getTime() !== proof.expiresAt * 1e3 || proof.notBefore !== void 0 && proof.notBefore > Math.floor(now / 1e3) || Object.keys(proof.attenuation).length !== 1 || resource === void 0 || normalizePkhIdentifier(resource) !== expectedResource || actions === void 0 || Object.keys(actions).length !== 1 || JSON.stringify(caveats) !== "[{}]" || JSON.stringify(proof.facts) !== JSON.stringify([TERMINAL_DELEGATION_FACT])) {
+        throw new Error("Unexpected handoff delegation authority");
+      }
+      handoff = { url: encodeLink(seed, ucan), expiresAt: prepared.expiry.toISOString() };
+    }
+  });
+  if (result.prompted || handoff === void 0 || result.delegation.expiry.getTime() <= Date.now()) return { message: NO_HANDOFF };
+  const record4 = JSON.stringify({
+    version: 1,
+    agent_name: IDENTITY_LABELS.agent,
+    machine_label: IDENTITY_LABELS.machinePrefix + sha256Hex3(issuer).slice(0, 6).toUpperCase(),
+    connected_at: (/* @__PURE__ */ new Date()).toISOString(),
+    access_expires_at: parentExpiresAt.toISOString(),
+    abilities: ["apps_data", "account_index", ...permissions.some((permission2) => permission2.service === "tinycloud.hooks") ? ["feed"] : []],
+    ...apps
+  });
+  if (Buffer.byteLength(record4) > 4096) return { message: NO_HANDOFF };
+  const written = await kv3.put(key, record4, { contentType: "application/json" });
+  return written.ok && result.delegation.expiry.getTime() > Date.now() ? handoff : { message: NO_HANDOFF };
+}
+async function onboardingHandoff(permissions, approvalCid, authenticatedNode2) {
+  if (!permissions.some((permission2) => permission2.space === "account")) return { message: FEED_ONLY };
+  if (approvalCid === void 0) return { message: NO_HANDOFF };
+  try {
+    return await createHandoff(await authenticatedNode2(), permissions, approvalCid);
+  } catch {
+    return { message: NO_HANDOFF };
+  }
+}
+
 // src/auth/onboarding-scope.ts
 init_errors();
 init_constants();
@@ -43777,15 +50531,13 @@ function registerOnboardCommand(program) {
         );
       }
       await completeApprovalResult(ctx.profile);
-      let code5 = typeof options.code === "string" && options.code.trim() !== "" ? options.code.trim() : void 0;
+      let code6 = typeof options.code === "string" && options.code.trim() !== "" ? options.code.trim() : void 0;
       let currentStep = 1;
+      let approvalCid;
       const acquire = async (did2, flow = {}) => {
-        if (code5 !== void 0) {
-          const pasted = code5;
-          code5 = void 0;
-          return delegationFromInput(pasted, did2, flow);
-        }
-        return startAuthFlow(did2, {
+        const pasted = code6;
+        code6 = void 0;
+        const approval = pasted !== void 0 ? await delegationFromInput(pasted, did2, flow) : await startAuthFlow(did2, {
           ...flow,
           profileName: ctx.profile,
           noPopup: true,
@@ -43796,8 +50548,11 @@ ${approvalUrl}
 ${deadlineMs === void 0 ? "\nWaiting for approval. Re-run this command after an interruption; no code is needed." : ""}`);
           }
         });
+        approvalCid = approval.delegationCid;
+        return approval;
       };
       const spaceRecheck = createSpaceRecheck();
+      let onboardedNode;
       for (const [index, step] of steps.entries()) {
         const reason = step.asks;
         currentStep = index + 1;
@@ -43854,18 +50609,22 @@ ${deadlineMs === void 0 ? "\nWaiting for approval. Re-run this command after an 
           deadlineMs === void 0 ? void 0 : spaceSetupTimeoutMs({ deadlineMs, step: currentStep, of: steps.length }),
           async () => ({ node })
         );
+        onboardedNode = node;
       }
       profile = await ProfileManager.getProfile(ctx.profile);
       const session = await ProfileManager.getSession(ctx.profile);
+      const handoff = await onboardingHandoff(permissions, approvalCid, async () => onboardedNode ?? ensureAuthenticated(ctx));
       output({
         onboarded: true,
         profile: ctx.profile,
         ownerDid: profile.ownerDid ?? null,
         host: ctx.host,
         granted: [...new Set(permissions.map((p) => p.space))].map((space) => ({ space, asks })),
-        expiresAt: storedSessionState(session, profile).expiresAt
+        expiresAt: storedSessionState(session, profile).expiresAt,
+        handoff
       }, () => `Onboarded: profile ${ctx.profile} acts for ${profile.ownerDid ?? "the owner"}.
-${steps.map(({ asks: asks2 }) => `  ${asks2}`).join("\n")}`);
+${steps.map(({ asks: asks2 }) => `  ${asks2}`).join("\n")}
+${"url" in handoff ? handoff.url : handoff.message}`);
     } catch (error) {
       return handleError(error);
     }
@@ -44332,10 +51091,10 @@ function assertName(name) {
   }
   return name;
 }
-async function withReplicaRoot(profile, action, create5 = false) {
+async function withReplicaRoot(profile, action, create6 = false) {
   const profileDirectory = profilePath13(profile);
   const readRoot = async (directory, recheckProfile) => {
-    if (create5) {
+    if (create6) {
       if (recheckProfile) await recheckProfile();
       await mkdir7(join23(directory, "replicas"), { mode: 448 }).catch((error) => {
         if (error.code !== "EEXIST") throw error;
@@ -44358,10 +51117,10 @@ async function withReplicaRoot(profile, action, create5 = false) {
   if (checked === null) throw localPathChanged(profile);
   return checked;
 }
-async function withReplicaDirectory(profile, name, action, create5 = false) {
+async function withReplicaDirectory(profile, name, action, create6 = false) {
   assertName(name);
   const result = await withReplicaRoot(profile, async (root, recheckRoot, recheckProfile) => {
-    if (create5) {
+    if (create6) {
       await recheckRoot();
       await mkdir7(join23(root, name), { mode: 448 }).catch((error) => {
         if (error.code !== "EEXIST") throw error;
@@ -44389,7 +51148,7 @@ async function withReplicaDirectory(profile, name, action, create5 = false) {
     );
     if (opened === null) throw new ReplicaError(ReplicaErrorCode.NOT_FOUND, `Replica "${name}" was not found.`);
     return opened;
-  }, create5);
+  }, create6);
   if (result === null) throw new ReplicaError(ReplicaErrorCode.NOT_FOUND, `Profile "${profile}" has no replicas.`);
   return result;
 }
@@ -44484,8 +51243,8 @@ async function storedGrants(profile) {
   const records = await readAdditionalDelegations2(profile).catch(
     () => []
   );
-  for (const record3 of records) {
-    const authorization = record3.delegation?.delegationHeader?.Authorization;
+  for (const record4 of records) {
+    const authorization = record4.delegation?.delegationHeader?.Authorization;
     if (typeof authorization === "string") authorizations.push(authorization);
   }
   const grants = [];
@@ -44731,7 +51490,7 @@ async function replicationPartitions(profile, root) {
     const partition = await withPinnedLocalDirectory(profile, root, entry.name, async (pinned) => {
       const identity2 = await readReportJson(profile, pinned, "identity.json");
       const pending = await readReportJson(profile, pinned, "pending.json");
-      const pinnedCount = pending?.records?.filter((record3) => record3.state === "in_flight" || record3.state === "ambiguous").length ?? 0;
+      const pinnedCount = pending?.records?.filter((record4) => record4.state === "in_flight" || record4.state === "ambiguous").length ?? 0;
       return {
         idHash: entry.name,
         host: typeof identity2?.host === "string" ? identity2.host : null,
@@ -45044,7 +51803,7 @@ import {
   verifyRegistryCacheEntry
 } from "@tinycloud/sdk-core";
 import { boundedResponseBytes, publishLocationRecordV2 } from "@tinycloud/sdk-core/registry-publication";
-import { createProfileRegistryCacheStore as createProfileRegistryCacheStore5, createProfileRegistrySequenceStore as createProfileRegistrySequenceStore5 } from "@tinycloud/operations/state";
+import { createProfileRegistryCacheStore as createProfileRegistryCacheStore6, createProfileRegistrySequenceStore as createProfileRegistrySequenceStore6 } from "@tinycloud/operations/state";
 var DISCLOSURE = "Anyone who knows your account ID can look up these server addresses and space names.";
 var EFFECT = "After this, a space that isn't in your storage settings stops with an error instead of using another server.";
 var CONFLICT = "These storage settings changed before they could be published. Run this command again without --yes to review the latest settings.";
@@ -45116,10 +51875,10 @@ function registerRegistryPublishCommand(registry) {
         }
         const storage = await nodeAt(options.server, "--server");
         const encryptionNode = options.decryptionServer === void 0 ? void 0 : await nodeAt(options.decryptionServer, "--decryption-server");
-        const cache5 = createProfileRegistryCacheStore5(context2.profile);
-        const sequences = createProfileRegistrySequenceStore5(context2.profile);
+        const cache6 = createProfileRegistryCacheStore6(context2.profile);
+        const sequences = createProfileRegistrySequenceStore6(context2.profile);
         let previewShown = false;
-        const record3 = await publishLocationRecordV2({
+        const record4 = await publishLocationRecordV2({
           registryUrl: context2.tinycloudRegistryUrl ?? DEFAULT_TINYCLOUD_LOCATION_REGISTRY_URL,
           subject,
           signer: { type: "did:pkh", signMessage: (message) => signer.signMessage(message) },
@@ -45129,7 +51888,7 @@ function registerRegistryPublishCommand(registry) {
             mode: options.readOnly ? "read-only" : "read-write"
           })),
           ...encryptionNode === void 0 ? {} : { encryptionNode },
-          cacheStore: cache5,
+          cacheStore: cache6,
           sequenceStore: sequences,
           onPrepared: async (payload, current) => {
             preview(payload, current, options.yes === true);
@@ -45145,21 +51904,21 @@ function registerRegistryPublishCommand(registry) {
             }
           }
         });
-        if (!previewShown) preview(record3, record3, true);
+        if (!previewShown) preview(record4, record4, true);
         const ownerKey = registryOwnerKeyV2(subject);
         try {
-          await cache5.update(ownerKey, async (previous, revision) => {
+          await cache6.update(ownerKey, async (previous, revision) => {
             if (previous) {
               const accepted = await verifyRegistryCacheEntry(subject, ownerKey, previous);
-              if (accepted.sequence > record3.sequence) return previous;
+              if (accepted.sequence > record4.sequence) return previous;
             }
-            await sequences.set(ownerKey, record3.sequence);
-            return { ownerKey, responseBody: JSON.stringify({ record: record3 }), fetchedAt: Date.now(), sequence: record3.sequence, revision };
+            await sequences.set(ownerKey, record4.sequence);
+            return { ownerKey, responseBody: JSON.stringify({ record: record4 }), fetchedAt: Date.now(), sequence: record4.sequence, revision };
           });
         } catch {
           throw new CLIError("REGISTRY_CACHE_WRITE_FAILED", "Storage settings were published, but this computer couldn't save its copy. Run this command again to save it.");
         }
-        return { published: true, changed: previewShown, record: record3, disclosure: DISCLOSURE, effect: EFFECT };
+        return { published: true, changed: previewShown, record: record4, disclosure: DISCLOSURE, effect: EFFECT };
       });
       if (shouldOutputJson()) outputJson(result);
       else process.stdout.write(result.changed ? "Published this account's storage settings.\n" : "These storage settings are already published. Nothing changed.\n");
@@ -45224,7 +51983,8 @@ import { CLI_NAME as CLI_NAME34 } from "@tinycloud/operations/cli-name";
 import { readFile as readFile18 } from "fs/promises";
 import { join as join24 } from "path";
 import { constants as osConstants, homedir, hostname, userInfo } from "os";
-import { appSecretScope, SECRET_TYPES as SECRET_TYPES2 } from "@tinycloud/sdk-core";
+import * as nodeSdk from "@tinycloud/node-sdk";
+import { appSecretScope, MAX_SECRET_NAME_LENGTH, SECRET_TYPES as SECRET_TYPES2, secretNameTooLongRefusal } from "@tinycloud/sdk-core";
 import { invokeOperation as invokeOperation4 } from "@tinycloud/operations";
 import { isLocalOwnerProfile as isLocalOwnerProfile4, liveStoredLease as liveStoredLease3, ownerSessionLacksProof as ownerSessionLacksProof5 } from "@tinycloud/operations/profile";
 import {
@@ -45379,8 +52139,8 @@ function runProbeChild(request, options = {}) {
   });
 }
 function probeFailed(stderr2) {
-  const code5 = childErrorCode(stderr2);
-  return code5 === void 0 ? { kind: "probe_failed" } : { kind: "probe_failed", childErrorCode: code5 };
+  const code6 = childErrorCode(stderr2);
+  return code6 === void 0 ? { kind: "probe_failed" } : { kind: "probe_failed", childErrorCode: code6 };
 }
 function childErrorCode(stderr2) {
   const lines = stderr2.split("\n");
@@ -45476,8 +52236,8 @@ function runCommand(argv, env) {
     try {
       child = spawn3(argv[0], argv.slice(1), { stdio: "inherit", env, shell: false });
     } catch (error) {
-      const code5 = error instanceof Error && "code" in error && typeof error.code === "string" ? error.code : void 0;
-      resolve10({ kind: "not_started", ...code5 === void 0 ? {} : { errno: code5 } });
+      const code6 = error instanceof Error && "code" in error && typeof error.code === "string" ? error.code : void 0;
+      resolve10({ kind: "not_started", ...code6 === void 0 ? {} : { errno: code6 } });
       return;
     }
     const forward = (signal) => {
@@ -45492,8 +52252,8 @@ function runCommand(argv, env) {
     child.on("error", (error) => {
       if (child.pid === void 0) settle({ kind: "not_started", ...error.code === void 0 ? {} : { errno: error.code } });
     });
-    child.once("exit", (code5, signal) => {
-      settle(signal !== null ? { kind: "signaled", signal } : { kind: "exited", code: code5 ?? 1 });
+    child.once("exit", (code6, signal) => {
+      settle(signal !== null ? { kind: "signaled", signal } : { kind: "exited", code: code6 ?? 1 });
     });
   });
 }
@@ -45716,7 +52476,10 @@ function statusError(error, profile, warnings) {
 }
 
 // src/commands/secrets.ts
+init_secret_keys();
+init_owner_did();
 init_types();
+import { migrateSecrets } from "@tinycloud/sdk-services/secrets/migrate";
 var SECRETS_SPACE2 = "secrets";
 var SECRET_KV_ABILITIES = {
   get: secretCapabilityAction("get"),
@@ -45731,6 +52494,7 @@ async function readStdin4() {
   }
   return Buffer.concat(chunks);
 }
+var NETWORK_GRANT_NEEDS_WALLET_KEY = "This profile signs in through OpenKey, and `secrets network grant` needs your wallet's own key to sign the grant. Set `TC_PRIVATE_KEY` and rerun it, or use a profile set up with `tc init --key-only` and `tc auth login --method local`.";
 function authOptions(options) {
   const privateKey = options.privateKey || process.env.TC_PRIVATE_KEY;
   return privateKey ? { privateKey } : void 0;
@@ -45764,6 +52528,9 @@ function defaultRequester() {
 function resolveSecretScope(options) {
   return options.scope ? { scope: options.scope } : void 0;
 }
+function refuseReservedSecretScope(options) {
+  canonicalizeSecretScope(resolveSecretScope(options)?.scope);
+}
 async function resolveSecretSpace(input, profileName2) {
   return resolveSpaceUri(input, profileName2, { useProfileDefault: false });
 }
@@ -45790,7 +52557,7 @@ function canonicalizeSecretScope(scope) {
       ExitCode.USAGE_ERROR
     );
   }
-  if (RESERVED_SECRET_SCOPES.has(canonical)) {
+  if (RESERVED_SECRET_SCOPES.has(canonical) || isBotHistoryScope(canonical)) {
     throw new CLIError(
       "INVALID_SECRET_SCOPE",
       `Secret scope ${JSON.stringify(scope)} is reserved; omit scope for global secrets.`,
@@ -45881,7 +52648,8 @@ async function runSecretOperation(params) {
     name: params.name,
     options: params.scopeOptions,
     space: params.space,
-    node: params.node
+    node: params.node,
+    namedKey: params.namedKey
   });
   await withSpinner(
     "Requesting secret permissions...",
@@ -45913,6 +52681,10 @@ function assertOwnerApprovalPossible(profileName2, profile, action, name, missin
 }
 function scopedSecretLoginHint(profileName2) {
   return `Have the owner approve a scoped login whose manifest names the secret: ${CLI_NAME34} --profile ${profileName2} auth login --method openkey --paste --manifest <manifest.json>. Pass the owner's code on stdin, newline-terminated.`;
+}
+function networkGrantNotice(recipientDid, networkName, expiry) {
+  const until = expiry instanceof Date && Number.isFinite(expiry.getTime()) ? `until ${expiry.toISOString().slice(0, 16).replace("T", " ")} UTC` : "for as long as this grant lasts";
+  return `${safeInline(recipientDid)} can read every secret in the "${safeInline(networkName)}" network, including secrets added later, ${until}.`;
 }
 async function runSecretOperationAttempt(label, operation) {
   try {
@@ -45946,16 +52718,16 @@ async function canonicalSecretGet(params, collect) {
   const auth = authOptions(params.options);
   let ownerNode;
   if (!auth?.privateKey) {
-    const profile2 = await ProfileManager.getProfile(params.ctx.profile).catch(() => null);
-    if (profile2) {
-      const posture = resolveProfilePosture(profile2);
+    const profile = await ProfileManager.getProfile(params.ctx.profile).catch(() => null);
+    if (profile) {
+      const posture = resolveProfilePosture(profile);
       const session = await ProfileManager.getSession(params.ctx.profile);
       if (posture === "delegate-session" && session && isStoredSessionExpired(session)) {
         throw sessionExpiredError(params.ctx.profile, posture);
       }
-      if (profile2.authMethod === "openkey" && canRequestOwnerPermissions(profile2)) {
-        if (!session || isStoredSessionExpired(session) || ownerSessionLacksProof5(session, profile2)) {
-          ownerNode = await ensureSecretsNode(params.ctx, params.options, params.openKeyAcquisition, profile2);
+      if (profile.authMethod === "openkey" && canRequestOwnerPermissions(profile)) {
+        if (!session || isStoredSessionExpired(session) || ownerSessionLacksProof5(session, profile)) {
+          ownerNode = await ensureSecretsNode(params.ctx, params.options, params.openKeyAcquisition, profile);
         }
       }
     }
@@ -45977,45 +52749,70 @@ async function canonicalSecretGet(params, collect) {
   ));
   let first = await invoke();
   if (first.status === "error" && first.error.code === "SESSION_NOT_FOUND" && auth?.privateKey === void 0) {
-    const profile2 = await ProfileManager.getProfile(params.ctx.profile);
-    if (profile2.authMethod === "openkey" && canRequestOwnerPermissions(profile2)) {
+    const profile = await ProfileManager.getProfile(params.ctx.profile);
+    if (profile.authMethod === "openkey" && canRequestOwnerPermissions(profile)) {
       ownerNode = await ensureSecretsNode(
         params.ctx,
         params.options,
         params.openKeyAcquisition,
-        profile2
+        profile
       );
       first = await invoke();
     }
   }
-  if (first.status !== "authority_required") return first;
   if (auth?.privateKey !== void 0) return first;
-  if (first.context.posture !== "owner-openkey" && first.context.posture !== "local-owner-key") {
-    return first;
+  let result = first;
+  let approved;
+  for (let approvals = 0; approvals < 2; approvals++) {
+    const approval = ownerSecretApproval(result, params.name);
+    if (approval === void 0) return result;
+    const asked = JSON.stringify(approval.missing);
+    if (asked === approved) return result;
+    approved = asked;
+    if (result.context.posture !== "owner-openkey" && result.context.posture !== "local-owner-key") {
+      return result;
+    }
+    const profile = await ProfileManager.getProfile(params.ctx.profile);
+    if (!canRequestOwnerPermissions(profile)) return result;
+    assertOwnerApprovalPossible(params.ctx.profile, profile, "get", params.name, approval.missing);
+    const node = params.node ?? ownerNode ?? await ensureSecretsNode(
+      params.ctx,
+      params.options,
+      params.openKeyAcquisition
+    );
+    ownerNode ??= node;
+    await withSpinner(
+      "Requesting secret permissions...",
+      () => ensureDelegationAuthority({
+        ctx: params.ctx,
+        profile,
+        node,
+        requested: approval.missing,
+        expiryOption: void 0,
+        reason: approval.reason,
+        force: true,
+        anchorSpace: params.space ?? SECRETS_SPACE2,
+        openKeyAcquisition: params.openKeyAcquisition
+      })
+    );
+    result = await invoke();
   }
-  const profile = await ProfileManager.getProfile(params.ctx.profile);
-  if (!canRequestOwnerPermissions(profile)) return first;
-  assertOwnerApprovalPossible(params.ctx.profile, profile, "get", params.name, first.missing);
-  const node = params.node ?? ownerNode ?? await ensureSecretsNode(
-    params.ctx,
-    params.options,
-    params.openKeyAcquisition
-  );
-  await withSpinner(
-    "Requesting secret permissions...",
-    () => ensureDelegationAuthority({
-      ctx: params.ctx,
-      profile,
-      node,
-      requested: first.missing,
-      expiryOption: void 0,
-      reason: secretCommandReason("get", params.name),
-      force: true,
-      anchorSpace: params.space ?? SECRETS_SPACE2,
-      openKeyAcquisition: params.openKeyAcquisition
-    })
-  );
-  return invoke();
+  return result;
+}
+function ownerSecretApproval(result, name) {
+  if (result.status === "authority_required") {
+    return { missing: result.missing, reason: secretCommandReason("get", name) };
+  }
+  if (result.status !== "error") return void 0;
+  const { code: code6, details } = result.error;
+  if (code6 !== "SECRET_LEGACY_ENVELOPE" || typeof details?.decrypt !== "string") {
+    return void 0;
+  }
+  return {
+    // The operation may name the network with a lowercase owner; ask in the EIP-55 spelling every other entry uses.
+    missing: [{ service: "tinycloud.encryption", path: canonicalNetworkUrn(details.decrypt), actions: [SECRET_DECRYPT_CAPABILITY] }],
+    reason: `Read the secret ${name}. It's stored in the older format, so reading it needs access to all your encrypted data. Running \`${CLI_NAME34} secrets migrate\` gives it its own key, and then this wider access isn't needed.`
+  };
 }
 function throwCanonicalSecretGetError(result, name) {
   switch (result.status) {
@@ -46074,10 +52871,10 @@ function shouldRequestSecretPermissions(error) {
   return /permission|session expired|autosign|capabilit/i.test(error.message);
 }
 function thrownPermissionError(error) {
-  const record3 = error;
-  const message = typeof record3?.message === "string" ? record3.message : String(error);
-  const code5 = typeof record3?.code === "string" ? record3.code : "PERMISSION_DENIED";
-  if (code5 !== "PERMISSION_DENIED" && !/permission|session expired|autosign|capabilit/i.test(message)) {
+  const record4 = error;
+  const message = typeof record4?.message === "string" ? record4.message : String(error);
+  const code6 = typeof record4?.code === "string" ? record4.code : "PERMISSION_DENIED";
+  if (code6 !== "PERMISSION_DENIED" && !/permission|session expired|autosign|capabilit/i.test(message)) {
     return null;
   }
   return {
@@ -46281,9 +53078,9 @@ async function resolveDelegatedSecretSource(source, secretPath, space = SECRETS_
   return { ...selected, source };
 }
 function mapEncryptionResultError(error) {
-  const code5 = error.code || "DECRYPTION_FAILED";
-  const exitCode = code5 === "PERMISSION_DENIED" ? ExitCode.PERMISSION_DENIED : code5 === "NOT_FOUND" ? ExitCode.NOT_FOUND : code5 === "NETWORK_ERROR" || code5 === "TRANSPORT_ERROR" ? ExitCode.NETWORK_ERROR : ExitCode.ERROR;
-  return new CLIError(code5, error.message, exitCode);
+  const code6 = error.code || "DECRYPTION_FAILED";
+  const exitCode = code6 === "PERMISSION_DENIED" ? ExitCode.PERMISSION_DENIED : code6 === "NOT_FOUND" ? ExitCode.NOT_FOUND : code6 === "NETWORK_ERROR" || code6 === "TRANSPORT_ERROR" ? ExitCode.NETWORK_ERROR : ExitCode.ERROR;
+  return new CLIError(code6, error.message, exitCode);
 }
 function parseDecryptedSecretPayload(data, secretPath) {
   const text2 = new TextDecoder().decode(data);
@@ -46399,11 +53196,11 @@ async function readDelegatedSecretValue(params) {
   return parseDecryptedSecretPayload(decrypted.data, params.secretPath);
 }
 function isStoredSessionExpired(session) {
-  const record3 = session;
-  const direct = parseDate(record3.expiresAt ?? record3.expiry ?? record3.expirationTime);
-  const signedOrSiweExpiry = direct ? direct.toISOString() : sessionExpiresAt(record3);
+  const record4 = session;
+  const direct = parseDate(record4.expiresAt ?? record4.expiry ?? record4.expirationTime);
+  const signedOrSiweExpiry = direct ? direct.toISOString() : sessionExpiresAt(record4);
   if (signedOrSiweExpiry === null || Date.parse(signedOrSiweExpiry) > Date.now()) return false;
-  return liveStoredLease3(record3) === void 0;
+  return liveStoredLease3(record4) === void 0;
 }
 function parseDate(value4) {
   if (value4 instanceof Date) {
@@ -46422,23 +53219,65 @@ function secretKvAbility(action) {
 }
 function secretPermissionEntries(params) {
   const path = params.action === "list" ? resolveSecretListPrefix(params.options) : resolveSecretPath2(params.name ?? "", params.options).permissionPaths.vault;
+  const namedKeyPut = params.action === "put" && params.namedKey === true;
   const permissions = [{
     service: "tinycloud.kv",
     space: params.space ?? SECRETS_SPACE2,
     path,
-    actions: [secretKvAbility(params.action)],
+    actions: namedKeyPut ? [secretKvAbility("put"), secretKvAbility("get")] : [secretKvAbility(params.action)],
     skipPrefix: true
   }];
+  if (params.action !== "get" && !namedKeyPut) return permissions;
+  const networkId = "getEncryptionNetworkIdForSpace" in params.node && typeof params.node.getEncryptionNetworkIdForSpace === "function" ? params.node.getEncryptionNetworkIdForSpace(params.space ?? SECRETS_SPACE2) : params.node.getDefaultEncryptionNetworkId();
   if (params.action === "get") {
-    const networkId = "getEncryptionNetworkIdForSpace" in params.node && typeof params.node.getEncryptionNetworkIdForSpace === "function" ? params.node.getEncryptionNetworkIdForSpace(params.space ?? SECRETS_SPACE2) : params.node.getDefaultEncryptionNetworkId();
     permissions.push({
       service: "tinycloud.encryption",
       path: networkId,
       actions: [SECRET_DECRYPT_CAPABILITY],
       skipPrefix: true
     });
+    return permissions;
+  }
+  const key = networkId.endsWith(":default") ? secretKeyResourceForVaultPath(networkId, path) : void 0;
+  if (key !== void 0) {
+    permissions.push({
+      service: "tinycloud.encryption",
+      path: key,
+      actions: [SECRET_KEY_CREATE_CAPABILITY, SECRET_DECRYPT_CAPABILITY],
+      skipPrefix: true
+    });
   }
   return permissions;
+}
+var SECRET_KEY_CREATE_CAPABILITY = "tinycloud.encryption/key.create";
+function secretMigrateNetworkId(node, space) {
+  const networkId = node.getEncryptionNetworkIdForSpace(space ?? SECRETS_SPACE2);
+  if (!networkId.endsWith(":default")) {
+    throw new CLIError(
+      "USAGE_ERROR",
+      "Only secrets on the default encryption network can have their own key, so there's nothing to migrate here.",
+      ExitCode.USAGE_ERROR
+    );
+  }
+  return networkId;
+}
+function secretMigratePermissions(space, networkId, dryRun) {
+  const kv3 = {
+    service: "tinycloud.kv",
+    space: space ?? SECRETS_SPACE2,
+    path: resolveSecretListPrefix(),
+    actions: [secretKvAbility("list"), secretKvAbility("get"), ...dryRun ? [] : [secretKvAbility("put")]],
+    skipPrefix: true
+  };
+  return dryRun ? [kv3] : [kv3, { service: "tinycloud.encryption", path: networkId, actions: [SECRET_DECRYPT_CAPABILITY], skipPrefix: true }];
+}
+function secretMigrateKeyPermissions(networkId, keyPaths) {
+  return keyPaths.map((keyPath) => ({
+    service: "tinycloud.encryption",
+    path: secretKeyResource(networkId, keyPath),
+    actions: [SECRET_DECRYPT_CAPABILITY, SECRET_KEY_CREATE_CAPABILITY],
+    skipPrefix: true
+  }));
 }
 function formatSecretScopeFlag(options) {
   return options?.scope ? ` --scope ${JSON.stringify(options.scope)}` : "";
@@ -46568,16 +53407,16 @@ function secretRunPlan(cmd, operands, maps) {
     exports.push({ name, variable: name });
   }
   for (const map of maps) {
-    const equals7 = map.indexOf("=");
-    const variable = map.slice(equals7 + 1);
-    if (equals7 <= 0 || !ENV_VAR_RE.test(variable)) {
+    const equals8 = map.indexOf("=");
+    const variable = map.slice(equals8 + 1);
+    if (equals8 <= 0 || !ENV_VAR_RE.test(variable)) {
       throw new CLIError(
         "USAGE_ERROR",
         `Invalid \`--map ${JSON.stringify(map)}\`: use NAME=ENV_VAR, where ENV_VAR starts with a letter or _ and uses only letters, digits and _.`,
         ExitCode.USAGE_ERROR
       );
     }
-    exports.push({ name: map.slice(0, equals7), variable });
+    exports.push({ name: map.slice(0, equals8), variable });
   }
   if (exports.length === 0) {
     throw new CLIError("USAGE_ERROR", `Name at least one secret: ${usage3}`, ExitCode.USAGE_ERROR);
@@ -46656,7 +53495,7 @@ function registerSecretsCommand(program, openKeyAcquisition) {
     try {
       const globalOpts = cmd.optsWithGlobals();
       const ctx = await ProfileManager.resolveContext(globalOpts);
-      const node = await ensureSecretsNode(ctx, options);
+      const node = await ensureSecretsNode(ctx, options, openKeyAcquisition);
       const networkName = options.network ?? "default";
       const networkId = networkName.startsWith("urn:tinycloud:encryption:") ? networkName : node.getDefaultEncryptionNetworkId(networkName);
       const descriptor = await withSpinner(
@@ -46683,13 +53522,15 @@ function registerSecretsCommand(program, openKeyAcquisition) {
         const resolved = resolveSecretPath2(name, scopeOptions);
         const result = await runSecretOperation({
           ctx,
+          openKeyAcquisition,
           node,
           action: "get",
           name,
           scopeOptions,
           space: spaceUri,
           label: `Checking secret ${name}...`,
-          operation: () => secrets2.get(name, { ...scopeOptions, source: "network" })
+          // The user ran doctor on this secret: a missing read grant is asked for, as for `secrets get` (TC-3801).
+          operation: () => secrets2.get(name, { ...scopeOptions, source: "network", requestPermission: true })
         });
         if (result.ok) {
           secret = {
@@ -46745,14 +53586,16 @@ function registerSecretsCommand(program, openKeyAcquisition) {
   });
   secrets.command("list").description("List secrets").option("--scope <scope>", "Logical secret scope").option("--space <name|uri>", "Target a non-default secrets space (short name or full URI)").option("--private-key <hex>", "Ethereum private key (or set TC_PRIVATE_KEY)").action(async (options, cmd) => {
     try {
+      refuseReservedSecretScope(options);
       const globalOpts = cmd.optsWithGlobals();
       const ctx = await ProfileManager.resolveContext(globalOpts);
-      const node = await ensureSecretsNode(ctx, options);
+      const node = await ensureSecretsNode(ctx, options, openKeyAcquisition);
       const scopeOptions = resolveSecretScope(options);
       const spaceUri = await resolveSecretSpace(options.space, ctx.profile);
       const secrets2 = secretsServiceForSpace(node, spaceUri);
       const result = await runSecretOperation({
         ctx,
+        openKeyAcquisition,
         node,
         action: "list",
         scopeOptions,
@@ -46764,9 +53607,15 @@ function registerSecretsCommand(program, openKeyAcquisition) {
         throw cliErrorFromService(result.error);
       }
       const secretNames = Array.isArray(result.data) ? result.data : [];
+      const scopeTooLong = isOverlongStoredScope(scopeOptions?.scope);
+      const unreadable = secretNames.flatMap((name) => {
+        const note = unreadableSecretNote({ nameTooLong: name.length > MAX_SECRET_NAME_LENGTH, scopeTooLong });
+        return note === void 0 ? [] : [{ name, note }];
+      });
       outputJson({
         secrets: secretNames,
         count: secretNames.length,
+        ...unreadable.length > 0 ? { unreadable } : {},
         ...options.scope ? { scope: options.scope } : {},
         ...spaceUri ? { space: spaceUri } : {}
       });
@@ -46853,9 +53702,12 @@ function registerSecretsCommand(program, openKeyAcquisition) {
   secrets.command("put <name> [value]").description("Store a secret").option("--scope <scope>", "Logical secret scope").option("--space <name|uri>", "Target a non-default secrets space (short name or full URI)").option("--file <path>", "Read value from file").option("--stdin", "Read value from stdin").option("--type <type>", `What the secret is: ${SECRET_TYPES2.join(", ")} (default: secret). A totp secret must be a base32 seed or an otpauth:// link.`).option("--private-key <hex>", "Ethereum private key (or set TC_PRIVATE_KEY)").action(async (name, value4, options, cmd) => {
     try {
       const secretType = parseSecretTypeOption(options.type);
+      const tooLong = SECRET_NAME_RE2.test(name.trim()) ? secretNameTooLongRefusal(name) : void 0;
+      if (tooLong) throw new CLIError("INVALID_SECRET_NAME", tooLong.error.message, ExitCode.USAGE_ERROR);
+      refuseReservedSecretScope(options);
       const globalOpts = cmd.optsWithGlobals();
       const ctx = await ProfileManager.resolveContext(globalOpts);
-      const node = await ensureSecretsNode(ctx, options);
+      const node = await ensureSecretsNode(ctx, options, openKeyAcquisition);
       const spaceUri = await resolveSecretSpace(options.space, ctx.profile);
       const secrets2 = secretsServiceForSpace(node, spaceUri);
       let secretValue;
@@ -46875,12 +53727,15 @@ function registerSecretsCommand(program, openKeyAcquisition) {
       }
       const scopeOptions = resolveSecretScope(options);
       assertSecretValueMatchesType(secretType, secretValue);
-      const putOptions = secretType === void 0 ? scopeOptions : { ...scopeOptions, type: secretType };
+      const namedKey = process.env.TC_SECRETS_NAMED_KEY_WRITES === "1";
+      const putOptions = secretType === void 0 && !namedKey ? scopeOptions : { ...scopeOptions, ...secretType === void 0 ? {} : { type: secretType }, ...namedKey ? { namedKey: true } : {} };
       const result = await runSecretOperation({
         ctx,
+        openKeyAcquisition,
         node,
         action: "put",
         name,
+        namedKey,
         scopeOptions,
         space: spaceUri,
         label: `Storing secret ${name}...`,
@@ -46896,14 +53751,16 @@ function registerSecretsCommand(program, openKeyAcquisition) {
   });
   secrets.command("delete <name>").description("Delete a secret").option("--scope <scope>", "Logical secret scope").option("--space <name|uri>", "Target a non-default secrets space (short name or full URI)").option("--private-key <hex>", "Ethereum private key (or set TC_PRIVATE_KEY)").action(async (name, options, cmd) => {
     try {
+      refuseReservedSecretScope(options);
       const globalOpts = cmd.optsWithGlobals();
       const ctx = await ProfileManager.resolveContext(globalOpts);
-      const node = await ensureSecretsNode(ctx, options);
+      const node = await ensureSecretsNode(ctx, options, openKeyAcquisition);
       const scopeOptions = resolveSecretScope(options);
       const spaceUri = await resolveSecretSpace(options.space, ctx.profile);
       const secrets2 = secretsServiceForSpace(node, spaceUri);
       const result = await runSecretOperation({
         ctx,
+        openKeyAcquisition,
         node,
         action: "del",
         name,
@@ -46920,10 +53777,15 @@ function registerSecretsCommand(program, openKeyAcquisition) {
       return handleError(error);
     }
   });
-  network.command("grant <recipientDid> [name]").description("Grant decrypt permission for a secrets encryption network").option("--private-key <hex>", "Ethereum private key override (or set TC_PRIVATE_KEY)").action(async (recipientDid, name, options, cmd) => {
+  network.command("grant").argument("<recipientDid>").argument("[name]", "network name (default: default)").description("Let someone read every secret in an encryption network").option("--expiry <duration>", "How long the grant lasts, for example 30m, 1h or 2d. Default 1h, at most 7d; longer values are cut to 7d.").option("--private-key <hex>", "Ethereum private key override (or set TC_PRIVATE_KEY)").action(async (recipientDid, name, options, cmd) => {
     try {
+      const expiryMs = nodeSdk.secretKeyGrantExpiryMs(options.expiry);
       const globalOpts = cmd.optsWithGlobals();
       const ctx = await ProfileManager.resolveContext(globalOpts);
+      const profile = await ProfileManager.getProfile(ctx.profile).catch(() => null);
+      if (profile?.authMethod === "openkey" && !effectiveLocal(profile, options)) {
+        throw new CLIError("AUTH_REQUIRED", NETWORK_GRANT_NEEDS_WALLET_KEY, ExitCode.AUTH_REQUIRED);
+      }
       const node = await ensureAuthenticated(ctx, authOptions(options));
       const networkName = name ?? "default";
       const descriptor = await withSpinner(
@@ -46936,17 +53798,70 @@ function registerSecretsCommand(program, openKeyAcquisition) {
         actions: ["decrypt"]
       };
       const result = await withSpinner(
-        `Granting decrypt permission to ${recipientDid}...`,
-        () => node.delegateTo(recipientDid, [permission2])
+        `Granting ${safeInline(recipientDid)} access to read secrets...`,
+        () => node.delegateTo(recipientDid, [permission2], { expiry: expiryMs, forceWalletSign: true })
       );
+      process.stderr.write(networkGrantNotice(recipientDid, networkName, result.delegation.expiry) + "\n");
       outputJson({
         networkId: descriptor.networkId,
         recipientDid,
         cid: result.delegation.cid,
         prompted: result.prompted,
         path: result.delegation.path,
-        actions: result.delegation.actions
+        actions: result.delegation.actions,
+        scope: "whole-network",
+        ...result.delegation.expiry === void 0 ? {} : { expiresAt: result.delegation.expiry.toISOString() }
       });
+    } catch (error) {
+      return handleError(error);
+    }
+  });
+  secrets.command("migrate [names...]").description("Move secrets in the older format onto each secret's own key (counts only, never values)").option("--scope <scope>", "Only secrets in this logical scope").option("--space <name|uri>", "Target a non-default secrets space (short name or full URI)").option("--dry-run", "Count what would move without changing anything").option("--private-key <hex>", "Ethereum private key (or set TC_PRIVATE_KEY)").action(async (names, options, cmd) => {
+    try {
+      refuseReservedSecretScope(options);
+      const globalOpts = cmd.optsWithGlobals();
+      const ctx = await ProfileManager.resolveContext(globalOpts);
+      const node = await ensureSecretsNode(ctx, options);
+      const spaceUri = await resolveSecretSpace(options.space, ctx.profile);
+      const networkId = secretMigrateNetworkId(node, spaceUri);
+      const dryRun = options.dryRun === true;
+      let authorizeKeys;
+      if (!authOptions(options)?.privateKey) {
+        const profile = await ProfileManager.getProfile(ctx.profile);
+        if (!canRequestOwnerPermissions(profile)) {
+          throw new CLIError(
+            "PERMISSION_DENIED",
+            `Only the owner can migrate secrets, and profile "${ctx.profile}" isn't an owner profile. Run this from your owner profile.`,
+            ExitCode.PERMISSION_DENIED
+          );
+        }
+        const approve = (requested, reason) => withSpinner("Requesting secret permissions...", () => ensureDelegationAuthority({
+          ctx,
+          profile,
+          node,
+          requested,
+          expiryOption: void 0,
+          reason,
+          anchorSpace: spaceUri ?? SECRETS_SPACE2
+        }));
+        await approve(
+          secretMigratePermissions(spaceUri, networkId, dryRun),
+          dryRun ? secretCommandReason("list") : "Give each of your older-format secrets its own key. This needs access to all your encrypted data, because only that access can read the older format."
+        );
+        authorizeKeys = async (keyPaths) => {
+          await approve(secretMigrateKeyPermissions(networkId, keyPaths), "Give each secret being moved its own key. This reaches only those secrets, not the rest of your encrypted data.");
+        };
+      }
+      const result = await migrateSecrets(secretsServiceForSpace(node, spaceUri), {
+        ...names.length > 0 ? { names } : {},
+        ...options.scope ? { scope: options.scope } : {},
+        dryRun,
+        ...authorizeKeys === void 0 ? {} : { authorizeKeys }
+      });
+      if (!result.ok) {
+        throw cliErrorFromService(result.error);
+      }
+      outputJson({ ...result.data, ...spaceUri ? { space: spaceUri } : {} });
     } catch (error) {
       return handleError(error);
     }
@@ -47092,7 +54007,7 @@ import { ProfileLockTimeoutError as ProfileLockTimeoutError3 } from "@tinycloud/
 init_constants();
 import { authorizationVerdictOf as authorizationVerdictOf2 } from "@tinycloud/sdk-core";
 var NETWORK_FAILURE = /\b(?:fetch failed|ECONNREFUSED|ECONNRESET|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|UND_ERR_[A-Z_]+)\b|network ?error|failed to fetch/i;
-function record2(value4) {
+function record3(value4) {
   return typeof value4 === "object" && value4 !== null ? value4 : void 0;
 }
 function httpStatus(value4) {
@@ -47100,22 +54015,22 @@ function httpStatus(value4) {
   return status;
 }
 function statusOf(error, depth = 0) {
-  const fields = record2(error);
+  const fields = record3(error);
   if (fields === void 0) return void 0;
-  const direct = httpStatus(fields.status) ?? httpStatus(fields.statusCode) ?? httpStatus(record2(fields.meta)?.status);
+  const direct = httpStatus(fields.status) ?? httpStatus(fields.statusCode) ?? httpStatus(record3(fields.meta)?.status);
   return direct ?? (depth === 0 ? statusOf(fields.cause, 1) : void 0);
 }
 function codeOf(error) {
-  const code5 = record2(error)?.code;
-  return typeof code5 === "string" && /^[A-Z][A-Z0-9_]{2,63}$/.test(code5) ? code5 : void 0;
+  const code6 = record3(error)?.code;
+  return typeof code6 === "string" && /^[A-Z][A-Z0-9_]{2,63}$/.test(code6) ? code6 : void 0;
 }
 function classifyShareFailure(error, loginHint) {
   const status = statusOf(error);
   const verdict = authorizationVerdictOf2(error);
   const message = error instanceof Error ? error.message : "";
-  const code5 = codeOf(error);
+  const code6 = codeOf(error);
   const detail = (text2) => {
-    const parts = [status === void 0 ? void 0 : `HTTP ${status}`, code5].filter((part) => part !== void 0);
+    const parts = [status === void 0 ? void 0 : `HTTP ${status}`, code6].filter((part) => part !== void 0);
     return parts.length === 0 ? text2 : `${text2} (${parts.join(", ")})`;
   };
   if (verdict === "unauthenticated" || status === 401) {
@@ -47136,7 +54051,7 @@ function classifyShareFailure(error, loginHint) {
   if (status !== void 0) {
     return { code: "NODE_REJECTED", exitCode: ExitCode.ERROR, reason: detail("the node rejected the request") };
   }
-  if (NETWORK_FAILURE.test(message) || typeof record2(error)?.code === "string" && NETWORK_FAILURE.test(String(record2(error)?.code))) {
+  if (NETWORK_FAILURE.test(message) || typeof record3(error)?.code === "string" && NETWORK_FAILURE.test(String(record3(error)?.code))) {
     return { code: "NETWORK_ERROR", exitCode: ExitCode.NETWORK_ERROR, reason: "the TinyCloud node could not be reached; check the connection and retry" };
   }
   return void 0;
@@ -47656,7 +54571,7 @@ var SCRIPT_END = /<\/script/gi;
 var STYLE_END = /<\/style/gi;
 function scanMarkup(html, options) {
   const checkReferences = options.references;
-  const length5 = html.length;
+  const length6 = html.length;
   let index = 0;
   let comments = 0;
   const malformed = (detail) => {
@@ -47667,7 +54582,7 @@ function scanMarkup(html, options) {
     comments += 1;
     if (comments > MAX_ARTIFACT_COMMENTS) fail("limit", "artifact page has too many comments");
   };
-  while (index < length5) {
+  while (index < length6) {
     const open21 = html.indexOf("<", index);
     if (open21 === -1) return;
     index = open21 + 1;
@@ -47711,8 +54626,8 @@ function scanMarkup(html, options) {
     const attributes = /* @__PURE__ */ new Map();
     let attributeCount = 0;
     for (; ; ) {
-      while (index < length5 && SKIPPED.test(html[index])) index += 1;
-      if (index >= length5) {
+      while (index < length6 && SKIPPED.test(html[index])) index += 1;
+      if (index >= length6) {
         if (malformed("artifact output has an unterminated tag")) return;
         return;
       }
@@ -47723,11 +54638,11 @@ function scanMarkup(html, options) {
       ATTRIBUTE_NAME.lastIndex = index;
       const rawName = ATTRIBUTE_NAME.exec(html)[0];
       index = ATTRIBUTE_NAME.lastIndex;
-      while (index < length5 && SPACE2.test(html[index])) index += 1;
+      while (index < length6 && SPACE2.test(html[index])) index += 1;
       let rawValue = "";
       if (html[index] === "=") {
         index += 1;
-        while (index < length5 && SPACE2.test(html[index])) index += 1;
+        while (index < length6 && SPACE2.test(html[index])) index += 1;
         const quote = html[index];
         if (quote === '"' || quote === "'") {
           const close = html.indexOf(quote, index + 1);
@@ -47752,7 +54667,7 @@ function scanMarkup(html, options) {
         checkAttribute(name, decoded);
         if (isHrefAnimation(tag, name, decoded)) unsupportedOutput("artifact svg animates a resource reference");
         if (!attributes.has(name)) attributes.set(name, decoded);
-      } else if (index < length5 && html[index] !== ">" && !SKIPPED.test(html[index])) {
+      } else if (index < length6 && html[index] !== ">" && !SKIPPED.test(html[index])) {
         index += 1;
       }
     }
@@ -47775,7 +54690,7 @@ function scanMarkup(html, options) {
     } else if (tag === "style" && checkReferences) {
       STYLE_END.lastIndex = index;
       const close = STYLE_END.exec(html);
-      assertOnlyInlineCssReferences(html.slice(index, close === null ? length5 : close.index));
+      assertOnlyInlineCssReferences(html.slice(index, close === null ? length6 : close.index));
     }
   }
 }
@@ -47879,26 +54794,26 @@ function requiredFile(context2, basePath, reference) {
   return { file, resolved };
 }
 var CSS_REFERENCE_NAMES = /* @__PURE__ */ new Set(["url", "image-set", "-webkit-image-set", "src", "import"]);
-function isCssIdentifierCode(code5) {
-  return code5 >= 128 || code5 >= 48 && code5 <= 57 || code5 >= 65 && code5 <= 90 || code5 >= 97 && code5 <= 122 || code5 === 95 || code5 === 45;
+function isCssIdentifierCode(code6) {
+  return code6 >= 128 || code6 >= 48 && code6 <= 57 || code6 >= 65 && code6 <= 90 || code6 >= 97 && code6 <= 122 || code6 === 95 || code6 === 45;
 }
 function normalizeCssEscapes(source) {
   let output2 = "";
   let index = 0;
-  const length5 = source.length;
-  while (index < length5) {
+  const length6 = source.length;
+  while (index < length6) {
     const char = source[index];
     if (char === "/" && source[index + 1] === "*") {
       const end = source.indexOf("*/", index + 2);
-      const stop = end === -1 ? length5 : end + 2;
+      const stop = end === -1 ? length6 : end + 2;
       output2 += source.slice(index, stop);
       index = stop;
       continue;
     }
     if (char === '"' || char === "'") {
       let cursor = index + 1;
-      while (cursor < length5 && source[cursor] !== char && source[cursor] !== "\n") cursor += source[cursor] === "\\" ? 2 : 1;
-      const stop = Math.min(source[cursor] === char ? cursor + 1 : cursor, length5);
+      while (cursor < length6 && source[cursor] !== char && source[cursor] !== "\n") cursor += source[cursor] === "\\" ? 2 : 1;
+      const stop = Math.min(source[cursor] === char ? cursor + 1 : cursor, length6);
       output2 += source.slice(index, stop);
       index = stop;
       continue;
@@ -47907,7 +54822,7 @@ function normalizeCssEscapes(source) {
       let cursor = index;
       let decoded = "";
       let escaped = false;
-      while (cursor < length5) {
+      while (cursor < length6) {
         if (source[cursor] === "\\") {
           const next = source[cursor + 1];
           if (next === void 0) {
@@ -47951,15 +54866,15 @@ function assertOnlyInlineCssReferences(css) {
   if (/@import/i.test(text2)) fail("unsupported", "artifact css still imports a stylesheet");
   if (/(?:^|[^\w-])(?:-webkit-)?image-set\s*\(/i.test(text2) || /(?:^|[^\w-])src\s*\(/i.test(text2)) fail("unsupported", "artifact css uses an unsupported resource function");
   const opened = text2.match(/url\(/gi)?.length ?? 0;
-  let read6 = 0;
+  let read7 = 0;
   for (const match of text2.matchAll(/url\([ \t\n\r\f]*(?:"([^"]*)"|'([^']*)'|([^)"' \t\n\r\f]*))[ \t\n\r\f]*\)/gi)) {
-    read6 += 1;
+    read7 += 1;
     const value4 = match[1] ?? match[2] ?? match[3] ?? "";
     if (!isInlineReference(value4) || value4.includes("\\")) {
       throw new ArtifactBundleError("unsupported", "artifact css references a resource", void 0, value4);
     }
   }
-  if (read6 !== opened) fail("unsupported", "artifact css has a url() that cannot be read");
+  if (read7 !== opened) fail("unsupported", "artifact css has a url() that cannot be read");
 }
 async function transformCss(sourceText, basePath, context2) {
   if (context2.cssStack.length > MAX_ARTIFACT_CSS_IMPORT_DEPTH) fail("limit", "artifact stylesheet import depth exceeded");
@@ -48245,8 +55160,8 @@ function isWithinFolder(root, candidate) {
 }
 var CHANGED = "changed while it was read";
 function isRaceError(error) {
-  const code5 = error?.code;
-  return code5 === "ENOENT" || code5 === "ENOTDIR" || code5 === "ELOOP";
+  const code6 = error?.code;
+  return code6 === "ENOENT" || code6 === "ENOTDIR" || code6 === "ELOOP";
 }
 var PROC_FD = "/proc/self/fd";
 async function linuxDescriptorPath(fd) {
@@ -48403,11 +55318,11 @@ async function readHtmlFolder(directory, limit) {
           continue;
         }
         if (files.length >= MAX_ARTIFACT_FILES) throw limitError(`folder has more than ${MAX_ARTIFACT_FILES} files`);
-        const read6 = await readRegularFile(root, child, path, limit - total, limit);
-        if (read6 instanceof Uint8Array) {
-          total += read6.byteLength;
-          files.push({ path: path.normalize("NFC"), bytes: read6 });
-        } else problems.push(read6);
+        const read7 = await readRegularFile(root, child, path, limit - total, limit);
+        if (read7 instanceof Uint8Array) {
+          total += read7.byteLength;
+          files.push({ path: path.normalize("NFC"), bytes: read7 });
+        } else problems.push(read7);
       }
     }
   };
@@ -48521,9 +55436,9 @@ function shareHistoryRecoverError(error) {
   if (error instanceof ShareHistoryReadError) {
     return new CLIError("SHARE_HISTORY_RECOVER_FAILED", "could not read the unreadable sender history to move it aside", 1, { hint: "The original history file was not deleted. Check read permission on the history file, then retry." });
   }
-  const code5 = error instanceof Error ? error.code : void 0;
-  if (code5 !== void 0 && SHARE_HISTORY_RECOVER_FS_ERRNO[code5] === true) {
-    return new CLIError("SHARE_HISTORY_RECOVER_FAILED", `could not move the unreadable sender history aside (${code5})`, 1, { hint: "The original history file was not deleted. Check write permission on the profile directory, then retry." });
+  const code6 = error instanceof Error ? error.code : void 0;
+  if (code6 !== void 0 && SHARE_HISTORY_RECOVER_FS_ERRNO[code6] === true) {
+    return new CLIError("SHARE_HISTORY_RECOVER_FAILED", `could not move the unreadable sender history aside (${code6})`, 1, { hint: "The original history file was not deleted. Check write permission on the profile directory, then retry." });
   }
   return shareCliError(error);
 }
@@ -48643,14 +55558,14 @@ function shareCliError(error, operation = "publish") {
   }
   if (error instanceof SharePublishError) {
     const exit = error.code === "authority-required" ? 3 : error.code === "max-bytes-exceeded" ? 7 : 2;
-    const code5 = error.code === "authority-required" ? "AUTH_REQUIRED" : error.code === "max-bytes-exceeded" ? "MAX_BYTES_EXCEEDED" : "INVALID_ARGUMENT";
-    return new CLIError(code5, error.message, exit);
+    const code6 = error.code === "authority-required" ? "AUTH_REQUIRED" : error.code === "max-bytes-exceeded" ? "MAX_BYTES_EXCEEDED" : "INVALID_ARGUMENT";
+    return new CLIError(code6, error.message, exit);
   }
   if (error instanceof ShareReceiveError) {
     const verification = /* @__PURE__ */ new Set(["cid-mismatch", "decrypt-failed", "envelope-invalid", "origin-mismatch", "signature-invalid", "capability-invalid", "content-integrity-failed"]);
     const exit = error.code === "max-bytes-exceeded" ? 7 : verification.has(error.code) ? 5 : error.code === "expired" || error.code === "fetch-failed" ? 4 : error.code === "invalid-link" || error.code === "unsupported-target" ? 2 : 2;
-    const code5 = error.code === "fetch-failed" ? "NOT_FOUND" : error.code.replaceAll("-", "_").toUpperCase();
-    return new CLIError(code5, error.message, exit);
+    const code6 = error.code === "fetch-failed" ? "NOT_FOUND" : error.code.replaceAll("-", "_").toUpperCase();
+    return new CLIError(code6, error.message, exit);
   }
   const storageFull = storageFullError(error);
   if (storageFull) return storageFull;
@@ -48708,29 +55623,29 @@ function expires(value4) {
   }
 }
 async function rememberPublishedShare(result, link5) {
-  const record3 = { ...historyRecordForPublishedShare(result), link: link5 };
+  const record4 = { ...historyRecordForPublishedShare(result), link: link5 };
   try {
     if (shareServices.records === void 0) throw new Error("sender history is not configured");
-    await shareServices.records.put(record3);
-    return { record: record3, history: { recorded: true } };
+    await shareServices.records.put(record4);
+    return { record: record4, history: { recorded: true } };
   } catch (error) {
     const reason = shareHistoryReason(error);
     process.stderr.write(`Warning: share was published but not recorded in sender history (${reason}); future share list, share notify, and share revoke by ID will not find it. Keep share ID ${result.metadata.shareId} and CID ${result.link.cid}.
 `);
-    return { record: record3, history: { recorded: false, reason } };
+    return { record: record4, history: { recorded: false, reason } };
   }
 }
 function assertInvitationsAvailable(outcome) {
   if (shareServices.shortLinkInvitations !== true) throw new CLIError("UNAVAILABLE", `${INVITATIONS_UNAVAILABLE_MESSAGE} ${outcome}`, 4);
 }
-async function notifyRecordedShare(record3, recipient, adapter, storage, published) {
-  const result = await notifyShare({ shareId: record3.shareId, recipient, record: record3, adapter, checkDeliveryWindow: true });
+async function notifyRecordedShare(record4, recipient, adapter, storage, published) {
+  const result = await notifyShare({ shareId: record4.shareId, recipient, record: record4, adapter, checkDeliveryWindow: true });
   if (result.state !== "partial-failure" && storage !== void 0) {
     const mailbox = canonicalMailbox(recipient).email;
-    if (!record3.deliveredRecipients?.includes(mailbox)) {
+    if (!record4.deliveredRecipients?.includes(mailbox)) {
       try {
         if (storage.update === void 0) throw new Error("atomic sender history update is unavailable");
-        const updated = await storage.update(record3.shareId, (current) => ({
+        const updated = await storage.update(record4.shareId, (current) => ({
           ...current,
           deliveredRecipients: current.deliveredRecipients?.includes(mailbox) ? current.deliveredRecipients : [...current.deliveredRecipients ?? [], mailbox]
         }));
@@ -48862,7 +55777,7 @@ function registerShareCommand(program) {
       const shown = shareServices.links === void 0 || result.link.kind !== "policy" ? { url: result.url, short: false } : await shareServices.links.show(result, { fullLink: options.fullLink === true });
       if (shown.notice !== void 0) process.stderr.write(`${shown.notice}
 `);
-      const { record: record3, history: history2 } = await rememberPublishedShare(result, shown.url);
+      const { record: record4, history: history2 } = await rememberPublishedShare(result, shown.url);
       let notification;
       if (notifyRecipient !== void 0) {
         if (shareServices.delivery === void 0) throw new CLIError("AUTH_REQUIRED", "delivery authority is not configured", 3);
@@ -48871,7 +55786,7 @@ function registerShareCommand(program) {
 `);
           process.exitCode = 9;
         } else {
-          notification = await notifyRecordedShare(record3, notifyRecipient, shareServices.delivery, history2.recorded ? shareServices.records : void 0, { shareId: result.metadata.shareId, cid: result.link.cid });
+          notification = await notifyRecordedShare(record4, notifyRecipient, shareServices.delivery, history2.recorded ? shareServices.records : void 0, { shareId: result.metadata.shareId, cid: result.link.cid });
           if (notification.state === "partial-failure") process.exitCode = 9;
           if (notification.reason === "delivery-window-expired") process.stderr.write(NOTIFY_WINDOW_MESSAGE);
         }
@@ -48905,11 +55820,11 @@ function registerShareCommand(program) {
       if (shareServices.artifactStore === void 0) throw new CLIError("AUTH_REQUIRED", "artifact storage is not configured", 3);
       const versions = await listArtifactVersions(await shareServices.artifactStore(), id);
       const pinned = /* @__PURE__ */ new Map();
-      for (const record3 of await shareServices.records?.list() ?? []) {
-        const path = parseArtifactVersionPath(record3.resource.path);
+      for (const record4 of await shareServices.records?.list() ?? []) {
+        const path = parseArtifactVersionPath(record4.resource.path);
         if (path === void 0 || path.artifactId !== id) continue;
         const shares = pinned.get(path.version) ?? [];
-        shares.push({ shareId: record3.shareId, target: record3.targetKind ?? record3.recipientMatcher.kind, expiresAt: record3.expiresAt, ...record3.revokedAt === void 0 ? {} : { revokedAt: record3.revokedAt } });
+        shares.push({ shareId: record4.shareId, target: record4.targetKind ?? record4.recipientMatcher.kind, expiresAt: record4.expiresAt, ...record4.revokedAt === void 0 ? {} : { revokedAt: record4.revokedAt } });
         pinned.set(path.version, shares);
       }
       const view = versions.map((version) => ({
@@ -49013,20 +55928,20 @@ function registerShareCommand(program) {
       assertInvitationsAvailable("No invitation was sent.");
       if (shareServices.delivery === void 0) throw new CLIError("AUTH_REQUIRED", "delivery authority is not configured", 3);
       if (shareServices.records === void 0) throw new CLIError("AUTH_REQUIRED", "sender history storage is not configured", 3);
-      const record3 = await shareServices.records.get(id);
-      if (record3 === void 0) throw new CLIError("NOT_FOUND", "share not found", 4);
-      if (!record3.actions.includes("tinycloud.kv/get")) {
+      const record4 = await shareServices.records.get(id);
+      if (record4 === void 0) throw new CLIError("NOT_FOUND", "share not found", 4);
+      if (!record4.actions.includes("tinycloud.kv/get")) {
         throw new CLIError("INVALID_ARGUMENT", "share notify requires a stored share with the read action; no invitation was sent", 2);
       }
-      if (shortLinkId(record3.link) === void 0) throw new CLIError("NO_SHORT_LINK", NOTIFY_NEEDS_SHORT_LINK_MESSAGE, 2);
+      if (shortLinkId(record4.link) === void 0) throw new CLIError("NO_SHORT_LINK", NOTIFY_NEEDS_SHORT_LINK_MESSAGE, 2);
       const mailbox = canonicalMailbox(options.to);
       if (mailbox === void 0) throw new ShareNotifyError("recipient is invalid");
-      if (!recipientMatchesShareRecord(record3, mailbox.email)) throw new ShareNotifyError("recipient does not match the stored share target");
-      if (record3.recipientMatcher.kind === "emailDomain" && shareDeliveryWindowExpiresAt(record3) > Date.now()) {
+      if (!recipientMatchesShareRecord(record4, mailbox.email)) throw new ShareNotifyError("recipient does not match the stored share target");
+      if (record4.recipientMatcher.kind === "emailDomain" && shareDeliveryWindowExpiresAt(record4) > Date.now()) {
         if (shareServices.assertDomainDelivery === void 0) throw new CLIError("UNAVAILABLE", "could not verify TinyCloud node 1.17.3 domain delivery support; no invitation was sent", 4);
         await shareServices.assertDomainDelivery();
       }
-      const result = await notifyRecordedShare(record3, options.to, shareServices.delivery, shareServices.records);
+      const result = await notifyRecordedShare(record4, options.to, shareServices.delivery, shareServices.records);
       if (json) writeJson2(result);
       else process.stdout.write(`${result.state}
 `);
@@ -49040,9 +55955,9 @@ function registerShareCommand(program) {
     try {
       const json = jsonOutput(options, command);
       if (shareServices.records === void 0) throw new CLIError("AUTH_REQUIRED", "sender history storage is not configured", 3);
-      const record3 = shareServices.getRecord ? await shareServices.getRecord(id) : await shareServices.records.get(id);
-      if (record3 === void 0) throw new CLIError("NOT_FOUND", "share not found", 4);
-      const result = await revokeShare({ record: record3, records: shareServices.records, adapter: shareServices.revocation, scope: options.ancestor ? "ancestor" : "direct" });
+      const record4 = shareServices.getRecord ? await shareServices.getRecord(id) : await shareServices.records.get(id);
+      if (record4 === void 0) throw new CLIError("NOT_FOUND", "share not found", 4);
+      const result = await revokeShare({ record: record4, records: shareServices.records, adapter: shareServices.revocation, scope: options.ancestor ? "ancestor" : "direct" });
       if (result.state === "unsupported") {
         throw new CLIError("UNSUPPORTED_TARGET", result.reason, 2);
       }
@@ -49058,9 +55973,9 @@ function registerShareCommand(program) {
       const json = jsonOutput(options, command);
       if (shareServices.records === void 0) throw new CLIError("AUTH_REQUIRED", "sender history storage is not configured", 3);
       if (shareServices.links === void 0) throw new CLIError("AUTH_REQUIRED", "link authority is not configured", 3);
-      const record3 = shareServices.getRecord ? await shareServices.getRecord(id) : await shareServices.records.get(id);
-      if (record3 === void 0) throw new CLIError("NOT_FOUND", "share not found", 4);
-      const linkId = shortLinkId(record3.link);
+      const record4 = shareServices.getRecord ? await shareServices.getRecord(id) : await shareServices.records.get(id);
+      if (record4 === void 0) throw new CLIError("NOT_FOUND", "share not found", 4);
+      const linkId = shortLinkId(record4.link);
       if (linkId === void 0) throw new CLIError("NO_SHORT_LINK", "this share has no short link to delete: it was shared as a full link, or its link was not recorded", 2);
       let state2;
       try {
@@ -49068,7 +55983,7 @@ function registerShareCommand(program) {
       } catch (error) {
         throw new CLIError("UNAVAILABLE", `the short link was not deleted: ${linkFailureReason(error, "delete")}; try again shortly`, 4);
       }
-      if (json) writeJson2({ protocol: "tinycloud-share", version: 1, result: { state: state2, shareId: record3.shareId } });
+      if (json) writeJson2({ protocol: "tinycloud-share", version: 1, result: { state: state2, shareId: record4.shareId } });
       else process.stdout.write(`${state2}
 `);
     } catch (error) {
@@ -49608,13 +56523,15 @@ async function inspectProfile(params) {
   const storedDelegations = await readDelegations(params.name, issues);
   const sessionPermissions = session ? sessionPermissionsFromRecap(session) : [];
   const signedExpiry = session ? extractSessionExpiry(session) : null;
-  const lease = session && signedExpiry !== null && signedExpiry.getTime() <= Date.now() ? liveStoredLease4(session) : void 0;
+  const liveLease = session ? liveStoredLease4(session) : void 0;
+  const lease = signedExpiry !== null && signedExpiry.getTime() <= Date.now() ? liveLease : void 0;
   const sessionExpiry = lease !== void 0 ? new Date(lease.expiresAt) : signedExpiry;
   const sessionExpired = sessionExpiry === null ? null : sessionExpiry.getTime() <= Date.now();
   const statusSession = {
     present: session !== null,
     expired: session === null ? null : sessionExpired,
     expiresAt: sessionExpiry?.toISOString() ?? null,
+    renewsUntil: liveLease === void 0 ? null : new Date(liveLease.expiresAt).toISOString(),
     permissions: sessionPermissions,
     permissionsCompact: compactPermissions(sessionPermissions)
   };
@@ -49733,12 +56650,12 @@ function sessionPermissionsFromRecap(session) {
   }
 }
 function permissionFromRawRecap(value4) {
-  const record3 = asRecord(value4);
-  if (!record3) return null;
-  const service = stringValue(record3.service);
-  const space = stringValue(record3.space);
-  const path = stringValue(record3.path);
-  const actions = Array.isArray(record3.actions) ? record3.actions.map(String).filter(Boolean) : [];
+  const record4 = asRecord(value4);
+  if (!record4) return null;
+  const service = stringValue(record4.service);
+  const space = stringValue(record4.space);
+  const path = stringValue(record4.path);
+  const actions = Array.isArray(record4.actions) ? record4.actions.map(String).filter(Boolean) : [];
   if (!service || !space || path === null || actions.length === 0) return null;
   return {
     service: normalizeService2(service),
@@ -49756,12 +56673,12 @@ function normalizePermissions(entries) {
   return uniquePermissions(permissions);
 }
 function permissionFromUnknown(value4) {
-  const record3 = asRecord(value4);
-  if (!record3) return null;
-  const service = stringValue(record3.service);
-  const space = stringValue(record3.space);
-  const path = stringValue(record3.path);
-  const actions = Array.isArray(record3.actions) ? record3.actions.map(String).filter(Boolean) : [];
+  const record4 = asRecord(value4);
+  if (!record4) return null;
+  const service = stringValue(record4.service);
+  const space = stringValue(record4.space);
+  const path = stringValue(record4.path);
+  const actions = Array.isArray(record4.actions) ? record4.actions.map(String).filter(Boolean) : [];
   if (!service || !space || path === null || actions.length === 0) return null;
   return {
     service: normalizeService2(service),
@@ -49894,9 +56811,12 @@ function formatSession(session) {
     return `${theme.warn("expired")}${formatExpiresAt(session.expiresAt)}`;
   }
   if (session.expired === false) {
-    return `${theme.success("active")}${formatExpiresAt(session.expiresAt)}`;
+    return `${theme.success("active")}${formatExpiresAt(session.expiresAt)}${formatRenewsUntil(session)}`;
   }
-  return `${theme.success("present")}${formatExpiresAt(session.expiresAt)}`;
+  return `${theme.success("present")}${formatExpiresAt(session.expiresAt)}${formatRenewsUntil(session)}`;
+}
+function formatRenewsUntil(session) {
+  return session.renewsUntil !== null && session.renewsUntil !== session.expiresAt ? `, renews until ${session.renewsUntil}` : "";
 }
 function formatDelegation2(delegation) {
   const state2 = delegation.expired === true ? theme.warn("expired") : theme.success("active");

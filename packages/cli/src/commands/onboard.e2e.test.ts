@@ -7,12 +7,15 @@ import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
+import { SiweMessage } from "siwe";
 import { NodeWasmBindings, PrivateKeySigner, type PermissionEntry } from "@tinycloud/node-sdk";
-import { activateSessionWithHost, principalDidEquals } from "@tinycloud/sdk-core";
+import { activateSessionWithHost, parseSignedSiweCacao, principalDidEquals } from "@tinycloud/sdk-core";
 import { canonicalize } from "@tinycloud/share-envelope";
 import { checkLinkRecord, linkIssuerPublicKey, resolveApprovalRequest, type CheckedLinkRecord, type LinkRecord, type OpenKeyApprovalRequestV1 } from "@tinycloud/share-envelope/links";
 import { additionalDelegationsPath, profileConfigPath, profilePath, readJson, sessionPath, withTinyCloudStateRoot, writeJsonAtomic } from "@tinycloud/operations/state";
 import { startUnregisteredLocationRegistry, type UnregisteredLocationRegistry } from "../../../node-sdk/src/test-support/unregistered-location-registry";
+import { verifyOnboardingHandoff } from "./onboard-handoff.test-support.js";
+import { encodeDagCbor } from "../../../sdk-core/src/delegations/cacao.js";
 
 // Real-node e2e for `tinycloud onboard`: an owned synthetic OpenKey transport
 // opens the CLI's signed immutable requests and returns real owner-signed,
@@ -63,6 +66,8 @@ describe.skipIf(!NODE_BIN)("tinycloud onboard, against a real node", () => {
   const approvalResults = new Map<string, ApprovalEntry>();
   const seenProofs = new Set<string>();
   const activeChildren = new Set<ReturnType<typeof Bun.spawn>>();
+  /** Whether the fake owner approves a request that asks for renewal WITH renewal; otherwise without. */
+  let ownerRenews = false;
   const ackEvidence: Array<{ requestId: string; requestDigest: string; resultRef: string; ackId: string; delegationCid: string; savedAs: string }> = [];
   const ackChecks: Array<{ requestId: string; targetDid: string; profilePrincipal: string | null; ackIdMatches: boolean; digestMatches: boolean; resultRefMatches: boolean; ownerMatches: boolean; principalMatches: boolean; sessionMatches: boolean; grantMatches: boolean }> = [];
 
@@ -212,6 +217,31 @@ describe.skipIf(!NODE_BIN)("tinycloud onboard, against a real node", () => {
     return [...new Set(request.permissions.map(permission => permission.space!.split(":").at(-1)!))].sort();
   }
 
+  /** What OpenKey returns for an owner who approves with renewal: the owner's SIWE lease to the node's renewer on `grantCid`. */
+  async function ownerLease(signer: PrivateKeySigner, grantCid: string, leaseLifetimeSeconds: number) {
+    const keys = await (await fetch(`${host}/.well-known/tinycloud/node-keys`)).json() as { nodeDid: string; renewerDid: string; renewerPublicKey: string; renewerEpoch: number };
+    const nodeIdentity = { nodeDid: keys.nodeDid, renewerDid: keys.renewerDid, renewerPublicKey: keys.renewerPublicKey, renewerEpoch: keys.renewerEpoch };
+    const address = await signer.getAddress();
+    const approvedAt = new Date().toISOString();
+    const end = new Date(Date.parse(approvedAt) + leaseLifetimeSeconds * 1000);
+    end.setUTCMilliseconds(0);
+    const expiresAt = end.toISOString();
+    const nonce = randomBytes(8).toString("hex");
+    const target = `urn:cid:${grantCid}`;
+    const att = { [target]: { "tinycloud.delegation/renew": [{}] } };
+    const statement = `I further authorize the stated URI to perform the following actions on my behalf: (1) 'tinycloud.delegation': 'renew' for '${target}'.`;
+    const resources = [`urn:recap:${Buffer.from(JSON.stringify({ att, prf: [] })).toString("base64url")}`];
+    const message = new SiweMessage({ domain: "cli.tinycloud.xyz", address, uri: keys.renewerDid, version: "1", chainId: 1,
+      nonce, issuedAt: approvedAt, expirationTime: expiresAt, statement, resources }).prepareMessage();
+    const signature = await signer.signMessage(message);
+    const leaseAuthorization = Buffer.from(encodeDagCbor({ h: { t: "eip4361" }, p: { domain: "cli.tinycloud.xyz", iss: `did:pkh:eip155:1:${address}`,
+      aud: keys.renewerDid, version: 1, nonce, iat: approvedAt, exp: expiresAt, statement, resources },
+      s: { t: "eip191", s: new Uint8Array(Buffer.from(signature.slice(2), "hex")) } })).toString("base64url");
+    const lease = await parseSignedSiweCacao(leaseAuthorization);
+    return { version: 1 as const, approvedAt, approvedLeaseLifetimeSeconds: leaseLifetimeSeconds, receipt: {
+      originalCid: grantCid, leaseCid: lease.cid, leaseAuthorization, leaseExpiresAt: expiresAt, leaseGeneration: 1, nodeIdentity } };
+  }
+
   async function approve(entry: ApprovalEntry, request: OpenKeyApprovalRequestV1, signer: PrivateKeySigner,
     permissions: Readonly<OpenKeyApprovalRequestV1["permissions"]> = request.permissions) {
     const address = await signer.getAddress();
@@ -252,8 +282,11 @@ describe.skipIf(!NODE_BIN)("tinycloud onboard, against a real node", () => {
     const nonce = randomBytes(12);
     const cipher = createCipheriv("aes-256-gcm", encryptionKey, nonce);
     cipher.setAAD(Buffer.from(entry.id));
+    const renewal = request.renewal && ownerRenews ? await ownerLease(signer, session.delegationCid, request.renewal.leaseLifetimeSeconds) : undefined;
     const plaintext = { resultVersion: 1, requestId: entry.id, requestDigest: entry.record.header.bodyCid,
-      requesterDid: entry.record.header.issuer, ownerDid, targetDid: request.targetDid, delegationExpiresAt, delegation };
+      // An owner asked for a lease answers with a choice: without renewal unless the test sets `ownerRenews`.
+      requesterDid: entry.record.header.issuer, ownerDid, targetDid: request.targetDid, delegationExpiresAt, delegation,
+      ...(request.renewal ? (renewal ? { renewalChoice: "leased", renewal } : { renewalChoice: "finite" }) : {}) };
     const ciphertext = Buffer.concat([cipher.update(JSON.stringify(plaintext), "utf8"), cipher.final(), cipher.getAuthTag()]);
     const publicKey = relay.getPublicKey(undefined, "uncompressed");
     entry.resultRef = randomBytes(24).toString("base64url");
@@ -321,9 +354,10 @@ describe.skipIf(!NODE_BIN)("tinycloud onboard, against a real node", () => {
     } finally { activeChildren.delete(child); }
   }
 
-  function assertThirtyDays(entry: ApprovalEntry) {
-    expect(entry.request!.grantLifetimeSeconds).toBe(THIRTY_DAYS_S);
-    expect(entry.signedLifetimeSeconds).toBe(THIRTY_DAYS_S);
+  function assertSevenDaysRenewing(entry: ApprovalEntry) {
+    expect(entry.request!.grantLifetimeSeconds).toBe(7 * 86400);
+    expect(entry.request!.renewal?.leaseLifetimeSeconds).toBe(THIRTY_DAYS_S);
+    expect(entry.signedLifetimeSeconds).toBe(7 * 86400);
     expect(Date.parse(entry.record.header.expiresAt)).toBe(Math.floor(Date.parse(entry.record.header.issuedAt) / 1000) * 1000 + 3600_000);
   }
 
@@ -467,10 +501,10 @@ globalThis.fetch = ((input: Parameters<typeof fetch>[0], init?: Parameters<typeo
     expect(first.links).toEqual([pending.approvalUrl]);
     const approval = first.offered[0]!;
     expect(approval.request).toMatchObject({
-      reason: "Set up TinyCloud on this computer: use your apps and see your spaces, for 30 days.",
+      reason: "Set up TinyCloud on this computer: use your apps and see your spaces, for 7 days, renewing for up to 30 days.",
     });
     expect(approval.request!.reason).not.toMatch(/tinycloud\.[a-z0-9_-]+:/i);
-    assertThirtyDays(approval);
+    assertSevenDaysRenewing(approval);
     expect(spacesOf(approval.request!)).toEqual(["account", "applications"]);
     expect(authority(approval.request!.permissions)).toEqual(authority([
       { service: "tinycloud.capabilities", space: "account", path: "", actions: ["tinycloud.capabilities/read"] },
@@ -489,7 +523,7 @@ globalThis.fetch = ((input: Parameters<typeof fetch>[0], init?: Parameters<typeo
     expect(approval.ackId).toBeUndefined();
     expect((await cli("agent", ["kv", "get", "--space", "account", "spaces/applications"])).stderr).toContain("AUTH_REQUIRED");
     const done = await onboardWithApprovals("agent", () => ownerSigner, ["onboard", "--timeout", "1s"]);
-    expect(done.exitCode, done.stderr + done.stdout).toBe(0);
+    expect(done.exitCode).toBe(0);
     expect(done.offered.map(entry => entry.id)).toEqual([approval.id]);
     expect(done.links).toEqual(first.links);
     expect(approvalRequests.size - countBefore).toBe(1);
@@ -582,7 +616,7 @@ globalThis.fetch = ((input: Parameters<typeof fetch>[0], init?: Parameters<typeo
     expect(onboarded.exitCode, onboarded.stderr).toBe(0);
     expect(onboarded.offered).toHaveLength(1);
     const approval = onboarded.offered[0]!;
-    expect(approval.request).toMatchObject({ reason: "Set up TinyCloud on this computer: use your Feed, for 7 days." });
+    expect(approval.request).toMatchObject({ reason: "Set up TinyCloud on this computer: use your Feed, for 7 days, renewing for up to 30 days." });
     expect(spacesOf(approval.request!)).toEqual(["applications"]);
     expect(approval.request!.permissions.map(permission => [permission.service, permission.path])).toEqual([
       ["tinycloud.capabilities", ""],
@@ -623,5 +657,48 @@ globalThis.fetch = ((input: Parameters<typeof fetch>[0], init?: Parameters<typeo
     const ownerList = await cli("feed-owner", ["feed", "list", "--agent", "demo", "--space", "applications"]);
     expect(ownerList.exitCode, ownerList.stderr).toBe(0);
     expect(ownerList.stdout).toContain("demo-card-1");
+  });
+  test("plain onboard: the owner approves with renewal, the node admits the 30-day lease and the session keeps it", async () => {
+    await mkdir(home("leased"), { recursive: true, mode: 0o700 });
+    ownerRenews = true;
+    try {
+      const onboarded = await onboardWithApprovals("leased", () => ownerSigner);
+      expect(onboarded.exitCode, onboarded.stderr).toBe(0);
+      expect(onboarded.offered).toHaveLength(1);
+      expect(onboarded.offered[0]!.request!.renewal).toEqual({ version: 1, leaseLifetimeSeconds: THIRTY_DAYS_S });
+      expect(onboarded.stderr).not.toContain("without renewal");
+      expect(JSON.parse(onboarded.stdout).granted.map((granted: { asks: string }) => granted.asks)).toEqual([
+        "Set up TinyCloud on this computer: use your apps and see your spaces, for 7 days, renewing for up to 30 days.",
+        "Set up TinyCloud on this computer: use your apps and see your spaces, for 7 days, renewing for up to 30 days.",
+      ]);
+      const { session } = await savedState("leased");
+      expect(session?.renewal).toMatchObject({ approvedLeaseLifetimeSeconds: THIRTY_DAYS_S, receipt: { originalCid: session?.delegationCid } });
+    } finally {
+      ownerRenews = false;
+    }
+  });
+
+  test("onboard on a live sign-in that lacks its scope adds one non-renewing 30-day grant and reports that grant's lifetime", async () => {
+    await mkdir(home("added"), { recursive: true, mode: 0o700 });
+    const manifest = join(root, "added-applications-only.json");
+    await writeFile(manifest, JSON.stringify({ app_id: "onboard-added", name: "Applications", space: "applications", prefix: "", defaults: false,
+      includePublicSpace: false, permissions: [{ service: "tinycloud.kv", space: "applications", path: "", actions: ["tinycloud.kv/get", "tinycloud.kv/list"] }] }), { mode: 0o600 });
+    expect((await cli("added", ["init", "--key-only"])).exitCode).toBe(0);
+    const signedIn = await onboardWithApprovals("added", () => ownerSigner, ["auth", "login", "--manifest", manifest, "--expiry", "7d", "--no-popup"]);
+    expect(signedIn.exitCode, signedIn.stderr + signedIn.stdout).toBe(0);
+    const onboarded = await onboardWithApprovals("added", () => ownerSigner);
+    expect(onboarded.exitCode, onboarded.stderr + onboarded.stdout).toBe(0);
+    expect(onboarded.offered).toHaveLength(1);
+    const grant = onboarded.offered[0]!.request!;
+    expect(grant).toMatchObject({ grantLifetimeSeconds: THIRTY_DAYS_S, reason: "Set up TinyCloud on this computer: use your apps and see your spaces, for 30 days." });
+    expect(grant.renewal).toBeUndefined();
+    expect(JSON.parse(onboarded.stdout).granted.map((granted: { asks: string }) => granted.asks)).toEqual([
+      "Set up TinyCloud on this computer: use your apps and see your spaces, for 30 days.",
+      "Set up TinyCloud on this computer: use your apps and see your spaces, for 30 days.",
+    ]);
+  });
+
+  test("TC3302 synthetic handoff", async () => {
+    await verifyOnboardingHandoff({ host, registryOrigin: registry.url.origin, ownerSigner, cli, onboardWithApprovals });
   });
 });

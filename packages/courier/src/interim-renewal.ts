@@ -2,14 +2,16 @@ import { deserializeDelegation, serializeDelegation } from '@tinycloud/node-sdk'
 import type { AccountDelegationRecord, PermissionEntry, PortableDelegation, TinyCloudNode } from '@tinycloud/node-sdk';
 import { canonicalizeRecapCaveats, parseCanonicalRecapResource, parseSignedCompactUcanAttenuation } from '@tinycloud/sdk-core';
 import { canonicalJson } from './canonical.js';
-import { bareDid, CLOCK_SKEW_MS, siweTimes } from './authority.js';
-import { CourierError } from './errors.js';
+import { bareDid, CLOCK_SKEW_MS } from './authority.js';
+import { CourierError, retryInvocationTime } from './errors.js';
 import { cmd } from './program.js';
 import { k, peerReadPermissions } from './keys.js';
-import type { Profile, StoredPeer } from './profile.js';
+import type { Profile, ProfileSave, StoredPeer } from './profile.js';
 import { getJson, putCreate, putMatch } from './store.js';
 
 const DAY = 86_400_000;
+// Leave time for scheduled issuance, the peer's marker poll, and clock skew.
+const AUTO_RENEW_HEADROOM_MS = 15 * 60_000;
 export const INTERIM_PERIOD_MS = 30 * DAY;
 /** What a Courier 0.5.x peer accepts; also the floor for any peer whose own lifetime is short or unreadable. */
 export const LEGACY_PEER_LIMIT_MS = 7 * DAY;
@@ -29,6 +31,8 @@ export interface InterimState {
   inboundRefusedAt?: string;
   /** CID of the over-long delegation that was replaced by a shorter one. That same delegation is never shortened twice. */
   shortenedCid?: string;
+  /** CID Courier signed and is about to activate, persisted before the activation call so a concurrent revoke (or a later run, after a crash) can find and revoke it even if the local pairing is gone by the time activation's own save runs. */
+  preparing?: { cid: string; at: string };
   cleanup: Record<string, { intentAt: string; revokedAt?: string }>;
 }
 export type InterimPeer = StoredPeer & { interim?: InterimState };
@@ -148,7 +152,7 @@ export function peerLimitNote(peer: Pick<StoredPeer, 'inbound'>, now = Date.now(
 
 function parentOf(node: TinyCloudNode, profile: Profile, now: number): { cid: string; end: number } {
   const session = node.restorableSession;
-  const end = session && siweTimes(session.siwe).expiresAt?.getTime();
+  const end = session && node.sessionEnd?.getTime();
   if (!session?.delegationCid || !end || !Number.isFinite(end) || end <= now || node.credentialHolderDid !== profile.courierDid) {
     throw new CourierError('grant-expired', `Courier needs your approval again. Run \`${cmd('init --request')}\` to request it.`);
   }
@@ -162,10 +166,17 @@ async function issued(node: TinyCloudNode, profile: Profile): Promise<AccountDel
   return result.data;
 }
 
-async function cleanup(node: TinyCloudNode, peer: InterimPeer, cid: string, save: () => void): Promise<boolean> {
+async function cleanup(node: TinyCloudNode, peer: InterimPeer, cid: string, save: ProfileSave, beforeIntent?: Parameters<ProfileSave>[0]): Promise<boolean> {
   const state = stateOf(peer);
+  const previousIntent = state.cleanup[cid];
   state.cleanup[cid] ??= { intentAt: new Date().toISOString() };
-  save(); // durable intent precedes every cleanup invocation
+  // The pairing may already be gone locally (a concurrent revoke won the race): the node-side revoke still has to run.
+  try { save(beforeIntent); } catch (error) {
+    if (!(error instanceof CourierError) || error.code !== 'peer-revoked') {
+      if (!previousIntent) delete state.cleanup[cid];
+      throw error;
+    }
+  }
   if (stateOf(peer).cleanup[cid].revokedAt) return true;
   const result = await node.delegationManager.revokeIssued(cid);
   if (!result.ok) return false;
@@ -173,13 +184,22 @@ async function cleanup(node: TinyCloudNode, peer: InterimPeer, cid: string, save
   stateOf(peer).cleanup[cid].revokedAt = revokedAt;
   const entry = peer.outbound.find(item => item.cid === cid) as LedgerEntry | undefined;
   if (entry) entry.revokedAt = revokedAt;
-  save();
+  try { save(); } catch (error) { if (!(error instanceof CourierError) || error.code !== 'peer-revoked') throw error; }
   return true;
 }
 
+/** Node v1.26.22's listing uses signed ancestor expiry, not the stamped end. */
+function confirmSignedLiveSibling(node: TinyCloudNode, record: AccountDelegationRecord, parent: { cid: string; end: number }, now: number): Promise<boolean> | undefined {
+  const end = record.expiresAt?.getTime();
+  if (record.status !== 'expired' || end === undefined || !(now < end && end <= parent.end)
+    || record.parents.length !== 1 || record.parents[0] !== parent.cid) return undefined;
+  return node.getDelegationStatus(record.cid).then(status =>
+    status.ok && status.data.status === 'active' && status.data.effective_expiry === end / 1000);
+}
+
 /** Network queries run unlocked; the caller persists each local change with a locked merge. */
-async function checkSiblings(node: TinyCloudNode, profile: Profile, peer: InterimPeer, save: () => void, now: number): Promise<{ tip: AccountDelegationRecord; records: AccountDelegationRecord[] } | InterimResult> {
-  parentOf(node, profile, now);
+async function checkSiblings(node: TinyCloudNode, profile: Profile, peer: InterimPeer, save: ProfileSave, now: number): Promise<{ tip: AccountDelegationRecord; records: AccountDelegationRecord[] } | InterimResult> {
+  const parent = parentOf(node, profile, now);
   const records = await issued(node, profile);
   const ledger = peer.outbound as LedgerEntry[];
   const current = ledgerTip(peer);
@@ -196,16 +216,35 @@ async function checkSiblings(node: TinyCloudNode, profile: Profile, peer: Interi
     const ancestor = bad.find(item => item.record?.status === 'ancestor_revoked')?.record;
     if (ancestor) { state.ownerRevoked = true; state.ownerRevokedCid = ancestor.revokedAncestorCid ?? ancestor.parents[0]; }
     save();
-    for (const record of siblings) if (record.status === 'active' && record.expiresAt && record.expiresAt.getTime() > now) {
+    for (const record of siblings) {
+      if (!record.expiresAt || record.expiresAt.getTime() <= now) continue;
+      if (record.status !== 'active') {
+        const confirmation = confirmSignedLiveSibling(node, record, parent, now);
+        if (!confirmation || !(await confirmation)) continue;
+      }
       await cleanup(node, peer, record.cid, save);
     }
     return { state: state.ownerRevoked ? 'owner-revoked' : 'revoked' };
   }
+  let confirmedActive: Set<string> | undefined;
+  for (const record of siblings) {
+    const confirmation = confirmSignedLiveSibling(node, record, parent, now);
+    if (!confirmation) continue;
+    if (!(await confirmation)) return { state: 'unavailable' };
+    (confirmedActive ??= new Set()).add(record.cid);
+  }
+  const active = (record: AccountDelegationRecord): boolean => record.status === 'active' || confirmedActive?.has(record.cid) === true;
   let orphaned = false;
   for (const record of siblings) {
-    if (record.status === 'active' && record.expiresAt && record.expiresAt.getTime() > now && !ledger.some(entry => entry.cid === record.cid)) {
+    if (active(record) && record.expiresAt && record.expiresAt.getTime() > now && !ledger.some(entry => entry.cid === record.cid)) {
       orphaned = true;
-      await cleanup(node, peer, record.cid, save);
+      await cleanup(node, peer, record.cid, save, disk => {
+        // Reconciliation queried the node without holding the profile lock. Never claim
+        // an orphan cleanup if another writer has since recorded that CID.
+        if (disk?.peers[peer.handle]?.outbound.some(entry => entry.cid === record.cid)) {
+          throw new CourierError('profile-changed', `Access for ${peer.handle} changed during renewal. It was left unchanged.`);
+        }
+      });
     }
   }
   if (orphaned) return { state: 'unavailable' };
@@ -213,7 +252,7 @@ async function checkSiblings(node: TinyCloudNode, profile: Profile, peer: Interi
     if (entry.revokedAt || stateOf(peer).cleanup[entry.cid]?.intentAt) continue;
     if (entry.cid !== current.cid && Date.parse(entry.expiresAt) <= now) continue;
     const record = siblings.find(item => item.cid === entry.cid);
-    if (!record || record.status !== 'active') return { state: 'unavailable' };
+    if (!record || !active(record)) return { state: 'unavailable' };
     liveEnd(record.expiresAt, Date.now());
   }
   liveEnd(tip.expiresAt, Date.now());
@@ -266,8 +305,8 @@ export function assertSuccessor(profile: Profile, peer: StoredPeer, prior: Accou
 }
 
 /** Issue only our own child; persist intent and issued children before subsequent network actions. */
-export async function maintainOutbound(node: TinyCloudNode, profile: Profile, peer: InterimPeer, persist: () => void, options: { force?: boolean; manual?: boolean; extendOnly?: boolean } = {}): Promise<InterimResult> {
-  const save = () => { profile.version = 4; persist(); };
+export async function maintainOutbound(node: TinyCloudNode, profile: Profile, peer: InterimPeer, persist: ProfileSave, options: { force?: boolean; manual?: boolean; extendOnly?: boolean } = {}): Promise<InterimResult> {
+  const save: ProfileSave = beforeSave => { profile.version = 4; persist(beforeSave); };
   const local = interimLocalState(peer);
   if (local !== 'live') return { state: local };
   if (peer.status !== 'paired') return { state: 'unavailable' };
@@ -279,6 +318,11 @@ export async function maintainOutbound(node: TinyCloudNode, profile: Profile, pe
   const ledger = peer.outbound.find(entry => entry.cid === tip.cid);
   const started = (tip.notBefore ?? tip.issuedAt)?.getTime() ?? (ledger ? Date.parse(ledger.issuedAt) : undefined);
   if (started === undefined || !Number.isFinite(started) || started >= end) return { state: 'unavailable' };
+  const period = end - started;
+  const halfLife = period / 2;
+  // Use the actual child period, including a short parent clamp, rather than the requested lifetime.
+  // Keep the daily cooldown when it fits; otherwise leave at least half of a very short window.
+  const throttleMs = options.manual ? DAY : Math.min(DAY, period - Math.min(halfLife, AUTO_RENEW_HEADROOM_MS));
   const state = stateOf(peer);
   const now = Date.now();
   const limitMs = peerRenewalLimitMs(peer, now);
@@ -287,37 +331,46 @@ export async function maintainOutbound(node: TinyCloudNode, profile: Profile, pe
   // `extendOnly` (artifact export) never replaces a grant with a shorter one: the receiving `pair accept` refuses it as stale.
   const outlives = outlivesPeerLimit(peer, tip.cid, end, now);
   const overlong = !options.extendOnly && outlives;
-  if (!options.force && ((!options.manual && !overlong && now < started + (end - started) / 2)
-    || (lastAttempt !== undefined && now - lastAttempt < DAY))) return { state: 'live' };
+  if (!options.force && ((!options.manual && !overlong && now < started + halfLife)
+    || (lastAttempt !== undefined && now - lastAttempt < throttleMs))) return { state: 'live' };
   if (!overlong && Math.floor(Math.min(now + limitMs, parent.end) / 1000) * 1000 <= end) return { state: 'live', reason: options.extendOnly && outlives ? 'overlong' : 'no-extension' };
   state.lastAttemptAt = new Date(now).toISOString();
   save();
   const key = k.peerDelegation(peer.handle, peer.sessionId);
-  let before = await getJson<{ cid?: string; delegation?: string }>(node.kv, key);
+  const readMarker = () => getJson<{ cid?: string; delegation?: string }>(node.kv, key);
+  let before = await retryInvocationTime(readMarker);
   if (!before) {
     // Existing pairings may have only a node-issued prior record. Establish a CAS marker, never a new grant.
-    await putCreate(node.kv, key, { v: 0, cid: tip.cid, issuedAt: tip.issuedAt?.toISOString() });
-    before = await getJson<{ cid?: string; delegation?: string }>(node.kv, key);
+    await retryInvocationTime(() => putCreate(node.kv, key, { v: 0, cid: tip.cid, issuedAt: tip.issuedAt?.toISOString() }));
+    before = await retryInvocationTime(readMarker);
   }
   const publishedCid = before?.value.delegation ? deserializeDelegation(before.value.delegation).cid : before?.value.cid;
   if (!before?.etag || publishedCid !== tip.cid) return { state: 'unavailable' };
   // No grace: recheck the original and parent immediately before delegateTo signs.
   liveEnd(tip.expiresAt, Date.now());
   parentOf(node, profile, Date.now());
-  const result = await node.delegateTo(peer.courierDid, permissions(tip.resources), { expiry: limitMs, requireActivation: true });
+  const result = await node.delegateTo(peer.courierDid, permissions(tip.resources), {
+    expiry: limitMs, requireActivation: true,
+    // Persisted before activation: a concurrent revoke that already deleted the pairing makes this save refuse
+    // (peer-revoked), which aborts activation entirely (the SDK never activates on a rejected onPrepared); one that
+    // lands after this still lets a later run find and revoke this prepared CID even with no local ledger entry.
+    onPrepared: async prepared => { state.preparing = { cid: prepared.cid, at: new Date().toISOString() }; save(); },
+  });
   const next = result.delegation;
   if (next.cid === tip.cid) return { state: 'live', reason: 'no-extension' };
   const record = { cid: next.cid, priorCid: tip.cid, issuedAt: new Date().toISOString(), expiresAt: next.expiry.toISOString(), delegation: serializeDelegation(next) };
-  (peer.outbound as LedgerEntry[]).push(record);
-  save(); // even a rejected result is recorded before any cleanup/network action
   try {
+    (peer.outbound as LedgerEntry[]).push(record);
+    delete state.preparing;
+    save(); // even a rejected result is recorded before any cleanup/network action; peer-revoked here still reaches cleanup below
     assertSuccessor(profile, peer, tip, successorRecord(node, next), parentOf(node, profile, Date.now()));
     liveEnd(tip.expiresAt, Date.now());
     const rechecked = await checkSiblings(node, profile, peer, save, Date.now());
     if ('state' in rechecked) throw new CourierError('renewal-unavailable', "Courier couldn't safely renew access, so your current access is unchanged. Try again later.");
     liveEnd(tip.expiresAt, Date.now());
     parentOf(node, profile, Date.now());
-    await putMatch(node.kv, key, { v: 0, delegation: record.delegation, issuedAt: record.issuedAt }, before.etag);
+    const etag = before.etag;
+    await retryInvocationTime(() => putMatch(node.kv, key, { v: 0, delegation: record.delegation, issuedAt: record.issuedAt }, etag));
     if (overlong) { state.shortenedCid = tip.cid; save(); }
     return { state: 'renewed', delegation: next };
   } catch (error) {

@@ -16,10 +16,13 @@ import {
 } from "./secretTypes";
 import {
   canonicalizeSecretScope,
-  parseSecretCatalogKey,
+  isStoredSecretName,
+  isStoredTooLongScope,
+  parseStoredSecretCatalogKey,
   resolveSecretPath,
-  SECRET_NAME_RE,
+  secretNameTooLongRefusal,
   type ResolvedSecretPath,
+  type SecretGetOptions,
   type SecretScopeOptions,
   type SecretPutOptions,
 } from "./paths";
@@ -70,17 +73,19 @@ export class SecretsService implements ISecretsService {
 
   private async readPayload(
     name: string,
-    options?: SecretScopeOptions,
+    options?: SecretGetOptions,
   ): Promise<Result<SecretPayload, SecretsError>> {
     const secretPath = resolveSecretPathResult(name, options);
     if ("ok" in secretPath) return secretPath;
 
-    const result =
-      options?.source === undefined
-        ? await this.vault.get<SecretPayload>(secretPath.vaultKey)
-        : await this.vault.get<SecretPayload>(secretPath.vaultKey, {
-            source: options.source,
-          });
+    // A secret opens only from its own key, or from an old network-wrapped
+    // copy, and only when bound to this space and name (TC-3284).
+    const result = await this.vault.get<SecretPayload>(secretPath.vaultKey, {
+      expectAad: true,
+      keyPath: secretPath.keyPath,
+      ...(options?.source === undefined ? {} : { source: options.source }),
+      ...(options?.namedKeyOnly === true ? { namedKeyOnly: true } : {}),
+    });
     if (!result.ok) {
       return result;
     }
@@ -89,7 +94,7 @@ export class SecretsService implements ISecretsService {
 
   async get(
     name: string,
-    options?: SecretScopeOptions,
+    options?: SecretGetOptions,
   ): Promise<Result<string, SecretsError>> {
     const payload = await this.readPayload(name, options);
     if (!payload.ok) return payload;
@@ -98,7 +103,7 @@ export class SecretsService implements ISecretsService {
 
   async getEntry(
     name: string,
-    options?: SecretScopeOptions,
+    options?: SecretGetOptions,
   ): Promise<Result<SecretEntry, SecretsError>> {
     const payload = await this.readPayload(name, options);
     if (!payload.ok) return payload;
@@ -114,6 +119,8 @@ export class SecretsService implements ISecretsService {
     value: string,
     options?: SecretPutOptions,
   ): Promise<Result<void, SecretsError>> {
+    const tooLong = secretNameTooLongRefusal(name);
+    if (tooLong) return tooLong;
     const secretPath = resolveSecretPathResult(name, options);
     if ("ok" in secretPath) return secretPath;
     if (options?.type !== undefined && !isSecretType(options.type)) {
@@ -131,9 +138,10 @@ export class SecretsService implements ISecretsService {
         ? {}
         : { type: options.type }),
     } satisfies SecretPayload;
-    return options?.ifAbsent === true
-      ? this.vault.put(secretPath.vaultKey, payload, { ifNoneMatch: "*" })
-      : this.vault.put(secretPath.vaultKey, payload);
+    return this.vault.put(secretPath.vaultKey, payload, {
+      ...(options?.namedKey === true ? { keyPath: secretPath.keyPath } : {}),
+      ...(options?.ifAbsent === true ? { ifNoneMatch: "*" } : {}),
+    });
   }
 
   async delete(
@@ -150,13 +158,19 @@ export class SecretsService implements ISecretsService {
     options?: SecretScopeOptions,
   ): Promise<Result<string[], SecretsError>> {
     let prefix: string;
-    try {
-      const scope = canonicalizeSecretScope(options?.scope);
-      prefix = scope === undefined ? "secrets/" : `secrets/scoped/${scope}/`;
-    } catch (error) {
-      return invalidSecretInput(
-        error instanceof Error ? error.message : String(error),
-      );
+    const stored = options?.scope?.trim();
+    if (stored !== undefined && isStoredTooLongScope(stored)) {
+      // A scope stored before the length limit is still listed; nothing can get, put or delete under it.
+      prefix = `secrets/scoped/${stored}/`;
+    } else {
+      try {
+        const scope = canonicalizeSecretScope(options?.scope);
+        prefix = scope === undefined ? "secrets/" : `secrets/scoped/${scope}/`;
+      } catch (error) {
+        return invalidSecretInput(
+          error instanceof Error ? error.message : String(error),
+        );
+      }
     }
 
     const result = await this.vault.list({
@@ -169,7 +183,7 @@ export class SecretsService implements ISecretsService {
     }
     return {
       ok: true,
-      data: result.data.filter((name) => SECRET_NAME_RE.test(name)),
+      data: result.data.filter((name) => isStoredSecretName(name)),
     };
   }
 
@@ -193,7 +207,7 @@ export class SecretsService implements ISecretsService {
       }
 
       for (const key of result.data.keys) {
-        const entry = parseSecretCatalogKey(key);
+        const entry = parseStoredSecretCatalogKey(key);
         if (!entry) continue;
         entries.set(`${entry.scope ?? ""}\u0000${entry.name}`, entry);
       }

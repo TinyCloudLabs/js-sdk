@@ -3,6 +3,7 @@
 import * as nodeSdk from "@tinycloud/node-sdk";
 
 import { OperationInvocationError, operationError } from "./errors.js";
+import { BOT_HISTORY_KEY_PATH } from "@tinycloud/sdk-services";
 
 const DEFAULT_SECRETS_SPACE = "secrets";
 const SECRET_NAME_RE = /^[A-Z][A-Z0-9_]*$/;
@@ -167,7 +168,7 @@ export function canonicalizeSecretScope(scope: string | undefined): string | und
     .replace(/[^a-z0-9-]/g, "-")
     .replace(/-+/g, "-")
     .replace(/^-|-$/g, "");
-  if (canonical === "" || RESERVED_SECRET_SCOPES.has(canonical)) {
+  if (canonical === "" || RESERVED_SECRET_SCOPES.has(canonical) || isBotHistoryScope(canonical)) {
     throw invalidSecretInput();
   }
   return canonical;
@@ -192,4 +193,9 @@ function invalidSecretInput(): OperationInvocationError {
   return new OperationInvocationError(
     operationError("INPUT_INVALID", "The secret reference is invalid."),
   );
+}
+
+/** TinyChat's bot-history scope, derived from the SDK's key path (never a copied string): reserved like `default`. */
+function isBotHistoryScope(scope: string): boolean {
+  return BOT_HISTORY_KEY_PATH.startsWith(`secrets/scoped/${scope}/`);
 }

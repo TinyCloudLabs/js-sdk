@@ -33,6 +33,8 @@ export type {
   SecretReadInput,
   SecretReadResult,
   BootstrapWarning,
+  NodeSignOutFailure,
+  NodeSignOutStatus,
 } from "@tinycloud/node-sdk";
 export type {
   UnifiedOwnerRootInput,
@@ -146,6 +148,9 @@ export * from "./providers";
 export {
   // Session and auth types
   type ClientSession,
+  type ClientSignInResult,
+  type SignInResult,
+  type SignInWarning,
   type SiweConfig,
   type EnsData,
   SiweMessage,
@@ -362,6 +367,7 @@ export {
   type ParsedSecretCatalogKey,
   type SecretScopeOptions,
   type SecretPutOptions,
+  type SecretGetOptions,
 } from "@tinycloud/sdk-core";
 
 // Re-export encryption service types and helpers from sdk-core

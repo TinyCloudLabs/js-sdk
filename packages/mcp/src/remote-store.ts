@@ -1,7 +1,10 @@
 import { sameTinyCloudNode } from "@tinycloud/sdk-core";
+import { admitOwnerRenewalLease, RENEWAL_LEASE_ORIGINAL_EXPIRED, RENEWAL_RENEWER_CHANGED } from "@tinycloud/sdk-core/delegations/renewal";
+import { RENEWAL_ADMISSION_LEAD_MS, verifyOwnerRenewalLease } from "@tinycloud/sdk-core/delegations/renewal-receipt";
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { chmod, mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
 
 import {
   activateValidatedRuntimeDelegation,
@@ -13,7 +16,7 @@ import {
   UnsupportedSessionRestoreError,
   isCapabilitySubset,
   principalDidEquals,
-  publicJwk,
+  RUNTIME_DELEGATION_REJECTIONS,
   siweRuntimeDelegation,
   signedCompactUcanExpiry,
   type PermissionEntry,
@@ -24,13 +27,50 @@ import { TCWSessionManager, importKey, initPanicHook } from "@tinycloud/node-sdk
 import { createOrReusePermissionRequest } from "@tinycloud/operations/artifacts";
 import { withTinyCloudStateRoot } from "@tinycloud/operations/state";
 import { invokeOperation } from "@tinycloud/operations";
+import { liveStoredLease, restoreStoredSession } from "@tinycloud/operations/profile";
 import { nodeRevocationOf, operationRetryDescriptor, type NodeRevocation } from "@tinycloud/operations/mcp-authority";
 import { tcAppsApprovalMessage, tcAppsApprovalReason } from "@tinycloud/operations/tc-apps";
+import {
+  APPROVAL_POLL_INTERVAL_MS,
+  DEFAULT_LINKS_API_ORIGIN,
+  isApprovalClientError,
+  type ApprovalClientError,
+  type ApprovalRenewal,
+} from "@tinycloud/share-envelope/links";
 import { nativeOwnerForConnectorGrant, canonicalOwnerDid, NATIVE_GRANT_MAX_LIFETIME_SECONDS } from "./native-auth.js";
+import {
+  ackOpenKeyResult,
+  collectOpenKeyResult,
+  createOpenKeyRequest,
+  lifetimeSeconds,
+  type OpenKeyCollection,
+  type OpenKeyEndpoints,
+  type OpenKeyRequestState,
+} from "./openkey-approval.js";
 
 import type { McpOperationInvocation } from "./tools.js";
 const PROFILE = "agent";
 const MAX_CALLBACK_BYTES = 256 * 1024;
+const PENDING_VERSION = 2;
+/** How long a call waits on OpenKey for one approval result. */
+const CALL_COLLECTION_TIMEOUT_MS = 3_000;
+/** How long a call waits for all of its tenant's approval results; the rest continue in the background. */
+const CALL_COLLECTION_BUDGET_MS = 3_000;
+const POLL_COLLECTION_TIMEOUT_MS = 10_000;
+/** Background polls run every 2 s for the first minute, then every 10 s. */
+const FAST_POLL_WINDOW_MS = 60_000;
+const SLOW_POLL_INTERVAL_MS = 10_000;
+/** Approvals polled in the background at once; beyond this, calls collect. */
+const MAX_COLLECTION_POLLS = 64;
+/** How long after its request ends a result may still be collected (OpenKey keeps it 10 minutes). */
+const RESULT_COLLECTION_GRACE_MS = 600_000;
+/** A claimed result left by a stopped server becomes collectable again after this. */
+const PROCESSING_STALE_MS = 120_000;
+/**
+ * The renewal lease every connection approval asks for. The owner may approve without it; then the
+ * grant ends at its signed end and is approved again.
+ */
+export const BOOTSTRAP_LEASE_SECONDS = 90 * 86_400;
 const NATIVE_GRANT_IMPORT_REJECTION_CODES = new Set([
   "DELEGATION_ARTIFACT_INVALID",
   "DELEGATION_EXPIRED",
@@ -58,10 +98,18 @@ export interface RemoteStoreConfig {
   readonly stateDir: string;
   readonly stateSecret: string;
   readonly publicUrl: URL;
-  /** Separate public-plugin approvals from the existing root callback. */
+  /** Separate public-plugin approvals from the existing root approval link. */
   readonly approvalPath?: string;
   readonly nodeHost: string;
+  /** OpenKey web origin approval links open on. */
   readonly openkeyHost: string;
+  /**
+   * OpenKey API origin approval results are fetched from. Defaults to
+   * `https://api.openkey.so` for `https://openkey.so`, else `openkeyHost`.
+   */
+  readonly openkeyApiHost?: string;
+  /** Links API origin that stores signed approval requests. */
+  readonly linksApiOrigin?: string;
   readonly approvalTtlSeconds: number;
   readonly delegationExpiry: string;
   /** Shared secret used only by the Exo native client, never logged. */
@@ -99,17 +147,25 @@ export interface NativeServiceIdentity {
 }
 
 interface PendingApproval {
-  readonly version: 1;
+  readonly version: 2;
   readonly nonce: string;
   readonly tenantId: string;
   readonly kind: "bootstrap" | "delegation";
+  /** The operations authority request a scoped approval answers. */
   readonly requestId?: string;
   readonly permissions: PermissionEntry[];
   readonly ownerDids: string[];
   readonly createdAt: string;
   readonly approvalEpoch: number;
   readonly expiresAt: string;
+  /** The OpenKey approval request, once the link was first opened. */
+  readonly openkey?: OpenKeyRequestState;
+  /** When a collection claimed this approval's result; only claimed files carry it. */
+  readonly claimedAt?: string;
 }
+
+/** What one collection attempt left: keep polling, retry later, finished, or nothing to collect. */
+type CollectionOutcome = "pending" | "retry" | "done" | "idle";
 
 export interface ConnectStatus {
   readonly connected: boolean;
@@ -143,13 +199,13 @@ export class ApprovalOwnerMismatchError extends Error {
   }
 }
 
-/** The callback stages `/connect/callback` names when it refuses an approval. */
-export type ApprovalStage = "restore_approval" | "siwe_runtime_delegation" | "auth_import" | "activation";
+/** The stages that can refuse a collected approval. */
+export type ApprovalStage = "restore_approval" | "siwe_runtime_delegation" | "auth_import" | "activation" | "renewal";
 
 /**
- * A callback stage refused the approval. `code` and `reason` are
- * server-authored identifiers for diagnostics; the message and cause may quote
- * callback or node data and are never sent or logged.
+ * A stage refused the approval. `code` and `reason` are server-authored
+ * identifiers for diagnostics; the message and cause may quote OpenKey or node
+ * data and are never sent or logged.
  */
 export class ApprovalStageError extends Error {
   readonly stage: ApprovalStage;
@@ -165,19 +221,29 @@ export class ApprovalStageError extends Error {
   }
 }
 
-/** Why a callback was refused before its approval was read. */
+/**
+ * The node could not be reached or did not answer while admitting an approved renewal lease. The
+ * approval is kept and admitted again on the next collection; admission replays the same signed lease.
+ */
+class RenewalAdmissionUnavailableError extends Error {
+  constructor(cause: unknown) {
+    super("The renewal lease could not be admitted yet.", { cause });
+    this.name = "RenewalAdmissionUnavailableError";
+  }
+}
+
+/** Why an approval link was refused before its approval was read. */
 export type ApprovalRequestDetail =
   | "state_missing"
   | "state_invalid"
   | "state_expired"
   | "state_not_pending"
-  | "tenant_missing"
-  | "body_invalid";
+  | "tenant_missing";
 
 /**
- * The callback's state, tenant or body was refused before the approval was
- * read. `detail` is for server diagnostics only: callers get one uniform
- * response so they cannot probe whether a state is valid.
+ * The link's state or tenant was refused before the approval was read.
+ * `detail` is for server diagnostics only: callers get one uniform response
+ * so they cannot probe whether a state is valid.
  */
 export class ApprovalRequestError extends Error {
   readonly detail: ApprovalRequestDetail;
@@ -186,6 +252,14 @@ export class ApprovalRequestError extends Error {
     super(message, { cause });
     this.name = "ApprovalRequestError";
     this.detail = detail;
+  }
+}
+
+/** OpenKey could not store the approval request, so there is no link to open yet. */
+export class ApprovalLinkUnavailableError extends Error {
+  constructor(cause: unknown) {
+    super("The approval link could not be created.", { cause });
+    this.name = "ApprovalLinkUnavailableError";
   }
 }
 export class NativeGrantValidationError extends Error {
@@ -228,11 +302,26 @@ export class RemoteTenantStore {
   readonly #scopedClearing = new Map<string, Promise<void>>();
   readonly #clearedScoped = new Map<string, Set<string>>();
   readonly #approvalProcessing = new Map<string, Promise<void>>();
+  readonly #linkCreations = new Map<string, Promise<string>>();
+  readonly #collections = new Map<string, Promise<CollectionOutcome>>();
+  readonly #polls = new Map<string, NodeJS.Timeout>();
+  #closed = false;
+  readonly #endpoints: OpenKeyEndpoints;
+  readonly #grantLifetimeSeconds: number;
   #nativeIdentity?: Promise<{ did: string; jwk: Record<string, unknown> }>;
   readonly #nativeGrantQueues = new Map<string, Promise<void>>();
 
   constructor(config: RemoteStoreConfig) {
     this.#config = config;
+    const openkeyOrigin = new URL(config.openkeyHost).origin;
+    this.#endpoints = {
+      openkeyOrigin,
+      openkeyApiOrigin: new URL(
+        config.openkeyApiHost ?? (openkeyOrigin === "https://openkey.so" ? "https://api.openkey.so" : openkeyOrigin),
+      ).origin,
+      linksApiOrigin: new URL(config.linksApiOrigin ?? DEFAULT_LINKS_API_ORIGIN).origin,
+    };
+    this.#grantLifetimeSeconds = lifetimeSeconds(config.delegationExpiry);
   }
 
   async nativeServiceIdentity(): Promise<NativeServiceIdentity> {
@@ -452,12 +541,14 @@ export class RemoteTenantStore {
   }
   /** Check stored node authority before an authenticated operation uses it. */
   async validateTenant(subject: string, ownerDids: readonly string[]): Promise<void> {
-    await this.#hasValidSession(await this.#ensureTenant(subject), ownerDids);
+    const tenant = await this.#ensureTenant(subject);
+    await this.#collectApprovals(tenant);
+    await this.#hasValidSession(tenant, ownerDids);
   }
-
 
   async connectStatus(subject: string, ownerDids: readonly string[] = []): Promise<ConnectStatus> {
     const tenant = await this.#ensureTenant(subject);
+    await this.#collectApprovals(tenant);
     const state = await this.#sessionState(tenant, ownerDids, true);
     if (state === "valid") return { connected: true, sessionDid: tenant.sessionDid };
     // An unconfirmed session is not connected, but no new approval is issued for it.
@@ -648,89 +739,307 @@ export class RemoteTenantStore {
     return "scoped";
   }
 
-  async approvalRedirect(state: string): Promise<string> {
-    const pending = await this.#readPending(state, false);
-    const tenant = await this.#readTenant(pending.tenantId);
-    const callback = new URL(`${this.#config.approvalPath ?? "/connect"}/callback`, this.#config.publicUrl);
-    callback.searchParams.set("state", state);
-    const params = new URLSearchParams({
-      did: tenant.sessionDid,
-      callback: callback.toString(),
-      host: this.#config.nodeHost,
-      requesterOrigin: this.#config.publicUrl.origin,
-      jwk: Buffer.from(JSON.stringify(publicJwk(tenant.jwk))).toString("base64url"),
-      permissions: Buffer.from(JSON.stringify({
-        permissions: pending.permissions,
-        reason: [
-          pending.kind === "bootstrap"
-            ? "Connect this TinyCloud account to the hosted MCP delegate."
-            : tcAppsApprovalReason(pending.permissions) ??
-              "Approve the exact capabilities requested by the TinyCloud MCP operation.",
-          // Owner DIDs come from the verified OpenKey access token of the MCP
-          // client that created this link, never from the link itself. The
-          // callback refuses a signer outside them, so the approver isn't asked to check.
-          ...(pending.ownerDids.length === 0
-            ? []
-            : [`Requested by TinyCloud account ${pending.ownerDids.join(", ")}.`]),
-        ].join(" "),
-      })).toString("base64url"),
-      expiry: this.#config.delegationExpiry,
-    });
-    return `${this.#config.openkeyHost.replace(/\/+$/, "")}/delegate?${params.toString()}`;
+  /**
+   * The OpenKey link behind one of this server's `/connect?state=` links. The
+   * first visit creates the OpenKey approval request, signed by the tenant's
+   * own key; later visits reuse it. Collection starts in the background and on
+   * the tenant's next call.
+   */
+  async approvalLink(state: string): Promise<string> {
+    const located = await this.#readPending(state);
+    const path = this.#pendingPath(located.stateRoot, located.pending.nonce);
+    const prior = this.#linkCreations.get(path);
+    if (prior) return prior;
+    const creating = this.#createApprovalLink(located.stateRoot, located.pending)
+      .finally(() => this.#linkCreations.delete(path));
+    this.#linkCreations.set(path, creating);
+    return creating;
   }
 
-  async completeApproval(state: string, request: Request): Promise<void> {
-    const length = Number(request.headers.get("content-length") ?? "0");
-    if (Number.isFinite(length) && length > MAX_CALLBACK_BYTES) {
-      throw new ApprovalRequestError("body_invalid", "Callback body is too large.");
+  async #createApprovalLink(stateRoot: string, initial: PendingApproval): Promise<string> {
+    const path = this.#pendingPath(stateRoot, initial.nonce);
+    // Reread under the per-link lock: an earlier visit may have created the request.
+    const pending = await readJson<PendingApproval>(path);
+    if (pending === null || pending.version !== PENDING_VERSION) {
+      throw new ApprovalRequestError("state_not_pending", "Approval state is invalid or already used.");
     }
-    const text = await request.text();
-    if (Buffer.byteLength(text) > MAX_CALLBACK_BYTES) {
-      throw new ApprovalRequestError("body_invalid", "Callback body is too large.");
+    if (pending.openkey !== undefined && this.#currentRequest(pending.openkey)) {
+      if (Date.parse(pending.openkey.expiresAt) <= Date.now()) {
+        throw new ApprovalRequestError("state_expired", "Approval state has expired.");
+      }
+      this.#startCollectionPoll(stateRoot, pending.nonce);
+      return pending.openkey.link;
     }
-    let data: unknown;
+    // A request made against other OpenKey origins is never opened or collected; this visit asks again.
+    if (pending.openkey !== undefined) writeDiagnostic("approval dropped: reason=openkey_origin_changed");
+    const tenant = await this.#readTenant(pending.tenantId);
+    let openkey: OpenKeyRequestState;
     try {
-      data = JSON.parse(text);
+      openkey = await createOpenKeyRequest(this.#endpoints, {
+        jwk: tenant.jwk,
+        nodeHost: this.#config.nodeHost,
+        permissions: pending.permissions,
+        reason: approvalReason(pending),
+        grantLifetimeSeconds: this.#grantLifetimeSeconds,
+        ...(pending.kind === "bootstrap" ? { leaseLifetimeSeconds: BOOTSTRAP_LEASE_SECONDS } : {}),
+        expiresAt: new Date(pending.expiresAt),
+      });
     } catch (error) {
-      throw new ApprovalRequestError("body_invalid", "Callback body is invalid.", error);
+      throw new ApprovalLinkUnavailableError(error);
     }
-    if (!isRecord(data)) throw new ApprovalRequestError("body_invalid", "Callback body is invalid.");
+    if (!samePrincipal(openkey.request.issuer, tenant.sessionDid)) {
+      throw new ApprovalLinkUnavailableError(new Error("The approval request does not name this tenant's key."));
+    }
+    // The link stays usable as long as the OpenKey request it opens.
+    const expiresAt = new Date(Math.max(Date.parse(pending.expiresAt), Date.parse(openkey.expiresAt))).toISOString();
+    await secureWrite(path, { ...pending, expiresAt, openkey });
+    this.#startCollectionPoll(stateRoot, pending.nonce);
+    return openkey.link;
+  }
 
-    const pending = await this.#readPending(state, true);
+  /**
+   * Collect every approval result this tenant has open in OpenKey before a
+   * call decides whether it is connected. The call waits at most
+   * `CALL_COLLECTION_BUDGET_MS` in total; whatever is still running then
+   * finishes in the background, and a failure leaves the pending approval for
+   * the next call or poll.
+   */
+  async #collectApprovals(tenant: TenantProfile): Promise<void> {
+    const budget = new AbortController();
+    await Promise.race([
+      this.#collectEach(tenant),
+      sleep(CALL_COLLECTION_BUDGET_MS, undefined, { signal: budget.signal, ref: false }).catch(() => undefined),
+    ]).finally(() => budget.abort());
+  }
+
+  async #collectEach(tenant: TenantProfile): Promise<void> {
+    const directory = this.#pendingDirectory(tenant.stateRoot);
+    let names: string[];
+    try {
+      names = await readdir(directory);
+    } catch (error) {
+      if (isRecord(error) && error.code === "ENOENT") return;
+      throw error;
+    }
+    for (const name of names) {
+      if (name.endsWith(".json.processing")) await this.#recoverProcessing(join(directory, name));
+    }
+    const nonces = (await readdir(directory).catch(() => [] as string[]))
+      .filter((name) => name.endsWith(".json"))
+      .map((name) => name.slice(0, -".json".length));
+    for (const nonce of nonces) {
+      await this.#collectApproval(tenant.stateRoot, nonce, CALL_COLLECTION_TIMEOUT_MS);
+    }
+  }
+
+  /**
+   * A claimed result whose processing never finished (the server stopped
+   * mid-way). Once it is stored only the acknowledgement remains; otherwise,
+   * after a grace period, it becomes collectable again.
+   */
+  async #recoverProcessing(claimed: string): Promise<void> {
+    const pending = await readJson<PendingApproval>(claimed).catch(() => null);
+    if (pending === null || pending.version !== PENDING_VERSION || pending.openkey === undefined) {
+      await rm(claimed, { force: true });
+      return;
+    }
     const stateRoot = join(this.#config.stateDir, "tenants", pending.tenantId);
+    if (this.#collections.has(this.#pendingPath(stateRoot, pending.nonce))) return;
+    if (pending.openkey.storedCid !== undefined) {
+      await this.#acknowledge(stateRoot, pending.openkey);
+      await rm(claimed, { force: true });
+      return;
+    }
+    // The claim records its own time: a rename keeps the pending file's older mtime.
+    const claimedAt = pending.claimedAt === undefined ? Number.NaN : Date.parse(pending.claimedAt);
+    if (Date.now() - claimedAt < PROCESSING_STALE_MS) return;
+    const { claimedAt: _claimed, ...fresh } = pending;
+    await secureWrite(claimed.slice(0, -".processing".length), fresh);
+    await rm(claimed, { force: true });
+  }
+
+  /** One collection attempt for one pending approval, single-flight per approval. */
+  async #collectApproval(stateRoot: string, nonce: string, timeoutMs: number): Promise<CollectionOutcome> {
+    const path = this.#pendingPath(stateRoot, nonce);
+    const running = this.#collections.get(path);
+    if (running) return running;
+    const collecting = this.#collectStep(stateRoot, nonce, timeoutMs)
+      .catch((error: unknown) => {
+        writeDiagnostic(`approval collection failed: code=${collectionErrorCode(error)}`);
+        return "retry" as const;
+      })
+      .finally(() => this.#collections.delete(path));
+    this.#collections.set(path, collecting);
+    return collecting;
+  }
+
+  async #collectStep(stateRoot: string, nonce: string, timeoutMs: number): Promise<CollectionOutcome> {
+    const path = this.#pendingPath(stateRoot, nonce);
+    const pending = await readJson<PendingApproval>(path).catch(() => null);
+    if (pending === null || pending.version !== PENDING_VERSION || pending.openkey === undefined) return "idle";
+    const openkey = pending.openkey;
+    // Results are fetched only from the OpenKey API origin this server is configured with.
+    if (!this.#currentRequest(openkey)) {
+      writeDiagnostic("approval dropped: reason=openkey_origin_changed");
+      await rm(path, { force: true });
+      return "done";
+    }
+    if (Date.now() >= collectionDeadline(openkey)) {
+      await rm(path, { force: true });
+      return "done";
+    }
+    const tenant = await this.#readTenant(pending.tenantId);
+    if ((pending.approvalEpoch ?? 0) !== tenant.approvalEpoch) {
+      await rm(path, { force: true });
+      return "done";
+    }
+    let collected: OpenKeyCollection;
+    try {
+      collected = await collectOpenKeyResult(openkey, tenant.jwk, timeoutMs);
+    } catch (error) {
+      if (!isApprovalClientError(error)) throw error;
+      return this.#collectionRefused(path, pending, error);
+    }
+    if (collected.status === "pending") return "pending";
+    if (collected.status === "discovered") {
+      await secureWrite(path, {
+        ...pending,
+        openkey: { ...openkey, resultRef: collected.resultRef, resultExpiresAt: collected.resultExpiresAt },
+      });
+      return this.#collectStep(stateRoot, nonce, timeoutMs);
+    }
+    const claimed = `${path}.processing`;
+    try {
+      await rename(path, claimed);
+    } catch (error) {
+      if (isRecord(error) && error.code === "ENOENT") return "done";
+      throw error;
+    }
+    await secureWrite(claimed, { ...pending, claimedAt: new Date().toISOString() });
     const prior = this.#approvalProcessing.get(stateRoot);
     const processing = (async () => {
       if (prior) await prior.catch(() => undefined);
-      try {
-        const tenant = await this.#readTenant(pending.tenantId);
-        if ((pending.approvalEpoch ?? 0) !== tenant.approvalEpoch) {
-          throw new ApprovalRequestError("state_not_pending", "Approval state is invalid or already used.");
-        }
-        if (pending.kind === "bootstrap") {
-          await this.#storeBootstrap(tenant, pending, data);
-        } else {
-          await this.#storeDelegation(tenant, pending, data);
-        }
-        await rm(this.#pendingPath(tenant.stateRoot, pending.nonce) + ".processing", { force: true });
-      } catch (error) {
-        await this.#restorePending(pending).catch(() => undefined);
-        throw error;
+      const current = await this.#readTenant(pending.tenantId);
+      if ((pending.approvalEpoch ?? 0) !== current.approvalEpoch) {
+        throw new ApprovalRequestError("state_not_pending", "Approval state is invalid or already used.");
       }
+      const { checked } = collected;
+      const storedCid = pending.kind === "bootstrap"
+        ? await this.#storeBootstrap(current, pending, checked.delegation, checked.ownerDid, checked.renewal)
+        : await this.#storeDelegation(current, pending, checked.delegation, checked.ownerDid);
+      await secureWrite(claimed, { ...pending, openkey: { ...openkey, storedCid } });
     })();
     this.#approvalProcessing.set(stateRoot, processing);
     try {
       await processing;
+    } catch (error) {
+      if (error instanceof RenewalAdmissionUnavailableError) {
+        // Nothing was stored: the same result is fetched and admitted again on the next collection.
+        await secureWrite(path, pending).catch(() => undefined);
+        await rm(claimed, { force: true });
+        writeDiagnostic("approval renewal admission deferred: code=NODE_UNAVAILABLE");
+        return "retry";
+      }
+      // The link stays usable: its next visit asks OpenKey again.
+      const { openkey: _spent, ...fresh } = pending;
+      await secureWrite(path, fresh).catch(() => undefined);
+      await rm(claimed, { force: true });
+      writeDiagnostic(approvalRefusalDiagnostic(error));
+      return "done";
     } finally {
       if (this.#approvalProcessing.get(stateRoot) === processing) this.#approvalProcessing.delete(stateRoot);
     }
+    await this.#acknowledge(stateRoot, openkey);
+    await rm(claimed, { force: true });
+    return "done";
+  }
+
+  async #collectionRefused(
+    path: string,
+    pending: PendingApproval,
+    error: ApprovalClientError,
+  ): Promise<CollectionOutcome> {
+    switch (error.code) {
+      case "network":
+      case "unavailable":
+        return "retry";
+      case "request_expired":
+        if (pending.openkey !== undefined && Date.now() < Date.parse(pending.openkey.expiresAt)) return "retry";
+        await rm(path, { force: true });
+        return "done";
+      case "acknowledged":
+        await rm(path, { force: true });
+        return "done";
+      default: {
+        // The result is gone, refused by OpenKey, or does not answer this request.
+        const { openkey: _spent, ...fresh } = pending;
+        await secureWrite(path, fresh);
+        writeDiagnostic(`approval result rejected: stage=collect code=${error.code.toUpperCase()}`);
+        return "done";
+      }
+    }
+  }
+
+  async #acknowledge(stateRoot: string, openkey: OpenKeyRequestState): Promise<void> {
+    try {
+      const tenant = await this.#readTenant(basename(stateRoot));
+      await ackOpenKeyResult(openkey, tenant.jwk, POLL_COLLECTION_TIMEOUT_MS);
+    } catch (error) {
+      // OpenKey drops an unacknowledged result when its retention ends.
+      writeDiagnostic(`approval acknowledgement failed: code=${collectionErrorCode(error)}`);
+    }
+  }
+
+  /**
+   * Poll one opened approval until it is collected or its request and result
+   * window end: every 2 s for the first minute, then every 10 s. At most
+   * `MAX_COLLECTION_POLLS` run at once; beyond that the tenant's next call
+   * collects.
+   */
+  #startCollectionPoll(stateRoot: string, nonce: string): void {
+    const key = this.#pendingPath(stateRoot, nonce);
+    if (this.#closed || this.#polls.has(key) || this.#polls.size >= MAX_COLLECTION_POLLS) return;
+    const startedAt = Date.now();
+    const schedule = (): void => {
+      const delay = Date.now() - startedAt < FAST_POLL_WINDOW_MS ? APPROVAL_POLL_INTERVAL_MS : SLOW_POLL_INTERVAL_MS;
+      const timer = setTimeout(() => void tick(), delay);
+      timer.unref();
+      this.#polls.set(key, timer);
+    };
+    const tick = async (): Promise<void> => {
+      const outcome = await this.#collectApproval(stateRoot, nonce, POLL_COLLECTION_TIMEOUT_MS);
+      if (this.#closed || outcome === "done" || outcome === "idle") {
+        this.#polls.delete(key);
+        return;
+      }
+      schedule();
+    };
+    schedule();
+  }
+
+  /** Stop background collection. Pending approvals stay on disk for the next start. */
+  async close(): Promise<void> {
+    this.#closed = true;
+    for (const timer of this.#polls.values()) clearTimeout(timer);
+    this.#polls.clear();
+    await Promise.allSettled([...this.#collections.values()]);
+  }
+
+  /** Whether a stored request opens on, and is collected from, the OpenKey origins this server is configured with. */
+  #currentRequest(openkey: OpenKeyRequestState): boolean {
+    return openkey.apiOrigin === this.#endpoints.openkeyApiOrigin &&
+      URL.canParse(openkey.link) && URL.canParse(this.#endpoints.openkeyOrigin) &&
+      new URL(openkey.link).origin === new URL(this.#endpoints.openkeyOrigin).origin;
   }
 
   async #storeBootstrap(
     tenant: TenantProfile,
     pending: PendingApproval,
     data: Record<string, unknown>,
-  ): Promise<void> {
-    const { node, session } = await this.#restoreApproval(tenant, data);
+    resultOwner: string,
+    renewal: ApprovalRenewal | undefined,
+  ): Promise<string> {
+    const { node, session } = await this.#restoreApproval(tenant, data, resultOwner);
     this.#assertCurrentApproval(pending, session);
     if (pending.ownerDids.length > 0 && !pending.ownerDids.some((did) => samePrincipal(node.did, did))) {
       throw new ApprovalOwnerMismatchError();
@@ -740,29 +1049,77 @@ export class RemoteTenantStore {
     if (!isCapabilitySubset(pending.permissions, node.getVerifiedSessionCapabilities()).subset) {
       throw new Error("The approved delegation does not cover the requested account access.");
     }
+    if (renewal !== undefined) await this.#admitRenewal(tenant, node.did, session, renewal);
     const profile = await readJson<Record<string, unknown>>(this.#profilePath(tenant.stateRoot));
     await secureWrite(this.#profilePath(tenant.stateRoot), {
       ...profile,
       ownerDid: normalizeDid(node.did),
       spaceId: session.spaceId,
     });
+    // The lease is kept with the session it renews; restores past the signed end go through the node.
     await secureWrite(this.#sessionPath(tenant.stateRoot), {
       authMethod: "openkey",
       ...session,
+      ...(renewal === undefined ? {} : { renewal }),
     });
     this.#renewalRequired.delete(tenant.stateRoot);
     this.#activeSessions.delete(tenant.stateRoot);
+    return session.delegationCid;
+  }
+
+  /**
+   * Check the owner's renewal lease against the grant it renews, then admit it at the node, before the
+   * session is stored. Admission replays the exact signed lease, so a retry admits the same one.
+   */
+  async #admitRenewal(
+    tenant: TenantProfile,
+    ownerDid: string,
+    session: CallbackSession,
+    renewal: ApprovalRenewal,
+  ): Promise<void> {
+    let signed: { originalExpiresAt: string; leaseSignedExpiresAt: string };
+    try {
+      signed = await verifyOwnerRenewalLease(session, ownerDid, renewal);
+    } catch (error) {
+      throw new ApprovalStageError("renewal", "RENEWAL_LEASE_MISMATCH", undefined, error);
+    }
+    // The node renews only a grant that outlives a few of its renewal rounds.
+    if (Date.parse(signed.originalExpiresAt) - Date.now() < RENEWAL_ADMISSION_LEAD_MS) {
+      throw new ApprovalStageError("renewal", "RENEWAL_GRANT_ENDS_TOO_SOON");
+    }
+    try {
+      await admitOwnerRenewalLease({
+        host: new URL(this.#config.nodeHost).origin,
+        originalAuthorization: session.delegationHeader.Authorization,
+        originalCid: session.delegationCid,
+        ownerDid,
+        agentDid: tenant.sessionDid.split("#")[0]!,
+        spaceId: session.spaceId,
+        nodeIdentity: renewal.receipt.nodeIdentity,
+        leaseAuthorization: renewal.receipt.leaseAuthorization,
+        leaseCid: renewal.receipt.leaseCid,
+        leaseExpiresAt: signed.leaseSignedExpiresAt,
+      });
+    } catch (error) {
+      const code = isRecord(error) ? error.code : undefined;
+      // A changed renewer never renews this lease, and an ended grant cannot start one: ask again.
+      if (code === RENEWAL_RENEWER_CHANGED || code === RENEWAL_LEASE_ORIGINAL_EXPIRED) {
+        throw new ApprovalStageError("renewal", code, undefined, error);
+      }
+      throw new RenewalAdmissionUnavailableError(error);
+    }
   }
 
   async #storeDelegation(
     tenant: TenantProfile,
     pending: PendingApproval,
     data: Record<string, unknown>,
-  ): Promise<void> {
+    resultOwner: string,
+  ): Promise<string> {
     if (pending.requestId === undefined) throw new Error("Authority request is missing.");
     // Unlike bootstrap there is no empty-list exemption: a delegation is only
     // imported when its verified signer is the OAuth principal that asked.
-    const { node, session } = await this.#restoreApproval(tenant, data);
+    const { node, session } = await this.#restoreApproval(tenant, data, resultOwner);
     this.#assertCurrentApproval(pending, session);
     if (!pending.ownerDids.some((did) => samePrincipal(node.did, did))) throw new ApprovalOwnerMismatchError();
     // OpenKey returns a signed-login (CACAO) delegation. Every field is
@@ -810,6 +1167,7 @@ export class RemoteTenantStore {
       );
     }
     if (result.status !== "ok") throw new ApprovalStageError("auth_import", "AUTHORITY_REQUIRED");
+    return session.delegationCid;
   }
 
   #assertCurrentApproval(pending: PendingApproval, session: CallbackSession): void {
@@ -821,15 +1179,17 @@ export class RemoteTenantStore {
   }
 
   /**
-   * Verify the OpenKey callback as a SIWE session for this tenant's key. The
-   * callback must carry the full signed proof (SIWE, signature, address and
-   * chain), so the WASM verifier always runs: it binds the authorization bytes
-   * and CID to the signed SIWE, and `node.did` is the wallet that signed
-   * exactly the delegation being stored.
+   * Verify OpenKey's delegation as a SIWE session for this tenant's key. It
+   * must carry the full signed proof (SIWE, signature, address and chain), so
+   * the WASM verifier always runs: it binds the authorization bytes and CID to
+   * the signed SIWE, and `node.did` is the wallet that signed exactly the
+   * delegation being stored. That wallet must be the owner OpenKey's result
+   * names.
    */
   async #restoreApproval(
     tenant: TenantProfile,
     data: Record<string, unknown>,
+    resultOwner: string,
   ): Promise<{ node: TinyCloudNode; session: CallbackSession }> {
     let session: CallbackSession;
     try {
@@ -852,6 +1212,9 @@ export class RemoteTenantStore {
     }
     if (!samePrincipal(node.sessionDid, tenant.sessionDid)) {
       throw new ApprovalStageError("restore_approval", "SESSION_MISMATCH");
+    }
+    if (!samePrincipal(node.did, resultOwner)) {
+      throw new ApprovalStageError("restore_approval", "RESULT_OWNER_MISMATCH");
     }
     return { node, session };
   }
@@ -907,15 +1270,20 @@ export class RemoteTenantStore {
     if (raw === null) return "invalid";
     const node = new TinyCloudNode({ host: this.#config.nodeHost });
     try {
-      await node.restoreSession(raw as unknown as TinyCloudSession);
-    } catch {
+      // Past its signed end, a session stored with a renewal lease restores only through the node.
+      await restoreStoredSession(node, raw as unknown as TinyCloudSession, raw);
+    } catch (error) {
       const header = isRecord(raw.delegationHeader) ? raw.delegationHeader.Authorization : undefined;
       const signedExpiry = typeof header === "string" ? signedCompactUcanExpiry(header) : undefined;
       const siweExpiry = typeof raw.siwe === "string"
         ? /^Expiration Time: ([^\r\n]+)\r?$/m.exec(raw.siwe)?.[1]
         : undefined;
       const expiry = signedExpiry ?? (siweExpiry === undefined ? undefined : new Date(siweExpiry));
-      if (expiry !== undefined && expiry.getTime() <= Date.now()) return "invalid";
+      if (expiry !== undefined && expiry.getTime() <= Date.now()) {
+        // An ended, stopped or re-issued lease asks again; a node that did not answer confirms nothing.
+        const ended = isRecord(error) && error.code === "AUTH_EXPIRED";
+        return liveStoredLease(raw) !== undefined && !ended ? "unknown" : "invalid";
+      }
       await this.#clearAuthority(tenant);
       return "invalid";
     }
@@ -1085,15 +1453,17 @@ export class RemoteTenantStore {
     ownerDids: string[],
     requestId?: string,
   ): Promise<PendingApproval> {
+    const leaseAsk = kind === "bootstrap" ? BOOTSTRAP_LEASE_SECONDS : undefined;
     const reusable = await reusablePending(
       this.#pendingDirectory(tenant.stateRoot),
       { tenantId, approvalEpoch: tenant.approvalEpoch, kind, requestId, permissions, ownerDids },
+      (openkey) => this.#currentRequest(openkey) && openkey.request.renewal?.leaseLifetimeSeconds === leaseAsk,
     );
     if (reusable !== undefined) return reusable;
     const nonce = randomBytes(24).toString("base64url");
     const created = Date.now();
     const pending: PendingApproval = {
-      version: 1,
+      version: PENDING_VERSION,
       nonce,
       tenantId,
       approvalEpoch: tenant.approvalEpoch,
@@ -1108,7 +1478,7 @@ export class RemoteTenantStore {
     return pending;
   }
 
-  async #readPending(state: string, consume: boolean): Promise<PendingApproval> {
+  async #readPending(state: string): Promise<{ stateRoot: string; pending: PendingApproval }> {
     const [tenantId, nonce, signature] = state.split(".");
     if (tenantId === undefined || nonce === undefined || signature === undefined) {
       throw new ApprovalRequestError("state_invalid", "Approval state is invalid.");
@@ -1121,54 +1491,36 @@ export class RemoteTenantStore {
     }
     const stateRoot = join(this.#config.stateDir, "tenants", tenantId);
     const path = this.#pendingPath(stateRoot, nonce);
-    const claimed = `${path}.processing`;
-    if (consume) {
-      try {
-        await rename(path, claimed);
-      } catch (error) {
-        // No pending file to claim. Other filesystem failures stay unclassified.
-        if (!isRecord(error) || error.code !== "ENOENT") throw error;
-        // The state is signed by this server, so a missing tenant key means the
-        // tenant directory itself is gone (for example a reset state volume).
-        const tenantExists = await readJson<unknown>(this.#keyPath(stateRoot)).then(
-          (jwk) => jwk !== null,
-          () => true,
-        );
-        if (!tenantExists) {
-          throw new ApprovalRequestError("tenant_missing", "The TinyCloud delegate no longer exists.", error);
-        }
-        // Already used, being processed, or never issued. This is not proof of
-        // replay: retrying an expired link lands here too, because the first
-        // attempt deleted its pending file.
-        throw new ApprovalRequestError("state_not_pending", "Approval state is invalid or already used.", error);
-      }
+    const pending = await readJson<PendingApproval>(path);
+    if (pending === null) {
+      // The state is signed by this server, so a missing tenant key means the
+      // tenant directory itself is gone (for example a reset state volume).
+      const tenantExists = await readJson<unknown>(this.#keyPath(stateRoot)).then(
+        (jwk) => jwk !== null,
+        () => true,
+      );
+      if (!tenantExists) throw new ApprovalRequestError("tenant_missing", "The TinyCloud delegate no longer exists.");
+      // Already used, being processed, or never issued. This is not proof of
+      // replay: an expired link lands here too once its pending file is gone.
+      throw new ApprovalRequestError("state_not_pending", "Approval state is invalid or already used.");
     }
-    try {
-      const pending = await readJson<PendingApproval>(consume ? claimed : path);
-      if (pending === null || pending.version !== 1 || pending.tenantId !== tenantId || pending.nonce !== nonce) {
-        throw new ApprovalRequestError("state_not_pending", "Approval state is invalid or already used.");
-      }
-      const profile = await readJson<Record<string, unknown>>(this.#profilePath(stateRoot));
-      const approvalEpoch = this.#approvalEpochs.get(stateRoot) ??
-        (typeof profile?.approvalEpoch === "number" ? profile.approvalEpoch : 0);
-      if ((pending.approvalEpoch ?? 0) !== approvalEpoch) {
-        throw new ApprovalRequestError("state_not_pending", "Approval state is invalid or already used.");
-      }
-      if (new Date(pending.expiresAt).getTime() <= Date.now()) {
-        await rm(consume ? claimed : path, { force: true });
-        throw new ApprovalRequestError("state_expired", "Approval state has expired.");
-      }
-      return pending;
-    } catch (error) {
-      if (consume) await rename(claimed, path).catch(() => undefined);
-      throw error;
+    if (pending.version !== PENDING_VERSION || pending.tenantId !== tenantId || pending.nonce !== nonce) {
+      throw new ApprovalRequestError("state_not_pending", "Approval state is invalid or already used.");
     }
-  }
-
-  async #restorePending(pending: PendingApproval): Promise<void> {
-    const stateRoot = join(this.#config.stateDir, "tenants", pending.tenantId);
-    const path = this.#pendingPath(stateRoot, pending.nonce);
-    await rename(`${path}.processing`, path);
+    const profile = await readJson<Record<string, unknown>>(this.#profilePath(stateRoot));
+    const approvalEpoch = this.#approvalEpochs.get(stateRoot) ??
+      (typeof profile?.approvalEpoch === "number" ? profile.approvalEpoch : 0);
+    if ((pending.approvalEpoch ?? 0) !== approvalEpoch) {
+      throw new ApprovalRequestError("state_not_pending", "Approval state is invalid or already used.");
+    }
+    if (new Date(pending.expiresAt).getTime() <= Date.now()) {
+      // A result approved just before the end may still be collected.
+      if (pending.openkey === undefined || Date.now() >= collectionDeadline(pending.openkey)) {
+        await rm(path, { force: true });
+      }
+      throw new ApprovalRequestError("state_expired", "Approval state has expired.");
+    }
+    return { stateRoot, pending };
   }
 
   #connectUrl(pending: PendingApproval): string {
@@ -1426,6 +1778,61 @@ function sessionFromCallback(data: Record<string, unknown>, privateJwk: Record<s
   };
 }
 
+/** What the approver reads in OpenKey. */
+function approvalReason(pending: PendingApproval): string {
+  return [
+    pending.kind === "bootstrap"
+      ? "Connect this TinyCloud account to the hosted MCP delegate."
+      : tcAppsApprovalReason(pending.permissions) ??
+        "Approve the exact capabilities requested by the TinyCloud MCP operation.",
+    // Owner DIDs come from the verified OpenKey access token of the MCP
+    // client that created this link, never from the link itself. Collection
+    // refuses a signer outside them, so the approver isn't asked to check.
+    ...(pending.ownerDids.length === 0
+      ? []
+      : [`Requested by TinyCloud account ${pending.ownerDids.join(", ")}.`]),
+  ].join(" ");
+}
+
+/**
+ * The last moment a result for this request may still be collected: OpenKey keeps a result at most
+ * `RESULT_COLLECTION_GRACE_MS` after it is approved, and approval ends with the request. A later
+ * retention OpenKey reports never extends collection.
+ */
+function collectionDeadline(openkey: OpenKeyRequestState): number {
+  return Date.parse(openkey.expiresAt) + RESULT_COLLECTION_GRACE_MS;
+}
+
+/** An identifier for a collection failure; never OpenKey, delegation or node text. */
+function collectionErrorCode(error: unknown): string {
+  if (isApprovalClientError(error)) return error.code.toUpperCase();
+  if (error instanceof ApprovalRequestError) return error.detail.toUpperCase();
+  return "UNKNOWN";
+}
+
+/**
+ * The log line for a refused approval. Stage, code, reason and detail are
+ * identifiers, never OpenKey, delegation or node text.
+ */
+export function approvalRefusalDiagnostic(error: unknown): string {
+  if (error instanceof ApprovalOwnerMismatchError) {
+    return "approval result rejected: stage=owner code=APPROVAL_OWNER_MISMATCH detail=none";
+  }
+  const stage = error instanceof ApprovalStageError ? error.stage : "unknown";
+  const code = error instanceof ApprovalStageError && /^[A-Z][A-Z0-9_]{0,63}$/.test(error.code)
+    ? error.code
+    : "UNKNOWN";
+  const reason = !(error instanceof ApprovalStageError) || error.reason === undefined
+    ? undefined
+    : RUNTIME_DELEGATION_REJECTIONS.find((known) => known === error.reason) ?? "unknown";
+  const detail = error instanceof ApprovalRequestError ? error.detail : "none";
+  return `approval result rejected: stage=${stage} code=${code}${reason === undefined ? "" : ` reason=${reason}`} detail=${detail}`;
+}
+
+function writeDiagnostic(message: string): void {
+  process.stderr.write(`[tinycloud-mcp-http] ${message}\n`);
+}
+
 function samePrincipal(left: string | undefined, right: string): boolean {
   if (typeof left !== "string") return false;
   try {
@@ -1512,9 +1919,14 @@ async function restoreOptionalText(path: string, contents: string | null): Promi
   await chmod(path, 0o600);
 }
 
+/**
+ * A live pending approval for exactly this request, if one exists. One whose OpenKey request
+ * `currentRequest` refuses (other origins, another renewal ask) is never reused.
+ */
 async function reusablePending(
   directory: string,
   expected: Pick<PendingApproval, "tenantId" | "approvalEpoch" | "kind" | "requestId" | "permissions" | "ownerDids">,
+  currentRequest: (openkey: OpenKeyRequestState) => boolean,
 ): Promise<PendingApproval | undefined> {
   let names: string[];
   try {
@@ -1528,12 +1940,20 @@ async function reusablePending(
     if (!name.endsWith(".json")) continue;
     const path = join(directory, name);
     const pending = await readJson<PendingApproval>(path).catch(() => null);
-    if (pending === null || new Date(pending.expiresAt).getTime() <= Date.now()) {
+    if (pending === null) {
       await rm(path, { force: true });
       continue;
     }
+    if (new Date(pending.expiresAt).getTime() <= Date.now()) {
+      // A result approved just before the end may still be collected.
+      if (pending.openkey === undefined || Date.now() >= collectionDeadline(pending.openkey)) {
+        await rm(path, { force: true });
+      }
+      continue;
+    }
     active.push(pending);
-    if (samePendingRequest(pending, expected)) return pending;
+    if (samePendingRequest(pending, expected) &&
+      (pending.openkey === undefined || currentRequest(pending.openkey))) return pending;
   }
   if (active.length >= 64) {
     active.sort((left, right) => Date.parse(left.createdAt) - Date.parse(right.createdAt));
@@ -1546,7 +1966,7 @@ function samePendingRequest(
   pending: PendingApproval,
   expected: Pick<PendingApproval, "tenantId" | "approvalEpoch" | "kind" | "requestId" | "permissions" | "ownerDids">,
 ): boolean {
-  return pending.version === 1 && pending.tenantId === expected.tenantId &&
+  return pending.version === PENDING_VERSION && pending.tenantId === expected.tenantId &&
     (pending.approvalEpoch ?? 0) === expected.approvalEpoch &&
     pending.kind === expected.kind && pending.requestId === expected.requestId &&
     JSON.stringify(pending.permissions) === JSON.stringify(expected.permissions) &&

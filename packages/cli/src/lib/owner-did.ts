@@ -1,6 +1,7 @@
 import { ensureEip55 } from "@tinycloud/node-sdk-wasm";
 import { ExitCode } from "../config/constants.js";
 import { CLIError } from "../output/errors.js";
+import { isSecretKeyPath } from "../../../sdk-core/src/manifest.js";
 
 /** The network owner identity in the EIP-55 spelling expected by the node. */
 export function canonicalOwnerDid(did: string, label = "--owner"): string {
@@ -20,10 +21,18 @@ export function canonicalNetworkUrn(path: string): string {
   return match ? `urn:tinycloud:encryption:${canonicalOwnerDid(match[1]!)}:${match[2]}` : path;
 }
 
-/** Only a network owned by the signer may appear as a raw decrypt grant. */
+/**
+ * Only a network owned by the signer may appear as a raw encryption grant: the network, its `share/` prefix or one
+ * Share key, or one secret's key on its default network. A `secrets/` prefix is never admitted (TC-3284).
+ */
 export function rawEncryptionOwnerMatches(path: string, ownerDid: string): boolean {
-  const match = /^urn:tinycloud:encryption:(did:pkh:eip155:[1-9]\d*:0x[0-9a-fA-F]{40}):([a-z0-9][a-z0-9-]*)(?:\/share\/(?:[0-9a-f]{32})?)?$/.exec(path);
+  const match = /^urn:tinycloud:encryption:(did:pkh:eip155:[1-9]\d*:0x[0-9a-fA-F]{40}):([a-z0-9][a-z0-9-]*)(?:\/(.*))?$/.exec(path);
   if (!match) return false;
+  const rest = match[3];
+  if (rest !== undefined && !/^share\/(?:[0-9a-f]{32})?$/.test(rest) &&
+    !(match[2] === "default" && isSecretKeyPath(rest))) {
+    return false;
+  }
   try {
     return canonicalOwnerDid(match[1]!) === canonicalOwnerDid(ownerDid);
   } catch {

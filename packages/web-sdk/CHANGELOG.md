@@ -1,5 +1,288 @@
 # @tinycloudlabs/web-sdk
 
+## 3.14.0-beta.21
+
+### Patch Changes
+
+- Updated dependencies [03d49fe]
+  - @tinycloud/sdk-core@3.14.0-beta.21
+  - @tinycloud/share-sdk@1.7.0-beta.0
+  - @tinycloud/node-sdk@3.14.0-beta.21
+
+## 3.14.0-beta.20
+
+### Patch Changes
+
+- f2ce056: Apps can request additional permissions after restoring a session with a verified renewal. The new permissions end by the time the restored session expires.
+
+  Details: TC-4028
+
+- Updated dependencies [f2ce056]
+- Updated dependencies [f2ce056]
+  - @tinycloud/sdk-core@3.14.0-beta.20
+  - @tinycloud/node-sdk@3.14.0-beta.20
+  - @tinycloud/replica@0.4.7-beta.6
+
+## 3.14.0-beta.19
+
+### Patch Changes
+
+- 71da2dd: Users can sign in to TinyCloud Explorer at `https://explorer.tinycloud.xyz` even if the owner has no location registry record. OpenKey handles account setup. Other origins do not gain this access.
+
+  Details: TC-3862
+  - @tinycloud/sdk-core@3.14.0-beta.19
+  - @tinycloud/node-sdk@3.14.0-beta.19
+  - @tinycloud/replica@0.4.7-beta.5
+
+## 3.14.0-beta.18
+
+### Patch Changes
+
+- Updated dependencies [532d5eb]
+  - @tinycloud/sdk-core@3.14.0-beta.18
+  - @tinycloud/node-sdk@3.14.0-beta.18
+  - @tinycloud/replica@0.4.7-beta.4
+
+## 3.14.0-beta.17
+
+### Minor Changes
+
+- 52f7d4c: `keys.encrypt` accepts a caller-verified public key descriptor for a named key and seals to it without contacting the node. The descriptor must match the network and key path. Seeded keys need a descriptor marked active and deletable. The caller verifies its origin and freshness. `descriptor` cannot be used with `ensureKey: true`.
+
+  `BOT_HISTORY_KEY_PATH` is reserved for TinyChat bot history. The `tinychat-bot-history` scope cannot hold secrets. A runtime permission request can grant decrypt or key creation on that exact key, and the web SDK keeps an approved grant for that key across reloads in the same session.
+
+  Details: TC-3823
+
+### Patch Changes
+
+- Updated dependencies [52f7d4c]
+  - @tinycloud/sdk-core@3.14.0-beta.17
+  - @tinycloud/node-sdk@3.14.0-beta.17
+  - @tinycloud/replica@0.4.7-beta.3
+
+## 3.14.0-beta.16
+
+### Patch Changes
+
+- 9919d97: `hasPermissions` and `hasRuntimePermissions` recognize exact secret-key permissions signed in the session, even when the same session has a bare encryption-network grant. An exact key does not cover a different key, a broader prefix or an unsigned action.
+
+  Details: TC-3969
+
+- 9919d97: Secrets permission checks use the signed-in owner's resolved manifest when the app declares an encryption path with `{owner}`. The template remains unchanged for sign-in. Apps can read secrets sealed to the network key and write secrets without asking again for permissions already granted.
+
+  Details: TC-3971
+
+- Updated dependencies [9919d97]
+- Updated dependencies [9919d97]
+  - @tinycloud/node-sdk@3.14.0-beta.16
+
+## 3.14.0-beta.15
+
+### Minor Changes
+
+- 171a7b3: Opted-in writes seal each secret to its own key, `secrets/<name>` (or `secrets/scoped/<scope>/<name>`), so one secret can be shared without the others. The content key is wrapped once, to that key only. Pass `{ namedKey: true }` to SDK `secrets.put`, or set `TC_SECRETS_NAMED_KEY_WRITES=1` for `tc secrets put`. Without opt-in, writes seal to the network key. Node support alone does not change the write format. Readers open both formats with the corresponding grant, including network-wrapped secrets written without AAD. A reader holding only one secret's key gets `legacy_envelope` / `LEGACY_ENVELOPE` for a network-wrapped copy. `secretKeyPath`, `parseSecretKeyPath` and `secretReadPermissions` build the exact key and grant.
+
+  `vault.resealToKey(key, keyPath, { dryRun })` moves one record onto its own key: it seals a new copy, checks it opens to the same bytes, and overwrites only if the record is unchanged (`ifMatch`). Any failure keeps the old copy.
+
+  Upgrading (node-sdk): `secrets.get` and `secrets.getEntry` ask the wallet for missing authority only with `requestPermission: true`. Pass it for a read the user started. Without a live grant on the secret's own key the read is `DECRYPT_DENIED` with `permissionHint` naming that key, and a node refusing that key gives the same code. `namedKeyOnly: true` opens only a copy sealed to the secret's own key. Both are on the new `SecretGetOptions`. `put`, `delete` and `list` ask without the flag.
+
+  web-sdk keeps approved grants for one secret's own key across reloads, like panel grants. In web-sdk, `secrets.get` and `secrets.getEntry` with `requestPermission: true` ask the page's permission prompt for exactly that key on the space's own network, then read once more. That prompt always shows, even after "don't ask for 30 days". A declined or closed prompt returns `PERMISSION_DENIED`, and the next opted-in read shows the prompt. Without the flag they never ask. A node-sdk node restored without a signer reports that it can't ask for authority.
+
+  A runtime grant or a `delegateTo` delegation on a secret's own key (or keys under `secrets`) lasts 1 hour unless an expiry is asked, is capped at 7 days, and ends no later than the session; the returned `delegation.expiry` is the expiry signed. Other `delegateTo` delegations, network-root decrypt included, keep the 7-day default. node-sdk exports the limits as `SECRET_KEY_GRANT_DEFAULT_MS` and `SECRET_KEY_GRANT_MAX_MS`, and `secretKeyGrantExpiryMs(expiry)` applies them. Secret names and scopes are limited to 64 characters (`MAX_SECRET_NAME_LENGTH`, `MAX_SECRET_SCOPE_LENGTH`); a longer one is `INVALID_INPUT`. `resealToKey` throws unless `keyPath` is the record's own secret key.
+
+  `delegateTo` of a secret's key needs that key in the signed session: sign in with an explicit `capabilityRequest` that includes `<network>/secrets/` (decrypt, key.create). The default sign-in does not include it. `delegateTo` refuses any `secrets` path that is not one secret's exact key.
+
+  An opted-in write to a node without `encryption-named-keys-v1` returns `NAMED_KEYS_UNSUPPORTED` (`service: "secrets"`) before any secret permission request, grant or write. An expired session's sign-in may run first. `tc secrets put` exits 11 for that code. Default network-wrapped writes and reads of existing secrets do not require the feature. `NAMED_KEYS_UNSUPPORTED`, `NAMED_KEYS_UNSUPPORTED_MESSAGE` and `namedKeysUnsupportedResult()` are exported from sdk-services and sdk-core, and `TinyCloudNode.namedKeysSupported()` reports the node's answer. A node without the feature receives a sign-in request without per-secret key entries; that request retains its other entries, including bare-network decrypt. Sign-in checks `/info` once before building a request that names secret keys.
+
+  When the node's features can't be checked, an opted-in write returns `NAMED_KEYS_CHECK_FAILED` (`service: "secrets"`, `meta.retryable: true`) before any secret permission request, grant or write. An expired session's sign-in may run first. `tc secrets put` exits 6 for that code. `NAMED_KEYS_CHECK_FAILED`, `NAMED_KEYS_CHECK_FAILED_MESSAGE` and `namedKeysPutRefusal(supported)` are exported from sdk-services and sdk-core.
+
+  Upgrading: a secret stored under a name or scope longer than 64 characters can't be read, written or deleted through `get`, `put` or `delete`. It is not hidden: `listAll()` returns it with `nameTooLong: true` and/or `scopeTooLong: true` (the scope as stored), and `list()` includes its name. A `put` of a name over 64 characters returns `INVALID_INPUT` ("This secret wasn't saved: its name is N characters, and names can be at most 64. Choose a shorter name.") before any secret permission request, grant or write, and `tc secrets put` prints the same words with exit 2. `parseStoredSecretCatalogKey`, `secretNameTooLongMessage` and `secretNameTooLongRefusal(name)` are exported from sdk-services and sdk-core; `parseSecretCatalogKey` returns nothing for such a key. Self-hosted owners who hold such a secret can rename it with the previous CLI first.
+
+  The unscoped secret name `SCOPED` is reserved: its key, `secrets/scoped`, is the parent of every scoped key, so `secretKeyPath`, `resolveSecretPath` and the calls built on them throw `Secret name "SCOPED" is reserved.` and the services return `INVALID_INPUT`. Upgrading: a secret stored under the unscoped name `SCOPED` can't be read, written or deleted through `get`, `put` or `delete`. A secret named `SCOPED` inside a scope is not affected.
+
+  Details: TC-3801
+
+### Patch Changes
+
+- Updated dependencies [171a7b3]
+  - @tinycloud/sdk-core@3.14.0-beta.15
+  - @tinycloud/node-sdk@3.14.0-beta.15
+  - @tinycloud/replica@0.4.7-beta.2
+
+## 3.14.0-beta.14
+
+### Patch Changes
+
+- Updated dependencies [979145a]
+  - @tinycloud/replica@0.4.7-beta.1
+  - @tinycloud/node-sdk@3.14.0-beta.14
+  - @tinycloud/sdk-core@3.14.0-beta.14
+
+## 3.14.0-beta.13
+
+### Patch Changes
+
+- Updated dependencies [3d5cd63]
+  - @tinycloud/sdk-core@3.14.0-beta.13
+  - @tinycloud/node-sdk@3.14.0-beta.13
+
+## 3.14.0-beta.12
+
+### Minor Changes
+
+- 2790836: Permissions an app asks for while it's open stay approved after the page reloads, for as long as each approval lasts. Each app keeps only what was approved for that app; another app asking for the same access gets its own request. Only approvals for key-value, SQL and file access in one space are kept; the app asks again for any other approval after a reload. Requests that decrypt data, create keys, touch the secrets space, carry conditions or use a service other than key-value, SQL, files or delegation don't offer "Don't ask again for 30 days"; each one is approved on OpenKey's screen. Sign-in permissions are unchanged.
+
+  `hasPermissions(entries)` reports whether current approvals cover the given entries. With `{ onBehalfOf: appId }`, it counts only the session's sign-in permissions and approvals given for that app. `permissionsReady()` resolves once approvals kept before a reload are active again, or after 4 seconds at most; it never rejects, and an approval still being restored by then counts as not held.
+
+  Details: TC-3549
+
+### Patch Changes
+
+- Updated dependencies [2790836]
+  - @tinycloud/node-sdk@3.14.0-beta.12
+
+## 3.14.0-beta.11
+
+### Patch Changes
+
+- acb3dd2: An app whose host contains a line break signs in and gets a folder named `o_` and 16 hex characters, like any other host that isn't a domain name.
+
+  Details: TC-3930
+
+- Updated dependencies [acb3dd2]
+  - @tinycloud/sdk-core@3.14.0-beta.11
+  - @tinycloud/node-sdk@3.14.0-beta.11
+
+## 3.14.0-beta.10
+
+### Minor Changes
+
+- 778e1e2: A manifest permission path can hold the token `{owner}`, which resolves to the signing account's `did:pkh:eip155:<chain id>:<checksummed address>` at sign-in. The digest sent to OpenKey covers the manifest as published, with the token in place, so one published manifest serves every account. A manifest without the token sends the same request and digest as before. The token is accepted only inside `permissions[].path`; anywhere else (a name, a key, a space, an additional delegate) the sign-in is refused before OpenKey is asked. `@tinycloud/sdk-core` exports `resolveManifestOwner`, `manifestUsesOwnerPlaceholder` and `MANIFEST_OWNER_PLACEHOLDER`, and the presentation envelope may carry an `owner` hint that OpenKey checks against the owner it derives itself. A restored web session resolves the token with its own address and chain id.
+
+  Details: TC-3731
+
+### Patch Changes
+
+- Updated dependencies [778e1e2]
+  - @tinycloud/sdk-core@3.14.0-beta.10
+  - @tinycloud/node-sdk@3.14.0-beta.10
+
+## 3.14.0-beta.9
+
+### Minor Changes
+
+- 895bfdc: When OpenKey signs a permission request, `requestPermissions` shows no SDK prompt, and OpenKey's approval screen shows the request. The sign request carries the app's name and, for a request made for another app, that app's name (`onBehalfOf`). OpenKey shows them beside the requesting site as the app's own claim, and the signed message doesn't include them. `setRuntimePermissionSigner(signer, { openKey: true })` marks a custom signer as OpenKey's and passes it that display text as the second argument of `signMessage`. Set `openKey: true` only for a signer that shows its own approval screen for every request. The SDK prompt shows for wallets, for signers not marked as OpenKey, for OpenKey clients that don't accept the display text and for an OpenKey key held in an external wallet.
+
+  Details: TC-3704
+
+## 3.14.0-beta.8
+
+### Patch Changes
+
+- fbdbaa7: An app that signs in without a manifest gets a folder named by its domain and port: `notes.example.com:8443` gets `applications/com.example.notes_8443/`, and ports 80 and 443 add nothing. A host that isn't a domain name, such as an IPv6 address, gets a folder of its own named `o_` and 16 hex characters. Apps with no domain share one folder and log, once, how to get their own.
+
+  An app that used 3.14.0-beta.5 on another port with no manifest gets a new folder: data it saved in that beta is in the folder without the port, such as `applications/com.example.notes/`.
+
+  Details: TC-3443
+
+- Updated dependencies [fbdbaa7]
+- Updated dependencies [fbdbaa7]
+  - @tinycloud/node-sdk@3.14.0-beta.8
+  - @tinycloud/sdk-core@3.14.0-beta.8
+
+## 3.14.0-beta.7
+
+### Minor Changes
+
+- d382af8: Signing out asks each TinyCloud node the session used to stop accepting its session key and the keys created while setting up the account. Sign-out on this device finishes without waiting for the nodes. A node counts as done only when it confirms it recorded this; a node that can't be reached or doesn't support it keeps accepting those keys until the latest grant they hold ends, which can be after the session expires if the session was renewed or holds a longer delegation. `nodeSignOutStatus()` on `TinyCloudNode` and the web SDK resolves when the node calls finish and lists the nodes that confirmed (`confirmed`), had nothing to record (`nothingToRecord`) and didn't confirm (`notConfirmed`, each with a reason: unreachable, refused, unsupported or failed).
+
+  Only the instance that set up the account holds its setup keys. After a reload, sign-out can't send them, and they expire on their own (7 days by default). Access the user gave apps and agents before signing out stays until they remove it in Settings.
+
+  Details: TC-3443
+
+### Patch Changes
+
+- Updated dependencies [d382af8]
+- Updated dependencies [d382af8]
+  - @tinycloud/node-sdk@3.14.0-beta.7
+  - @tinycloud/sdk-core@3.14.0-beta.7
+  - @tinycloud/web-sdk-wasm@1.8.0-beta.0
+
+## 3.14.0-beta.6
+
+### Patch Changes
+
+- 7d438ee: Account index writes are sent only when the session can write the index (`tinycloud.sql` write and schema on the account database). A session without that access skips the index writes. Account reads and writes through the registry records don't depend on that access.
+
+  Details: TC-3688
+
+- Updated dependencies [7d438ee]
+  - @tinycloud/sdk-core@3.14.0-beta.6
+  - @tinycloud/node-sdk@3.14.0-beta.6
+
+## 3.14.0-beta.5
+
+### Minor Changes
+
+- 2cb453f: A sign-in that declares no `manifest`, `capabilityRequest` or `defaultActions` asks only for the app's own folder: KV (get, put, del, list, metadata) and SQL (read, write) under `applications/<app id>/`, plus capabilities read on `applications`, for 7 days. The app id is the sign-in domain reversed (`notes.example.com` → `com.example.notes`), or `node.app` for a Node client without a `domain`. It doesn't get the whole primary space, the secrets vault, account registry entries, the public space or the encryption network, and it logs one console warning per sign-in. `@tinycloud/server`'s `createServerIdentity` without a `manifest` gets the same folder.
+
+  Sessions, app delegations and bootstrap sessions default to 7 days, with or without a manifest. A manifest's `expiry` doesn't set the session length; set `sessionExpirationMs` for a longer session.
+
+  Upgrading: the default was 30 days. Apps that relied on it, including apps with a manifest such as Share's library sign-in, set `sessionExpirationMs` to keep 30 days.
+
+  Owner tools that need every action on their own space pass `...ownerFullAccess(space)` (new, from `@tinycloud/sdk-core` and `@tinycloud/node-sdk`) in the `TinyCloudNode` config; `defaultActions` is a `TinyCloudNode` option.
+
+  A wallet-mode `TinyCloudNode` runs its calls on its own session from the first sign-in: the sessions it signs to set up a new account are used only for that setup, so the manifest bounds what the app can do.
+
+  `createEncryptionNetwork` returns a network that already exists without asking to create it, so calling it for the network account setup created needs no `network.create` in the manifest.
+
+  Details: TC-3443
+
+### Patch Changes
+
+- Updated dependencies [2cb453f]
+  - @tinycloud/sdk-core@3.14.0-beta.5
+  - @tinycloud/node-sdk@3.14.0-beta.5
+  - @tinycloud/replica@0.4.7-beta.0
+
+## 3.14.0-beta.4
+
+### Patch Changes
+
+- Updated dependencies [4e4d845]
+  - @tinycloud/node-sdk@3.14.0-beta.4
+
+## 3.14.0-beta.3
+
+### Patch Changes
+
+- 628be3c: User-facing text in the CLI and SDK names the product TinyCloud One. `AccountSetupRequiredError` sends people to https://tinycloud.one/ to finish setting up their account. The CLI README's feed section is titled "TinyCloud One feed" (anchor `#tinycloud-one-feed`), and `tinycloud feed --help` and the CLI auth skill say TinyCloud One.
+
+  Upgrading: `AccountSetupRequiredError.setupUrl` is "https://tinycloud.one/". Code that compared it with "https://home.tinycloud.xyz/" needs this value.
+
+  Details: TC-3659
+
+- Updated dependencies [628be3c]
+  - @tinycloud/sdk-core@3.14.0-beta.3
+  - @tinycloud/node-sdk@3.14.0-beta.3
+
+## 3.14.0-beta.2
+
+### Patch Changes
+
+- 18a0e38: Browser sign-in through OpenKey's versioned approval works in bundles that do not provide Node's `Buffer`. `extractRecapAttenuations` decodes the signed message's recap with `atob` and `TextDecoder`; a recap payload that is not valid base64 is refused with the error "Failed to decode urn:recap: payload".
+
+  Details: TC-3639
+
+- 81884ce: A share link's host is used when the owner has no registry record and the host is a known TinyCloud node: a production node, or a host the recipient configured (`host`, `newUserHost` or `tinycloudFallbackHosts`). Share links to owners without a registry record open from recipients that have no `newUserHost`, including `TinyCloudWeb.receiveShare`. The owner's registry record decides whenever it exists, and v2 shares and receives that delegate to the current session don't use the link host. `@tinycloud/sdk-core` exports `isKnownTinyCloudNode`, and `SharingService` takes an optional `receivedHostHintTransport` callback that `TinyCloudNode` supplies.
+
+  Details: TC-3661
+
+- Updated dependencies [18a0e38]
+- Updated dependencies [81884ce]
+  - @tinycloud/sdk-core@3.14.0-beta.2
+  - @tinycloud/node-sdk@3.14.0-beta.2
+
 ## 3.14.0-beta.1
 
 ### Patch Changes

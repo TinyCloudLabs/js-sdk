@@ -1,7 +1,7 @@
 import "../../packages/operations/test-support/test-bootstrap.mjs";
 import { assertPrivateTestEnvironment } from "../../packages/operations/test-support/private-home.mjs";
 import { afterAll } from "bun:test";
-import { TinyCloudNode } from "@tinycloud/node-sdk";
+import { TinyCloudNode, ownerFullAccess } from "@tinycloud/node-sdk";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import { mkdir, writeFile, rm } from "node:fs/promises";
@@ -54,7 +54,7 @@ export async function setupCliProfile(): Promise<TinyCloudNode> {
     privateKey: TEST_KEY,
     host: SERVER_URL,
     tinycloudRegistryUrl: registry.url.origin,
-    prefix: "cli-test",
+    ...ownerFullAccess("cli-test"),
     autoCreateSpace: true,
   });
 
