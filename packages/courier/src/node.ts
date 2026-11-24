@@ -1,3 +1,4 @@
+import fs from 'node:fs';
 import { assertOwnerRenewalIdentity, verifyOwnerRenewal } from './owner-renewal.js';
 import { RenewalAuthorityInactiveError, RenewalLeaseExpiredError } from '@tinycloud/sdk-core/delegations/renewal';
 import { TinyCloudNode, DelegatedAccess, NodeWasmBindings, activateValidatedRuntimeDelegation, deserializeDelegation, serializeDelegation } from '@tinycloud/node-sdk';
@@ -8,7 +9,8 @@ import { cmd } from './program.js';
 import { CourierError } from './errors.js';
 import { COURIER_SPACE, k } from './keys.js';
 import type { AgentKey, OwnerGrant, Profile, StoredPeer } from './profile.js';
-import { loadGrant, loadKey, saveProfile, withProfileTransaction } from './profile.js';
+import { loadGrant, loadKey, profileDir, saveProfile, withProfileTransaction } from './profile.js';
+import { dropPendingQuietly } from './pending.js';
 import { canonicalJson } from './canonical.js';
 import { getJson } from './store.js';
 import { assertAgentGrant, assertPeerDelegation, bareDid, siweTimes } from './authority.js';
@@ -55,7 +57,7 @@ function readersOf(node: TinyCloudNode) {
 export async function courierNode(profile: Profile, home?: string): Promise<TinyCloudNode> {
   const key = loadKey(home);
   const grant = loadGrant(home);
-  if (profile.status === 'awaiting-space') return healAwaitingSpace(profile, key, grant);
+  if (profile.status === 'awaiting-space') return healAwaitingSpace(profile, key, grant, home);
   return restoreCourierNode(profile, key, grant);
 }
 
@@ -71,15 +73,27 @@ function awaitingSpaceError(profile: Profile): CourierError {
  * and the command runs. The profile changes only when the shared probe says the space is hosted. A space that is not hosted
  * (or a profile with no grant to ask with) is the no-space error the profile always gave; a probe that fails propagates its error.
  * Saving the heal can refuse (the profile changed meanwhile); that refusal is not hidden.
+ *
+ * The heal saves with `saveProfile`, which takes the profile lock for the save alone. A caller must not hold that lock across
+ * this call: `withProfileLock` is synchronous and `withProfileTransaction` holds it only while it reads, so neither can, and the
+ * transaction's own save is this same merge. `saveProfile` writes the current profile directory only, so a profile read from
+ * another `home` is not healed and keeps the no-space error.
  */
-async function healAwaitingSpace(profile: Profile, key: AgentKey, grant: OwnerGrant | undefined): Promise<TinyCloudNode> {
-  if (!grant) throw awaitingSpaceError(profile);
+async function healAwaitingSpace(profile: Profile, key: AgentKey, grant: OwnerGrant | undefined, home: string | undefined): Promise<TinyCloudNode> {
+  if (!grant || !isCurrentHome(home)) throw awaitingSpaceError(profile);
   const node = await restoreCourierNode(profile, key, grant);
   if (!(await verifySpaceReady(node))) throw awaitingSpaceError(profile);
   profile.status = 'ready';
   delete profile.spacePending;
   saveProfile(profile);
+  dropPendingQuietly(grant.delegationCid);
   return node;
+}
+
+/** Whether `home` is the directory `saveProfile` writes. */
+function isCurrentHome(home: string | undefined): boolean {
+  if (home === undefined) return true;
+  try { return fs.realpathSync(home) === fs.realpathSync(profileDir()); } catch { return false; }
 }
 
 async function restoreCourierNode(profile: Profile, key: AgentKey, grant: OwnerGrant | undefined): Promise<TinyCloudNode> {

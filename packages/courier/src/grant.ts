@@ -13,7 +13,7 @@ import { nodeOpts } from './node.js';
 import { verifySpaceReady } from './space-probe.js';
 import { assertAgentGrant, CLOCK_SKEW_MS, siweTimes } from './authority.js';
 import { withRefusalNotice } from './grant-refusal.js';
-import { dropAllPending, dropPendingDelegation, dropPendingForCode, newestPending, pendingForCode, savePending } from './pending.js';
+import { dropAllPending, dropPendingForCode, dropPendingQuietly, newestPending, pendingForCode, savePending } from './pending.js';
 
 const PRIVATE_JWK_FIELDS = new Set(['d', 'p', 'q', 'dp', 'dq', 'qi', 'oth', 'k']);
 
@@ -373,7 +373,7 @@ export function pendingSpaceError(profile: Profile): CourierError {
 export function noSpaceError(profile: Profile): CourierError {
   return new CourierError(
     'no-space',
-    `Your TinyCloud "${COURIER_SPACE}" space is not set up on ${profile.host}, so the approved grant can't be used yet. Courier will not create it. Turn on Auto-Sign in OpenKey and approve the Courier request again, or, from a wallet profile, run \`${tcCmd(`space host ${COURIER_SPACE}`)}\` and then \`${cmd('init --resume')}\`.`,
+    `Your TinyCloud "${COURIER_SPACE}" space is not set up on ${profile.host}, so the approved grant can't be used yet. Courier will not create it. Turn on Auto-Sign in OpenKey and approve the Courier request again: run \`${cmd('init --request')}\` for a new request, since an approved one cannot be approved twice. Or, from a wallet profile, run \`${tcCmd(`space host ${COURIER_SPACE}`)}\` and then \`${cmd('init --resume')}\`.`,
   );
 }
 
@@ -435,13 +435,6 @@ export function isPermanentRefusal(error: unknown, siwe: string): boolean {
     return !expiresAt || expiresAt.getTime() + CLOCK_SKEW_MS < Date.now();
   }
   return CONTENT_REFUSALS.has(error.code);
-}
-
-/** Best effort: a failed cleanup must neither replace the error the caller needs to see nor fail a saved grant. */
-function dropPendingQuietly(delegationCid: string): void {
-  try { dropPendingDelegation(delegationCid); } catch (error) {
-    console.error(`warning: could not remove the saved grant record (${(error as Error).message}); it expires on its own.`);
-  }
 }
 
 /** `spaceTimeoutMs` bounds the wait for OpenKey to host a pending agents space (default 150 s); `init --wait` passes what its --timeout leaves. */

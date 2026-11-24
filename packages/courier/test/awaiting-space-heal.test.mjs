@@ -5,7 +5,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { NodeWasmBindings, PrivateKeySigner, TinyCloudNode } from '@tinycloud/node-sdk';
-import { loadProfile, saveGrant, saveKey, saveProfile } from '../dist/profile.js';
+import { loadGrant, loadProfile, saveGrant, saveKey, saveProfile } from '../dist/profile.js';
+import { newestPending, savePending } from '../dist/pending.js';
 import { AGENT_GRANT, COURIER_SPACE } from '../dist/keys.js';
 import { siweTimes } from '../dist/authority.js';
 import { courierNode } from '../dist/node.js';
@@ -178,3 +179,52 @@ test('the no-space message gives both ways out and does not send the owner to Sh
     }
   }
 });
+
+test('the no-space message names the command that creates a new Courier request (TC-2398)', () => {
+  for (const prog of ['courier', 'tc courier']) {
+    setProgramName(prog);
+    try {
+      assert.ok(noSpaceError({ host: 'https://node.example' }).message.includes(`\`${prog} init --request\``));
+    } finally {
+      setProgramName('courier');
+    }
+  }
+});
+
+test('a heal drops the saved pending-delegation record of the grant, as init --resume does', async (t) => awaitingHome(async () => {
+  stubProbe(t, ready);
+  const grant = loadGrant();
+  savePending('ABCD-EFGH', grant, new Date(Date.now() + DAY));
+  assert.equal(newestPending()?.delegationCid, grant.delegationCid);
+
+  await courierNode(loadProfile());
+
+  assert.equal(loadProfile().status, 'ready');
+  assert.equal(newestPending(), undefined);
+}));
+
+test('a profile read from another home is not healed: no probe, and neither profile changes', async (t) => awaitingHome(async (home) => {
+  const calls = stubProbe(t, ready);
+  const other = fs.mkdtempSync(path.join(os.tmpdir(), 'courier-heal-other-'));
+  t.after(() => fs.rmSync(other, { recursive: true, force: true }));
+  fs.chmodSync(other, 0o700);
+  for (const name of ['profile.json', 'key.json', 'grant.json']) fs.copyFileSync(path.join(home, name), path.join(other, name));
+  const before = fs.readFileSync(path.join(home, 'profile.json'), 'utf8');
+
+  await assert.rejects(courierNode(loadProfile(other), other), { code: 'no-space', message: noSpaceText });
+  assert.equal(calls.n, 0);
+  assert.equal(fs.readFileSync(path.join(home, 'profile.json'), 'utf8'), before);
+  assert.equal(fs.readFileSync(path.join(other, 'profile.json'), 'utf8'), before);
+}));
+
+test('a profile read from an explicit home that is the current one (through a symlink) is healed there', async (t) => awaitingHome(async (home) => {
+  const calls = stubProbe(t, ready);
+  const link = `${home}-link`;
+  fs.symlinkSync(home, link);
+  t.after(() => fs.rmSync(link, { force: true }));
+
+  await courierNode(loadProfile(link), link);
+
+  assert.equal(calls.n, 1);
+  assert.equal(loadProfile().status, 'ready');
+}));
