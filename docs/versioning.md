@@ -51,7 +51,7 @@ There is one release path in this repo: stable releases from `master`. Pre mode 
 
 ### Stable releases: via changesets, from master, scoped
 
-`.github/workflows/changesets.yml` runs on every push to `master`. It versions and publishes plain stable versions to the `latest` dist-tag for **only** the packages listed in `.github/release-scope.json`. Every other workspace package keeps its version, CHANGELOG and pending changesets until a maintainer adds it to that list. The `enabled` field in that file is the only switch of this workflow: while it is `false`, a push to `master` releases nothing. It does not cover the break-glass `raw-publish.yml` and `manual-release.yml`, which TC-4123 gates before the switch is enabled.
+`.github/workflows/changesets.yml` runs on every push to `master`. It versions and publishes plain stable versions to the `latest` dist-tag for **only** the packages listed in `.github/release-scope.json`. Every other workspace package keeps its version, CHANGELOG and pending changesets until a maintainer adds it to that list. The `enabled` field in that file is the only switch of this workflow: while it is `false`, a push to `master` releases nothing.
 
 The `Release` job:
 
@@ -73,7 +73,7 @@ Guards:
 
 To release a held package, a maintainer adds it to `packages` in `.github/release-scope.json` in a reviewed PR, with its manifest at its last stable release and a `baselines` entry.
 
-Break-glass only: `.github/workflows/raw-publish.yml` (manual dispatch, optional dist-tag override and dry run) publishes each package at its current version and skips versions npm already has. It does not run changeset versioning, the release scope, or the GitHub release steps, so create the GitHub release by hand.
+`raw-publish.yml` and `manual-release.yml` were removed (TC-4123): they published from any ref, to `latest` by default, and ignored the release gate. Releases publish only through `changesets.yml`; to finish an interrupted stable release, dispatch it again as above. `courier-stable-stage.yml` stages a sealed plan under the `staging` dist-tag and `npm-latest-rollback.yml` moves `latest`; neither publishes from an arbitrary ref.
 
 ### How releases push
 

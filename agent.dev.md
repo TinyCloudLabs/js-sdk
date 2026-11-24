@@ -114,9 +114,9 @@ the Release workflow, which versions and publishes plain stable versions on the 
 **only** the packages listed in `.github/release-scope.json`:
 
 - `enabled` is the only switch of this workflow. While it is `false` a push releases nothing (the
-  `Release gate` job stops the run). It does not stop the break-glass `raw-publish.yml` and
-  `manual-release.yml`, which can still publish from a dispatched ref; gating them is TC-4123 and must
-  land before the switch is enabled. Flipping `enabled` is a maintainer decision, never an agent's.
+  `Release gate` job stops the run). The break-glass `raw-publish.yml` and `manual-release.yml` were
+  retired (TC-4123); the only off-master path is the SHA-bound `courier-stable-stage.yml` route (sealed
+  plans, `staging` dist-tag only). Flipping `enabled` is a maintainer decision, never an agent's.
 - `packages` is the release scope. Every other workspace package keeps its version, CHANGELOG and
   pending changesets. A changeset that names both kinds is split at release time: the in-scope lines
   are consumed, the rest is written back as a pending changeset with the same text. To release another

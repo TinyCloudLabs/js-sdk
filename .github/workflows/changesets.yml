@@ -7,9 +7,10 @@ name: Release
 # Every other workspace package keeps its version, CHANGELOG and pending
 # changesets until a maintainer adds it to that file. The file's `enabled`
 # switch is the only thing that lets THIS workflow release anything: while it is
-# false a push to master does nothing. It does not stop the separate break-glass
-# workflows (raw-publish.yml, manual-release.yml); gating them is TC-4123, which
-# must land before the switch is enabled. See scripts/scoped-version.mjs.
+# false a push to master does nothing. The break-glass raw-publish.yml and
+# manual-release.yml were retired (TC-4123); the only off-master path is the
+# SHA-bound courier-stable-stage.yml route (staging tag only). See
+# scripts/scoped-version.mjs.
 on:
   push:
     branches:

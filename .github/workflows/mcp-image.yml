@@ -13,7 +13,7 @@ on:
         required: false
         type: string
       preflight_only:
-        description: Only check the deploy credentials (Phala can read CVM tinycloud-mcp and it runs a permitted OS image; the Cloudflare token is active and can read the mcp.tinycloud.xyz records). Builds and deploys nothing.
+        description: Only check the deploy credentials (Phala can read CVM tinycloud-mcp and it runs a permitted OS image; its allowlist holds no name this deploy does not feed; the Cloudflare token is active and can read the mcp.tinycloud.xyz records). Builds and deploys nothing.
         required: false
         type: boolean
         default: false
@@ -105,6 +105,7 @@ jobs:
           tools="$RUNNER_TEMP/mcp-deploy-tools"
           mkdir -p "$tools"
           cp .github/deploy-tools/package.json .github/deploy-tools/package-lock.json "$tools/"
+          cp .github/scripts/mcp-sync-allowed-envs.mjs "$tools/"
           npm ci --prefix "$tools" --ignore-scripts --no-audit --no-fund
           echo "MCP_DEPLOY_TOOLS=$tools" >> "$GITHUB_ENV"
           echo "$tools/node_modules/.bin" >> "$GITHUB_PATH"
@@ -137,6 +138,17 @@ jobs:
         run: |
           bash .github/scripts/test-phala-os-guard.sh
           node .github/scripts/test-mcp-deploy-env.mjs
+      # Log shipping is optional: a missing token never blocks a deploy or a rollback, but the logging stage needs it.
+      - name: Report whether the MCP log shipping token is present
+        env:
+          BETTERSTACK_SOURCE_TOKEN: ${{ secrets.BETTERSTACK_SOURCE_TOKEN }}
+        shell: bash
+        run: |
+          if [ -n "$BETTERSTACK_SOURCE_TOKEN" ]; then
+            echo "MCP log shipping token: present"
+          else
+            echo "::notice::MCP log shipping token: not set; the shipper would idle and MCP log status is NOT AVAILABLE"
+          fi
       - name: CVM tinycloud-mcp runs a permitted OS image
         env:
           PHALA_CLOUD_API_KEY: ${{ secrets.PHALA_CLOUD_API_KEY }}
@@ -147,6 +159,17 @@ jobs:
             exit 1
           fi
           bash .github/scripts/phala-os-guard.sh <<<"$cvm"
+      # Names only, before any build or deploy (the deploy job repeats it directly before the environment sync). Stop if
+      # the CVM allowlist holds a name this deploy does not feed. Prints "extras: none" or the extra names; never a
+      # value, the compose file or a manifest. Read-only: it changes nothing, so a preflight_only run can report it.
+      - name: Check the CVM allowlist for names this deploy does not feed
+        env:
+          PHALA_CLOUD_API_KEY: ${{ secrets.PHALA_CLOUD_API_KEY }}
+          PHALA_CVM_ID: tinycloud-mcp
+        shell: bash
+        run: |
+          set -euo pipefail
+          node "$MCP_DEPLOY_TOOLS/mcp-sync-allowed-envs.mjs" check-extras
       - name: Cloudflare token is active and can read the mcp.tinycloud.xyz records
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -219,6 +242,18 @@ jobs:
           npm ci --prefix "$tools" --ignore-scripts --no-audit --no-fund
           echo "MCP_DEPLOY_TOOLS=$tools" >> "$GITHUB_ENV"
           echo "$tools/node_modules/.bin" >> "$GITHUB_PATH"
+      # Names only, before any environment sync or deploy. A full environment write carries only this deploy's keys, so
+      # stop if the CVM allowlist holds any other name (for example one added by hand). Prints "extras: none" or the
+      # extra names; never a value, the compose file or a manifest. The allowlist is read with the same credential and
+      # client library as the deploy step, and nothing is changed.
+      - name: Check the CVM allowlist for names this deploy does not feed
+        env:
+          PHALA_CLOUD_API_KEY: ${{ secrets.PHALA_CLOUD_API_KEY }}
+          PHALA_CVM_ID: tinycloud-mcp
+        shell: bash
+        run: |
+          set -euo pipefail
+          node "$MCP_DEPLOY_TOOLS/mcp-sync-allowed-envs.mjs" check-extras
       - name: Deploy hosted MCP
         env:
           PHALA_CLOUD_API_KEY: ${{ secrets.PHALA_CLOUD_API_KEY }}
@@ -228,6 +263,7 @@ jobs:
           TC_MCP_INTROSPECTION_CLIENT_SECRET: ${{ secrets.TC_MCP_INTROSPECTION_CLIENT_SECRET }}
           TINYCLOUD_MCP_IMAGE: ${{ needs.resolve.outputs.image }}
           TC_MCP_NATIVE_SERVICE_CREDENTIAL: ${{ secrets.TC_MCP_NATIVE_SERVICE_CREDENTIAL }}
+          BETTERSTACK_SOURCE_TOKEN: ${{ secrets.BETTERSTACK_SOURCE_TOKEN }}
           CERTBOT_EMAIL: ops@tinycloud.xyz
         shell: bash
         run: |
@@ -238,7 +274,7 @@ jobs:
           export PHALA_CVM_ID=tinycloud-mcp
           unset CLOUDFLARE_API_TOKEN TC_MCP_STATE_SECRET
           unset TC_MCP_INTROSPECTION_CLIENT_ID TC_MCP_INTROSPECTION_CLIENT_SECRET
-          unset TINYCLOUD_MCP_IMAGE TC_MCP_NATIVE_SERVICE_CREDENTIAL CERTBOT_EMAIL
+          unset TINYCLOUD_MCP_IMAGE TC_MCP_NATIVE_SERVICE_CREDENTIAL BETTERSTACK_SOURCE_TOKEN CERTBOT_EMAIL
           node "$MCP_DEPLOY_TOOLS/mcp-sync-allowed-envs.mjs"
           # The exact encrypted environment file used for allowlist sync is also used for deploy.
           phala deploy \
