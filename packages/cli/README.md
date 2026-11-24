@@ -26,13 +26,12 @@ The CLI checks the npm registry for a newer release at most once a day, in a bac
 
 The CLI installs newer patch and minor releases of your channel in the background and uses them from the next command. A major release is never installed automatically; you get a notice instead.
 
-- Checks: each version has been on your channel for 6 hours and passes the provenance and npm signature checks. It must run before the CLI switches to it, and a failed switch returns to the previous version.
+- Checks: your CLI has seen the version on your channel for 6 hours, and it passes the provenance and npm signature checks. It must run before the CLI switches to it, and a failed switch returns to the previous version.
 - Versions live in `~/.tinycloud/versions/`. The log is `~/.tinycloud/versions/auto-update.log`.
 - Turn it off with `TC_NO_AUTO_UPDATE=1` or `"autoUpdate": false` in `~/.tinycloud/config.json`. It is off when `CI` is set to anything but `false` or `0`.
 - `tinycloud upgrade` updates on request. `--to <version>` switches to an exact version and pauses automatic updates; `--yes` skips the question and is needed outside a terminal.
 - The standalone `courier` package isn't updated this way.
-
-To uninstall, run `npm uninstall -g @tinycloud/cli` (or `bun remove -g @tinycloud/cli`), then delete `~/.tinycloud/versions`.
+- To uninstall, run `npm uninstall -g @tinycloud/cli` (or `bun remove -g @tinycloud/cli`), then delete `~/.tinycloud/versions`.
 
 ## Agent skills
 

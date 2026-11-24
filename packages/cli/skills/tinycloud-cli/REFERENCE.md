@@ -564,11 +564,12 @@ On either recovery path, an orphaned `.recover-*` claim can hold a replacement o
 
 The CLI installs newer patch and minor releases of your channel in the background and uses them from the next command. A major release is never installed automatically; you get a notice instead.
 
-- **Checks:** each version has been on your channel for 6 hours and passes the provenance and npm signature checks. It must run before the CLI switches to it, and a failed switch returns to the previous version.
+- **Checks:** your CLI has seen the version on your channel for 6 hours, and it passes the provenance and npm signature checks. It must run before the CLI switches to it, and a failed switch returns to the previous version.
 - **Files:** versions live in `~/.tinycloud/versions/`. The log is `~/.tinycloud/versions/auto-update.log`.
 - **Off switches:** `TC_NO_AUTO_UPDATE=1` or `"autoUpdate": false` in `~/.tinycloud/config.json`. It is off when `CI` is set to anything but `false` or `0`.
 - **`tinycloud upgrade`** updates on request. `--to <version>` switches to an exact version and pauses automatic updates; `--yes` skips the question and is needed outside a terminal. A refusal's `reason` is one of `UNSUPPORTED_INSTALL`, `NEEDS_YES`, `DECLINED`, `LOCKED`, `NPM_NOT_FOUND`, `INVALID_VERSION`, `VERSION_NOT_FOUND`, `TARGET_TOO_OLD`, `REGISTRY_UNAVAILABLE`, `COURIER_RUNNING`, `PROVENANCE_MISSING`, `PROVENANCE_INVALID`, `PROVENANCE_UNAVAILABLE`, `SIGNATURE_INVALID` or `DEPENDENCY_NOT_FROM_REGISTRY`.
 - The standalone `courier` package isn't updated this way.
+- To uninstall, run `npm uninstall -g @tinycloud/cli` (or `bun remove -g @tinycloud/cli`), then delete `~/.tinycloud/versions`.
 
 ## DID Formats
 

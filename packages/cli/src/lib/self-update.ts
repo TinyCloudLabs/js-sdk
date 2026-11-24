@@ -657,9 +657,9 @@ const LAST_SWITCH_FILE = "last-switch.json";
 /** Written once the first-run notice has been shown for this versions root. */
 const FIRST_RUN_FILE = "first-run-notice.json";
 
-// User-facing copy: TC-4276, Monica (20:28Z), verbatim.
+// User-facing copy: TC-4276, Monica (20:28Z; first line 20:39Z), verbatim.
 export const FIRST_RUN_NOTICE = [
-  "TinyCloud CLI updates itself: it installs verified patch and minor releases of your channel in the background, once each has been on your channel for 6 hours. Major releases are never installed automatically. Log: ~/.tinycloud/versions/auto-update.log",
+  "TinyCloud CLI updates itself: it installs verified patch and minor releases of your channel in the background, 6 hours after your CLI first sees each one on your channel. Major releases are never installed automatically. Log: ~/.tinycloud/versions/auto-update.log",
   "To turn this off, set \"autoUpdate\": false in ~/.tinycloud/config.json, or set TC_NO_AUTO_UPDATE=1.",
 ];
 
