@@ -178,7 +178,7 @@ The export requires an already-paired handle and always emits a fresh delegation
 for that same Courier DID, space, mailbox and session scope; it does not read or
 renew the exporting side's inbound delegation. The receiver may install the C
 artifact for that exact existing peer only. The signed peer delegation remains
-limited to its existing mailbox scope and at most seven days.
+limited to its existing mailbox scope and at most 30 days.
 By default, exporting is rate-limited to one renewal per peer in 20 hours. Use
 `--force` only when the same peer needs an immediate additional artifact.
 
@@ -1064,7 +1064,7 @@ Courier accepts only an OpenKey grant whose signed authority exactly equals
 lifetime of at most 30 days. It accepts a peer delegation only when it is
 signed by the courier DID named in the pairing artifact, covers exactly
 `kv get/list` on that peer's mailbox plus the matching hooks subscription, and
-expires within 7 days. A 5-minute clock skew is allowed. Profiles holding a
+expires within 30 days. A 5-minute clock skew is allowed. Profiles holding a
 broader or longer grant or delegation from an earlier build are rejected: run
 `init` again, or re-pair.
 
