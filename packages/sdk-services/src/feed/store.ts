@@ -7,6 +7,7 @@ import type {
 } from "./types";
 import { feedResponseHeaderSchema, feedResponsePayloadSchema, newFeedMessageSchema, newFeedResponseSchema } from "./schemas";
 import { projectFeedResponseNotification } from "./notification";
+import { isReplyOnlyRevision } from "./reply-only";
 
 const PRIVATE_RESPONSE_OPTIONS: QueryOptions & { redactErrors: true } = { redactErrors: true };
 
@@ -364,16 +365,14 @@ export const readFeedResponseHandling: FeedApi["readFeedResponseHandling"] = asy
   return handling.data ? ok(handling.data) : feedError("NOT_FOUND", "Matching response handling not found");
 };
 
-export const getFeedCardState: FeedApi["getFeedCardState"] = async (output, responses, identity) => {
-  const params = [identity.cardId, identity.revision, identity.issuanceId];
-  const cards = await jsonRows<FeedCard>(output,
-    "SELECT card_json FROM feed_cards WHERE card_id = ? AND revision = ? AND issuance_id = ?", params);
-  if (!cards.ok) return cards;
-  if (!cards.data[0]) return feedError("NOT_FOUND", "Card issuance not found");
+/** The saved answer for one exact card issuance, with its acknowledgement and outcome. */
+async function answerStateOf(
+  output: FeedReadDatabase, responses: FeedReadDatabase, identity: FeedCardIdentity,
+): Promise<Result<{ response: FeedResponse | null } & FeedResponseHandling>> {
   const saved = await responses.query<unknown>(
     `${RESPONSE_HEADER_SELECT} WHERE r.card_id = ? AND r.revision = ? AND r.issuance_id = ?
        AND json_extract(r.response_json, '$.kind') IN ('answer', 'followup')
-     ORDER BY r.sequence DESC LIMIT 1`, params, PRIVATE_RESPONSE_OPTIONS);
+     ORDER BY r.sequence DESC LIMIT 1`, [identity.cardId, identity.revision, identity.issuanceId], PRIVATE_RESPONSE_OPTIONS);
   if (!saved.ok) return responseDataFailure("Could not read the card's saved response", saved.error);
   const row = saved.data.rows[0];
   let response: FeedResponse | null;
@@ -382,10 +381,40 @@ export const getFeedCardState: FeedApi["getFeedCardState"] = async (output, resp
   const handling = response ? await selectResponseHandling(output, response) : ok(undefined);
   if (!handling.ok) return handling;
   return ok({
-    card: cards.data[0], response,
+    response,
     acknowledgement: handling.data?.acknowledgement ?? null,
     outcome: handling.data?.outcome ?? null,
   });
+}
+
+export const getFeedCardState: FeedApi["getFeedCardState"] = async (output, responses, identity, options) => {
+  const cards = await jsonRows<FeedCard>(output,
+    "SELECT card_json FROM feed_cards WHERE card_id = ? AND revision = ? AND issuance_id = ?",
+    [identity.cardId, identity.revision, identity.issuanceId]);
+  if (!cards.ok) return cards;
+  const card = cards.data[0];
+  if (!card) return feedError("NOT_FOUND", "Card issuance not found");
+  const own = await answerStateOf(output, responses, identity);
+  if (!own.ok) return own;
+  // Home never carries an answer onto a typed (sitrep) card either: its board record is the request, not the replies.
+  const typed = card.payload?.sitrep !== undefined || card.payload?.sitrepThread !== undefined;
+  if (own.data.response !== null || options?.carryReplyOnlyAnswer !== true || typed) return ok({ card, ...own.data });
+
+  // No answer on this revision: walk back through earlier revisions while each step only appended replies (Home's rule).
+  const earlier = await jsonRows<FeedCard>(output,
+    "SELECT card_json FROM feed_cards WHERE card_id = ? AND revision < ? ORDER BY revision DESC, sequence DESC",
+    [identity.cardId, identity.revision]);
+  if (!earlier.ok) return earlier;
+  let later = card;
+  for (const previous of earlier.data) {
+    if (previous.revision === later.revision) continue; // another issuance of a revision already stepped past
+    if (!isReplyOnlyRevision(previous, later)) break;
+    const answered = await answerStateOf(output, responses, previous);
+    if (!answered.ok) return answered;
+    if (answered.data.response !== null) return ok({ card, ...answered.data, answeredAtRevision: previous.revision });
+    later = previous;
+  }
+  return ok({ card, ...own.data });
 };
 
 export const resolveFeedCard: FeedApi["resolveFeedCard"] = async (output, reference) => {

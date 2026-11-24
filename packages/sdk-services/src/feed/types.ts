@@ -81,6 +81,20 @@ export interface FeedResponseHandling {
 export interface FeedCardState extends FeedResponseHandling {
   card: FeedCard;
   response: FeedResponse | null;
+  /**
+   * Set only when `response` (and its handling) belongs to an earlier revision of this card that the card's revisions
+   * since then only added replies to (`carryReplyOnlyAnswer`): the revision the owner actually answered.
+   */
+  answeredAtRevision?: number;
+}
+
+export interface FeedCardStateOptions {
+  /**
+   * When this revision has no response of its own, return the answer, acknowledgement and outcome of the nearest earlier
+   * revision that every revision since only changed by appending replies (Home's reply-only rule). Default false: the
+   * state of exactly this revision.
+   */
+  carryReplyOnlyAnswer?: boolean;
 }
 
 export interface FeedDatabases {
@@ -192,6 +206,7 @@ export interface FeedApi {
     output: FeedReadDatabase,
     responses: FeedReadDatabase,
     identity: FeedCardIdentity,
+    options?: FeedCardStateOptions,
   ): Promise<Result<FeedCardState>>;
   resolveFeedCard(output: FeedReadDatabase, reference: string): Promise<Result<FeedCardIdentity>>;
   initializeFeedHandoff(handoff: FeedDatabase): Promise<Result<void>>;
