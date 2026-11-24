@@ -205,8 +205,11 @@ export class CredentialsService {
       completed = true; await redirectStore?.clear(); return verified;
     } catch (cause) {
       controller?.fail();
-      if (timed.signal.aborted && timed.signal.reason instanceof CredentialError) throw timed.signal.reason;
-      throw credentialError(cause);
+      const failure = timed.signal.aborted && timed.signal.reason instanceof CredentialError ? timed.signal.reason : credentialError(cause);
+      // The issuer reports the request as expired, canceled or out of proof attempts: it can never finish. Transient errors keep it for the next attempt.
+      const state = failure.details.state;
+      if (state === "expired" || state === "canceled" || state === "proof_attempts_exhausted") await redirectStore?.clear();
+      throw failure;
     } finally { surface?.close(); if (completed) await redirectStore?.clear(); timed.clear(); }
   }
 
