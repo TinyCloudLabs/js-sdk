@@ -3862,6 +3862,34 @@
     },
     "reason": "5 reviewed TC-4082 commits + no-read fix 63dfefb58; Naomi 00:38Z. Both canonical jobs (SQLite and Postgres, run 45296681183 at debfa194e) measured 1542306/1472943 gzip bytes, 2291/2080 over tc3810ReaderRoot's 1540015/1470863. The Web SDK root carries the hosted-owner proof: the proof state in NodeUserAuthorization (begin, confirm, fail, restore candidate and adoption, proven-space routing, per-proof landed state), the TinyCloudNode restore, retire-on-failed-proof and sign-in handling around it, and one allowHostedOwnerProof line in TinyCloudWeb. The assess and read helpers load from the lazy space-hosting chunk, not the root. Details: TC-4082 Re-based onto tc3975NamedKeyWarningRoot after #1144 merged (Naomi 01:17Z: may move only by master's movement): the same +2291/+2080 now sits over tc3975NamedKeyWarningRoot's 1540164/1471056, so the ceilings are 1542455/1473136; CI decides. Run 45305691554 at 6ad3a0f2f (master 878291c9f merged) measured 1542479/1473127 on both SQLite and Postgres (the SQLite job 138148858055, the Postgres job 138148858149), +2315/+2071 over tc3975NamedKeyWarningRoot's 1540164/1471056: gzip non-additivity after the #1144 merge, source unchanged; Naomi 01:46Z"
   },
+  "tc3891OwnerRegistryRecordRoot": {
+    "label": "TinyCloud One sign-in creates the owner's registry record (TC-3891)",
+    "ruling": "Naomi 2026-11-24 10:27Z TC-858: tc3891OwnerRegistryRecordRoot: web-sdk root cjs ceiling 1473127 → 1487555 (+14428, measured on CI cc3792132) for ensureOwnerRegistryRecord; mjs ceiling unchanged at 1542479 (measured 1501514, same 243 exports).",
+    "base": "cd5b9826dabff48cca74deafd067242e6b32c3eb",
+    "sourceCommits": [
+      "faf1a6689588403d6a14d0c9671b52dfd79f81c7",
+      "f3697c164871ec6d183ef13d78a3e0a68db16961",
+      "cc3792132fd5cabca449c675ecd50b3e8731404a"
+    ],
+    "canonicalCI": {
+      "run": "45367645133",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45367645133/job/138353435697",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45367645133/job/138353436205"
+      ]
+    },
+    "root": {
+      "delta": {
+        "index.mjs": 0,
+        "index.cjs": 14428
+      },
+      "ceiling": {
+        "index.mjs": 1542479,
+        "index.cjs": 1487555
+      }
+    },
+    "reason": "Both canonical jobs (SQLite and Postgres, run 45367645133 at cc3792132, merged with master cd5b9826d) measured 1501514/1487555 gzip bytes against tc4082HostedOwnerRoot's 1542479/1473127. The Web SDK root carries TinyCloudWeb.ensureOwnerRegistryRecord and the registry-publish module it imports: the create-only owner-signed v2 location record publish (publishLocationRecordV2 from @tinycloud/sdk-core/registry-publication), the TinyCloud One and Home origin gate, and the OpenKey or wallet signer. The import() is merged into the root because the web build pins LimitChunkCountPlugin({ maxChunks: 1 }); with it webpack stops concatenating sdk-core into index.mjs, which is why index.mjs fell by 40965 bytes with the same 243 exports. Not taken: a lazy entry, because @tinycloud/sdk-core/registry-publication imports the sdk-core root, so the chunk carried all of sdk-core (about 297 KB gzip) plus the links and issued-delegation async chunks, and its computed chunk import broke the openkey-example build. Details: TC-3891"
+  },
   "tc3522InvocationRefusalKvWorker": {
     "label": "retain invocation-refusal attribution in the kv-storage worker (TC-3522)",
     "ruling": "Naomi ACBX 2026-11-23: admit only the exact worker gzip bytes reproduced by SQLite and PostgreSQL, with zero headroom. Root, optional and gated ceilings are unchanged.",

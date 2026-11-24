@@ -1572,7 +1572,8 @@ export class TinyCloudWeb {
       openkey ? openkey.client as (OpenKeyAuthorizeTinyCloud & OpenKeyMessageSigner) : undefined;
     const onError = this.config.onRegistryPublishError;
     try {
-      // Dynamic import keeps registry-publish.ts off the root chunk (TC-858 size ceiling).
+      // The root build pins one chunk, so this import is merged into the root; its bytes are the
+      // tc3891OwnerRegistryRecordRoot TC-858 row. A lazy entry would carry all of sdk-core.
       const { ensureOwnerRegistryRecord } = await import("../registry-publish");
       return await ensureOwnerRegistryRecord({
         node,
