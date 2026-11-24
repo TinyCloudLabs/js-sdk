@@ -168,7 +168,7 @@ describe("dependencies that aren't registry tarballs", () => {
     expect(() => checkResolvedAgainstShrinkwrap(resolved([]), shrinkwrap, cli)).toThrow(VerificationError);
   });
 
-  test("tarball entries are read by their path below the package directory; a repeated path keeps the later copy", () => {
+  test("tarball entries are read by their path below the package directory", () => {
     const files = readTarballFiles(tarballOf({ "package.json": "{}", "npm-shrinkwrap.json": "first", "dist/npm-shrinkwrap.json": "nested" }), ["npm-shrinkwrap.json"]);
     expect(files.get("npm-shrinkwrap.json")?.toString()).toBe("first");
     expect(files.size).toBe(1);
