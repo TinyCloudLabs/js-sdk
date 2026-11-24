@@ -3799,29 +3799,35 @@
   },
   "tc4082HostedOwnerRoot": {
     "label": "sign in a hosted owner with no registry record (TC-4082)",
-    "ruling": "Naomi 2026-11-23 22:50:03Z: up to +2139 B ESM and +1916 B CJS over tc3810ReaderRoot's ceilings; the row records the exact bytes canonical CI measured, which came in under that grant. The PR body names what adds them and confirms no dev-only or dead code is bundled.",
+    "ruling": "Naomi 2026-11-24 00:37:34Z: re-grant tc4082HostedOwnerRoot to exactly 1542306/1472943 (+2291/+2080 over tc3810ReaderRoot). Earlier grant, 2026-11-23 22:50:03Z: up to +2139/+1916 for the sign-in proof alone.",
     "base": "b698913ae9a0f82a313d7e8c23dcddd4758b357c",
     "sourceCommits": [
-      "98f7a2e4932a40c5d56273177f50d5e0443a436a"
+      "98f7a2e4932a40c5d56273177f50d5e0443a436a",
+      "952c889d8eedf252352bea7bf706a06a54c39c87",
+      "79534a0bc6e83e1e9489a5658b814086e3a09185",
+      "dc3282e0e9496e4089656c83d72d4064928fca91",
+      "bd7ce999c1d81017baa3cc20bd9c00e93ace96ad",
+      "d3ff712f8b2ca63b2fac3da31c9c40a833c8648a",
+      "63dfefb58a1384dc9b66faaf1e772e5edcecf75f"
     ],
     "canonicalCI": {
-      "run": "45286170027",
+      "run": "45296681183",
       "jobs": [
-        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45286170027/job/138082938458",
-        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45286170027/job/138082938913"
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45296681183/job/138118882182",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45296681183/job/138118882211"
       ]
     },
     "root": {
       "delta": {
-        "index.mjs": 2120,
-        "index.cjs": 1899
+        "index.mjs": 2291,
+        "index.cjs": 2080
       },
       "ceiling": {
-        "index.mjs": 1542135,
-        "index.cjs": 1472762
+        "index.mjs": 1542306,
+        "index.cjs": 1472943
       }
     },
-    "reason": "Both canonical jobs (SQLite and Postgres, run 45286170027 at 82ac6f0cb) measured 1542135/1472762 gzip bytes, 2120/1899 over tc3810ReaderRoot's 1540015/1470863, within the ruled +2139/+1916. The Web SDK root carries the hosted-owner proof: the proof state in NodeUserAuthorization (begin, confirm, fail, restore candidate and adoption, proven-space routing), the TinyCloudNode restore and sign-in handling around it, and one allowHostedOwnerProof line in TinyCloudWeb. The assess and read helpers load from the lazy space-hosting chunk, not the root. Details: TC-4082"
+    "reason": "5 reviewed TC-4082 commits + no-read fix 63dfefb58; Naomi 00:38Z. Both canonical jobs (SQLite and Postgres, run 45296681183 at debfa194e) measured 1542306/1472943 gzip bytes, 2291/2080 over tc3810ReaderRoot's 1540015/1470863. The Web SDK root carries the hosted-owner proof: the proof state in NodeUserAuthorization (begin, confirm, fail, restore candidate and adoption, proven-space routing, per-proof landed state), the TinyCloudNode restore, retire-on-failed-proof and sign-in handling around it, and one allowHostedOwnerProof line in TinyCloudWeb. The assess and read helpers load from the lazy space-hosting chunk, not the root. Details: TC-4082"
   },
   "tc3522InvocationRefusalKvWorker": {
     "label": "retain invocation-refusal attribution in the kv-storage worker (TC-3522)",
