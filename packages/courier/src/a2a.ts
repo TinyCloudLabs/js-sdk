@@ -98,6 +98,7 @@ export interface ThreadMeta {
 }
 
 export interface BuildMessageArgs {
+  messageId?: string;
   threadId: string;
   text: string;
   mediaType?: string;
@@ -138,7 +139,7 @@ export function buildMessage(a: BuildMessageArgs): CourierMessage {
   const parts: MessagePart[] = [{ text: a.text, mediaType: a.mediaType ?? 'text/markdown' }];
   if (a.fileParts) parts.push(...a.fileParts);
   return {
-    messageId: ulid(),
+    messageId: a.messageId ?? ulid(),
     contextId: a.threadId,
     role: a.role,
     parts,

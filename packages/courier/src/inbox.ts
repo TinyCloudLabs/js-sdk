@@ -116,7 +116,7 @@ export async function collectInbound(input: {
   return { items, errors, pending };
 }
 
-export async function commitReceipts(selfKv: KV, pending: Map<string, PendingDelivery[]>): Promise<void> {
+export async function commitReceipts(selfKv: KV, pending: Map<string, PendingDelivery[]>, options?: { strict?: boolean }): Promise<void> {
   for (const [peer, deliveries] of pending) {
     for (let attempt = 0; attempt < 3; attempt++) {
       try {
@@ -138,6 +138,7 @@ export async function commitReceipts(selfKv: KV, pending: Map<string, PendingDel
       } catch (error) {
         const conflict = error instanceof CourierError && error.code === 'conflict';
         if (conflict && attempt < 2) continue;
+        if (options?.strict) throw error;
         console.error(`Warning: Couldn't update delivery receipts for ${oneLine(peer, 80)}. Messages you've already read may show up again.`);
         break;
       }

@@ -33,6 +33,9 @@ export interface PairArtifact {
   callMe: string;
   delegation?: string;
   delegationExpiresAt?: string;
+  challengeVersion?: 1;
+  challenge?: string;
+  completion?: { x: string; signature: string };
   issuedAt: string;
 }
 
@@ -82,6 +85,7 @@ export function artifactA(profile: Profile, peerHandle: string, callMe: string):
     type: 'courier-pair',
     v: 0,
     step: 'A',
+    challengeVersion: 1,
     from: { owner: profile.ownerDid!, courier: profile.courierDid, label: profile.label },
     spaceId: profile.spaceId!,
     peer: peerHandle,
@@ -92,7 +96,7 @@ export function artifactA(profile: Profile, peerHandle: string, callMe: string):
 
 export function artifactWithDelegation(
   step: 'B' | 'C',
-  profile: Profile,
+  profile: Pick<Profile, 'ownerDid' | 'courierDid' | 'spaceId'> & { label?: string },
   delegation: PortableDelegation,
   peer: string,
   callMe: string,
