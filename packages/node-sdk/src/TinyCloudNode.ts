@@ -707,6 +707,7 @@ class ServiceGraphLifetime {
     // aborting signal's own reason; the listeners below abort without one. Trade-off: on Node its composites stay
     // reachable while the long-lived signal lives (about 65 B per request on Node 20, 180 B on Node 22; a listener
     // that is never removed retains about 1 KB). Where it is missing (older browsers) the listeners are unchanged.
+    // node-floor-ok: the typeof check on the next line guards it
     if (typeof AbortSignal.any === "function") return AbortSignal.any([signal, this.abortController.signal]);
     const combined = new AbortController();
     const abort = () => combined.abort();
@@ -2032,6 +2033,7 @@ export class TinyCloudNode {
       // A session saved but never registered on this node is refused: it registers once.
       activate: (signal) => {
         assertCurrent();
+        // node-floor-ok: Node 20.3+; floor raise tracked in TC-4280
         const activationSignal = AbortSignal.any([signal, graph.signal]);
         if (primary && primary.delegationCid === session.delegationCid) {
           return this.activateSignedSession(primary, primary.siwe, activationSignal, true);
@@ -2581,6 +2583,7 @@ export class TinyCloudNode {
   private fetchForGraph(graph: ServiceGraphLifetime): FetchFunction {
     return async (url, init) => {
       graph.assertActive();
+      // node-floor-ok: Node 20.3+; floor raise tracked in TC-4280
       const signal = init?.signal ? AbortSignal.any([init.signal, graph.signal]) : graph.signal;
       const response = await globalThis.fetch(url, { ...init, signal });
       graph.assertActive();
@@ -2669,6 +2672,7 @@ export class TinyCloudNode {
             const parsed = new URL(url);
             if (parsed.origin !== target.url || parsed.username || parsed.password || parsed.hash) throw new ResourceNotRoutedError(resources.map(({ resource }) => resource).join(", "));
             const timeout = AbortSignal.timeout(5_000);
+            // node-floor-ok: Node 20.3+; floor raise tracked in TC-4280
             const signal = init?.signal ? AbortSignal.any([init.signal, timeout]) : timeout;
             try {
               return await rawFetch(url, { ...init, signal, redirect: "error" });
@@ -3019,6 +3023,7 @@ export class TinyCloudNode {
       } },
       fetch: async (url, init) => {
         graph.assertActive();
+        // node-floor-ok: Node 20.3+; floor raise tracked in TC-4280
         const signal = init?.signal ? AbortSignal.any([init.signal, graph.signal]) : graph.signal;
         const response = await fetchFn(url, { ...init, signal });
         graph.assertActive();
@@ -4446,6 +4451,7 @@ export class TinyCloudNode {
         parent.assertActive();
         return routedFetch(url, {
           ...init,
+          // node-floor-ok: Node 20.3+; floor raise tracked in TC-4280
           signal: init?.signal ? AbortSignal.any([init.signal, parent.signal]) : parent.signal,
         });
       },
@@ -4683,6 +4689,7 @@ export class TinyCloudNode {
         context.fetch(url, {
           ...init,
           signal: init?.signal
+            // node-floor-ok: Node 20.3+; floor raise tracked in TC-4280
             ? AbortSignal.any([init.signal, signal])
             : signal,
         }),
@@ -6798,6 +6805,7 @@ export class TinyCloudNode {
     const timeout = AbortSignal.timeout(5_000);
     try {
       response = await fetchFn(`${host}/encryption/networks/${encodeURIComponent(networkId)}`, {
+        // node-floor-ok: Node 20.3+; floor raise tracked in TC-4280
         signal: callerSignal ? AbortSignal.any([callerSignal, timeout]) : timeout, redirect: "error",
       });
     } catch (error) {
@@ -8341,6 +8349,7 @@ export class TinyCloudNode {
         const timeout = AbortSignal.timeout(5_000);
         this.sessionHosts.add(target.url);
         const result = await activateSessionWithHost(target.url, delegationHeader,
+          // node-floor-ok: Node 20.3+; floor raise tracked in TC-4280
           AbortSignal.any([signal, timeout]));
         signal.throwIfAborted();
         this.throwRegistryRefusal(result.status, result.error ?? "");
