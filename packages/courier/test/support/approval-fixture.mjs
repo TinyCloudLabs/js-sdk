@@ -148,7 +148,8 @@ export function installFakeOpenKey(t) {
     const plaintext = {
       resultVersion: 1, requestId: id, requestDigest: bodyCid, requesterDid: request.issuer,
       ownerDid: `did:pkh:eip155:${grant.chainId}:${grant.address}`, targetDid: request.targetDid,
-      delegationExpiresAt: expiresAt, delegation, ...(options.result ?? {}),
+      // An owner asked for a lease answers with a choice; these fixtures approve without renewal unless a test says otherwise.
+      delegationExpiresAt: expiresAt, delegation, ...(request.renewal ? { renewalChoice: 'finite' } : {}), ...(options.result ?? {}),
     };
     return { relay: sealRelay(request.resultEncryptionPublicJwk, id, plaintext), grant };
   }

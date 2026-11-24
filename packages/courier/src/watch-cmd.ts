@@ -6,7 +6,7 @@ import { randomBytes } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { cmd, programName } from './program.js';
 import { CourierError } from './errors.js';
-import { loadProfile, profileDir, writeSecure } from './profile.js';
+import { loadProfile, profileDir, writeSecure, type StoredPeer } from './profile.js';
 import { peerHooks, peerKv } from './node.js';
 import type { ParsedArgs } from './args.js';
 import { WATCH_DEFAULTS, Watcher, type WatchOptions } from './watch.js';
@@ -247,25 +247,26 @@ export async function cmdWatch(args: ParsedArgs): Promise<void> {
   }
 
   const log = jsonLineLog();
-  const node = await createRuntimeNode();
+  let node = await createRuntimeNode();
+  const onRenewed = (peer: StoredPeer): void => watcher.inboundRenewed(peer);
   const watcher = new Watcher({
-    beforePoll: () => watchOwnerPreflight(node),
+    beforePoll: async () => { node = await watchOwnerPreflight(node); },
     // One peer, before acting for it: a strict verdict (inbound grant probed too; anything but positive throws, so the
     // action fails closed). Every peer: the 300 s housekeeping.
-    checkAuthority: (handle) => handle === undefined ? maintainPeerSet(node) : maintainPeerSet(node, handle, true, true),
+    checkAuthority: (handle) => handle === undefined ? maintainPeerSet(node) : maintainPeerSet(node, handle, true, true, onRenewed),
     onAuthorityRefusal: recordAuthorityRefusal,
     notificationHome: config.home,
     notifyOnly: config.adapter === 'none',
-    selfKv: node.kv,
+    get selfKv() { return node.kv; },
     // The DID the restored node session signs as: captured after the reload, so a key rotated meanwhile cannot split
     // this watcher from the identity its node acts as.
     agent: node.credentialHolderDid,
     spaceId: profile.spaceId!,
-    selfHooks: node.hooks,
-    peerHooks: (peer) => peerHooks(node, loadProfile(), peer),
+    get selfHooks() { return node.hooks; },
+    peerHooks: (peer) => peerHooks(node, loadProfile(), peer, onRenewed),
     loadPeers: () => Object.values(loadProfile().peers).filter(peer => watchPeerEligible(peer)),
     peerHandles: () => Object.keys(loadProfile().peers),
-    kvFor: (peer, renew) => peerKv(node, loadProfile(), peer, { renew }),
+    kvFor: (peer, renew) => peerKv(node, loadProfile(), peer, { renew, onRenewed }),
     wake: createWaker(config, { run: spawnRunner, sessions: fileSessions() }),
     postInform: async (peer, threadId, text, pauseId) => { await postPausedInform(node.kv, loadProfile(), peer, threadId, text, pauseId); },
     notify: createNotifier(notifyConfig(args, config), { run: spawnRunner }),

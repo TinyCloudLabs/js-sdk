@@ -149,7 +149,7 @@ async function stage(delegation: Record<string, unknown>, result: Record<string,
 const acquireOptions = (askRenewal = true) => ({
   profileName: "renewal", jwk: key, host, permissions: requested, expectedOwner: ownerDid, expiry: "1h",
   openkeyHost: "https://openkey.example", openkeyApiHost: server.url.origin, noPopup: true,
-  ...(askRenewal ? { renewalLeaseSeconds: LEASE_SECONDS } : {}),
+  ...(askRenewal ? { renewalLeaseSeconds: LEASE_SECONDS } : { renewalLeaseSeconds: undefined }),
   onApprovalRequest: () => { throw new Error("The approval was already given"); },
 });
 const acquire = (askRenewal = true) => acquireApprovalRequest(did, acquireOptions(askRenewal));
@@ -238,15 +238,15 @@ test("a node that no longer advertises the lease's renewer refuses the approval 
   expect(await pendingCount()).toBe(0);
 });
 
-// The CLI tells a changed node identity (permanent) from other admission failures (retry) by this exact SDK message.
-// A reworded SDK error must fail here, not quietly turn the refusal back into a retry.
-test("the SDK reports a changed renewer with the exact message the CLI matches", async () => {
+// The CLI tells a changed node identity (permanent) from other admission failures (retry) by this SDK code.
+// A recoded SDK error must fail here, not quietly turn the refusal back into a retry.
+test("the SDK reports a changed renewer with the code the CLI matches", async () => {
   const delegation = await signedDelegation();
   const { receipt } = await renewalFor(delegation.delegationCid);
   advertised = { ...nodeIdentity, renewerEpoch: 1 };
   await expect(admitOwnerRenewalLease({ host, originalAuthorization: (delegation.delegationHeader as { Authorization: string }).Authorization,
     originalCid: delegation.delegationCid, ownerDid, agentDid: did, spaceId, nodeIdentity, leaseAuthorization: receipt.leaseAuthorization,
-    leaseCid: receipt.leaseCid, leaseExpiresAt: receipt.leaseExpiresAt })).rejects.toThrow(/^Renewal node identity changed$/);
+    leaseCid: receipt.leaseCid, leaseExpiresAt: receipt.leaseExpiresAt })).rejects.toMatchObject({ code: "RENEWAL_RENEWER_CHANGED" });
   expect(admitted).toEqual([]);
 });
 

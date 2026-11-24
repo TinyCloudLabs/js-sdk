@@ -118,7 +118,7 @@ function makeNode(): TinyCloudNode {
 test("a truncated bootstrap step array cannot write a completion marker", async () => {
   const node = makeNode();
   const put = mock(async () => ({ ok: true, data: { data: undefined } }));
-  Reflect.set(node, "kvForSpace", () => ({ put }));
+  const scope = { kv: () => ({ put }) };
   const write = Reflect.get(node, "writeBootstrapCompletionMarker");
   const steps = bootstrapSteps(ADDRESS, 1);
 
@@ -127,7 +127,7 @@ test("a truncated bootstrap step array cannot write a completion marker", async 
   );
   expect(put).not.toHaveBeenCalled();
 
-  await write.call(node, steps);
+  await write.call(node, steps, scope);
   expect(put).toHaveBeenCalledWith(
     BOOTSTRAP_COMPLETION_MARKER_KEY,
     expect.objectContaining({
@@ -217,7 +217,14 @@ function makeRecoveryHarness(fake: FakeCloud): TinyCloudNode {
   };
   Reflect.set(node, "auth", auth);
   Reflect.set(node, "hasRuntimePermissions", () => true);
-  Reflect.set(node, "registerBootstrapRuntimeGrant", () => {});
+  Reflect.set(node, "bootstrapGrant", () => ({ provenance: "bootstrap" }));
+  // Bootstrap provisions through its own scope; route it to the fakes below.
+  Reflect.set(node, "createBootstrapScope", () => ({
+    grants: [],
+    account: () => node.account,
+    sql: (spaceId: string) => Reflect.get(node, "sqlForSpace")(spaceId),
+    close: () => {},
+  }));
   Reflect.set(node, "_account", {
     index: {
       async ensure() {
@@ -274,7 +281,7 @@ function makeRecoveryHarness(fake: FakeCloud): TinyCloudNode {
       };
     },
   }));
-  Reflect.set(node, "ensureEncryptionNetwork", async (_networkId: string, options: { assumeMissing: boolean }) => {
+  Reflect.set(node, "ensureEncryptionNetworkIn", async (_scope: unknown, _networkId: string, options: { assumeMissing: boolean }) => {
     fake.encryptionAssumeMissing.push(options.assumeMissing);
     fake.at("encryption:network-create", () => { fake.networkCreated = true; });
   });

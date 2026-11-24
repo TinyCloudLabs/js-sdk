@@ -4,7 +4,7 @@
  * encryption and vault services of a {@link DelegatedAccess}.
  */
 import type { KVService, ServiceContext } from "@tinycloud/sdk-core";
-import type { EncryptionService, parsePermissionHint, VaultNetworkReadResult } from "@tinycloud/sdk-services";
+import type { EncryptionService, parsePermissionHint, VaultGetOptions, VaultNetworkReadResult } from "@tinycloud/sdk-services";
 import type { DelegatedEncryptionFactory } from "./DelegatedAccess";
 import type { SecretReadResult } from "./TinyCloudNode";
 
@@ -14,7 +14,7 @@ import type { SecretReadResult } from "./TinyCloudNode";
  */
 export interface DelegatedSecrets {
   encryption: EncryptionService;
-  read(vaultKey: string): Promise<SecretReadResult>;
+  read(vaultKey: string, options: VaultGetOptions<unknown>): Promise<SecretReadResult>;
 }
 
 /**
@@ -39,7 +39,7 @@ export function delegatedSecrets(
   vault.initialize(context);
   return {
     encryption,
-    read: async (vaultKey) => secretReadResult(await vault.readNetworkEncrypted<unknown>(vaultKey), parseHint),
+    read: async (vaultKey, options) => secretReadResult(await vault.readNetworkEncrypted<unknown>(vaultKey, options), parseHint),
   };
 }
 
@@ -82,7 +82,7 @@ export function secretReadResult(
         },
       };
     }
-    // `aad_mismatch` needs `expectAad`, which a secret read never sets.
+    // A secret read always sets `expectAad`; a mismatch stays an opaque failure.
     if (result.status === "aad_mismatch") return { status: "read_failed" };
     return { status: result.status };
   }

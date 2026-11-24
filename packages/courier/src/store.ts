@@ -190,6 +190,22 @@ export async function del(kv: KV, key: string): Promise<void> {
   unwrap(r, `del ${key}`);
 }
 
+/**
+ * Delete every key under `prefix`. A node may answer a list with one truncated page, so re-list after each pass
+ * until the prefix is empty. False when keys remain after `passes`; the caller keeps its cleanup retryable.
+ */
+export async function deleteAll(kv: KV, prefix: string, passes = 64): Promise<boolean> {
+  for (let pass = 0; pass < passes; pass++) {
+    const keys = await listAll(kv, prefix);
+    if (keys.length === 0) return true;
+    for (const key of keys) {
+      if (!key.startsWith(prefix)) throw new CourierError('bad-mailbox', 'The node listed a key outside the requested prefix.');
+      await del(kv, key);
+    }
+  }
+  return false;
+}
+
 /** Unconditional put, for single-writer copies such as `me/mirror/` tasks. */
 export async function putOverwrite(kv: KV, key: string, value: unknown): Promise<void> {
   const r = (await kv.put(key, value, FULL)) as ResultLike<KVResponse<void>>;

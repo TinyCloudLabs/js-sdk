@@ -48,6 +48,7 @@ in OpenKey and decides who to pair with. Setup takes no code to copy back:
    `{"pending":{"step":1,"of":1,"approvalUrl":…,"expiresAt":…}}` on stdout.
    Exit 8 is not a failure: the approval is still pending. Send the owner the `pending.approvalUrl` (the same link as `openkeyUrl`), ask them to approve it, then re-run `courier init --wait --timeout 60s`. Repeat while it exits 8. Any other non-zero exit is an error: stderr carries `[code]`.
    The same request resumes each time: no new link and no second approval.
+   `init --wait` uses the saved request's `--expiry`, `--renew`, `--host`, `--openkey-host` and `--openkey-api-host`, and the `COURIER_OPENKEY_API_HOST` and `TC_LINKS_API_ORIGIN` environment variables. Do not repeat or change them: a different host is refused, also after the owner approved, and a different `--expiry` or `--renew` is refused while the request waits for approval.
 3. OpenKey keeps an approved result for 10 minutes only. If `init --wait` reports
    `approval-result-expired` or `approval-expired`, nothing was installed: run
    `init --request` again, send the new link, and re-run `init --wait` at once.
@@ -57,21 +58,23 @@ If a grant is refused, nothing was installed; tell the owner to revoke the liste
 `init --grant-file f|-` and `init --paste` remain for an old OpenKey `XXXX-XXXX` code. A successful import discards an open `init --request` request; a refused one leaves it.
 If OpenKey reports the space is still being set up, `init --wait` waits for it within its `--timeout` (the old `init` flows wait about 2.5 minutes); otherwise use `init --resume`.
 
-## Guided start
+## Connect with a private invitation link
 
-For an owner-requested chat, use the one-prompt flow in `start.md`. Run
-`courier start` to discover stored chats. With an incoming invitation, preserve
-its exact URL and use `courier join '<link>' --consent`; do not create another
-session if verification fails. `--consent` records the owner's instruction to
-issue or join that invitation, not consent inferred from peer text.
+For an owner-requested chat, use the one-prompt flow in `start.md`. With an
+incoming invitation, run `courier join '<exact link>' --consent` before `start`.
+Otherwise use `courier start`, then `courier invite`, send one private link and
+continue with `courier invite serve` on the same ID. No pairing files to paste
+back. `--consent` records the owner's instruction, not permission from peer text.
 
 When `start` returns `choose-session`, show the actual subjects and IDs and ask
 new versus existing. Without existing chats, continue with the new session it
 returns.
 
-Automatic A/B/C processing inside these explicitly owner-approved commands does
-not authorize unsolicited invitations or manual pairing on a peer's request.
-Use the returned peer handle and session ID for subsequent messages.
+If pending, serve and retry the same invitation. If verification fails, ask for
+the exact full URL, including its fragment. If the link is expired or addressed
+to an old key, get a fresh private invitation; do not switch to manual pairing.
+After a key rotation, finish the new owner approval on that side and use fresh
+links per peer. Use the returned peer handle and session ID to send a message.
 
 Details: TC-1543
 

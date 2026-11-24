@@ -26,10 +26,16 @@ export interface RequestPermissionsCoreDeps {
     appName: string;
     appIcon?: string;
     additional: PermissionEntry[];
+    expiryMs?: number;
+    caption?: string;
+    onBehalfOf?: string;
+    allowSuppression?: boolean;
   }) => Promise<{
     approved: boolean;
     suppressPromptFor30Days?: boolean;
   }>;
+  /** True when the signer shows the request itself (OpenKey): the SDK prompt is skipped and no opt-out is read or stored. */
+  skipPrompt?: boolean;
   /** Whether this page/app has opted out of the SDK explainer prompt. */
   isPromptSuppressed?: () => boolean;
   /** Persist a successful opt-out from the SDK explainer prompt. */
@@ -49,6 +55,24 @@ export interface RequestPermissionsCoreResult {
 export interface RequestPermissionsOptions {
   /** Requested lifetime of the issued delegation, in milliseconds. */
   expiryMs?: number;
+  /**
+   * Display name of the app the permissions are for, when the caller asks on
+   * another app's behalf (for example a shell for an app it frames). The
+   * prompt names it beside the manifest app.
+   */
+  onBehalfOf?: string;
+  /**
+   * `false` always shows the prompt: an earlier 30-day opt-out is ignored,
+   * the prompt offers none, and none is stored. Default `true`.
+   */
+  allowPromptSuppression?: boolean;
+  /**
+   * The app's own short label for what this request is for, e.g. `"TrustBot's chat history"`. The prompt shows it as
+   * plain text, attributed to the app, beneath the line it derives from the request (the exact resource, each action
+   * and the expiry). It never replaces that line. Whitespace is folded and it is cut to 120 characters. A signer that
+   * shows the request itself (OpenKey) does not show it.
+   */
+  caption?: string;
 }
 
 /**
@@ -85,19 +109,25 @@ export async function requestPermissionsCore(
     throw new Error("requestPermissions expiryMs must be a positive finite number");
   }
 
+  const allowSuppression = options?.allowPromptSuppression !== false;
+  const onBehalfOf = options?.onBehalfOf;
   let shouldSuppressPrompt = false;
-  if (deps.isPromptSuppressed?.() !== true) {
+  if (deps.skipPrompt !== true && (!allowSuppression || deps.isPromptSuppressed?.() !== true)) {
     const modalResult = await deps.showModal({
       appName: deps.manifest.name,
       appIcon: deps.manifest.icon,
       additional,
+      expiryMs,
+      caption: options?.caption,
+      ...(onBehalfOf !== undefined ? { onBehalfOf } : {}),
+      ...(allowSuppression ? {} : { allowSuppression: false }),
     });
 
     if (!modalResult.approved) {
       return { approved: false };
     }
 
-    shouldSuppressPrompt = modalResult.suppressPromptFor30Days === true;
+    shouldSuppressPrompt = allowSuppression && modalResult.suppressPromptFor30Days === true;
   }
 
   const delegations =

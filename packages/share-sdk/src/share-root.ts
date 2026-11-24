@@ -213,6 +213,7 @@ export interface ExpectedOwnerDelegation {
 export function validateSignedOwnerDelegation(decoded: DecodedOwnerRootCacao, expected: ExpectedOwnerDelegation): { issuedAt: Date; expiresAt: Date } {
   const { label } = expected;
   const wider = { rootCid: decoded.cid, mustRevoke: true };
+  if (decoded.delegationMode === "terminal") throw new ShareRootError("malformed-root", `${label} must allow delegation`, wider);
   let issuer: Owner;
   try { issuer = parseOwnerDid(decoded.issuer); } catch { throw new ShareRootError("issuer-mismatch", `${label} is not signed by a did:pkh owner`, wider); }
   if (!sameOwner(issuer, expected.owner)) throw new ShareRootError("issuer-mismatch", `${label} is signed by another owner`, wider);

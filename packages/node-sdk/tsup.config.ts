@@ -10,6 +10,7 @@ export default defineConfig({
     'space-hosting': 'src/space-hosting.ts',
     'runtime-grants': 'src/runtime-grants.ts',
     'secret-read': 'src/secret-read.ts',
+    'session-retire': 'src/session-retire.ts',
     'credential-pending-store': 'src/credential-pending-store.ts',
     credentials: 'src/credentials/index.ts',
     'credentials-core': 'src/credentials/core.ts',
@@ -34,6 +35,7 @@ export default defineConfig({
     './space-hosting.js',
     './runtime-grants.js',
     './secret-read.js',
+    './session-retire.js',
     '@tinycloud/node-sdk-wasm',
     '@tinycloud/replica',
     '@tinycloud/replica/sqlite',
@@ -58,7 +60,7 @@ export default defineConfig({
     for (const entry of ['index.cjs', 'core.cjs']) {
       const path = fileURLToPath(new URL(`./dist/${entry}`, import.meta.url));
       let source = await readFile(path, 'utf8');
-      for (const lazy of ['encryption-keys', 'space-hosting', 'runtime-grants', 'secret-read']) {
+      for (const lazy of ['encryption-keys', 'space-hosting', 'runtime-grants', 'secret-read', 'session-retire']) {
         const esmImport = `import("./${lazy}.js")`;
         if (!source.includes(esmImport)) throw new Error(`${entry} has no ${lazy} import`);
         source = source.replaceAll(esmImport, `import("./${lazy}.cjs")`);

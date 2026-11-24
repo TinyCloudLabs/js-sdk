@@ -9,6 +9,7 @@ import Footer from "../components/Footer";
 import { DocumentSidebar } from "../components/documents/DocumentSidebar";
 import { EditorLayout } from "../components/editor/EditorLayout";
 import { useDocuments } from "../hooks/useDocuments";
+import { editorManifest } from "../manifest";
 
 // Lazy load heavy components
 const ShareModal = lazy(() => import("../components/sharing/ShareModal").then(m => ({ default: m.ShareModal })));
@@ -113,9 +114,14 @@ function Home() {
 
       const eip1193Provider = new OpenKeyProvider(openkey, authResult);
       const ethersProvider = new providers.Web3Provider(eip1193Provider as any);
+      const [signerAddress, network] = await Promise.all([
+        ethersProvider.getSigner().getAddress(),
+        ethersProvider.getNetwork(),
+      ]);
 
       const tcwConfig = getTinyCloudWebConfig({
         provider: ethersProvider,
+        manifest: editorManifest(signerAddress, network.chainId),
         siweConfig: {
           statement: "Sign in to the TinyCloud OpenKey example app.",
           domain: window.location.hostname,

@@ -1,6 +1,6 @@
 {
   "name": "@tinycloud/web-sdk",
-  "version": "3.13.0-beta.9",
+  "version": "3.14.0-beta.21",
   "description": "A set of tools and utilities to help you build your app with TinyCloud.",
   "main": "dist/index.cjs",
   "module": "dist/index.mjs",
@@ -33,7 +33,8 @@
   },
   "repository": {
     "type": "git",
-    "url": "ssh://git@github.com:TinyCloudLabs/web-sdk.git"
+    "url": "https://github.com/TinyCloudLabs/js-sdk.git",
+    "directory": "packages/web-sdk"
   },
   "type": "module",
   "author": "TinyCloud, Inc.",
@@ -67,12 +68,12 @@
     "@multiformats/multiaddr": "^13.0.1",
     "@multiformats/multiaddr-to-uri": "^12.0.0",
     "@noble/curves": "^1.9.7",
-    "@tinycloud/node-sdk": "3.13.0-beta.9",
-    "@tinycloud/replica": "0.4.6-beta.2",
-    "@tinycloud/sdk-core": "3.13.0-beta.9",
+    "@tinycloud/node-sdk": "3.14.0",
+    "@tinycloud/replica": "0.4.7",
+    "@tinycloud/sdk-core": "3.14.0",
     "@tinycloud/share-envelope": "1.6.0",
-    "@tinycloud/share-sdk": "1.6.0-beta.1",
-    "@tinycloud/web-sdk-wasm": "1.7.8",
+    "@tinycloud/share-sdk": "1.6.0",
+    "@tinycloud/web-sdk-wasm": "1.8.0-beta.0",
     "axios": "^1.7.9",
     "viem": "^2.45.0",
     "zod": "^3.22.0"
@@ -124,5 +125,9 @@
     "dist/**/*.mjs",
     "dist/**/*.d.ts",
     "dist/**/*.LICENSE.txt"
-  ]
+  ],
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  }
 }

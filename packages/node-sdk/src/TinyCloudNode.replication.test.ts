@@ -11,6 +11,7 @@ import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 
 import {
   CaveatedDelegationUnsupportedError,
+  ownerFullAccess,
   PermissionNotInManifestError,
   SessionExpiredError,
   ServiceContext,
@@ -551,6 +552,7 @@ describe("replicationSignInEntries (§4.1, §4.6)", () => {
       signer: makeSigner(),
       tinycloudHosts: ["https://tinycloud.test"],
       sessionStorage: new MemorySessionStorage(),
+      ...ownerFullAccess(),
       replication: replicationConfig(),
     });
     await (node.auth as NodeUserAuthorization).signIn();
@@ -633,6 +635,7 @@ describe("replicationSignInEntries (§4.1, §4.6)", () => {
       signer: makeSigner(),
       tinycloudHosts: ["https://tinycloud.test"],
       sessionStorage: new MemorySessionStorage(),
+      ...ownerFullAccess(),
       replication: {
         enabled: true,
         storage: {} as never,
@@ -657,6 +660,7 @@ describe("replicationSignInEntries (§4.1, §4.6)", () => {
         tinycloudHosts: ["https://tinycloud.test"],
         sessionStorage: new MemorySessionStorage(),
         prefix: "account",
+        defaultActions: ownerFullAccess().defaultActions,
         includeAccountRegistryPermissions,
         replication: replicationConfig(),
       });
@@ -680,6 +684,7 @@ describe("replicationSignInEntries (§4.1, §4.6)", () => {
       tinycloudHosts: ["https://tinycloud.test"],
       sessionStorage: new MemorySessionStorage(),
       prefix: "secrets",
+      defaultActions: ownerFullAccess().defaultActions,
       replication: replicationConfig(),
     });
     (gated.auth as NodeUserAuthorization).setRestoredTinyCloudSession(
@@ -696,6 +701,7 @@ describe("replicationSignInEntries (§4.1, §4.6)", () => {
       tinycloudHosts: ["https://tinycloud.test"],
       sessionStorage: new MemorySessionStorage(),
       prefix: "secrets",
+      defaultActions: ownerFullAccess().defaultActions,
       replication: replicationConfig({ allowSecrets: true }),
     });
     (opted.auth as NodeUserAuthorization).setRestoredTinyCloudSession(
@@ -711,6 +717,7 @@ describe("replicationSignInEntries (§4.1, §4.6)", () => {
       tinycloudHosts: ["https://tinycloud.test"],
       sessionStorage: new MemorySessionStorage(),
       prefix: "secrets",
+      defaultActions: ownerFullAccess().defaultActions,
       replication: replicationConfig({
         allowSecrets: true,
         prefixes: ["vault/secrets/tokens/"],

@@ -34,7 +34,10 @@ export interface ProfileSnapshot {
   readonly session: Record<string, unknown> | null;
 }
 
-/** Read profile, key and session. Only a missing profile is `null`; an unreadable one is an error. */
+/**
+ * Read profile, key and session. Only a missing profile is `null`; an unreadable one is an error. The key is read even
+ * while the profile is signed out: logout keeps it, and the next login signs in with it again.
+ */
 export async function readProfileSnapshot(profileName: string): Promise<ProfileSnapshot> {
   const profile = await ProfileManager.getProfile(profileName).catch((error: unknown) => {
     if (error instanceof CLIError && error.code === "PROFILE_NOT_FOUND") return null;
@@ -42,7 +45,7 @@ export async function readProfileSnapshot(profileName: string): Promise<ProfileS
   });
   return {
     profile,
-    key: await ProfileManager.getKey(profileName),
+    key: await ProfileManager.getStoredKey(profileName),
     session: await ProfileManager.getSession(profileName) as Record<string, unknown> | null,
   };
 }
@@ -205,7 +208,8 @@ export async function commitLogin(profileName: string, snapshot: ProfileSnapshot
       await ProfileManager.setSession(profileName, commit.session);
       if (current.profile?.authSignedOut === true || commit.durable === true) {
         await syncAuthCredentialFiles(profilePath(profileName));
-        await ProfileManager.setProfileDurable(profileName, { ...profile, authSignedOut: false });
+        const { authKeyRetained: _authKeyRetained, ...signedIn } = profile;
+        await ProfileManager.setProfileDurable(profileName, { ...signedIn, authSignedOut: false });
       } else {
         await ProfileManager.setProfile(profileName, profile);
       }

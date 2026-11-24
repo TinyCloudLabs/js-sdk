@@ -1,6 +1,6 @@
 {
   "name": "@tinycloud/sdk-core",
-  "version": "3.13.0-beta.9",
+  "version": "3.14.0",
   "description": "Core TinyCloud SDK - shared interfaces and TinyCloud class",
   "author": "TinyCloud, Inc.",
   "license": "EGPL",
@@ -94,9 +94,9 @@
     "@multiformats/uri-to-multiaddr": "^10.0.0",
     "@noble/curves": "^1.9.7",
     "@tinycloud/share-envelope": "1.6.0",
-    "@tinycloud/share-sdk": "1.6.0-beta.1",
-    "@tinycloud/bootstrap": "2.9.0",
-    "@tinycloud/sdk-services": "3.13.0-beta.8",
+    "@tinycloud/share-sdk": "1.6.0",
+    "@tinycloud/bootstrap": "2.10.0",
+    "@tinycloud/sdk-services": "3.14.0",
     "multiformats": "^13.4.1",
     "ms": "^2.1.3",
     "siwe": "^3.0.0",
@@ -112,6 +112,11 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/tinycloudlabs/web-sdk"
+    "url": "https://github.com/TinyCloudLabs/js-sdk.git",
+    "directory": "packages/sdk-core"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
   }
 }

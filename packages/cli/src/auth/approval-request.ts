@@ -8,7 +8,7 @@ import { additionalDelegationsPath, profilePath } from "@tinycloud/operations/st
 import { buildShareInvitationApprovalSpec, checkApprovalResultBinding, createApprovalRequest, DEFAULT_LINKS_API_ORIGIN, signerFromJwk, type ApprovalRenewal, type Ed25519PrivateJwk, type LinkRecord, type OpenKeyApprovalRequestV1, type ShareInvitationApprovalContext } from "@tinycloud/share-envelope/links";
 import { principalDidEquals, type AuthDelegationArtifact, type AuthRequestArtifact, type PermissionEntry } from "@tinycloud/node-sdk";
 import { canonicalizeRecapCaveats, parseSignedCompactUcanAttenuation } from "@tinycloud/sdk-core";
-import { admitOwnerRenewalLease, RENEWAL_LEASE_ORIGINAL_EXPIRED } from "@tinycloud/sdk-core/delegations/renewal";
+import { admitOwnerRenewalLease, RENEWAL_LEASE_ORIGINAL_EXPIRED, RENEWAL_RENEWER_CHANGED } from "@tinycloud/sdk-core/delegations/renewal";
 import { RENEWAL_ADMISSION_LEAD_MS, verifyOwnerRenewalLease } from "@tinycloud/sdk-core/delegations/renewal-receipt";
 import { ProfileManager } from "../config/profiles.js";
 import { readJson, writeJsonDurable, syncAuthCredentialFiles } from "../config/storage.js";
@@ -65,6 +65,12 @@ const renewals = new WeakMap<object, ApprovalRenewal>();
 /** The verified renewal lease an approval result carried for this delegation, if it carried one. */
 export function approvalRenewalOf(delegation: object): ApprovalRenewal | undefined {
   return renewals.get(delegation);
+}
+
+/** The owner's answer to the lease this delegation's request asked for; undefined when the request asked for none. */
+export function approvalRenewalChoiceOf(delegation: object): "leased" | "finite" | undefined {
+  if (!acquisitions.get(delegation)?.request.renewal) return undefined;
+  return renewals.has(delegation) ? "leased" : "finite";
 }
 
 /** Remote results require the durable login commit before their delivery can be acknowledged. */
@@ -205,7 +211,7 @@ function configuredOrigin(value: string, label: string): string {
   }
   return url.origin;
 }
-function grantLifetimeSeconds(expiry: AuthFlowOptions["expiry"]): number {
+export function grantLifetimeSeconds(expiry: AuthFlowOptions["expiry"]): number {
   const durationMs = typeof expiry === "string" && /^\d+s$/.test(expiry)
     ? Number(expiry.slice(0, -1)) * 1000
     : parseRequestedExpiry(expiry ?? "7d").durationMs;
@@ -426,8 +432,8 @@ async function admitApprovedRenewal(host: string, entry: PendingApproval, verifi
     if (error instanceof Error && "code" in error && error.code === RENEWAL_LEASE_ORIGINAL_EXPIRED) {
       throw new CLIError("AUTH_EXPIRED", "The approved session has expired. No session was saved.", ExitCode.AUTH_REQUIRED);
     }
-    // admitOwnerRenewalLease raises this when the host no longer advertises the identity the lease was issued to.
-    if (error instanceof Error && error.message === "Renewal node identity changed") {
+    // The host no longer advertises the renewer identity the lease was issued to.
+    if (error instanceof Error && "code" in error && error.code === RENEWAL_RENEWER_CHANGED) {
       throw refused("This renewal names a different TinyCloud node than the one you signed in to, so it wasn't turned on. Sign in again for a new approval.");
     }
     throw Object.assign(new CLIError("NETWORK_ERROR", "The TinyCloud node didn't accept this session's renewal. Your approval is saved, so run the same command again.",
@@ -556,9 +562,14 @@ export async function acquireApprovalRequest(_did: string, options: AuthFlowOpti
   const spec = context
     ? buildShareInvitationApprovalSpec({ targetDid: signer.did, targetPublicJwk, nodeOrigin: options.host, context, now: Date.now() })
     : { issuer: signer.did, requestVersion: 1 as const, targetDid: signer.did,
-      targetPublicJwk, nodeOrigin: options.host, permissions: options.permissions as OpenKeyApprovalRequestV1["permissions"],
+      targetPublicJwk, nodeOrigin: options.host,
+      // `skipPrefix` tells the local SDK not to prefix a path; the signed request is strict and its paths are final.
+      permissions: options.permissions!.map(({ skipPrefix: _skipPrefix, ...entry }) => entry) as OpenKeyApprovalRequestV1["permissions"],
       ...(options.reason ? { reason: options.reason } : {}), grantLifetimeSeconds: grantLifetimeSeconds(options.expiry),
-      ...(options.renewalLeaseSeconds === undefined ? {} : { renewal: { version: 1 as const, leaseLifetimeSeconds: options.renewalLeaseSeconds } }) };
+      ...(options.renewalLeaseSeconds === undefined ? {} : {
+        renewal: { version: 1 as const, leaseLifetimeSeconds: options.renewalLeaseSeconds },
+        ...(options.renewalPurpose === undefined ? {} : { purpose: options.renewalPurpose }),
+      }) };
   if (options.commandIntent !== undefined && !/^auth-grant:[0-9a-f]{64}$/.test(options.commandIntent)) {
     throw invalid("Invalid approval command intent.");
   }

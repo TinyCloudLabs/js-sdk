@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import { randomBytes, randomUUID } from "node:crypto";
 import { posix as pathPosix } from "node:path";
-import { TinyCloudNode } from "@tinycloud/node-sdk";
+import { TinyCloudNode, ownerFullAccess } from "@tinycloud/node-sdk";
 import { createTinyCloudDelegatedVfs } from "@tinycloud/vfs";
 
 const SERVER_URL =
@@ -35,7 +35,7 @@ function createClient(name, privateKey) {
   return new TinyCloudNode({
     privateKey,
     host: SERVER_URL,
-    prefix: `vfs-demo-${name}`,
+    ...ownerFullAccess(`vfs-demo-${name}`),
     autoCreateSpace: true,
   });
 }

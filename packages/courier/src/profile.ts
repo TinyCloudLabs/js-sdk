@@ -19,6 +19,8 @@ export interface AgentKey {
 
 export interface OwnerGrant {
   renewal?: ApprovalRenewal;
+  /** The owner answered a lease ask with a grant that ends at its own expiry: the automatic re-approval asks for none. */
+  renewalChoice?: 'finite';
   v: 1;
   delegationHeader: { Authorization: string };
   delegationCid: string;
@@ -259,7 +261,7 @@ function readProfile(home: string): Profile {
     throw new CourierError('bad-profile', `Corrupt profile at ${profilePath('profile.json', home)}`);
   }
   if (loaded.version === 2) {
-    throw new CourierError('profile-outdated', `This profile stores Courier data in the applications space. Courier now uses your agents space: run \`${cmd('init --rotate-key')}\`, then re-pair peers.`);
+    throw new CourierError('profile-outdated', `This profile stores Courier data in the applications space. With owner approval, run \`${cmd('init --rotate-key --request')}\` and collect the new grant with \`${cmd('init --wait')}\`, then re-pair with fresh private links (\`${cmd('invite --help')}\`).`);
   }
   if (loaded.version !== 3 && loaded.version !== 4) throw new CourierError('bad-profile', `Unsupported profile version ${String(loaded.version)}; run \`${cmd('init --rotate-key')}\`.`);
   const profile = loaded as Profile;
@@ -299,14 +301,18 @@ export function loadProfile(home = profileDir()): Profile {
 
 const same = (a: unknown, b: unknown): boolean => canonicalJson(a ?? null) === canonicalJson(b ?? null);
 
-/** Three-way merge of one peer's fields: what this command changed wins, anything it left alone keeps the current file's value. */
+/** Three-way merge: untouched fields keep disk values; append-only delegation receipts are retained; conflicting peer state refuses. */
 function mergePeer(handle: string, base: StoredPeer | undefined, mine: StoredPeer | undefined, disk: StoredPeer | undefined): StoredPeer | undefined {
   if (same(mine, base)) return disk; // not touched by this command
-  if (!mine) return undefined; // revoked here
   if (!disk) {
+    if (!mine) return undefined;
     if (!base) return mine; // a new peer is added
     throw new CourierError('peer-revoked', `${handle} was revoked while this command was running. Nothing was saved and nothing was published.`);
   }
+  if (base && (['courierDid', 'ownerDid', 'spaceId', 'sessionId', 'pairedAt'] as const).some(key => !same(base[key], disk[key]))) {
+    throw new CourierError('profile-changed', `The pairing with ${handle} changed while this command was running. Nothing was saved; run the command again.`);
+  }
+  if (!mine) return undefined; // revoked here, only for the pairing this operation started with
   if (disk.status === 'paired' && mine.status !== 'paired') {
     throw new CourierError('usage', `Already paired with ${handle}.`);
   }
@@ -325,13 +331,16 @@ function mergePeer(handle: string, base: StoredPeer | undefined, mine: StoredPee
     else if (same(d[key], b[key]) || same(d[key], m[key])) value = m[key];
     else if (key === 'outbound') {
       const byCid = new Map<string, StoredPeer['outbound'][number]>();
-      for (const entry of [...(d.outbound as StoredPeer['outbound']), ...(m.outbound as StoredPeer['outbound'])]) byCid.set(entry.cid, entry);
+      for (const entry of [...(d.outbound as StoredPeer['outbound']), ...(m.outbound as StoredPeer['outbound'])]) {
+        const prior = byCid.get(entry.cid);
+        byCid.set(entry.cid, prior?.revokedAt ? { ...entry, revokedAt: prior.revokedAt } : entry);
+      }
       value = [...byCid.values()].sort((x, y) => Date.parse(x.issuedAt) - Date.parse(y.issuedAt));
     } else if (key === 'inbound') {
       // Two imports raced: the longer-lived delegation stays, never the one that happened to save last.
       value = Date.parse((d.inbound as NonNullable<StoredPeer['inbound']>).expiresAt) > Date.parse((m.inbound as NonNullable<StoredPeer['inbound']>).expiresAt) ? d.inbound : m.inbound;
     } else if (key === 'status') value = d.status === 'paired' ? 'paired' : m.status;
-    else value = m[key];
+    else throw new CourierError('profile-changed', `${handle} changed while this command was running. Nothing was saved; run the command again.`);
     if (value !== undefined) merged[key] = value;
   }
   return merged as unknown as StoredPeer;
@@ -382,12 +391,15 @@ function sleepSync(ms: number): void {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 
+let profileLockHeld = false;
+
 /**
  * Exclusive, held only while a save reads, merges and writes (milliseconds). The lock is intake's: created whole with a `{pid, nonce}` owner
  * record, released only by its nonce, and broken only when its holder is established dead (a true boot-id change on the same host, or its pid is absent; on Linux the record and this process must name the same pid namespace).
  * A live holder, or one whose liveness cannot be established, is waited for and then refused: age alone never breaks a lock.
  */
-function withProfileLock<T>(fn: () => T): T {
+export function withProfileLock<T>(fn: () => T): T {
+  if (profileLockHeld) return fn();
   ensureSecureDir();
   const lock = `${profilePath('profile.json')}.lock`;
   const deadline = performance.now() + LOCK_WAIT_MS;
@@ -402,9 +414,11 @@ function withProfileLock<T>(fn: () => T): T {
     }
     sleepSync(10);
   }
+  profileLockHeld = true;
   try {
     return fn();
   } finally {
+    profileLockHeld = false;
     release?.();
   }
 }
@@ -461,27 +475,12 @@ function saveProfileUnlocked(profile: Profile, beforeSave?: (disk: Profile | und
   remember(profile);
 }
 
-/** Serialize peer operations across network awaits; use save(), never saveProfile(), inside. */
-export async function withProfileTransaction<T>(fn: (profile: Profile, save: () => void) => Promise<T>): Promise<T> {
-  ensureSecureDir();
-  const deadline = performance.now() + LOCK_WAIT_MS;
-  let release: () => void;
-  for (;;) {
-    try {
-      release = acquireLock(`${profilePath('profile.json')}.lock`);
-      break;
-    } catch (error) {
-      if (!(error instanceof CourierError) || error.code !== 'locked') throw error;
-      if (performance.now() >= deadline) throw new CourierError('profile-locked', error.message);
-      await new Promise((resolve) => setTimeout(resolve, 10));
-    }
-  }
-  try {
-    const profile = loadProfile();
-    return await fn(profile, () => saveProfileUnlocked(profile));
-  } finally {
-    release();
-  }
+export type ProfileSave = (beforeSave?: (disk: Profile | undefined) => void) => void;
+
+/** Read under a short lock; network work runs unlocked, and each save re-reads and merges under the lock. */
+export async function withProfileTransaction<T>(fn: (profile: Profile, save: ProfileSave) => Promise<T>): Promise<T> {
+  const profile = withProfileLock(() => loadProfile());
+  return fn(profile, beforeSave => saveProfile(profile, beforeSave));
 }
 
 /** The shape `loadKey` accepts: version 1, a JWK and a `did:key:` identifier. */
@@ -520,7 +519,7 @@ export function getPeer(p: Profile, handle: string): StoredPeer {
     const known = Object.keys(p.peers);
     throw new CourierError(
       'unknown-peer',
-      `Unknown peer "${handle}".${known.length ? ` Known: ${known.join(', ')}.` : ` Run \`${cmd('pair start <peer>')}\` first.`}`,
+      `Unknown peer "${handle}".${known.length ? ` Known: ${known.join(', ')}.` : ''} Connect with a private invitation link: \`${cmd('invite --help')}\` to send one, or \`${cmd('join --help')}\` to accept one.`,
     );
   }
   return peer;

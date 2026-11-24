@@ -20,7 +20,7 @@ process.env.BUN_INSTALL_CACHE_DIR = TEST_HOME;
 if (!process.env.HOME.startsWith("/var/tmp/tc1888.")) throw new Error("test home is not a temp dir");
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { TinyCloudNode } from "@tinycloud/node-sdk";
+import { TinyCloudNode, ownerFullAccess } from "@tinycloud/node-sdk";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
@@ -162,13 +162,13 @@ describe.skipIf(NODE_BIN === undefined)("TC-1888 local-copy purge (Chromium)", (
       },
     });
 
-    owner = new TinyCloudNode({ privateKey: WALLET_KEY, host, tinycloudRegistryUrl: registry.url.origin, autoCreateSpace: true });
+    owner = new TinyCloudNode({ privateKey: WALLET_KEY, host, tinycloudRegistryUrl: registry.url.origin, autoCreateSpace: true, ...ownerFullAccess() });
     await owner.signIn();
     for (const [key, value] of [["notes/a", "alpha note"], ["notes/b", "beta note"]] as const) {
       const put = await owner.kv.put(key, new TextEncoder().encode(value));
       if (!put.ok) throw new Error(`kv put ${key} failed: ${JSON.stringify(put.error)}`);
     }
-    const ownerB = new TinyCloudNode({ privateKey: ACCOUNT_B_KEY, host, tinycloudRegistryUrl: registry.url.origin, autoCreateSpace: true });
+    const ownerB = new TinyCloudNode({ privateKey: ACCOUNT_B_KEY, host, tinycloudRegistryUrl: registry.url.origin, autoCreateSpace: true, ...ownerFullAccess() });
     await ownerB.signIn();
     const putB = await ownerB.kv.put("notes/b-only", new TextEncoder().encode("belongs to B"));
     if (!putB.ok) throw new Error(`account B seed failed: ${JSON.stringify(putB.error)}`);

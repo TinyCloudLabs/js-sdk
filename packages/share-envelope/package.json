@@ -44,5 +44,14 @@
     "tsup": "^8.0.0",
     "typescript": "^5.9.3",
     "vitest": "^3.2.4"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/TinyCloudLabs/js-sdk.git",
+    "directory": "packages/share-envelope"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
   }
 }

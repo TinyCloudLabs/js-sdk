@@ -159,7 +159,7 @@ afterAll(async () => {
 const PENDING = () => join(profilePath("approval"), "approval-pending.json");
 const entries = async () => await readJson<Array<{ requestId: string; resultRef?: string; relayPrivateKey?: string }>>(PENDING());
 const ACQUIRE = { profileName: "approval", jwk: key, host, permissions: requested, expectedOwner: ownerDid, expiry: "1h",
-  openkeyHost: "https://openkey.example", openkeyApiHost: server.url.origin, noPopup: true, onApprovalRequest: () => undefined };
+  openkeyHost: "https://openkey.example", openkeyApiHost: server.url.origin, noPopup: true, onApprovalRequest: () => undefined, renewalLeaseSeconds: undefined };
 
 /** A stored request whose result OpenKey still holds, so acquisition discovers, fetches and verifies it (the real first-fetch path). */
 async function unfetched(delegation: Record<string, unknown>, options: Parameters<typeof stage>[1] = { expectedOwner: ownerDid }): Promise<void> {

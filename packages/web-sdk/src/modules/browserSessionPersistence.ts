@@ -17,6 +17,8 @@ export interface RestorableSessionData {
    * before this field existed; in that case the node re-resolves lazily.
    */
   tinycloudHosts?: string[];
+  /** Hosts the session's delegations were posted to; sign-out retires the key on each. */
+  activatedHosts?: string[];
   /** Replica gate stamp from sign-in; `node.restoreSession` validates it against the gate. */
   replicaStamp?: PersistedSessionData["replicaStamp"];
 }
@@ -65,6 +67,7 @@ export function restoreDataFromPersisted(
     signature: data.signature,
     expiresAt: data.expiresAt,
     tinycloudHosts: data.tinycloudHosts,
+    activatedHosts: data.activatedHosts,
     replicaStamp: data.replicaStamp,
   };
 }

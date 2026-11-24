@@ -1,4 +1,6 @@
+import fs from 'node:fs';
 import { assertOwnerRenewalIdentity, verifyOwnerRenewal } from './owner-renewal.js';
+import { RenewalAuthorityInactiveError, RenewalLeaseExpiredError } from '@tinycloud/sdk-core/delegations/renewal';
 import { TinyCloudNode, DelegatedAccess, NodeWasmBindings, activateValidatedRuntimeDelegation, deserializeDelegation, serializeDelegation } from '@tinycloud/node-sdk';
 import { createRegistryVerdictCache } from '@tinycloud/sdk-core/registry-verdict-cache';
 import { createInMemoryRegistryCacheStore, createInMemoryRegistrySequenceStore, type RegistryCacheStore, type RegistrySequenceStore } from '@tinycloud/sdk-core';
@@ -6,11 +8,13 @@ import type { IHooksService, PortableDelegation, TinyCloudSession, ValidatedRunt
 import { cmd } from './program.js';
 import { CourierError } from './errors.js';
 import { COURIER_SPACE, k } from './keys.js';
-import type { Profile, StoredPeer } from './profile.js';
-import { loadGrant, loadKey, withProfileTransaction } from './profile.js';
+import type { AgentKey, OwnerGrant, Profile, StoredPeer } from './profile.js';
+import { loadGrant, loadKey, profileDir, saveProfile, withProfileTransaction } from './profile.js';
+import { dropPendingQuietly } from './pending.js';
 import { canonicalJson } from './canonical.js';
 import { getJson } from './store.js';
 import { assertAgentGrant, assertPeerDelegation, bareDid, siweTimes } from './authority.js';
+import { verifySpaceReady } from './space-probe.js';
 
 /**
  * One registry verdict cache for every node this process creates (TC-2970), in `absent-reads` mode (TC-2481): only a
@@ -53,17 +57,51 @@ function readersOf(node: TinyCloudNode) {
 export async function courierNode(profile: Profile, home?: string): Promise<TinyCloudNode> {
   const key = loadKey(home);
   const grant = loadGrant(home);
-  if (profile.status === 'awaiting-space') {
-    if (profile.spacePending) {
-      throw new CourierError('no-space', `TinyCloud "${COURIER_SPACE}" space is still being set up by OpenKey; run \`${cmd('init --resume')}\`.`);
-    }
-    throw new CourierError('no-space', `TinyCloud "${COURIER_SPACE}" space is missing; after hosting it, run \`${cmd('init --resume')}\`.`);
+  if (profile.status === 'awaiting-space') return healAwaitingSpace(profile, key, grant, home);
+  return restoreCourierNode(profile, key, grant);
+}
+
+function awaitingSpaceError(profile: Profile): CourierError {
+  if (profile.spacePending) {
+    return new CourierError('no-space', `TinyCloud "${COURIER_SPACE}" space is still being set up by OpenKey; run \`${cmd('init --resume')}\`.`);
   }
+  return new CourierError('no-space', `TinyCloud "${COURIER_SPACE}" space is missing; after hosting it, run \`${cmd('init --resume')}\`.`);
+}
+
+/**
+ * `awaiting-space` is a cached negative answer, asked again on every use: once the node hosts the space the profile is `ready`
+ * and the command runs. The profile changes only when the shared probe says the space is hosted. A space that is not hosted
+ * (or a profile with no grant to ask with) is the no-space error the profile always gave; a probe that fails propagates its error.
+ * Saving the heal can refuse (the profile changed meanwhile); that refusal is not hidden.
+ *
+ * The heal saves with `saveProfile`, which takes the profile lock for the save alone. A caller must not hold that lock across
+ * this call: `withProfileLock` is synchronous and `withProfileTransaction` holds it only while it reads, so neither can, and the
+ * transaction's own save is this same merge. `saveProfile` writes the current profile directory only, so a profile read from
+ * another `home` is not healed and keeps the no-space error.
+ */
+async function healAwaitingSpace(profile: Profile, key: AgentKey, grant: OwnerGrant | undefined, home: string | undefined): Promise<TinyCloudNode> {
+  if (!grant || !isCurrentHome(home)) throw awaitingSpaceError(profile);
+  const node = await restoreCourierNode(profile, key, grant);
+  if (!(await verifySpaceReady(node))) throw awaitingSpaceError(profile);
+  profile.status = 'ready';
+  delete profile.spacePending;
+  saveProfile(profile);
+  dropPendingQuietly(grant.delegationCid);
+  return node;
+}
+
+/** Whether `home` is the directory `saveProfile` writes. */
+function isCurrentHome(home: string | undefined): boolean {
+  if (home === undefined) return true;
+  try { return fs.realpathSync(home) === fs.realpathSync(profileDir()); } catch { return false; }
+}
+
+async function restoreCourierNode(profile: Profile, key: AgentKey, grant: OwnerGrant | undefined): Promise<TinyCloudNode> {
   if (!grant || profile.status === 'awaiting-grant') {
     throw new CourierError('no-grant', `No OpenKey owner grant is installed. Run \`${cmd('init')}\` and approve the request in OpenKey.`);
   }
   if (!grant.spaceId.toLowerCase().endsWith(`:${COURIER_SPACE}`)) {
-    throw new CourierError('profile-outdated', `Courier grant space is not ${COURIER_SPACE}; run \`${cmd('init --rotate-key')}\`, then re-pair peers.`);
+    throw new CourierError('profile-outdated', `Courier grant space is not ${COURIER_SPACE}. With owner approval, run \`${cmd('init --rotate-key --request')}\` and collect the new grant with \`${cmd('init --wait')}\`, then re-pair with fresh private links (\`${cmd('invite --help')}\`).`);
   }
   const expiry = Date.parse(grant.expiresAt);
   if (!Number.isFinite(expiry) || (!grant.renewal && Date.now() >= expiry)) {
@@ -88,8 +126,15 @@ export async function courierNode(profile: Profile, home?: string): Promise<Tiny
   };
   if (grant.renewal) {
     await verifyOwnerRenewal(grant, grant.ownerDid, grant.renewal);
-    if (Date.now() < expiry) await node.restoreSession(sessionData);
-    else await node.restoreSessionWithRenewal(sessionData, grant.renewal.receipt.leaseAuthorization);
+    // Restore through the lease whenever the node has renewed the grant, so delegations to peers can reach past its
+    // signed end before they lapse. Until the node's first renewal there is nothing to restore through, and the grant
+    // holds to its signed end. A revoked grant or a stopped lease is refused, never restored without the lease.
+    try {
+      await node.restoreSessionWithRenewal(sessionData, grant.renewal.receipt.leaseAuthorization);
+    } catch (error) {
+      if (Date.now() >= expiry || error instanceof RenewalAuthorityInactiveError || error instanceof RenewalLeaseExpiredError) throw error;
+      await node.restoreSession(sessionData);
+    }
     assertOwnerRenewalIdentity(grant.renewal, await node.renewalNodeIdentity());
   } else {
     await node.restoreSession(sessionData);
@@ -147,7 +192,7 @@ function peerReader(node: TinyCloudNode, peer: StoredPeer): TinyCloudNode {
 }
 
 /** `renew: false` skips reading the peer's renewal marker; the watcher reads it on its renewal schedule instead. */
-export async function peerKv(node: TinyCloudNode, profile: Profile, peer: StoredPeer, options: { renew?: boolean } = {}) {
+export async function peerKv(node: TinyCloudNode, profile: Profile, peer: StoredPeer, options: { renew?: boolean; onRenewed?: (peer: StoredPeer) => void } = {}) {
   const original = renewalBinding(profile, peer);
   const current = await currentInbound(node, profile, peer);
   const kv = peerReader(node, peer).kvForSpace(peer.spaceId);
@@ -187,6 +232,7 @@ export async function peerKv(node: TinyCloudNode, profile: Profile, peer: Stored
     if (profile.peers[peer.handle]) profile.peers[peer.handle].inbound = inbound;
   });
   readersOf(node).set(peer.handle, { cid: renewed.cid, reader, activated: renewed });
+  options.onRenewed?.(peer);
   return reader.kvForSpace(peer.spaceId);
 }
 
@@ -215,8 +261,8 @@ let wasm: NodeWasmBindings | undefined;
  * did:pkh), and a hook ticket minted from the node's own session is refused for a peer's space (401), so the
  * stream runs on a `DelegatedAccess` whose session is the peer delegation, signed by the courier key (spec §8).
  */
-export async function peerHooks(node: TinyCloudNode, profile: Profile, peer: StoredPeer): Promise<IHooksService> {
-  await peerKv(node, profile, peer); // validates the delegation against the pairing record
+export async function peerHooks(node: TinyCloudNode, profile: Profile, peer: StoredPeer, onRenewed?: (peer: StoredPeer) => void): Promise<IHooksService> {
+  await peerKv(node, profile, peer, onRenewed ? { onRenewed } : undefined); // validates the delegation against the pairing record
   const delegation = deserializeDelegation(peer.inbound!.delegation);
   const key = loadKey();
   wasm ??= new NodeWasmBindings();
