@@ -323,9 +323,10 @@ describe.skipIf(!NODE_BIN)("tinycloud onboard, against a real node", () => {
     } finally { activeChildren.delete(child); }
   }
 
-  function assertThirtyDays(entry: ApprovalEntry) {
-    expect(entry.request!.grantLifetimeSeconds).toBe(THIRTY_DAYS_S);
-    expect(entry.signedLifetimeSeconds).toBe(THIRTY_DAYS_S);
+  function assertSevenDaysRenewing(entry: ApprovalEntry) {
+    expect(entry.request!.grantLifetimeSeconds).toBe(7 * 86400);
+    expect(entry.request!.renewal?.leaseLifetimeSeconds).toBe(THIRTY_DAYS_S);
+    expect(entry.signedLifetimeSeconds).toBe(7 * 86400);
     expect(Date.parse(entry.record.header.expiresAt)).toBe(Math.floor(Date.parse(entry.record.header.issuedAt) / 1000) * 1000 + 3600_000);
   }
 
@@ -469,10 +470,10 @@ globalThis.fetch = ((input: Parameters<typeof fetch>[0], init?: Parameters<typeo
     expect(first.links).toEqual([pending.approvalUrl]);
     const approval = first.offered[0]!;
     expect(approval.request).toMatchObject({
-      reason: "Set up TinyCloud on this computer: use your apps and see your spaces, for 30 days.",
+      reason: "Set up TinyCloud on this computer: use your apps and see your spaces, for 7 days, renewing for up to 30 days.",
     });
     expect(approval.request!.reason).not.toMatch(/tinycloud\.[a-z0-9_-]+:/i);
-    assertThirtyDays(approval);
+    assertSevenDaysRenewing(approval);
     expect(spacesOf(approval.request!)).toEqual(["account", "applications"]);
     expect(authority(approval.request!.permissions)).toEqual(authority([
       { service: "tinycloud.capabilities", space: "account", path: "", actions: ["tinycloud.capabilities/read"] },
