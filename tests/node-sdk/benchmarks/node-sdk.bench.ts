@@ -2,7 +2,7 @@ import { appendFile, mkdir, writeFile } from "node:fs/promises";
 import { execFileSync } from "node:child_process";
 import { cpus, totalmem } from "node:os";
 import { dirname, join } from "node:path";
-import { TinyCloudNode } from "@tinycloud/node-sdk";
+import { TinyCloudNode, ownerFullAccess } from "@tinycloud/node-sdk";
 import {
   vault_decrypt,
   vault_encrypt,
@@ -212,7 +212,7 @@ async function main(): Promise<void> {
   const client = new TinyCloudNode({
     privateKey: TEST_KEY,
     host: SERVER_URL,
-    prefix: `sdk-bench-${runId}`,
+    ...ownerFullAccess(`sdk-bench-${runId}`),
     autoCreateSpace: true,
     telemetry: {
       enabled: true,

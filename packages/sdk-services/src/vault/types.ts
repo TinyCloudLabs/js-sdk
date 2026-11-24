@@ -8,6 +8,7 @@ import type {
   DecryptCapabilityProof,
   IEncryptionService,
 } from "../encryption";
+import type { NamedKeyClient } from "../encryption/namedKeys";
 import type { PermissionHint, ServiceError } from "../types";
 import type { RoutingFailure } from "../resourceRouting";
 
@@ -20,6 +21,12 @@ export interface VaultNetworkEncryptionConfig {
   decryptCapabilityProof?:
     | DecryptCapabilityProof
     | (() => DecryptCapabilityProof | Promise<DecryptCapabilityProof>);
+  /**
+   * The named-key client for records sealed to their own key (secrets,
+   * TC-3284), loaded on first use. It signs with the same session as
+   * `decryptCapabilityProof`.
+   */
+  namedKeys?: () => Promise<Pick<NamedKeyClient, "encrypt" | "decrypt">>;
 }
 
 /**
@@ -62,6 +69,13 @@ export interface VaultPutOptions {
    * (nothing was written; retry).
    */
   ifMatch?: string;
+  /**
+   * Seal to this named key (envelope v2, TC-3284) instead of the network root
+   * key: the key is ensured first (`key.create`), and the envelope is wrapped
+   * to the public key of its authenticated, active descriptor. Network-encrypted
+   * vaults with `encryption.namedKeys` only.
+   */
+  keyPath?: string;
 }
 
 /**
@@ -91,6 +105,21 @@ export interface VaultGetOptions<T = unknown> {
    * `STORAGE_ERROR` rather than skip the check.
    */
   expectAad?: boolean;
+  /**
+   * The named key this record is sealed to (TC-3284). The envelope's own
+   * `keyPath` picks how it is opened, never KV metadata: an envelope naming a
+   * key opens only when it is v2, on this vault's network, names exactly this
+   * key and passes the `expectAad` check (implied). Without this option every
+   * envelope naming a key is refused.
+   */
+  keyPath?: string;
+  /**
+   * Refuse an envelope sealed to the network root key before any node call,
+   * with `LEGACY_ENVELOPE` (`legacy_envelope` from `readNetworkEncrypted`):
+   * for a reader that holds only an exact-key grant, so a secret not yet on
+   * its own key never sends a network decrypt.
+   */
+  namedKeyOnly?: boolean;
   /** Delegated KV service for reading from the grantor's space (used by getShared) */
   kv?: { get<V>(key: string, options?: { raw?: boolean; source?: "network" }): Promise<{ ok: boolean; data?: { data: V }; error?: { message: string } }> };
 }
@@ -161,7 +190,32 @@ export type VaultNetworkReadResult<T> =
   | { status: "decrypt_failed" }
   | { status: "invalid_payload" }
   /** Only with `expectAad`: the envelope is not bound to this space and key. */
-  | { status: "aad_mismatch" };
+  | { status: "aad_mismatch" }
+  /** Only with `namedKeyOnly`: the envelope is sealed to the network root key, not the record's own. */
+  | { status: "legacy_envelope" };
+
+/**
+ * Outcome of {@link IDataVaultService.resealToKey}. Value-free: no plaintext,
+ * ciphertext, or key material, in any variant.
+ */
+export type VaultResealResult =
+  | { status: "moved" }
+  /** Already v2, naming exactly the key path, and its AAD verifies. */
+  | { status: "already" }
+  /** `dryRun` only: the copy would move; nothing was encrypted or written. */
+  | { status: "pending" }
+  /** Nothing was written. */
+  | {
+    status: "skipped";
+    reason:
+      | "not_found"
+      | "permission_required"
+      | "read_failed"
+      | "aad_mismatch"
+      | "verify_failed"
+      | "conflict"
+      | "write_failed";
+  };
 
 /**
  * Structured error codes for vault operations.
@@ -207,6 +261,19 @@ export type VaultErrorInput =
       code: "AAD_MISMATCH";
       key: string;
       message: string;
+    }
+  | {
+      /** `namedKeyOnly` read: the envelope is sealed to the network root key, not the record's own key. */
+      code: "LEGACY_ENVELOPE";
+      key: string;
+      message: string;
+    }
+  | {
+      /** The node refused to open the record's own key: the grant for it is missing, lapsed or revoked. Ask for `permissionHint`. */
+      code: "DECRYPT_DENIED";
+      key: string;
+      message: string;
+      permissionHint: PermissionHint;
     }
   | {
       /** `ifMatch` write refused (HTTP 412): the value changed or no longer exists. Re-read and retry. */

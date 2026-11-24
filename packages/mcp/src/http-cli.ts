@@ -5,6 +5,7 @@ import { toNodeHandler } from "@modelcontextprotocol/node";
 
 import { createHostedMcpApp } from "./http.js";
 import { loadOAuthMetadata } from "./oauth.js";
+import { rateLimitFromEnv } from "./rate-limit.js";
 
 export async function main(): Promise<void> {
   process.umask(0o077);
@@ -18,18 +19,23 @@ export async function main(): Promise<void> {
       "https://api.openkey.so/.well-known/oauth-authorization-server/api/auth",
   );
   const oauthMetadata = await loadOAuthMetadata(oauthMetadataUrl);
+  // Off unless TC_MCP_RATE_LIMIT is on; a bad value stops startup rather than silently running unprotected.
+  const rateLimit = rateLimitFromEnv(process.env);
   const app = createHostedMcpApp({
     publicUrl,
     stateDir,
     stateSecret,
     nodeHost: process.env.TC_HOST ?? "https://node.tinycloud.xyz",
     openkeyHost,
+    ...(process.env.TC_OPENKEY_API_HOST === undefined ? {} : { openkeyApiHost: process.env.TC_OPENKEY_API_HOST }),
+    ...(process.env.TC_LINKS_API_ORIGIN === undefined ? {} : { linksApiOrigin: process.env.TC_LINKS_API_ORIGIN }),
     approvalTtlSeconds: positiveInteger(process.env.TC_MCP_APPROVAL_TTL_SECONDS, 300),
     delegationExpiry: process.env.TC_MCP_DELEGATION_EXPIRY ?? "1h",
     ...(process.env.TC_MCP_NATIVE_SERVICE_CREDENTIAL === undefined
       ? {}
       : { nativeServiceCredential: process.env.TC_MCP_NATIVE_SERVICE_CREDENTIAL }),
     oauthMetadata,
+    ...(rateLimit === undefined ? {} : { rateLimit }),
     introspection: {
       endpoint: requiredUrl("TC_MCP_INTROSPECTION_URL").toString(),
       clientId: requiredString("TC_MCP_INTROSPECTION_CLIENT_ID"),

@@ -40,10 +40,20 @@ interface NodeSigningInternals {
     networkId: string;
     action: string;
     facts: object;
-  }): Promise<{ authorization: string; invocationCid: string }>;
+  }, binding?: NamedKeySessionBinding): Promise<{ authorization: string; invocationCid: string }>;
   createEncryptionCrypto(): EncryptionCrypto;
   /** Registry route for the network, mapped to the TEE origin and identity-checked there. */
   encryptionDestination(networkId: string): Promise<{ url: string; nodeDid: string }>;
+}
+
+/**
+ * @internal A delegated session the client signs with exactly (TC-3284), as
+ * `TinyCloudNode.signRawNetworkAuthorization`'s binding.
+ */
+export interface NamedKeySessionBinding {
+  graph: { assertActive(): void };
+  session: { delegationCid: string };
+  exactSession: true;
 }
 
 export interface CreateNamedKeyClientOptions {
@@ -55,6 +65,11 @@ export interface CreateNamedKeyClientOptions {
   networkId?: string;
   /** Override `fetch` (tests). */
   fetch?: typeof fetch;
+  /**
+   * @internal Sign every call with exactly this delegated session, never the
+   * node's own; the network root key is refused. Used by a delegated vault.
+   */
+  binding?: NamedKeySessionBinding;
 }
 
 /**
@@ -109,11 +124,13 @@ export function createNamedKeyClient(
         networkId: input.resource,
         action: input.action,
         facts: input.facts,
-      }),
+      }, options.binding),
     decryptRoot: (envelope) => {
       const delegationCid = node.session?.delegationCid;
-      if (delegationCid === undefined) {
-        return Promise.reject(new Error("Not signed in. Call signIn() first."));
+      if (options.binding !== undefined || delegationCid === undefined) {
+        return Promise.reject(new Error(options.binding === undefined
+          ? "Not signed in. Call signIn() first."
+          : "A delegated named-key client never opens the network root key"));
       }
       return node.encryption.decryptEnvelope(envelope, { proofs: [delegationCid] });
     },

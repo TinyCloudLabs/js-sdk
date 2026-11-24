@@ -77,7 +77,7 @@ import { approvedTc2234InvitationPolicyRoot, validateTc2234InvitationPolicyRootT
 import { validateTc2773LazyRestoreReplicaWorkerTransition } from "./replica-size-policy";
 import { validateTc2691HostExpiryTransition } from "./replica-size-policy";
 
-const approvedLedgerRows = Object.fromEntries(Object.entries(shippedApprovedLedgerRows).filter(([row]) => row !== "tc2934RequestedAccountRoot" && row !== "tc2936RestoreCommitRoot" && row !== "tc2931BootstrapScope" && row !== "tc2923EncryptionTeeOriginRoot" && row !== "tc2949PanelChunkRecoveryRoot" && row !== "tc2970RegistryVerdictCacheRoot" && row !== "tc2913OpenKeyContinuationRoot" && row !== "tc2987RegistryAbsentReadsRoot" && row !== "tc2937SharePlacementRoot" && row !== "tc3030FirstPartyOriginsRoot" && row !== "tc3076ChildExpiryRoot" && row !== "tc3168V1DefaultNodeRoot" && row !== "tc3172DelegateNotBeforeRoot" && row !== "tc3194NativeShareLinksRoot" && row !== "tc3243SdkOwnsBusyRetryRoot" && row !== "tc3285SecretTypesRoot" && row !== "tc3286ShareNoDelegationActionsRoot" && row !== "tc2944VaultPathClassifierRoot"));
+const approvedLedgerRows = Object.fromEntries(Object.entries(shippedApprovedLedgerRows).filter(([row]) => row !== "tc2934RequestedAccountRoot" && row !== "tc2936RestoreCommitRoot" && row !== "tc2931BootstrapScope" && row !== "tc2923EncryptionTeeOriginRoot" && row !== "tc2949PanelChunkRecoveryRoot" && row !== "tc2970RegistryVerdictCacheRoot" && row !== "tc2913OpenKeyContinuationRoot" && row !== "tc2987RegistryAbsentReadsRoot" && row !== "tc2937SharePlacementRoot" && row !== "tc3030FirstPartyOriginsRoot" && row !== "tc3076ChildExpiryRoot" && row !== "tc3168V1DefaultNodeRoot" && row !== "tc3172DelegateNotBeforeRoot" && row !== "tc3194NativeShareLinksRoot" && row !== "tc3243SdkOwnsBusyRetryRoot" && row !== "tc3285SecretTypesRoot" && row !== "tc3286ShareNoDelegationActionsRoot" && row !== "tc2944VaultPathClassifierRoot" && row !== "tc3448OnBehalfPromptRoot" && row !== "tc2490OneApprovalRoot" && row !== "tc3661ShareLinkHostRoot" && row !== "tc3522LeaseAskRoot" && row !== "tc3443GenericManifestRoot" && row !== "tc3688AccountIndexGuardRoot" && row !== "tc3443SessionRetireRoot" && row !== "tc3443PortFolderRoot" && row !== "tc3704OpenKeyPromptRoot" && row !== "tc3731ManifestOwnerRoot" && row !== "tc3443AppIdLineBreakRoot" && row !== "tc3549KeptApprovalsRoot" && row !== "tc3617HostedMcpLeaseRoot" && row !== "tc3947ReplicaRevokeRoot" && row !== "tc3522InvocationRefusalKvWorker" && row !== "tc3522InvocationRefusalReplicaWorker" && row !== "tc3801NamedKeysRoot" && row !== "tc3969SecretKeyCoverageRoot" && row !== "tc3823BotHistoryKeyRoot" && row !== "tc3802SecretKeyCapRoot" && row !== "tc3862ExplorerOriginRoot" && row !== "tc3522InvocationRefusalRoot" && row !== "tc3810ReaderRoot" && row !== "tc3975NamedKeyWarningRoot" && row !== "tc4082HostedOwnerRoot" && row !== "tc3891OwnerRegistryRecordRoot" && row !== "tc4222PermissionLineRoot"));
 
 const shipped = JSON.parse(readFileSync(resolve(import.meta.dir, "replica-size-ledger.json"), "utf8")) as Ledger;
 // This file retains historical snapshots before the TC-2934 and TC-2949 rows; those admissions are tested separately.
@@ -98,6 +98,33 @@ delete shipped.tc3243SdkOwnsBusyRetryRoot;
 delete shipped.tc3285SecretTypesRoot;
 delete shipped.tc3286ShareNoDelegationActionsRoot;
 delete shipped.tc2944VaultPathClassifierRoot;
+delete shipped.tc3448OnBehalfPromptRoot;
+delete shipped.tc2490OneApprovalRoot;
+delete shipped.tc3661ShareLinkHostRoot;
+delete shipped.tc3522LeaseAskRoot;
+delete shipped.tc3443GenericManifestRoot;
+delete shipped.tc3688AccountIndexGuardRoot;
+delete shipped.tc3443SessionRetireRoot;
+delete shipped.tc3443PortFolderRoot;
+delete shipped.tc3704OpenKeyPromptRoot;
+delete shipped.tc3731ManifestOwnerRoot;
+delete shipped.tc3443AppIdLineBreakRoot;
+delete shipped.tc3549KeptApprovalsRoot;
+delete shipped.tc3617HostedMcpLeaseRoot;
+delete shipped.tc3801NamedKeysRoot;
+delete shipped.tc3969SecretKeyCoverageRoot;
+delete shipped.tc3823BotHistoryKeyRoot;
+delete shipped.tc3802SecretKeyCapRoot;
+delete shipped.tc3862ExplorerOriginRoot;
+delete shipped.tc3522InvocationRefusalRoot;
+delete shipped.tc3810ReaderRoot;
+delete shipped.tc3975NamedKeyWarningRoot;
+delete shipped.tc4082HostedOwnerRoot;
+delete shipped.tc3891OwnerRegistryRecordRoot;
+delete shipped.tc4222PermissionLineRoot;
+delete shipped.tc3947ReplicaRevokeRoot;
+delete shipped.tc3522InvocationRefusalKvWorker;
+delete shipped.tc3522InvocationRefusalReplicaWorker;
 delete shipped.tc3030FirstPartyOriginsRoot;
 const MAX_WORKER_GZIP_BYTES = shipped.tc2872RenewalKvWorker?.worker.ceiling ?? LIVE_MAX_WORKER_GZIP_BYTES;
 const MAX_REPLICA_WORKER_GZIP_BYTES = shipped.tc2872RenewalReplicaWorker?.replicaWorker.ceiling ?? LIVE_MAX_REPLICA_WORKER_GZIP_BYTES;
@@ -4861,7 +4888,7 @@ const finalTransportLedger = () => {
   delete ledger.tc2234InvitationPolicyRoot;
   delete ledger.tc2773LazyRestoreRoot;
   ledger.allowance = { "index.mjs": 391, "index.cjs": 861 };
-  ledger.entries = ledger.entries.filter((entry) => entry.pr !== "#873");
+  ledger.entries = ledger.entries.filter((entry) => entry.pr !== "#873" && entry.pr !== "#1180");
   ledger.entries.push({
     pr: "#873", ticket: "TC-2481", "index.mjs": 99, "index.cjs": 104,
     note: "Naomi, TC-2523, 2026-11-08: #873 registry_unavailable refusal plus offline mapping, +99/+104 root (base e21 → 3e0d9322)",

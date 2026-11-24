@@ -9,6 +9,7 @@ import { TC_APPS_CATALOG_APPS } from "@tinycloud/operations/tc-apps";
 import { toMcpToolResult, type CanonicalOperationResult, type McpToolResult } from "./results.js";
 import { logToolCall } from "./logging.js";
 import { toMcpJsonSchema } from "./schemas.js";
+import { rateLimitedToolResult, type RateRefusal } from "./rate-limit.js";
 
 export const TOOL_NAMES = [
   "tinycloud_status",
@@ -55,6 +56,8 @@ export interface McpStartupSelection {
   readonly allowedTools?: readonly ToolName[];
   /** Check node authority only when an operation needs the account. */
   readonly beforeOperation?: () => Promise<void>;
+  /** Refuse a call before it runs when its caller is over a rate limit (hosted only). */
+  readonly rateLimit?: (tool: { readonly name: ToolName; readonly destructive: boolean }) => RateRefusal | undefined;
   /** Hosted transports may attach a browser approval URL to canonical results. */
   readonly transformOperationResult?: (result: unknown, invocation: McpOperationInvocation) => Promise<unknown>;
   /** Repeat each tool's title as `annotations.title`, for a directory that takes the listing name from there. */
@@ -479,6 +482,14 @@ export function registerTinyCloudTools(
         const metrics = { replayedGrants: 0 };
         let code = "INTERNAL_ERROR";
         try {
+          const refused = selection.rateLimit?.({ name: binding.name, destructive: binding.destructiveHint });
+          if (refused !== undefined) {
+            code = "rate_limited";
+            return rateLimitedToolResult(refused, {
+              operationId: binding.operationId,
+              operationVersion: binding.operationVersion,
+            });
+          }
           let projected: unknown = offersCatalogApps
             ? undefined
             : catalogAppRefusal(binding, selection.profile, input);

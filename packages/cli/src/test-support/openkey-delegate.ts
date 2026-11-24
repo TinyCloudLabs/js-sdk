@@ -14,6 +14,10 @@ export type OpenKeyDelegate = (
 
 const RAW_NETWORK = /^urn:tinycloud:encryption:did:pkh:eip155:(\d+):(0x[0-9a-fA-F]{40}):([^:]*)$/;
 const NETWORK_NAME = /^[a-z0-9][a-z0-9-]*$/;
+// OpenKey #696 (TC-3800): one secret's exact key, `default/secrets/<name>` or `default/secrets/scoped/<scope>/<name>`.
+const SECRET_KEY_TAIL_PREFIX = "default/secrets/";
+const SECRET_KEY_SEGMENT = "[a-z0-9][a-z0-9._-]{0,63}";
+const SECRET_KEY_TAIL = new RegExp(`^default/secrets/(?:${SECRET_KEY_SEGMENT}|scoped/${SECRET_KEY_SEGMENT}/${SECRET_KEY_SEGMENT})$`);
 
 
 function isRawRequest(permission: PermissionEntry): boolean {
@@ -60,13 +64,21 @@ export function openKeyDelegate(params: {
       if (p.space !== undefined && p.space !== "encryption") {
         refuse(`permissions[${index}].space must be "encryption" or absent for a raw encryption network`);
       }
-      if (p.actions.length === 0 || p.actions.some((action) => action !== "tinycloud.encryption/decrypt")) {
+      const network = RAW_NETWORK.exec(p.path);
+      const secretKey = network !== null && SECRET_KEY_TAIL.test(network[3]!);
+      if (p.actions.length === 0 || p.actions.some((action) =>
+        action !== "tinycloud.encryption/decrypt" && !(secretKey && action === "tinycloud.encryption/key.create"))) {
         refuse(`permissions[${index}].actions must be ["tinycloud.encryption/decrypt"] for a raw encryption network`);
       }
-      const network = RAW_NETWORK.exec(p.path);
       if (!network) return refuse(`permissions[${index}].path must be an encryption network owned by the signer`);
       if (network[1] !== "1" || network[2]!.toLowerCase() !== address.toLowerCase()) {
         return refuse(`permissions[${index}].path must be an encryption network owned by the signer`);
+      }
+      if (network[3]!.startsWith(SECRET_KEY_TAIL_PREFIX)) {
+        // Exact keys only (never `secrets/` or a scope folder), named with the canonical owner bytes.
+        if (!secretKey) refuse(`permissions[${index}].path names an invalid secret key`);
+        if (network[2] !== address) refuse(`permissions[${index}].path must use the canonical owner DID for a named encryption resource`);
+        return;
       }
       if (!NETWORK_NAME.test(network[3]!)) {
         refuse(`permissions[${index}].path names an invalid network`);

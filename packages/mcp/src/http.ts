@@ -11,16 +11,24 @@ import {
   type AuthInfo,
   type OAuthMetadata,
 } from "@modelcontextprotocol/server";
-import { RUNTIME_DELEGATION_REJECTIONS } from "@tinycloud/node-sdk";
 
 import { WEBMCP_SCRIPT_PATH, agentDiscoveryRoutes } from "./agent-discovery.js";
 import { createOpenKeyTokenVerifier } from "./oauth.js";
 import { createTokenStatusChecker, type TokenStatusChecker, type TokenStatusConfig } from "./token-status.js";
+import {
+  createRateLimits,
+  rateLimitedToolResult,
+  refuseAddress,
+  refundAddress,
+  refuseAuthenticated,
+  refuseTool,
+  type RateLimitConfig,
+  type RateLimits,
+} from "./rate-limit.js";
 import { logToolCall } from "./logging.js";
 import {
-  ApprovalOwnerMismatchError,
+  ApprovalLinkUnavailableError,
   ApprovalRequestError,
-  ApprovalStageError,
   NativeGrantValidationError,
   RemoteTenantStore,
   type RemoteStoreConfig,
@@ -58,6 +66,11 @@ export interface HostedMcpConfig extends RemoteStoreConfig {
    * signed token claims are checked.
    */
   readonly introspection?: Omit<TokenStatusConfig, "resourceUrl">;
+  /**
+   * Rate limits for the public connector. Omit to turn limiting off (the default); see `rate-limit.ts`.
+   * State is in memory and per process.
+   */
+  readonly rateLimit?: RateLimitConfig;
 }
 
 export interface HostedMcpApp {
@@ -91,7 +104,8 @@ export function createHostedMcpApp(config: HostedMcpConfig): HostedMcpApp {
     config.introspection === undefined
       ? undefined
       : createTokenStatusChecker({ ...config.introspection, resourceUrl: resource.toString() });
-  const hosted = createHostedSurface(config, resourceUrl, "hosted", statusFor(resourceUrl));
+  const limits = config.rateLimit === undefined ? undefined : createRateLimits(config.rateLimit);
+  const hosted = createHostedSurface(config, resourceUrl, "hosted", statusFor(resourceUrl), false, limits);
   const surfaces = [hosted];
   const restrictedByPath = new Map<string, HostedMcpApp>();
   for (const prefix of RESTRICTED_ADDRESS_PREFIXES) {
@@ -102,12 +116,11 @@ export function createHostedMcpApp(config: HostedMcpConfig): HostedMcpApp {
       nativeServiceCredential: undefined,
       stateDir: join(config.stateDir, prefix),
       approvalPath: connectUrl.pathname,
-    }, restrictedUrl, "public", statusFor(restrictedUrl), ANNOTATION_TITLE_PREFIXES.has(prefix));
+    }, restrictedUrl, "public", statusFor(restrictedUrl), ANNOTATION_TITLE_PREFIXES.has(prefix), limits);
     surfaces.push(restricted);
     for (const owned of [
       restrictedUrl,
       connectUrl,
-      new URL("./connect/callback", restrictedUrl),
       new URL(getOAuthProtectedResourceMetadataUrl(restrictedUrl)),
     ]) {
       restrictedByPath.set(owned.pathname, restricted);
@@ -127,9 +140,9 @@ function createHostedSurface(
   surface: "hosted" | "public",
   tokenStatus: TokenStatusChecker | undefined,
   annotationTitles = false,
+  limits: RateLimits | undefined = undefined,
 ): HostedMcpApp {
   const connectPath = config.approvalPath ?? "/connect";
-  const callbackPath = `${connectPath}/callback`;
   const issuer = String(config.oauthMetadata.issuer);
   const jwksUri = String(config.oauthMetadata.jwks_uri);
   const verifier = createOpenKeyTokenVerifier({
@@ -184,12 +197,16 @@ function createHostedSurface(
       beforeOperation: nativeOwner === undefined
         ? () => store.validateTenant(subject, ownerDids)
         : () => store.assertNativeGrantActive(nativeOwner),
+      ...(nativeOwner === undefined && limits !== undefined ? {
+        rateLimit: (tool: { readonly name: string; readonly destructive: boolean }) =>
+          refuseTool(limits, subject, tool.name, tool.destructive),
+      } : {}),
       ...(nativeOwner === undefined ? {
         transformOperationResult: (result: unknown, invocation: McpOperationInvocation) =>
           store.decorateAuthorityResult(subject, ownerDids, result, invocation),
       } : {}),
     }, validator);
-    if (nativeOwner === undefined) registerConnectTool(server, validator, store, identity, surface, annotationTitles);
+    if (nativeOwner === undefined) registerConnectTool(server, validator, store, identity, surface, annotationTitles, limits);
     return server;
   }, {
     legacy: "stateless",
@@ -418,19 +435,28 @@ function createHostedSurface(
           ? json({ ok: true })
           : methodNotAllowed("GET");
       }
+      if (limits !== undefined && url.pathname === connectPath) {
+        const blocked = refuseAddress(limits, request, "approval");
+        if (blocked !== undefined) return blocked;
+      }
       if (url.pathname === connectPath) {
         if (request.method !== "GET") return methodNotAllowed("GET");
         try {
-          const destination = await store.approvalRedirect(requiredState(url));
+          const destination = await store.approvalLink(requiredState(url));
           return Response.redirect(destination, 302);
         } catch (error) {
-          const reason = error instanceof ApprovalRequestError ? error.detail : "unknown";
+          const unavailable = error instanceof ApprovalLinkUnavailableError;
+          const reason = error instanceof ApprovalRequestError
+            ? error.detail
+            : unavailable ? "openkey_unavailable" : "unknown";
           writeDiagnostic(`connect rejected: reason=${reason} path=${connectPath}`);
           if (request.headers.get("accept")?.includes("text/html")) {
             return new Response(
-              "<!doctype html><html lang=\"en\"><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>TinyCloud approval unavailable</title><main><h1>This approval link is unavailable</h1><p>It may have expired or already been used. Go back to the assistant that sent it and ask it to connect TinyCloud again.</p><p>If you declined access, no further approval is required. Never paste passwords, codes or approval links into support messages.</p></main></html>",
+              unavailable
+                ? "<!doctype html><html lang=\"en\"><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>TinyCloud approval unavailable</title><main><h1>The approval page could not be opened</h1><p>TinyCloud could not reach the approval service. Wait a minute, then open this link again.</p><p>Never paste passwords, codes or approval links into support messages.</p></main></html>"
+                : "<!doctype html><html lang=\"en\"><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>TinyCloud approval unavailable</title><main><h1>This approval link is unavailable</h1><p>It may have expired or already been used. Go back to the assistant that sent it and ask it to connect TinyCloud again.</p><p>If you declined access, no further approval is required. Never paste passwords, codes or approval links into support messages.</p></main></html>",
               {
-                status: 400,
+                status: unavailable ? 503 : 400,
                 headers: {
                   "content-type": "text/html; charset=utf-8",
                   "cache-control": "no-store",
@@ -442,45 +468,9 @@ function createHostedSurface(
               },
             );
           }
-          return json({ error: "The approval link is invalid or expired." }, 400);
-        }
-      }
-      if (url.pathname === callbackPath) {
-        if (request.method === "OPTIONS") return callbackCors(new Response(null, { status: 204 }), config.openkeyHost);
-        if (request.method !== "POST") return methodNotAllowed("POST");
-        const originFailure = validateCallbackOrigin(request, config.openkeyHost);
-        if (originFailure !== undefined) return callbackCors(originFailure, config.openkeyHost);
-        try {
-          await store.completeApproval(requiredState(url), request);
-          return callbackCors(json({ success: true }), config.openkeyHost);
-        } catch (error) {
-          // Only fixed server-authored text reaches OpenKey; callback input is never echoed.
-          if (error instanceof ApprovalOwnerMismatchError) {
-            return callbackCors(json({ error: error.message, code: "approval_owner_mismatch" }, 403), config.openkeyHost);
-          }
-          // Stage, code, reason and detail are identifiers, never callback, delegation or node text.
-          const stage = error instanceof ApprovalStageError ? error.stage : "unknown";
-          const code = error instanceof ApprovalStageError && /^[A-Z][A-Z0-9_]{0,63}$/.test(error.code)
-            ? error.code
-            : "UNKNOWN";
-          const reason = !(error instanceof ApprovalStageError) || error.reason === undefined
-            ? undefined
-            : RUNTIME_DELEGATION_REJECTIONS.find((known) => known === error.reason) ?? "unknown";
-          // Only the server log says which state, tenant or body check failed;
-          // the response stays uniform so a caller cannot probe a state.
-          const detail = error instanceof ApprovalRequestError ? error.detail : "none";
-          writeDiagnostic(
-            `connect callback rejected: stage=${stage} code=${code}${reason === undefined ? "" : ` reason=${reason}`} detail=${detail}`,
-          );
-          return callbackCors(
-            json({
-              error: stage,
-              code,
-              ...(reason === undefined ? {} : { reason }),
-              message: "TinyCloud could not accept this delegation.",
-            }, 400),
-            config.openkeyHost,
-          );
+          return unavailable
+            ? json({ error: "The approval service is unavailable. Wait a minute, then open the link again." }, 503)
+            : json({ error: "The approval link is invalid or expired." }, 400);
         }
       }
       if (url.pathname === "/native/grant" && surface === "hosted") {
@@ -559,10 +549,31 @@ function createHostedSurface(
       }
       if (url.pathname !== resourceUrl.pathname) return json({ error: "Not found" }, 404);
       if (request.method === "OPTIONS") return mcpCors(new Response(null, { status: 204 }), request);
+      // Bearer tokens the server must reject cost an OpenKey lookup, so they spend the address's budget. The call is
+      // charged BEFORE the lookup and given back for a token that proves valid: a check-then-charge would let any
+      // number of concurrent bad tokens through before the first one is counted. A request with no token is a cheap
+      // discovery 401 and does not spend: every ChatGPT user shares OpenAI's addresses.
+      const presented = request.headers.has("authorization");
+      if (limits !== undefined && presented) {
+        const blocked = refuseAddress(limits, request, "bad-token");
+        if (blocked !== undefined) return mcpCors(blocked, request);
+      }
       const auth = await authenticate(request);
+      // A valid token is given back its charge, and so is a 5xx: the server failed (OpenKey introspection is
+      // unavailable), which is not evidence of a bad token.
+      if (limits !== undefined && presented && (!(auth instanceof Response) || auth.status >= 500)) {
+        refundAddress(limits, request, "bad-token");
+      }
+      if (limits !== undefined && !(auth instanceof Response)) {
+        const blocked = refuseAuthenticated(limits, auth.clientId, auth.extra?.subject);
+        if (blocked !== undefined) return mcpCors(blocked, request);
+      }
       return mcpCors(auth instanceof Response ? auth : await handler.fetch(request, { authInfo: auth }), request);
     },
-    close: () => handler.close(),
+    close: async () => {
+      await store.close();
+      await handler.close();
+    },
   };
 }
 
@@ -573,6 +584,7 @@ function registerConnectTool(
   identity: OAuthIdentity,
   surface: "hosted" | "public",
   annotationTitles: boolean,
+  limits: RateLimits | undefined,
 ): void {
   const title = "Connect TinyCloud";
   const inputSchema = fromJsonSchema({ type: "object", properties: {}, additionalProperties: false }, validator);
@@ -607,6 +619,11 @@ function registerConnectTool(
       let code = "INTERNAL_ERROR";
       let text: string;
       try {
+        const refused = limits === undefined ? undefined : refuseTool(limits, identity.subject, "tinycloud_connect", false);
+        if (refused !== undefined) {
+          code = "rate_limited";
+          return rateLimitedToolResult(refused) as never;
+        }
         const status = await store.connectStatus(identity.subject, identity.ownerDids);
         if (status.connected) {
           code = "ok";
@@ -691,22 +708,6 @@ function mcpCors(response: Response, request: Request): Response {
     if (request.method === "OPTIONS") headers.set("access-control-allow-headers", MCP_CORS_ALLOWED_HEADERS);
   }
   return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
-}
-
-function validateCallbackOrigin(request: Request, openkeyHost: string): Response | undefined {
-  const origin = request.headers.get("origin");
-  return origin === null || origin === new URL(openkeyHost).origin
-    ? undefined
-    : json({ error: "Origin is not allowed." }, 403);
-}
-
-function callbackCors(response: Response, openkeyHost: string): Response {
-  const headers = new Headers(response.headers);
-  headers.set("access-control-allow-origin", new URL(openkeyHost).origin);
-  headers.set("access-control-allow-methods", "POST, OPTIONS");
-  headers.set("access-control-allow-headers", "content-type");
-  headers.set("vary", "Origin");
-  return new Response(response.body, { status: response.status, headers });
 }
 
 async function readBoundedBodyText(request: Request, maxBytes: number): Promise<string | undefined> {

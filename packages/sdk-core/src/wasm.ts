@@ -146,6 +146,16 @@ export interface IWasmBindings {
     proof: PersistedSessionProof,
   ) => ValidatedPersistedSessionProof;
 
+  /**
+   * Verify a wallet-signed root of a session key (the session's own or a
+   * runtime grant's) with the checks of `validateSessionGrant` except its time
+   * window, and without requiring ReCap authority. Used at sign-out to pick the
+   * roots a session-key retire carries. Optional for custom bindings.
+   */
+  validateSessionRoot?: (
+    proof: PersistedSessionProof,
+  ) => ValidatedPersistedSessionProof;
+
   /** Ensure WASM module is initialized (optional — some bindings auto-init) */
   ensureInitialized?: () => Promise<void>;
 }

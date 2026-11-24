@@ -6,29 +6,30 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { ulid } from 'ulid';
-import { TinyCloudNode, NodeWasmBindings, activateValidatedRuntimeDelegation, deserializeDelegation, publicJwk, serializeDelegation } from '@tinycloud/node-sdk';
+import { NodeWasmBindings, publicJwk, type TinyCloudNode } from '@tinycloud/node-sdk';
 import type { PortableDelegation } from '@tinycloud/node-sdk';
 import { cmd, tcCmd } from './program.js';
 import { initRequestNextLine } from './next-line.js';
 import { CourierError, CourierPending, errInfo } from './errors.js';
-import { AGENT_GRANT, AGENT_GRANT_EXPIRY, COURIER_SPACE, DEFAULT_HOST, EXT, k, peerReadPermissions, PREFIX } from './keys.js';
+import { AGENT_GRANT, AGENT_GRANT_EXPIRY, COURIER_SPACE, DEFAULT_HOST, EXT, k } from './keys.js';
 import {
   loadProfile, saveProfile, withProfileTransaction, assertNotPaired, getPeer, profileDir, profileExists, loadKey, saveKey,
-  type AgentKey, type Profile, type StoredPeer,
+  type AgentKey, type Profile, type ProfileSave, type StoredPeer,
 } from './profile.js';
 import { revokePeer } from './revoke.js';
 import { courierNode, peerKv, currentInbound, assertInboundLive, renewalBinding } from './node.js';
 import { REVOKE_URL } from './grant-refusal.js';
 import { courierGrantRequest, grantFromInput, installRefusing, isShortCode, noSpaceError, pendingSpaceError, receiveGrant, resumeAwaitingGrant, resumeGrant } from './grant.js';
-import { completeApproval, DEFAULT_WAIT_MS, MAX_WAIT_MS, requestApproval, waitApproval } from './grant-request.js';
+import { assertWaitKeepsSaved, completeApproval, DEFAULT_WAIT_MS, MAX_WAIT_MS, renewalLeaseFor, requestApproval, waitApproval } from './grant-request.js';
 import { approvalPhase, assertPendingReadable, clearPending, holdsApproval, loadPending, readApprovalEntry, stageOf } from './approval-phase.js';
 import {
-  artifactA, artifactWithDelegation, parseArtifact, peerRecordBody, PEER_DELEGATION_EXPIRY, validateArtifactIdentity,
+  artifactA, artifactWithDelegation, parseArtifact, peerRecordBody, validateArtifactIdentity,
 } from './pairing.js';
+import { assertPairCompletion, inboundGrant, issuePairDelegation, pairChallenge, pendingFromA, recordOutbound, signPairCompletion, verifyPairDelegation } from './pairing-flow.js';
 import {
-  authRequiredTask, buildMessage, buildTask, COUNTERPARTY_NOTICE, isRecord, messageView, oneLine, safeText,
-  messageRole, parseTaskState, taskView,
-  type CourierMessage, type CourierTask, type Intent, INTENTS, type ThreadMeta,
+  authRequiredTask, buildTask, COUNTERPARTY_NOTICE, isRecord, messageView, oneLine, safeText,
+  parseTaskState, taskView,
+  type CourierMessage, type CourierTask, type Intent, INTENTS,
 } from './a2a.js';
 import { collectMessages, validateMessageSelection, renderMessageOutcomes, type MessageReadOutcome } from './message-read.js';
 import { clearLocalCaches, collectThread, diskOwnerSpaceIndex, diskThreadCache, partialReadText, peerReadError, recordOwnerSpaceWrite, type ThreadEntry } from './thread.js';
@@ -36,11 +37,12 @@ import { commitReceipts, collectInbound, renderInboxText, writeOut } from './inb
 import { getJson, listAll, putCreate, putMatch, del } from './store.js';
 import { DEFAULT_ORDERS } from './orders.js';
 import { requestFields, requestIds, requestShapeProblem, requestText } from './request.js';
-import { canonicalJson, requestHash } from './canonical.js';
+import { requestHash } from './canonical.js';
 import { targetHelp } from './guard/target.js';
 import type { ParsedArgs } from './args.js';
 import { requireFlag, oneOf } from './args.js';
-import { assertExactAuthority, assertPeerDelegation, bareDid, durationMs, AGENT_GRANT_MAX_MS } from './authority.js';
+import { bareDid, durationMs, AGENT_GRANT_MAX_MS } from './authority.js';
+import { publishMessage, type SendInput } from './send.js';
 
 interface Ctx {
   profile: Profile;
@@ -102,6 +104,13 @@ export async function cmdInit(args: ParsedArgs) {
   const expiry = args.get('expiry') ?? AGENT_GRANT_EXPIRY;
   const expiryMs = durationMs(expiry);
   if (!expiryMs || expiryMs > AGENT_GRANT_MAX_MS) fail('usage', `--expiry must be a duration such as 7d, at most ${AGENT_GRANT_EXPIRY}.`);
+  // A renewal lease travels only in the signed approval request (--request, --wait): a pasted code or grant file cannot carry one.
+  const renewFlag = initValue(args, 'renew');
+  if (renewFlag !== undefined && !args.has('request') && !args.has('wait') && !args.has('resume')) {
+    fail('usage', '--renew needs --request or --wait: only the approval link can ask the owner for a renewal.');
+  }
+  // A plain `--wait` without --expiry checks --renew against the saved request's lifetime instead (assertWaitKeepsSaved).
+  if (!args.has('wait') || args.has('rotate-key') || args.get('expiry') !== undefined) renewalLeaseFor(renewFlag, Math.floor(expiryMs / 1000));
   if (args.has('resume') && (args.has('request') || args.has('grant-file') || args.has('paste') || args.has('rotate-key'))) {
     fail('usage', `\`${cmd('init --resume')}\` cannot be combined with --request, --grant-file, --paste or --rotate-key.`);
   }
@@ -142,7 +151,7 @@ export async function cmdInit(args: ParsedArgs) {
     // An approval the owner gave, with no grant saved to install first, is collected by `--wait`, never discarded or shadowed by a cleanup.
     if (state.action === 'wait' && heldApproval(state.inputs.approval) && profile.status !== 'ready') {
       console.error(`${adviceFor(state)} Continuing as \`${cmd('init --wait')}\`.`);
-      await collectApproval(profile, loadKey(), { expiry: args.get('expiry'), openkeyApiHost: apiHostFlag, waitMs });
+      await collectApproval(profile, loadKey(), { expiry: args.get('expiry'), renew: renewFlag, openkeyApiHost: apiHostFlag, waitMs });
       return;
     }
     if (profile.status === 'awaiting-grant' && await resumeAwaitingGrant(profile)) {
@@ -184,6 +193,8 @@ export async function cmdInit(args: ParsedArgs) {
   profile.label = labelFlag ?? profile.label;
   if (handleFlag) profile.selfHandle = handleFlag;
   profile.courierDid = bareDid(key.did);
+  // `--wait` never replaces a saved request, nor installs an approval against other hosts: refused before this run's flags are saved.
+  if (args.has('wait') && !rotate) assertWaitKeepsSaved(profile, key, args.get('expiry'), { openkeyApiHost: apiHostFlag, renew: renewFlag });
   if (rotate) {
     profile.peers = {};
     profile.ownerDid = undefined;
@@ -200,8 +211,8 @@ export async function cmdInit(args: ParsedArgs) {
   if (rotate) console.error('Agent key rotated. Existing peer pairings must be re-established; the old grant remains valid until expiry.');
 
   if (args.has('request')) {
-    const pending = await requestApproval(profile, key, args.get('expiry'), { openkeyApiHost: apiHostFlag });
-    console.error(`Send the owner this link to approve (it expires ${pending.requestExpiresAt}). Copy it exactly, never retype it:\n${pending.approvalUrl}\nThen run \`${cmd('init --wait --timeout 60s')}\` to collect the approval.`);
+    const pending = await requestApproval(profile, key, args.get('expiry'), { openkeyApiHost: apiHostFlag, renew: renewFlag });
+    console.error(`Send the owner this link to approve (it expires ${pending.requestExpiresAt}). Copy it exactly, never retype it:\n${pending.approvalUrl}\nThen run \`${cmd('init --wait --timeout 60s')}\` to collect the approval. --wait uses the saved request, so do not repeat --expiry or --renew.`);
     console.error(initRequestNextLine());
     // A resumed request keeps the lifetime it was made with.
     const lifetime = pending.request.grantLifetimeSeconds * 1000 === expiryMs ? expiry : `${pending.request.grantLifetimeSeconds}s`;
@@ -210,7 +221,7 @@ export async function cmdInit(args: ParsedArgs) {
   }
 
   if (args.has('wait')) {
-    await collectApproval(profile, key, { expiry: args.get('expiry'), openkeyApiHost: apiHostFlag, waitMs });
+    await collectApproval(profile, key, { expiry: args.get('expiry'), renew: renewFlag, openkeyApiHost: apiHostFlag, waitMs });
     return;
   }
 
@@ -263,9 +274,9 @@ function dropOpenRequest(): void {
 }
 
 /** `init --wait`: create or resume the approval request, wait for the owner, install the result and acknowledge it. `--resume` hands off here while an approval is saved. */
-async function collectApproval(profile: Profile, key: AgentKey, options: { expiry?: string; openkeyApiHost?: string; waitMs: number }): Promise<void> {
+async function collectApproval(profile: Profile, key: AgentKey, options: { expiry?: string; renew?: string; openkeyApiHost?: string; waitMs: number }): Promise<void> {
   const deadline = Date.now() + options.waitMs;
-  const { pending, resumed } = await waitApproval(profile, key, options.expiry, { openkeyApiHost: options.openkeyApiHost });
+  const { pending, resumed } = await waitApproval(profile, key, options.expiry, { openkeyApiHost: options.openkeyApiHost, renew: options.renew });
   if (stageOf(pending) !== 'committed') {
     console.error(`${resumed ? 'Resuming the saved approval request.' : 'Created an approval request.'} Owner: approve it in OpenKey (copy the link exactly, never retype it):\n${pending.approvalUrl}\nWaiting for approval (up to ${Math.round(options.waitMs / 1000)} s). Run \`${cmd('init --wait')}\` again after an interruption; no new approval is needed.`);
   }
@@ -297,7 +308,7 @@ export async function cmdPair(args: ParsedArgs) {
   if (sub === 'start') return pairStart(args);
   if (sub === 'accept') return pairAccept(args);
   if (sub === 'renew') return pairRenew(args);
-  fail('usage', `Usage: ${cmd('pair start <peer> | pair accept <artifact-json|--file f|--stdin> | pair renew [peer] [--force] [--renew-artifact]')}`);
+  fail('usage', `For private links, use \`${cmd('invite --help')}\` or \`${cmd('join --help')}\`. For advanced manual pairing, see \`${cmd('pair --help')}\`.`);
 }
 
 async function pairStart(args: ParsedArgs) {
@@ -329,35 +340,6 @@ function readArtifactArg(args: ParsedArgs): string {
   return pos;
 }
 
-
-async function validatePeerDelegation(node: TinyCloudNode, profile: Profile, peer: StoredPeer, serialized: string, original?: Awaited<ReturnType<typeof currentInbound>>): Promise<{ delegation: PortableDelegation; cid: string; expiresAt: string }> {
-  const delegation = deserializeDelegation(serialized);
-  const ownerAddress = peer.ownerDid.split(':').at(-1)?.toLowerCase();
-  if (delegation.spaceId !== peer.spaceId || delegation.ownerAddress.toLowerCase() !== ownerAddress) {
-    fail('bad-artifact', 'Peer delegation space or owner does not match the pairing artifact.');
-  }
-  if (!peer.theirHandleForMe) fail('bad-artifact', 'Pairing artifact is missing the peer mailbox handle.');
-  const active = await activateValidatedRuntimeDelegation(node, delegation, {
-    host: profile.host,
-    authorize: (permissions) => {
-      assertExactAuthority(permissions, peerReadPermissions(peer.theirHandleForMe!, peer.spaceId, peer.sessionId), 'Pair renewal');
-      if (original && canonicalJson(permissions.map(entry => canonicalJson(entry)).sort()) !== canonicalJson(original.effectivePermissions.map(entry => canonicalJson(entry)).sort())) {
-        fail('bad-delegation', "Couldn't renew: the renewal would change what the peer can access. Nothing changed.");
-      }
-      return true;
-    },
-  });
-  assertPeerDelegation(active, {
-    issuer: peer.courierDid,
-    audience: profile.courierDid,
-    spaceId: peer.spaceId,
-    mailbox: peer.theirHandleForMe,
-    sessionId: peer.sessionId,
-  });
-  const expiry = delegation.expiry instanceof Date ? delegation.expiry : new Date(delegation.expiry);
-  return { delegation, cid: delegationCid(delegation), expiresAt: expiry.toISOString() };
-}
-
 async function pairAccept(args: ParsedArgs) {
   const { profile, node } = await ctx();
   const art = parseArtifact(readArtifactArg(args));
@@ -369,22 +351,20 @@ async function pairAccept(args: ParsedArgs) {
   if (art.step === 'A') {
     const handle = art.callMe;
     assertNotPaired(profile, handle); // before delegateTo: a refusal after it would leave a live delegation nothing records
-    const outbound = await node.delegateTo(art.from.courier, peerReadPermissions(handle, profile.spaceId!), { expiry: PEER_DELEGATION_EXPIRY });
-    const peer: StoredPeer = {
-      handle, ownerDid: art.from.owner, courierDid: art.from.courier, label: art.from.label,
-      spaceId: art.spaceId, outbound: [], theirHandleForMe: art.peer, status: 'awaiting-C', pairedAt: new Date().toISOString(),
-    };
-    recordOutbound(peer, outbound.delegation);
+    const peer = pendingFromA(art);
+    const outbound = await issuePairDelegation(node, profile.spaceId!, peer);
+    recordOutbound(peer, outbound);
     profile.peers[handle] = peer;
-    saveAfterDelegation(profile, outbound.delegation);
+    saveAfterDelegation(profile, outbound);
     await writePeerRecord(node, peer);
-    printJson(artifactWithDelegation('B', profile, outbound.delegation, handle, art.peer));
+    printJson(artifactWithDelegation('B', profile, outbound, handle, art.peer));
     return;
   }
 
   if (art.step === 'B') {
     const handle = args.get('as') ?? art.callMe;
     const peer = findPendingPeer(profile, handle);
+    if (art.challenge !== undefined) pairChallenge(art.challenge);
     const candidate: StoredPeer = {
       ...peer,
       ownerDid: art.from.owner,
@@ -393,35 +373,26 @@ async function pairAccept(args: ParsedArgs) {
       spaceId: art.spaceId,
       theirHandleForMe: art.peer,
     };
-    const incoming = await validatePeerDelegation(node, profile, candidate, art.delegation!);
+    const incoming = await verifyPairDelegation(node, profile, candidate, art.delegation!);
     Object.assign(peer, candidate);
-    peer.inbound = { delegation: serializeDelegation(incoming.delegation), cid: incoming.cid, expiresAt: incoming.expiresAt };
-    const outgoing = await node.delegateTo(peer.courierDid, peerReadPermissions(peer.handle, profile.spaceId!), { expiry: PEER_DELEGATION_EXPIRY });
-    recordOutbound(peer, outgoing.delegation);
+    peer.inbound = inboundGrant(incoming);
+    const outgoing = await issuePairDelegation(node, profile.spaceId!, peer);
+    recordOutbound(peer, outgoing);
     peer.status = 'paired';
-    saveAfterDelegation(profile, outgoing.delegation);
+    saveAfterDelegation(profile, outgoing);
     await writePeerRecord(node, peer);
-    printJson(artifactWithDelegation('C', profile, outgoing.delegation, peer.handle, art.peer));
+    const completion = artifactWithDelegation('C', profile, outgoing, peer.handle, art.peer);
+    if (art.challenge !== undefined) await signPairCompletion(art, completion, node);
+    printJson(completion);
     return;
   }
 
   const peer = profile.peers[art.callMe] ?? findPeerByCourier(profile, art.from.courier);
   if (!peer) fail('unknown-peer', `No paired peer for "${art.callMe}".`);
-  if (peer.handle !== art.callMe) {
-    fail('bad-artifact', `Artifact C names ${art.callMe}, but the matched peer handle is ${peer.handle}.`);
-  }
-  if (peer.status !== 'awaiting-C' && peer.status !== 'paired') {
-    fail('not-paired', `Cannot install artifact C for ${peer.handle}: pairing is not awaiting C or already paired.`);
-  }
-  if (art.from.courier !== peer.courierDid || art.spaceId !== peer.spaceId || art.from.owner !== peer.ownerDid) {
-    fail('bad-artifact', `Artifact C does not match the pairing with ${peer.handle}.`);
-  }
-  if (!peer.theirHandleForMe || art.peer !== peer.theirHandleForMe) {
-    fail('bad-artifact', `Artifact C changes the established mailbox scope for ${peer.handle}.`);
-  }
+  assertPairCompletion(peer, art);
   const binding = renewalBinding(profile, peer);
   const original = peer.status === 'paired' ? await currentInbound(node, profile, peer) : undefined;
-  const incoming = await validatePeerDelegation(node, profile, peer, art.delegation!, original);
+  const incoming = inboundGrant(await verifyPairDelegation(node, profile, peer, art.delegation!, original));
   if (original) {
     assertInboundLive(peer, original.expiry);
     const currentExpiry = Math.max(Date.parse(peer.inbound?.expiresAt ?? ''), original.expiry.getTime());
@@ -435,13 +406,13 @@ async function pairAccept(args: ParsedArgs) {
       if (renewalBinding(disk, stored) !== binding) fail('peer-changed', 'The pairing changed while Courier was renewing. Run the command again.');
       assertInboundLive(stored, original.expiry);
       assertInboundLive(stored, new Date(incoming.expiresAt));
-      stored.inbound = { delegation: serializeDelegation(incoming.delegation), cid: incoming.cid, expiresAt: incoming.expiresAt };
+      stored.inbound = incoming;
       save();
     });
     printJson({ ok: true, paired: peer.handle, peerDid: peer.courierDid, peerSpace: peer.spaceId, delegationExpiresAt: incoming.expiresAt });
     return;
   }
-  peer.inbound = { delegation: serializeDelegation(incoming.delegation), cid: incoming.cid, expiresAt: incoming.expiresAt };
+  peer.inbound = incoming;
   peer.status = 'paired';
   saveProfile(profile);
   await writePeerRecord(node, peer);
@@ -459,11 +430,6 @@ function saveAfterDelegation(profile: Profile, delegation: PortableDelegation): 
     console.error(`warning: the delegation ${delegationCid(delegation)} created for this pairing is live and was not saved. Nothing was published. The owner can revoke it at ${REVOKE_URL}.`);
     throw error;
   }
-}
-
-function recordOutbound(peer: StoredPeer, delegation: PortableDelegation): void {
-  const expiresAt = delegation.expiry instanceof Date ? delegation.expiry.toISOString() : new Date(delegation.expiry).toISOString();
-  peer.outbound.push({ cid: delegationCid(delegation), issuedAt: new Date().toISOString(), expiresAt, delegation: serializeDelegation(delegation) });
 }
 
 async function pairRenew(args: ParsedArgs) {
@@ -507,7 +473,7 @@ async function renewOutbound(active: Ctx, peer: StoredPeer, force: boolean, arti
   });
 }
 
-async function issueOutbound(active: Ctx, peer: StoredPeer, force: boolean, save: () => void, artifact: boolean): Promise<PortableDelegation | undefined> {
+async function issueOutbound(active: Ctx, peer: StoredPeer, force: boolean, save: ProfileSave, artifact: boolean): Promise<PortableDelegation | undefined> {
   const result = await maintainOutbound(active.node, active.profile, peer, save, { force, manual: true, extendOnly: artifact });
   if (result.reason === 'overlong') {
     fail('renew-throttled', `Access for ${oneLine(peer.handle)} already runs longer than the peer accepts${peerLimitNote(peer) ? ` (${peerLimitNote(peer)})` : ''}. A shorter grant is published automatically on the next renewal tick. Nothing was exported.`);
@@ -573,7 +539,13 @@ export async function cmdRevoke(args: ParsedArgs) {
   await withProfileTransaction(async (profile, save) => {
     const peer = profile.peers[handle] ?? fail('unknown-peer', `No pairing with ${shown}. If you already revoked it, there's nothing left to do.`);
     const node = await courierNode(profile);
-    await revokePeer(node, profile, handle, save);
+    await revokePeer(node, profile, handle, () => {
+      try { save(); }
+      catch (error) {
+        // A concurrent revoke completed this same removal; never restore its peer or mask a recreated pairing.
+        if (!(error instanceof CourierError) || error.code !== 'peer-revoked' || loadProfile().peers[handle]) throw error;
+      }
+    });
     delete profile.peers[handle];
     save();
     clearLocalCaches();
@@ -584,57 +556,13 @@ export async function cmdRevoke(args: ParsedArgs) {
 
 // ---------- send ----------
 
-export type SendInput = {
-  which: 'new' | 'thread';
-  threadId: string;
-  subject?: string;
-  text: string;
-  intent: Intent;
-  asks: { id: string; title: string }[];
-  constraints: string[];
-  inReplyTo: string | null;
-  referenceTaskIds: string[];
-};
-
 /** Writes one outbound message (and thread meta for a new thread) to the peer's mirror. Shared by `courier send` and the outbox. */
 export async function sendMessage(node: TinyCloudNode, profile: Profile, peerHandle: string, peer: StoredPeer, input: SendInput): Promise<CourierMessage> {
-  const { which, threadId, subject, text, intent, asks, constraints, inReplyTo, referenceTaskIds } = input;
-  if (peer.interim?.latchedAt || peer.interim?.inboundRefusedAt) fail('peer-revoked', `Sharing with ${oneLine(peer.handle)} was revoked. A new pairing is required.`);
-  const from = { owner: profile.ownerDid!, agent: profile.courierDid, label: profile.label };
-  if (peer.sessionId && (input.which === 'new' || threadId !== peer.sessionId)) {
-    fail('session-mismatch', 'This pairing permits only its invited session. Start or select another session explicitly.');
-  }
-  const startedByMe = which === 'new' || Boolean(await getJson(node.kv, k.threadMeta(peerHandle, threadId)));
-  let refsOwnTask = false;
-  let refsAnyTask = false;
-  for (const taskId of referenceTaskIds) {
-    if (await getJson(node.kv, k.task(peerHandle, threadId, taskId))) {
-      refsOwnTask = true;
-      refsAnyTask = true;
-      continue;
-    }
-    if (peer.inbound && peer.theirHandleForMe) {
-      const peerSpace = await peerKv(node, profile, peer);
-      const key = `${PREFIX}/to/${peer.theirHandleForMe}/threads/${threadId}/task/${taskId}.json`;
-      if (await getJson(peerSpace, key)) refsAnyTask = true;
-    }
-  }
-  const msg = buildMessage({
-    threadId, text, from, intent, asks, constraints, inReplyTo, referenceTaskIds,
-    role: messageRole({ startedByMe, refsOwnTask, refsAnyTask }),
+  // Mailbox keys follow the profile handle, as before the shared builder.
+  return publishMessage(node.kv, { owner: profile.ownerDid!, agent: profile.courierDid, label: profile.label }, { ...peer, handle: peerHandle }, input, {
+    peerKv: () => peerKv(node, profile, peer),
+    onWrite: key => recordOwnerSpaceWrite(profile.courierDid, profile.spaceId, input.threadId, key),
   });
-  if (which === 'new') {
-    const meta: ThreadMeta = {
-      threadId, subject: subject ?? '(no subject)',
-      startedBy: { owner: profile.ownerDid!, courier: profile.courierDid, label: profile.label },
-      createdAt: new Date().toISOString(),
-    };
-    await putCreate(node.kv, k.threadMeta(peerHandle, threadId), meta);
-    recordOwnerSpaceWrite(profile.courierDid, profile.spaceId, threadId, k.threadMeta(peerHandle, threadId));
-  }
-  await putCreate(node.kv, k.msg(peerHandle, threadId, msg.messageId), msg);
-  recordOwnerSpaceWrite(profile.courierDid, profile.spaceId, threadId, k.msg(peerHandle, threadId, msg.messageId));
-  return msg;
 }
 
 export async function cmdSend(args: ParsedArgs) {

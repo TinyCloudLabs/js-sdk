@@ -12,8 +12,11 @@ export const buildStepScripts: Record<string, true> = {
   "packages/replica/scripts/hash-worker.ts": true,
 };
 
+// packages/replica/test/ holds the replica tests and the browser pages they load. The package
+// ships only dist, built from src, so editing them is not a replica change.
 export const replicaOwnedPath = (path: string) =>
   !/\.test\.[cm]?[jt]sx?$/.test(path) &&
+  !path.startsWith("packages/replica/test/") &&
   (!/^packages\/[^/]+\/scripts\//.test(path) || Object.hasOwn(buildStepScripts, path)) && (
     path.startsWith("packages/replica/") ||
     path.startsWith("packages/sdk-services/src/kv/replication/") ||

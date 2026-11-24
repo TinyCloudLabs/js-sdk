@@ -28,3 +28,9 @@ export { cmdStart, discoverSessions, INVITATION_MODES } from './guided.js';
 export type { CourierSession, InvitationMode } from './guided.js';
 export { cmdInvite, cmdJoin, parseInvitation } from './invitation.js';
 export type { CourierInvitation } from './invitation.js';
+export {
+  acceptPairing, finalizePairing, listInbound, acknowledgeInbound, sendMessage, unpair, peerReference,
+  type HeadlessCourierContext, type CourierTenantScope, type CourierPeerStore, type CourierPeerTransaction,
+  type CourierPeerRecord, type CourierPeerRef, type CourierPairPending, type CourierPairedPeer,
+  type CourierInboundMessage, type CourierReply,
+} from './headless.js';

@@ -194,11 +194,15 @@ function errorCode(error: unknown): unknown {
   return typeof error === "object" && error !== null && "code" in error ? error.code : undefined;
 }
 
-/** node-sdk's refusals for a lease that ended or was stopped; an unreachable node is none of these. */
+/**
+ * node-sdk's refusals for a lease that ended, was stopped, or names a renewer the node no longer runs (it is
+ * never renewed again); an unreachable node is none of these.
+ */
 const RENEWAL_ENDED: Record<string, true> = {
   RENEWAL_LEASE_EXPIRED: true,
   RENEWAL_AUTHORITY_INACTIVE: true,
   RENEWAL_LEASE_ORIGINAL_EXPIRED: true,
+  RENEWAL_RENEWER_CHANGED: true,
 };
 
 /**

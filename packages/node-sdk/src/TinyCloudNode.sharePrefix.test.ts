@@ -307,7 +307,7 @@ async function signInWithCapabilityRequest(resources: { path: string; actions: s
   (node as any).ensureEncryptionNetwork = mock(async () => ({}));
   await withFetchResponses(
     [
-      new Response(JSON.stringify({ protocol: 1, version: "test", features: ["encryption"], nodeId: "did:key:z6MkNode" }), { status: 200, headers: { "Content-Type": "application/json" } }),
+      new Response(JSON.stringify({ protocol: 1, version: "test", features: ["encryption", "encryption-named-keys-v1"], nodeId: "did:key:z6MkNode" }), { status: 200, headers: { "Content-Type": "application/json" } }),
       new Response(JSON.stringify({ activated: ["space://test"], skipped: [] }), { status: 200, headers: { "Content-Type": "application/json" } }),
     ],
     async () => { await node.signIn(); },
@@ -338,4 +338,97 @@ describe("sign-in through the explicit capabilityRequest (node-sdk's own check, 
       await expect(signInWithCapabilityRequest([{ path, actions }])).rejects.toThrow("named keys go in manifest.keys");
     });
   }
+});
+
+// TC-3284: the owner's secrets sit on their own keys. Sign-in accepts decrypt and key.create on the owner's own default-network
+// secret keys (exact, as secretKeyPath derives them) and on the whole `secrets/` prefix from an explicit capabilityRequest only.
+describe("sign-in: the current owner's secret keys", () => {
+  const KEY = `${NETWORK}/secrets/api_key`;
+  const SCOPED_KEY = `${NETWORK}/secrets/scoped/my-app/api_key`;
+  const SECRETS_PREFIX = `${NETWORK}/secrets/`;
+
+  const accepted: [string, string, string[]][] = [
+    ["decrypt on an exact secret key", KEY, [DECRYPT]],
+    ["key.create on an exact secret key", KEY, [CREATE]],
+    ["decrypt + key.create on a scoped secret key", SCOPED_KEY, [DECRYPT, CREATE]],
+    ["decrypt + key.create on the secrets prefix", SECRETS_PREFIX, [DECRYPT, CREATE]],
+  ];
+  for (const [name, path, actions] of accepted) {
+    test(`accepts ${name} as a raw ability, with no network.create`, async () => {
+      expect(await signInWithCapabilityRequest([{ path, actions }])).toEqual({ [path]: actions });
+    });
+  }
+
+  const refused: [string, string, string[]][] = [
+    ["another owner's secret key", OTHER_OWNER_PREFIX.replace("/share/", "/secrets/api_key"), [DECRYPT]],
+    ["another owner's secrets prefix", OTHER_OWNER_PREFIX.replace("/share/", "/secrets/"), [DECRYPT]],
+    ["a non-default network's secret key", `${NETWORK.replace(":default", ":other")}/secrets/api_key`, [DECRYPT]],
+    ["a non-canonical scope", `${NETWORK}/secrets/scoped/my_app/api_key`, [DECRYPT]],
+    ["a key name no secret name lowers to", `${NETWORK}/secrets/9key`, [DECRYPT]],
+    ["a key below a secret key", `${NETWORK}/secrets/api_key/extra`, [DECRYPT]],
+    ["an apps key", `${NETWORK}/apps/billing/api_key`, [DECRYPT]],
+    ["key.block on a secret key", KEY, ["tinycloud.encryption/key.block"]],
+    ["network.create on the secrets prefix", SECRETS_PREFIX, ["tinycloud.encryption/network.create"]],
+    ["decrypt + a non-encryption action on the secrets prefix", SECRETS_PREFIX, [DECRYPT, "tinycloud.kv/get"]],
+  ];
+  for (const [name, path, actions] of refused) {
+    test(`refuses ${name} with the named-keys refusal`, async () => {
+      await expect(signInWithCapabilityRequest([{ path, actions }])).rejects.toThrow("named keys go in manifest.keys");
+    });
+  }
+
+  // Upper case and over-long segments never parse as a key resource at all.
+  const unparsable: [string, string][] = [
+    ["a mixed-case secret key", `${NETWORK}/secrets/Api_Key`],
+    ["an upper-case secret key", `${NETWORK}/secrets/API_KEY`],
+    ["a mixed-case scope", `${NETWORK}/secrets/scoped/My-App/api_key`],
+    ["a secret key over 64 bytes", `${NETWORK}/secrets/a${"b".repeat(64)}`],
+  ];
+  for (const [name, path] of unparsable) {
+    test(`refuses ${name} by the key-path grammar`, async () => {
+      await expect(signInWithCapabilityRequest([{ path, actions: [DECRYPT] }])).rejects.toThrow("must match");
+    });
+  }
+
+  test("refuses a secret key requested in another space", async () => {
+    const entry = { path: KEY, actions: [DECRYPT], space: "secrets" };
+    await expect(signInWithCapabilityRequest([entry])).rejects.toThrow("named keys go in manifest.keys");
+  });
+
+  test("refuses the secrets prefix from a manifest", async () => {
+    await expect(signInWith([{ path: SECRETS_PREFIX, actions: ["decrypt"] }])).rejects.toThrow();
+  });
+
+  test("an exact secret key reaches rawAbilities only, never abilities or spaceAbilities", async () => {
+    const wasm = makeFakeWasmBindings();
+    const node = makeNodeWithSigner(wasm, {
+      includeAccountRegistryPermissions: false,
+      capabilityRequest: {
+        manifests: [],
+        resources: [
+          { service: "tinycloud.encryption", space: "encryption", skipPrefix: true, path: KEY, actions: [DECRYPT, CREATE] },
+          { service: "tinycloud.kv", space: "secrets", skipPrefix: true, path: "vault/secrets/API_KEY", actions: ["tinycloud.kv/get"] },
+        ],
+        delegationTargets: [],
+        registryRecords: [],
+        expiryMs: 60_000,
+        includePublicSpace: false,
+      } as never,
+    });
+    Object.assign(node, { ensureEncryptionNetwork: mock(async () => ({})) });
+    await withFetchResponses(
+      [
+        new Response(JSON.stringify({ protocol: 1, version: "test", features: ["encryption", "encryption-named-keys-v1"], nodeId: "did:key:z6MkNode" }), { status: 200, headers: { "Content-Type": "application/json" } }),
+        new Response(JSON.stringify({ activated: ["space://test"], skipped: [] }), { status: 200, headers: { "Content-Type": "application/json" } }),
+      ],
+      async () => { await node.signIn(); },
+      expectedActivationAuthorizationFor(wasm),
+    );
+    // The fake bindings' prepareSession is a bun mock; its first call's params are what the recap is built from.
+    const params = (wasm.prepareSession as unknown as { mock: { calls: [Record<string, unknown>][] } }).mock.calls[0]![0];
+    expect(params.rawAbilities).toEqual({ [KEY]: [DECRYPT, CREATE] });
+    expect(JSON.stringify(params.abilities)).not.toContain("tinycloud.encryption");
+    expect(JSON.stringify(params.spaceAbilities)).not.toContain("tinycloud.encryption");
+    expect(JSON.stringify(params.spaceAbilities)).toContain("vault/secrets/API_KEY");
+  });
 });

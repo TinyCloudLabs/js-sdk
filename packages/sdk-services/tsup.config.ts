@@ -21,6 +21,7 @@ export default defineConfig({
     "encryption/resource": "src/encryption/resource.ts",
     "encryption/named-keys": "src/encryption/namedKeys.ts",
     "secrets/totp": "src/secrets/totp.ts",
+    "secrets/migrate": "src/secrets/migrate.ts",
     "internal/decrypt-transport-response-error":
       "src/encryption/DecryptTransportResponseError.ts",
   },

@@ -7,7 +7,7 @@ import type { TinyCloudNode } from '@tinycloud/node-sdk';
 import type { ParsedArgs } from './args.js';
 import { oneOf, requireFlag } from './args.js';
 import { readTextArg, sendMessage } from './commands.js';
-import type { SendInput } from './commands.js';
+import type { SendInput } from './send.js';
 import { canonicalJson, requestHash } from './canonical.js';
 import { CourierError, errInfo } from './errors.js';
 import { cmd } from './program.js';

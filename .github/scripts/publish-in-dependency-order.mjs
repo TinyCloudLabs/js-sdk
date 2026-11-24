@@ -21,6 +21,10 @@
 // packages) and restored afterwards. Tags, the "packages published successfully:" and
 // "New tag:" output and the registry auth are still changesets' own.
 //
+// With RELEASE_SCOPE_FILE set (.github/release-scope.json), only the packages that file lists and whose version
+// HEAD's version commit changed are published; every other public package is hidden the same way for every layer,
+// so a held beta or an already staged version can never be published from this checkout.
+//
 // usage: publish-in-dependency-order.mjs <publish-log> [<announce-log>]
 //   <publish-log>   everything changesets printed, for `record-accepted` and the
 //                   next run's pre-publish check
@@ -32,7 +36,7 @@ import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 
-import { acceptedFromPublishLog, gitRepo, publicPackages } from "./check-npm-release-provenance.mjs";
+import { acceptedFromPublishLog, gitRepo, publicPackages, releaseScope } from "./check-npm-release-provenance.mjs";
 
 const REGISTRY = "https://registry.npmjs.org";
 const POLL_INTERVAL_MS = 15_000;
@@ -265,7 +269,11 @@ async function main([logPath, announcePath]) {
     process.exitCode = 2;
     return;
   }
-  const layers = dependencyLayers(publicPackages(gitRepo(), "HEAD"));
+  const repo = gitRepo();
+  const inScope = releaseScope(repo);
+  const everything = publicPackages(repo, "HEAD");
+  const layers = dependencyLayers(inScope ? everything.filter(inScope) : everything);
+  const outOfScope = inScope ? [everything.filter((pkg) => !inScope(pkg))] : [];
   // Appended as each layer finishes: record-accepted must see what npm took even if this process dies later.
   writeFileSync(logPath, "");
   let result;
@@ -273,7 +281,7 @@ async function main([logPath, announcePath]) {
     result = await publishInOrder({
       layers,
       publishLayer: async (layer, index) => {
-        const published = await withLayersHidden(layers, index, changesetPublish);
+        const published = await withLayersHidden(outOfScope, -1, () => withLayersHidden(layers, index, changesetPublish));
         appendFileSync(logPath, published.output);
         return published;
       },

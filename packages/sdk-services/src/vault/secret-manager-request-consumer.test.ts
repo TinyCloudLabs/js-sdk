@@ -153,6 +153,23 @@ function secretsOverStubbedNode(answers: { put: NodeAnswer; head: NodeAnswer }) 
           },
         }),
       } as never,
+      // A secret is sealed to its own key (TC-3284); the stubbed node then
+      // answers the KV write as each case says.
+      namedKeys: async () => ({
+        encrypt: async (keyPath: string) => ({
+          v: 2,
+          networkId: `urn:tinycloud:encryption:did:pkh:eip155:1:${ADDRESS}:default`,
+          keyPath,
+          alg: "x25519-aes256gcm/v1",
+          keyVersion: 1,
+          encryptedSymmetricKey: "AQID",
+          encryptedSymmetricKeyHash: "a".repeat(64),
+          ciphertext: "AQID",
+        }),
+        decrypt: async () => {
+          throw new Error("no secret is read in these cases");
+        },
+      }),
     },
     tc: { kv, did: `did:pkh:eip155:1:${ADDRESS}`, address: ADDRESS, chainId: 1, hosts: [HOST] },
   } as never);

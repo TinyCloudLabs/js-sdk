@@ -1,5 +1,6 @@
 import { afterEach, expect, test } from "bun:test";
 import { NodeUserAuthorization } from "./NodeUserAuthorization";
+import { SessionHosts } from "../sessionRetire";
 
 // TC-2923: sign-in activates the registry record's encryption node on the
 // production node's TEE origin, identity-checked there first; data hosts keep
@@ -28,6 +29,7 @@ for (const dataHost of [DATA, PROXIED]) {
         _tinyCloudSession: { spaceId: SPACE, siwe: `Resources:\n- urn:recap:${recap}`, delegationHeader: { Authorization: "synthetic-session" } },
         registryVerdict: { status: "registered", record: { nodes: [{ did: DID, url: encryptionHost }], spaces: [], encryptionNode: DID } },
         resolveResourceDestinations: async () => [{ url: dataHost, nodeDid: DID }],
+        sessionHosts: new SessionHosts(),
       });
       const calls: { url: string; redirect?: RequestRedirect }[] = [];
       globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {

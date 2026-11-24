@@ -54,6 +54,7 @@ function fixture({ siblingAfterSign = false } = {}) {
   const node = {
     credentialHolderDid: profile.courierDid,
     restorableSession: { delegationCid: parent.cid, siwe: `courier.test wants you to sign in with your Ethereum account:\n0x1111111111111111111111111111111111111111\n\nCourier renewal test.\n\nURI: did:key:issuer\nVersion: 1\nChain ID: 1\nNonce: abcdefgh\nIssued At: ${new Date(at - DAY).toISOString()}\nExpiration Time: ${new Date(at + 20 * DAY).toISOString()}` },
+    get sessionEnd() { return new Date(/Expiration Time: (.+)/.exec(this.restorableSession.siwe)[1]); },
     computeDelegationCid: authorization => records.find(record => portable(record, record.cid === 'prior' ? 'old-owner-grant' : parent.cid).delegationHeader.Authorization === authorization)?.cid,
     delegationManager: {
       queryAllIssued: async () => {

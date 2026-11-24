@@ -31,19 +31,18 @@ bun add @tinycloud/web-sdk
 ## Quick Start
 
 ```typescript
-import { TinyCloudWeb } from '@tinycloud/web-sdk';
+import { TinyCloudWeb, type Manifest } from '@tinycloud/web-sdk';
 
-// Initialize the SDK
-const tc = new TinyCloudWeb();
+// The manifest names the app. With no `permissions`, the app gets
+// KV and SQL under `com.example.notes/` in the `applications` space.
+const manifest: Manifest = { app_id: 'com.example.notes', name: 'Notes' };
 
-// Connect to the user's wallet
-await tc.connect();
+const tc = new TinyCloudWeb({ manifest });
+await tc.signIn();
 
-// Use storage
-const storage = tc.storage;
-await storage.put('myKey', { hello: 'world' });
-const result = await storage.get('myKey');
-console.log(result.data); // { hello: 'world' }
+// KV storage
+await tc.kv.put('com.example.notes/myKey', { hello: 'world' });
+const result = await tc.kv.get('com.example.notes/myKey');
 ```
 
 ### Stored sessions and `signIn()`
@@ -57,6 +56,8 @@ grants), and the default browser storage does not restore a session past its
 expiry. The permission check does not contact the node, so a session the node
 rejects (a 401 after a revocation or a reset, for example) is still restored.
 With OpenKey, `prepareSignIn()` makes the same check.
+
+Without a `manifest`, `signIn()` asks only for the app's own folder, `applications/<your domain reversed>/` (KV and SQL), and logs a warning. A port other than 80 or 443 is part of the name: `notes.example.com:8443` gets `applications/com.example.notes_8443/`. Outside a browser, set `domain`; without one, apps share `applications/xyz.tinycloud.app/` and log how to get their own. Sessions last 7 days unless you set `sessionExpirationMs`.
 
 `restoreSession()` resolves from stored state. It automatically starts a
 background hosting probe, capped at 5 seconds, and reactivates stored panel
@@ -566,6 +567,6 @@ The web SDK includes implicit account bootstrap permissions only at the approved
 
 `autoBootstrapAccount: false` disables account bootstrap and its implicit sign-in permissions, including in the node SDK. `includeAccountRegistryPermissions: false` omits the implicit account registry bundle. Setting either option to `true` does not enable first-party bootstrap at another origin. The policy uses the actual page origin, independently of a configured SIWE domain.
 
-A third-party sign-in with no registered account route returns `ACCOUNT_SETUP_REQUIRED` with `setupUrl: "https://home.tinycloud.xyz/"` before signing. Complete setup there and retry. Registry availability errors retain their existing behavior. Setup status for accounts that already have a registry record is unchanged.
+A third-party sign-in with no registered account route returns `ACCOUNT_SETUP_REQUIRED` with `setupUrl: "https://tinycloud.one/?finish-setup=registry"`. It returns before signing unless the app asks only for its own `applications` space, holds an uncaveated `tinycloud.kv/list` or `tinycloud.space/info` on it, and asks for nothing that hosts, creates or deletes a space. In that case, after the owner's consent, the SDK sends one `/delegate` to the default node `https://node.tinycloud.xyz` and then one read of that space (`kv/list` with limit 1, or `space/info`). Only a 2xx response continues the sign-in. Any other answer returns `ACCOUNT_SETUP_REQUIRED` and discards the session: no session is stored and the session key is dropped so the wallet's signature is not reused. No second `/delegate` is ever sent. When the `/delegate` may have been accepted (it was accepted, or the answer was a 5xx, a network error or a timeout), the SDK also sends one `/session/retire` to the default node, best effort; overlapping sign-ins can misattribute that cleanup (TC-4154). A `/delegate` the node refused (4xx) is only discarded locally. A network error, timeout or 5xx on the `/delegate` or on that read fails with a different, non-setup error, after the same cleanup. Nothing is created or written to the registry, and the node may keep the delegation until it is retired or reaches its signed expiry. Complete setup at the setup URL and retry. Registry availability errors retain their existing behavior. Setup status for accounts that already have a registry record is unchanged.
 
-Details: TC-2931
+Details: TC-2931, TC-4082

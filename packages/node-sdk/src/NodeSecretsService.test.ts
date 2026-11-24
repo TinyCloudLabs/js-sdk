@@ -39,6 +39,20 @@ function readOnlyManifest(): Manifest {
   };
 }
 
+const SECRET_KEY = "urn:tinycloud:encryption:did:key:z6MkPrincipal:default/secrets/anthropic_api_key";
+
+/** A read that may not ask, missing decrypt on the secret's own key (TC-3801). */
+const DECRYPT_DENIED = {
+  ok: false,
+  error: {
+    code: "DECRYPT_DENIED",
+    service: "vault",
+    key: "secrets/ANTHROPIC_API_KEY",
+    message: "No live grant to decrypt ANTHROPIC_API_KEY; ask for permissionHint, or read with requestPermission.",
+    permissionHint: { service: "tinycloud.encryption", path: SECRET_KEY, actions: ["tinycloud.encryption/decrypt"] },
+  },
+};
+
 describe("NodeSecretsService", () => {
   it("requests root list permission before reading the full catalog", async () => {
     const base = makeBaseSecrets();
@@ -70,7 +84,7 @@ describe("NodeSecretsService", () => {
     ] satisfies PermissionEntry[]);
   });
 
-  it("requests read and decrypt permissions before getting a secret", async () => {
+  it("a background get never asks; with requestPermission it requests the read and decrypt on the secret's own key", async () => {
     const base = makeBaseSecrets();
     const grantPermissions = mock(async () => {});
     const secrets = new NodeSecretsService({
@@ -82,7 +96,11 @@ describe("NodeSecretsService", () => {
         "urn:tinycloud:encryption:did:key:z6MkPrincipal:default",
     });
 
-    const result = await secrets.get("ANTHROPIC_API_KEY");
+    expect(await secrets.get("ANTHROPIC_API_KEY")).toEqual(DECRYPT_DENIED);
+    expect(grantPermissions).not.toHaveBeenCalled();
+    expect(base.get).not.toHaveBeenCalled();
+
+    const result = await secrets.get("ANTHROPIC_API_KEY", { requestPermission: true });
 
     expect(result).toEqual({ ok: true, data: "stored" });
     expect(grantPermissions).toHaveBeenCalledWith([
@@ -95,7 +113,7 @@ describe("NodeSecretsService", () => {
       },
       {
         service: "tinycloud.encryption",
-        path: "urn:tinycloud:encryption:did:key:z6MkPrincipal:default",
+        path: SECRET_KEY,
         actions: ["decrypt"],
         skipPrefix: true,
       },
@@ -447,7 +465,7 @@ describe("NodeSecretsService", () => {
     });
   });
 
-  it("escalates only the entries uncoveredEntries returns", async () => {
+  it("escalates only the entries uncoveredEntries returns, and only when the read opts in", async () => {
     const base = makeBaseSecrets();
     const grantPermissions = mock(async () => {});
     const secrets = new NodeSecretsService({
@@ -462,14 +480,17 @@ describe("NodeSecretsService", () => {
         entries.filter((entry) => entry.service === "tinycloud.encryption"),
     });
 
-    const result = await secrets.get("ANTHROPIC_API_KEY");
+    expect(await secrets.get("ANTHROPIC_API_KEY")).toEqual(DECRYPT_DENIED);
+    expect(grantPermissions).not.toHaveBeenCalled();
+
+    const result = await secrets.get("ANTHROPIC_API_KEY", { requestPermission: true });
 
     expect(result).toEqual({ ok: true, data: "stored" });
     expect(grantPermissions).toHaveBeenCalledTimes(1);
     expect(grantPermissions).toHaveBeenCalledWith([
       {
         service: "tinycloud.encryption",
-        path: "urn:tinycloud:encryption:did:key:z6MkPrincipal:default",
+        path: SECRET_KEY,
         actions: ["decrypt"],
         skipPrefix: true,
       },
@@ -517,7 +538,7 @@ describe("NodeSecretsService", () => {
     expect(grantPermissions).not.toHaveBeenCalled();
   });
 
-  it("session-only node: an uncovered get is denied before any grant is attempted", async () => {
+  it("session-only node: an uncovered get is denied before any grant is attempted, opted in or not", async () => {
     const base = makeBaseSecrets();
     const grantPermissions = mock(async () => {});
     const secrets = new NodeSecretsService({
@@ -531,7 +552,9 @@ describe("NodeSecretsService", () => {
       uncoveredEntries: (entries) => entries,
     });
 
-    const result = await secrets.get("ANTHROPIC_API_KEY");
+    expect(await secrets.get("ANTHROPIC_API_KEY")).toEqual(DECRYPT_DENIED);
+
+    const result = await secrets.get("ANTHROPIC_API_KEY", { requestPermission: true });
 
     expect(result).toEqual({
       ok: false,

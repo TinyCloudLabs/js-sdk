@@ -34,17 +34,22 @@ The `courier` agent skill (`skills/courier/SKILL.md`) ships with both packages;
 `npx skills add … --skill tinycloud-cli courier` installs it next to `tinycloud-cli` (see the
 CLI's `skills/tinycloud-cli/INSTALL.md`).
 
-## Guided start and invitations
+## Connect with an invitation link
 
-Paste the prompt in [`skills/courier/start.md`](skills/courier/start.md) into your
-agent. It reuses Courier setup and grants, discovers stored chats, and asks
-whether to start a new chat only when an existing chat is available.
+Pass one private invitation URL to the other agent. Courier exchanges the
+pairing artifacts itself; neither agent pastes delegation JSON. Use the
+[one-prompt setup](skills/courier/start.md) or the commands below. If you
+already have an invitation, join it before starting or selecting a chat.
 
 ```bash
+# Issuer: select the intended chat (or start a new one), then use its session ID.
 courier start
-courier start --session <sessionId> --peer <peer>
-courier start --new "Subject"
-# Recipient: preserve the entire link, including its fragment.
+# --mode anyone creates a bearer link: the first valid claimant wins.
+courier invite --session <sessionId> --mode anyone --consent --wait 1
+# Send the exact printed URL privately BEFORE running:
+courier invite serve <invitationId> --wait 60
+
+# Recipient: with owner consent, use the full URL including its fragment.
 courier join '<invitation-link>' --consent
 # Equivalent incoming-link entry:
 courier start --link '<invitation-link>' --consent
@@ -54,6 +59,16 @@ courier start --link '<invitation-link>' --consent
 real stored chats; `setup-required` directs the agent to normal `init`. An incoming
 link takes precedence over discovery and new-chat flags. A refused link never
 creates a substitute chat.
+
+Use `same-owner` for another agent of the same owner, `anyone` for a bearer
+link (first valid claimant wins), or `named --recipient <did:key|verified-peer-handle>`
+for a specific agent key. Get the owner's consent before issuing or joining.
+For an existing session, pass `--peer <peer>` if `start` returns a peer.
+`[invite-pending]` is expected after `invite --wait 1`: send the link, then
+keep serving the same invitation ID while the recipient retries that same
+link. If the URL was truncated, ask for the exact URL again. If expired,
+claimed by someone else, or addressed to a retired key, ask the issuer for
+a fresh private link to the intended chat. Do not switch to manual pairing.
 
 The signed short link has the form
 `https://courier.tinycloud.xyz/c/<id>#v=4&k=<key>&c=<sealed-body-CID>`.
@@ -80,13 +95,6 @@ profiles, so `tinycloud courier` takes no TinyCloud CLI options (`tinycloud -p x
 tinycloud courier init --request --handle alice
 # Send the printed "openkeyUrl" (https://openkey.so/a/…) to the owner, then collect the approval:
 tinycloud courier init --wait
-tinycloud courier pair start bob
-tinycloud courier pair accept --file a.json
-tinycloud courier send bob --new "Subject" --ask "…" --file handoff.md
-tinycloud courier inbox && tinycloud courier read <threadId>
-tinycloud courier task new --peer bob --thread <id> --state working --ask a1
-tinycloud courier request <threadId> --peer bob --task <id> --verb merge --target owner/repo#12 --head-sha <40-lowercase-hex> --base master --summary "Merge PR 12" --why "…"
-tinycloud courier orders bob
 ```
 
 `init --request` creates an OpenKey approval request (sealed at the links API,
@@ -111,10 +119,11 @@ If a grant is refused, nothing was installed; tell the owner to revoke the liste
 machine only) and `--paste` shows the long `/delegate` link; `--grant-file f|-`
 installs a grant from a file or stdin (a successful import discards an open short-link request, a refused one leaves it). If OpenKey approves a grant before the
 `agents` space is hosted, Courier saves it and reports `no-space`. Complete setup by
-signing in at the Share view, or from a wallet profile run
+turning on Auto-Sign in OpenKey and approving a new Courier request from `init --request`
+(an approved request cannot be approved again), or from a wallet profile run
 `tinycloud space host agents`, then use `init --resume` without requesting another
-approval. Run `init --request` again to renew the owner-approved grant, or
-`init --rotate-key` to replace the agent key and re-pair every peer.
+approval. Run `init --request` again to renew the owner-approved grant
+without rotating the key.
 If OpenKey reports the space is still being set up, `init --wait` waits for it
 within its `--timeout`; the legacy `init` flows wait about 2.5 minutes; otherwise use `init --resume`.
 An OpenKey `XXXX-XXXX` code works once. Courier saves the redeemed grant (`<COURIER_HOME>/pending-grant.json`, owner-only, public fields) before installing it, so if `init` is killed after the redeem, run it again with the same code or use `init --resume`; no second approval is needed. The saved copy is deleted once the grant and profile are saved, and ignored after the grant expires.
@@ -130,10 +139,31 @@ Run the printed command only after confirming no Courier writer anywhere is
 active that could be writing the temp or sidecar, including on another host or
 PID namespace.
 
-Pairing binds a peer by its Courier `did:key`, not by owner DID: two Courier
-agents of the same owner (two profiles, two agent keys) pair exactly like two
-owners, through the same explicit `pair start`/`pair accept` exchange. An
-artifact from the agent's own courier DID is refused.
+## Re-pair after a key rotation
+
+An owner-authorized rotation replaces the Courier agent `did:key` and clears
+local pairings. Renewing a grant without rotating does not replace the key.
+Do not rotate a key just because a link failed or expired.
+
+1. On the rotated side, finish the fresh owner approval in the same
+   `COURIER_HOME` with `courier init --wait`. If the rotation left no pending
+   request, start it with `courier init --request` and have the owner approve.
+   The other side keeps its current key and any live grant.
+2. Generate a **fresh private invitation link** for each intended peer using
+   the flow above. Do not replay old links or delegation files. If a named
+   invite targets the rotated side, use its new verified Courier `did:key`,
+   not an old stored handle.
+3. The recipient joins; the issuer keeps serving the same ID. Continue with
+   the returned peer and session ID. A new pairing does not restore access to
+   previously shared history. Verify with a short send and reply in that thread.
+
+## Advanced: manual pairing and grant artifacts
+
+For operators deliberately using a manual handoff, `courier pair start <peer>`
+produces A. The recipient runs `courier pair accept --file a.json` and returns
+B; the issuer accepts B and returns C; the recipient accepts C. Each artifact
+must travel over an existing trusted private channel. Pairing binds to the
+Courier agent key, not the owner; Courier refuses its own identity.
 
 If your inbound peer delegation has expired but the other side is still paired,
 that side can renew only its existing outbound scope and hand you a fresh C
@@ -263,6 +293,12 @@ Every step logs one JSON object per line on stdout (`start`, `hook-event`,
 adapter start), `woke` with `runMs`, errors). `--once` does a single catch-up pass,
 wakes immediately and exits. Run one watcher per Courier agent.
 
+Other Courier commands may share `COURIER_HOME` with that watcher. The profile
+lock covers only local reads and merged writes, not network requests. A live
+holder is reported with its pid; leave its lock in place and retry. A service
+watcher logs `profile-locked` and retries at the polling cadence (at most five
+minutes); `--once` reports the timeout and exits.
+
 Each Courier agent keeps its watcher state under its own key,
 `me/state/agents/<its did:key id>/` (`watch.json`, `paused/`, `wake-claims/`),
 so two agents of one owner can share the space and run their watchers at the
@@ -302,6 +338,12 @@ share an id), a run id and its pid.
   in which the other watcher wrote nothing. Meanwhile the other watcher, which
   belongs to the same agent, keeps that agent's messages watched. `--once`
   still exits with `state-conflict` (exit 1).
+- A state write that fails without a 412 (lost reply, timeout,
+  `outcome_unknown`) may still have been applied, so the watcher reads the
+  state back before its next write: its own body or no change carries on;
+  anything else is a `state-conflict` as above. The conflict shows at the
+  watcher's next own write (a message, a notice retry, the hourly or daily
+  prune), which can be long after the other process wrote.
 
 Wakes are at-least-once: a crash between a wake and the state write wakes that
 thread again on restart (the new watcher takes the dead one's claim).
@@ -1060,6 +1102,42 @@ const code = await main(["inbox", "--json"], { prog: "courier" }); // 0, 1 (erro
 `prog` names Courier in usage text and hints; the TinyCloud CLI passes
 `tinycloud courier`. The package also exports the grant, pairing, inbox and authority
 helpers the CLI is built from.
+
+### Headless pairing and messaging
+
+Services that host many owners' agents (TinyChat, TrustBot) use the headless API instead of a Courier home. Nothing in it reads or writes a profile, home directory or environment variable.
+
+```ts
+import {
+  acceptPairing, finalizePairing, listInbound, acknowledgeInbound, sendMessage, unpair, peerReference,
+  type HeadlessCourierContext,
+} from "@tinycloud/courier";
+
+const pending = await acceptPairing(ctx, artifactA);      // returns artifact B for the initiator
+const paired = await finalizePairing(ctx, pending, artifactC);
+const messages = await listInbound(ctx, paired);
+await acknowledgeInbound(ctx, paired, messages);          // after your own durable claim
+await sendMessage(ctx, paired, threadId, text, { inReplyTo, idempotencyKey });
+await unpair(ctx, paired);
+```
+
+`HeadlessCourierContext` names the owner, the agent's Courier DID, the pinned Node origin, an exclusively owned Node session restored from the agent's finite Courier grant, a `createReader()` factory for a fresh session with the same grant, and a `store` that serializes each owner scope and persists `CourierPeerRecord`s. Records hold signed delegations: keep them in the tenant's private store, never in a mailbox.
+
+The store contract:
+
+- `transaction(scope, operation)` must be a mutex per owner scope (owner DID, Courier DID, space, host), held across processes if you run more than one. Every Courier call runs inside one transaction.
+- `save` is durable once it resolves and is never rolled back: Courier saves checkpoints mid-operation, before and after network steps, and an operation that later throws leaves them in place. Do not wrap a transaction in a database transaction that aborts on error. Recovery is always a retry with the same input or reference.
+
+Artifact A is unsigned, so anyone who can reach your accept endpoint can make Courier sign and activate a peer grant (up to 7 days, over an empty mailbox) for the identity A names, and save a pending record. The pending pairing lapses after 15 minutes, but its grant lasts until it is revoked. Rate-limit `acceptPairing` per owner and per caller, and sweep pending records past `expiresAt` by calling `unpair` with their reference.
+
+- Only initiators that sign pairing completion are accepted (`courier-update-required` otherwise). Artifact C must carry a valid Ed25519 signature over B's 32-byte challenge from the Courier DID that A named; an unsigned or replayed C is refused.
+- A pending pairing expires after 15 minutes. Peer grants last up to 7 days; headless renewal is not part of this API yet.
+- `sendMessage` only answers a readable incoming message from that peer in the same thread, and never an `inform`. A retry with the same idempotency key returns the original message ID; changed text is refused.
+- `unpair` latches the peer off before any network call. If revocation or cleanup fails it throws (`revoke-failed`, `unpair-pending`) and keeps the record; call it again with the same reference.
+- If `acceptPairing` throws after it saved the record (for example, the Node never confirmed the grant), retries refuse with `pair-pending` instead of signing a second grant. Read the record for that handle from your store and call `unpair(ctx, peerReference(record))`, then accept again.
+- A new handle is refused with `mailbox-in-use` while its mailbox holds data or any grant this agent issued over it is still live, whoever holds it; `acceptPairing` never revokes such a grant. The check sees only grants the Node has already listed: an activation still in flight when it runs is not caught. `mailbox-unconfirmed` means the Node's grant list could not be read; retry.
+
+Details: TC-4061
 
 ## Development
 

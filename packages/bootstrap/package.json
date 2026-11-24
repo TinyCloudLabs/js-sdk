@@ -1,6 +1,6 @@
 {
   "name": "@tinycloud/bootstrap",
-  "version": "2.9.0",
+  "version": "2.10.0",
   "description": "Canonical TinyCloud account bootstrap manifest and allowlist",
   "author": "TinyCloud, Inc.",
   "license": "EGPL",
@@ -36,6 +36,11 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/tinycloudlabs/web-sdk.git"
+    "url": "https://github.com/TinyCloudLabs/js-sdk.git",
+    "directory": "packages/bootstrap"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
   }
 }

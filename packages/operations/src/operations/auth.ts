@@ -13,7 +13,9 @@ import {
   canonicalizeOperationCapabilities,
   delegationWithinRequest,
   evaluateAuthority,
+  evaluateOperationAuthority,
   validateExactCapabilities,
+  type OperationAuthorityAlternative,
 } from "../authority.js";
 import {
   createOrReusePermissionRequest,
@@ -289,10 +291,30 @@ async function requestExactAuthority(
         "The operation returned an invalid permission requirement.",
       );
     }
-    const evaluation = evaluateAuthority(
-      context.runtime.granted as unknown as PermissionEntry[],
-      required,
-    );
+    let evaluation;
+    if (target.definition.authorityAlternatives !== undefined) {
+      const rawAlts = await target.definition.authorityAlternatives(context, parsed.data);
+      const alternatives: OperationAuthorityAlternative[] = [];
+      for (const entry of rawAlts) {
+        const replaces = exactCapabilities([entry.replaces]);
+        const satisfiedBy = exactCapabilities([entry.satisfiedBy]);
+        if (replaces?.[0] !== undefined && satisfiedBy?.[0] !== undefined) {
+          alternatives.push({ replaces: replaces[0], satisfiedBy: satisfiedBy[0] });
+        }
+      }
+      const resolveSpace = operationSpaceResolver(context.runtime.node, context.summary.space);
+      evaluation = evaluateOperationAuthority(
+        context.runtime.granted as unknown as PermissionEntry[],
+        required,
+        resolveSpace,
+        alternatives,
+      );
+    } else {
+      evaluation = evaluateAuthority(
+        context.runtime.granted as unknown as PermissionEntry[],
+        required,
+      );
+    }
     if (evaluation.satisfied) {
       // Do not call the artifact store: even a retention-only write is not an
       // allowed side effect for an already-authorized request.

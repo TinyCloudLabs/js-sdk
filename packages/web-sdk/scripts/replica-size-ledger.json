@@ -241,6 +241,27 @@
       "index.mjs": 0,
       "index.cjs": 0,
       "note": "Replica gzip growth measured against this PR's merge base"
+    },
+    {
+      "pr": "#1138",
+      "ticket": "TC-3947",
+      "index.mjs": 0,
+      "index.cjs": 0,
+      "note": "Replica gzip growth measured against this PR's merge base"
+    },
+    {
+      "pr": "#1161",
+      "ticket": "TC-4010",
+      "index.mjs": 0,
+      "index.cjs": 0,
+      "note": "Replica gzip growth measured against this PR's merge base"
+    },
+    {
+      "pr": "#1180",
+      "ticket": "TC-4237",
+      "index.mjs": -1,
+      "index.cjs": 0,
+      "note": "Replica gzip growth measured against this PR's merge base"
     }
   ],
   "phase2Ratchet": {
@@ -3399,5 +3420,541 @@
       "ceiling": { "index.mjs": 1529625, "index.cjs": 1462613 }
     },
     "reason": "The vault routing classifier (sdk-services resourceRouting, sdk-core delegation classification, node-sdk activation routing) reads which resources a request or grant names or covers by their ancestors, so a request or grant that reaches vault data goes to the dedicated vault address; sdk-services, sdk-core and node-sdk are bundled into the web-sdk root. Canonical Node 22/Bun 1.3.14 CI on #1069 (f5259377, master e7e5d47b merged in) measured index.mjs 1529625 and index.cjs 1462613 gzip -9 bytes: +686 and +273 over the TC-3286 ceilings 1528939 and 1462340 (+722 and +361 over the merge base). No other ceiling moves. Details: TC-2944"
+  },
+  "tc3448OnBehalfPromptRoot": {
+    "label": "permission prompt names the app a request is for (TC-3448)",
+    "ruling": "size-ruling: TC-3448 row tc3448OnBehalfPromptRoot raises the web-sdk root ceilings by CI's measured delta for the on-behalf modal (Monica's strings + gating)",
+    "base": "c2f4cc7692286a9c84ac709bf22a5f148493c6cb",
+    "sourceCommits": ["8bfd1d1b8b996ecec278ef151c3ac0dab7c8e684"],
+    "canonicalCI": {
+      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44558524675",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44558524675/job/135681081190",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44558524675/job/135681081827"
+      ]
+    },
+    "root": {
+      "delta": { "index.mjs": 47, "index.cjs": 56 },
+      "ceiling": { "index.mjs": 1529672, "index.cjs": 1462669 }
+    },
+    "reason": "The web-sdk permission prompt can name the app a request is for and hide the 30-day option (PermissionRequestModal, requestPermissionsCore). Canonical Node 22/Bun 1.3.14 CI on #1095 (8bfd1d1b, master c2f4cc76) measured index.mjs 1529672 and index.cjs 1462669 gzip -9 bytes: +47 and +56 over the TC-2944 ceilings 1529625 and 1462613. No other ceiling moves. Details: TC-3448"
+  },
+  "tc2490OneApprovalRoot": {
+    "label": "one OpenKey approval for a multi-space session (TC-2490)",
+    "ruling": "size-ruling: TC-2490 row tc2490OneApprovalRoot index.mjs 1529858 (+186), index.cjs 1462849 (+180) gzip bytes over the tc3448 ceilings, CI's canonical figure. Details: TC-2490",
+    "base": "c5a7f854291974630f3595aa1ef45466beca67c6",
+    "sourceCommits": ["53e4dc7884c2e5336e57d8c6e901619896a3ddc0"],
+    "canonicalCI": {
+      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44600709897",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44600709897/job/135831028234",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44600709897/job/135831028201"
+      ]
+    },
+    "root": {
+      "delta": { "index.mjs": 186, "index.cjs": 180 },
+      "ceiling": { "index.mjs": 1529858, "index.cjs": 1462849 }
+    },
+    "reason": "TinyCloudNode accepts a signed session grant spanning several of the owner's spaces, keeps each resource's own space in portable grants, and picks a manifest sign-in's primary space among its own requested spaces; node-sdk is bundled into the web-sdk root. Canonical Node 22/Bun 1.3.14 CI on #1060 (53e4dc78, master c5a7f854 merged in) measured index.mjs 1529858 and index.cjs 1462849 gzip -9 bytes: +186 and +180 over the TC-3448 ceilings 1529672 and 1462669. No other ceiling moves. Details: TC-2490"
+  },
+  "tc3661ShareLinkHostRoot": {
+    "label": "a share link's host is used when the owner has no registry record (TC-3661)",
+    "ruling": "size-ruling: TC-3661 row tc3661ShareLinkHostRoot index.mjs 1530053 (+195), index.cjs 1462997 (+148) gzip bytes over the tc2490 ceilings, CI's canonical figure. Details: TC-3661",
+    "base": "cb3edeab4f66ae2fc7f84243c7b8fdc3a15fc812",
+    "sourceCommits": ["d648dd280c96c43dee992e6339cf153f64fa5c34"],
+    "canonicalCI": {
+      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44919854667",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44919854667/job/136893305938",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44919854667/job/136893305988"
+      ]
+    },
+    "root": {
+      "delta": { "index.mjs": 195, "index.cjs": 148 },
+      "ceiling": { "index.mjs": 1530053, "index.cjs": 1462997 }
+    },
+    "reason": "TinyCloudNode takes a share link's host as the destination when the owner has no registry record and the host is a known TinyCloud node (SharingService receivedHostHintTransport, isKnownTinyCloudNode); node-sdk is bundled into the web-sdk root. Canonical Node 22/Bun 1.3.14 CI on #1114 (d648dd28, master cb3edeab) measured index.mjs 1530053 and index.cjs 1462997 gzip -9 bytes: +195 and +148 over the TC-2490 ceilings 1529858 and 1462849. No other ceiling moves. Details: TC-3661"
+  },
+  "tc3522LeaseAskRoot": {
+    "label": "a renewed session delegates up to the end the node renewed it to (TC-3522)",
+    "ruling": "size-ruling: TC-3522 row tc3522LeaseAskRoot index.mjs 1530103 (+50), index.cjs 1463084 (+87) gzip bytes over the tc3661 ceilings, CI's canonical figure, within the ruled +100 B / +100 B. Details: TC-3522",
+    "base": "628be3c4bd1c633bb7f676f6c32c761cf8b596df",
+    "sourceCommits": ["e4913f37af9b5fef23f6874895a160bae5d08ee8"],
+    "canonicalCI": {
+      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45054824553",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45054824553/job/137307609390",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45054824553/job/137307609492"
+      ]
+    },
+    "root": {
+      "delta": { "index.mjs": 50, "index.cjs": 87 },
+      "ceiling": { "index.mjs": 1530103, "index.cjs": 1463084 }
+    },
+    "reason": "TinyCloudNode.sessionEnd gives the end the node renewed a session to after restoreSessionWithRenewal, and delegateTo and planDelegation delegate up to it; node-sdk is bundled into the web-sdk root. Canonical Node 22/Bun 1.3.14 CI on #1123 (e4913f37, master 628be3c4 merged in) measured index.mjs 1530103 and index.cjs 1463084 gzip -9 bytes: +50 and +87 over the TC-3661 ceilings 1530053 and 1462997. No other ceiling moves. Details: TC-3522"
+  },
+  "tc3443GenericManifestRoot": {
+    "label": "a sign-in without a manifest asks only for its app's own folder (TC-3443)",
+    "ruling": "size-ruling: TC-3443 row tc3443GenericManifestRoot raises the web-sdk root ceilings by CI's measured delta for the generic app-folder manifest, its warning and ownerFullAccess",
+    "base": "4e4d8459a0c0f527137d2bfc359b7f97579ec2b2",
+    "sourceCommits": ["19cc3d058b6f5fdb436f71238634279c3bf688d0"],
+    "canonicalCI": {
+      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45058971922",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45058971922/job/137320387744",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45058971922/job/137320387385"
+      ]
+    },
+    "root": {
+      "delta": { "index.mjs": 396, "index.cjs": 151 },
+      "ceiling": { "index.mjs": 1530499, "index.cjs": 1463235 }
+    },
+    "reason": "A sign-in without a manifest asks only for its app's own folder (the generic app-folder manifest and its one console warning), and owner tools opt into every action on their space with ownerFullAccess (sdk-core owner-access, node-sdk and web-sdk sign-in); sdk-core and node-sdk are bundled into the web-sdk root. Canonical Node 22/Bun 1.3.14 CI on #1099 (19cc3d05, master 4e4d8459 merged in) measured index.mjs 1530499 and index.cjs 1463235 gzip -9 bytes: +396 and +151 over the TC-3522 ceilings 1530103 and 1463084. No other ceiling moves. Details: TC-3443"
+  },
+  "tc3688AccountIndexGuardRoot": {
+    "label": "account index writes are sent only when the session can write the index (TC-3688)",
+    "ruling": "size-ruling: TC-3688 row tc3688AccountIndexGuardRoot index.mjs 1530603 (+104), index.cjs 1463337 (+102) gzip bytes over the tc3443 ceilings, CI's canonical figure. Details: TC-3688",
+    "base": "2cb453f6523219d12bce66489fc2625782e970fa",
+    "sourceCommits": ["13fe661a2d7535b5493e83b42efe4d288722ac1a"],
+    "canonicalCI": {
+      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45063241608",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45063241608/job/137333621784",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45063241608/job/137333621819"
+      ]
+    },
+    "root": {
+      "delta": { "index.mjs": 104, "index.cjs": 102 },
+      "ceiling": { "index.mjs": 1530603, "index.cjs": 1463337 }
+    },
+    "reason": "AccountService skips the account index writes (and index setup) when the session's recap lacks tinycloud.sql write and schema on the account database; sdk-core and node-sdk are bundled into the web-sdk root. Canonical Node 22/Bun 1.3.14 CI on #1116 (13fe661a, master 2cb453f6 merged in) measured index.mjs 1530603 and index.cjs 1463337 gzip -9 bytes: +104 and +102 over the TC-3443 ceilings 1530499 and 1463235. No other ceiling moves. Details: TC-3688"
+  },
+  "tc3443SessionRetireRoot": {
+    "label": "sign-out retires the session at the node, with the retire code in a lazy chunk (TC-3443)",
+    "ruling": "size-ruling: TC-3443 row tc3443SessionRetireRoot index.mjs 1531668 (+1065), index.cjs 1464420 (+1083) gzip bytes over the tc3688 ceilings, kv-storage worker 780957 (+54) and replica worker 774682 (+121) gzip bytes over the tc2931 ceilings, CI's canonical figures. Details: TC-3443",
+    "base": "7d438ee4050498859d23ff3bb2f9022908b85b4c",
+    "sourceCommits": ["6ca3c9118bc045d731ae383523289a2c1e832741"],
+    "canonicalCI": {
+      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45067208416",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45067208416/job/137345926164",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45067208416/job/137345926173"
+      ]
+    },
+    "root": {
+      "delta": { "index.mjs": 1065, "index.cjs": 1083 },
+      "ceiling": { "index.mjs": 1531668, "index.cjs": 1464420 }
+    },
+    "worker": { "delta": 54, "ceiling": 780957 },
+    "replicaWorker": { "delta": 121, "ceiling": 774682 },
+    "reason": "Sign-out asks the node to stop accepting the session's keys; the retire request is in a lazy chunk loaded at session start, and the validateSessionRoot WASM export is bundled into the replica and kv-storage workers; sdk-core and node-sdk are bundled into the web-sdk root. Canonical Node 22/Bun 1.3.14/Rust 1.99.0 CI on #1118 (6ca3c911, master 7d438ee4 merged in) measured index.mjs 1531668 and index.cjs 1464420 gzip -9 bytes: +1065 and +1083 over the TC-3688 ceilings 1530603 and 1463337; the kv-storage worker 780957 (+54 over 780903) and replica.worker.js 774682 (+121 over 774561). No other ceiling moves. Details: TC-3443"
+  },
+  "tc3443PortFolderRoot": {
+    "label": "an app without a manifest gets a folder that includes its port (TC-3443)",
+    "ruling": "size-ruling: TC-3443 #1134 (2026-11-22 21:38Z): web-sdk root may grow index.mjs +1914 / index.cjs +865 gzip bytes over the tc3443SessionRetireRoot ceilings, per CI run 45071400680; workers unchanged. Details: TC-3443",
+    "base": "d382af88a04cfe10c04ad70f82ffdc3c6cf3aa15",
+    "sourceCommits": ["3bb106314aa21a3c29d2d42cd1daa74cf1d3211b"],
+    "canonicalCI": {
+      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45071400680",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45071400680/job/137358939899",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45071400680/job/137358940187"
+      ]
+    },
+    "root": {
+      "delta": { "index.mjs": 1914, "index.cjs": 865 },
+      "ceiling": { "index.mjs": 1533582, "index.cjs": 1465285 }
+    },
+    "reason": "Canonical Node 22/Bun 1.3.14/Rust 1.99.0 CI on #1134 (7e04e8d4, master d382af88 merged in) measured index.mjs 1533582 and index.cjs 1465285 gzip -9 bytes: +1914 and +865 over the tc3443SessionRetireRoot ceilings 1531668 and 1464420. The workers and every other ceiling stay at their ledger values. Details: TC-3443"
+  },
+  "tc3704OpenKeyPromptRoot": {
+    "label": "the SDK permission prompt is skipped when OpenKey signs and shows the request (TC-3704)",
+    "ruling": "size-ruling: TC-3704 row tc3704OpenKeyPromptRoot index.mjs 1533915 (+333), index.cjs 1465566 (+281) gzip bytes over the tc3443PortFolderRoot ceilings, CI's canonical figure. Details: TC-3704",
+    "base": "fbdbaa7ba8e66fb0fc91d2815df2a5eb90299c94",
+    "sourceCommits": ["ac08001eab851e5e4965a855f3179c791831fd00"],
+    "canonicalCI": {
+      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45074741963",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45074741963/job/137369362680",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45074741963/job/137369362946"
+      ]
+    },
+    "root": {
+      "delta": { "index.mjs": 333, "index.cjs": 281 },
+      "ceiling": { "index.mjs": 1533915, "index.cjs": 1465566 }
+    },
+    "reason": "requestPermissions skips the SDK prompt when OpenKey signs and shows the request, and sends OpenKey the app's name as display-only text with the sign request (TinyCloudWeb, openKeySignPresentation); the web-sdk root bundles both. Canonical Node 22/Bun 1.3.14 CI on #1117 (934c8daf, master fbdbaa7b merged in) measured index.mjs 1533915 and index.cjs 1465566 gzip -9 bytes: +333 and +281 over the tc3443PortFolderRoot ceilings 1533582 and 1465285. No other ceiling moves. Details: TC-3704"
+  },
+  "tc3731ManifestOwnerRoot": {
+    "label": "a manifest permission path can hold the token {owner} (TC-3731)",
+    "ruling": "size-ruling: TC-3731 row tc3731ManifestOwnerRoot index.mjs 1534530 (+615), index.cjs 1466077 (+511) gzip bytes over the tc3704OpenKeyPromptRoot ceilings, CI's canonical figure (2026-11-22). Details: TC-3731",
+    "base": "895bfdc72d6d4e70f5bac72f39b373e2195e7dcd",
+    "sourceCommits": ["a877975473564b71c9999c885b353e10220a2924"],
+    "canonicalCI": {
+      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45078405861",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45078405861/job/137380725081",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45078405861/job/137380725327"
+      ]
+    },
+    "root": {
+      "delta": { "index.mjs": 615, "index.cjs": 511 },
+      "ceiling": { "index.mjs": 1534530, "index.cjs": 1466077 }
+    },
+    "reason": "TinyCloudNode and NodeUserAuthorization bind the signer's did:pkh owner into manifest permission paths that hold {owner}, and a restored web session resolves the token with its own address and chain id; sdk-core and node-sdk are bundled into the web-sdk root. Canonical Node 22/Bun 1.3.14 CI on #1121 (c3425b3a, master 895bfdc7 merged in) measured index.mjs 1534530 and index.cjs 1466077 gzip -9 bytes: +615 and +511 over the tc3704OpenKeyPromptRoot ceilings 1533915 and 1465566. No other ceiling moves. Details: TC-3731"
+  },
+  "tc3443AppIdLineBreakRoot": {
+    "label": "a host with a line break gets its own o_ folder (TC-3443)",
+    "ruling": "size-ruling: TC-3443 row tc3443AppIdLineBreakRoot index.mjs 1534531 (+1), index.cjs 1466079 (+2) gzip bytes over the tc3731ManifestOwnerRoot ceilings, CI's canonical figure (2026-11-22). Details: TC-3443",
+    "base": "5cc591102a9aef7d90d880e97671a2261f0f5b41",
+    "sourceCommits": ["3d2ff8abd3e5a5562803d6e28aa83540333e5c46"],
+    "canonicalCI": {
+      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45082592488",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45082592488/job/137393874380",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45082592488/job/137393874698"
+      ]
+    },
+    "root": {
+      "delta": { "index.mjs": 1, "index.cjs": 2 },
+      "ceiling": { "index.mjs": 1534531, "index.cjs": 1466079 }
+    },
+    "reason": "A host with a line break gets its own o_ folder like any other host that is not a domain name, matching the vectors shared with OpenKey (sdk-core owner-access); sdk-core is bundled into the web-sdk root. Canonical Node 22/Bun 1.3.14 CI on #1135 (354f2184, master 5cc59110 merged in) measured index.mjs 1534531 and index.cjs 1466079 gzip -9 bytes: +1 and +2 over the tc3731ManifestOwnerRoot ceilings 1534530 and 1466077. No other ceiling moves. Details: TC-3443"
+  },
+  "tc3549KeptApprovalsRoot": {
+    "label": "ordinary runtime permission approvals stay approved across a page reload (TC-3549)",
+    "ruling": "size-ruling: TC-3549 (2026-11-23) row tc3549KeptApprovalsRoot index.mjs 1535425 (+894), index.cjs 1466887 (+808) gzip bytes over the tc3443AppIdLineBreakRoot ceilings, CI's canonical figure. Details: TC-3549",
+    "base": "6e4d8ab69d787f25723038728ee56da11d03657f",
+    "sourceCommits": ["39b0fd671d1865b7708a149055576a8f2d99816a"],
+    "canonicalCI": {
+      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45085618316",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45085618316/job/137403426242",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45085618316/job/137403426480"
+      ]
+    },
+    "root": {
+      "delta": { "index.mjs": 894, "index.cjs": 808 },
+      "ceiling": { "index.mjs": 1535425, "index.cjs": 1466887 }
+    },
+    "reason": "TinyCloudWeb keeps an approved, ordinary runtime permission grant with the session so it is active again after a page reload, for the app it was approved for, and TinyCloudNode takes a grant filter and a reuseExisting option; node-sdk is bundled into the web-sdk root. Canonical Node 22/Bun 1.3.14 CI on #1102 (39b0fd67, master acb3dd2e) measured index.mjs 1535425 and index.cjs 1466887 gzip -9 bytes: +894 and +808 over the tc3443AppIdLineBreakRoot ceilings 1534531 and 1466079. No other ceiling moves. Details: TC-3549"
+  },
+  "tc3617HostedMcpLeaseRoot": {
+    "label": "a session renewal whose lease names a replaced renewer asks the owner again (TC-3617)",
+    "ruling": "size-ruling: TC-3617 (2026-11-23) row tc3617HostedMcpLeaseRoot index.mjs 1535484 (+59), index.cjs 1466903 (+16) gzip bytes over the tc3549KeptApprovalsRoot ceilings, CI's canonical figure, within the ruled +100 B / +100 B. Details: TC-3617",
+    "base": "d4c0cf6b3df06f79bd9acfeadc31970e9a41da86",
+    "sourceCommits": ["cea5dad7992f88b7bd1ee2ad1e154967f139b7bd"],
+    "canonicalCI": {
+      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45089187188",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45089187188/job/137414613992",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45089187188/job/137414613915"
+      ]
+    },
+    "root": {
+      "delta": { "index.mjs": 59, "index.cjs": 16 },
+      "ceiling": { "index.mjs": 1535484, "index.cjs": 1466903 }
+    },
+    "reason": "TinyCloudNode.getRenewalEffectiveExpiry refuses a session lease issued to a renewer the node no longer advertises with the coded RenewalRenewerChangedError, so the owner is asked again; node-sdk is bundled into the web-sdk root. Canonical Node 22/Bun 1.3.14 CI on #1122 (cea5dad7, master 27908364) measured index.mjs 1535484 and index.cjs 1466903 gzip -9 bytes: +59 and +16 over the tc3549KeptApprovalsRoot ceilings 1535425 and 1466887. No other ceiling moves. Details: TC-3617"
+  },
+  "tc3947ReplicaRevokeRoot": {
+    "label": "a revoked grant in the node's JSON refusal is read as a revocation (TC-3947)",
+    "ruling": "size-ruling: TC-3947 (2026-11-23) row tc3947ReplicaRevokeRoot index.mjs 1535546 (+62), index.cjs 1466953 (+50) gzip bytes over the tc3617HostedMcpLeaseRoot ceilings, kv-storage worker 781191 (+234) and replica worker 774920 (+238) gzip bytes over the tc3443SessionRetireRoot ceilings, CI's canonical figures. Details: TC-3947",
+    "base": "3ad8bb80e3b3b1f2342f4663cfe72f0ecd881093",
+    "sourceCommits": ["d79271d35eefa9471209446e506284b3ecbb704e"],
+    "canonicalCI": {
+      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45102787771",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45102787771/job/137457227215",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45102787771/job/137457227567"
+      ]
+    },
+    "root": {
+      "delta": { "index.mjs": 62, "index.cjs": 50 },
+      "ceiling": { "index.mjs": 1535546, "index.cjs": 1466953 }
+    },
+    "worker": { "delta": 234, "ceiling": 781191 },
+    "replicaWorker": { "delta": 238, "ceiling": 774920 },
+    "reason": "KVService.changes and the replica transport read the node's JSON revocation refusal ({\"code\", \"error\"}, nodes 1.25.17 and later) as a revocation before matching the revocation text; sdk-services is bundled into the web-sdk root and, with the replica transport, into the replica and kv-storage workers. Canonical Node 22/Bun 1.3.14 CI on #1138 (d79271d3, master 3ad8bb80) measured index.mjs 1535546 and index.cjs 1466953 gzip -9 bytes: +62 and +50 over the tc3617HostedMcpLeaseRoot ceilings 1535484 and 1466903; kv-storage worker 781191 and replica worker 774920: +234 and +238 over the tc3443SessionRetireRoot ceilings 780957 and 774682. No other ceiling moves. Details: TC-3947"
+  },
+  "tc3801NamedKeysRoot": {
+    "label": "opt-in per-secret keys (TC-3801)",
+    "ruling": "size-ruling: TC-3801 (2026-11-23) row tc3801NamedKeysRoot index.mjs 1539368 (+3822), index.cjs 1471344 (+4391) gzip bytes over the tc3947ReplicaRevokeRoot ceilings, CI's canonical figures, no lazy-load path, the row's own cap lifted by ruling. Details: TC-3801",
+    "base": "979145a429cbc0fb1c107da4e211dbabeb9afb81",
+    "sourceCommits": ["f9fd4d997b3b3d42093650e10b3c175c238d486d"],
+    "canonicalCI": {
+      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45128664935",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45128664935/job/137538818194",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45128664935/job/137538818578"
+      ]
+    },
+    "root": {
+      "delta": { "index.mjs": 3822, "index.cjs": 4391 },
+      "ceiling": { "index.mjs": 1539368, "index.cjs": 1471344 }
+    },
+    "reason": "Opted-in writes seal secrets to their own keys. sdk-services carries resealToKey, the key paths and the long-name catalogue; sdk-core carries the exact-key paths in the manifest and policy; node-sdk and web-sdk carry the read paths and writer opt-in. Canonical Node.js 22/Bun 1.3.14 CI on #1131 (f9fd4d99, master 979145a4) measured index.mjs 1539368 and index.cjs 1471344 gzip -9 bytes: +3822 and +4391 over the tc3947ReplicaRevokeRoot ceilings 1535546 and 1466953. No other ceiling moves. Details: TC-3801"
+  },
+  "tc3969SecretKeyCoverageRoot": {
+    "label": "signed secret-key permission checks (TC-3969, TC-3971)",
+    "ruling": "size-ruling: TC-3969/TC-3971 js-sdk #1143: replica-size-ledger.json gains a ratchet row over tc3801NamedKeysRoot with ceilings index.mjs 1539389 (+21) and index.cjs 1471374 (+30), canonicalCI run 45143940197; other buckets unchanged.",
+    "base": "bc48358291cd70d37566a85b6d50d62357ccdbb3",
+    "sourceCommits": ["c302d7ce91aa00fa0df1f0edb85e5296010fc23d"],
+    "canonicalCI": {
+      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45143940197",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45143940197/job/137588595331",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45143940197/job/137588595402"
+      ]
+    },
+    "root": {
+      "delta": { "index.mjs": 21, "index.cjs": 30 },
+      "ceiling": { "index.mjs": 1539389, "index.cjs": 1471374 }
+    },
+    "reason": "The Web SDK root includes the signed exact-key coverage check and uses the owner-bound manifest for secrets operations. Canonical Node.js 22/Bun 1.3.14 CI on #1143 (c302d7ce) measured 1539389 and 1471374 gzip -9 bytes over the TC-3801 ceilings of 1539368 and 1471344. Details: TC-3969"
+  },
+  "tc3823BotHistoryKeyRoot": {
+    "label": "verified bot-history descriptor (TC-3823)",
+    "ruling": "size-ruling (10:24Z): TC-3823 js-sdk #1141: replica-size-ledger.json gains a root-only ratchet row tc3823BotHistoryKeyRoot over tc3969SecretKeyCoverageRoot with ceilings index.mjs 1539508 (+119) and index.cjs 1471446 (+72), canonicalCI run 45153655976; workers and other buckets unchanged.",
+    "base": "a974542e479c6f3c5d4fab10784a330a6003983d",
+    "sourceCommits": ["a8692311198e3b4643eb6018255c9013bf19c7bd"],
+    "canonicalCI": {
+      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45153655976",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45153655976/job/137621049279",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45153655976/job/137621049305"
+      ]
+    },
+    "root": {
+      "delta": { "index.mjs": 119, "index.cjs": 72 },
+      "ceiling": { "index.mjs": 1539508, "index.cjs": 1471446 }
+    },
+    "reason": "The Web SDK root includes sealing to a verified bot-history key descriptor and the exact runtime grant for that key. Canonical Node.js 22/Bun 1.3.14 CI on #1141 (a8692311) measured 1539508 and 1471446 gzip -9 bytes over the TC-3969/TC-3971 ceilings of 1539389 and 1471374. Workers and other buckets are unchanged. Details: TC-3823"
+  },
+  "tc3802SecretKeyCapRoot": {
+    "label": "per-secret keys: secret names over 64 characters have no key of their own (TC-3802)",
+    "ruling": "size-ruling (11:29Z): TC-3802 js-sdk #1133: replica-size-ledger.json gains a root-only ratchet row tc3802SecretKeyCapRoot over tc3823BotHistoryKeyRoot with ceilings index.mjs 1539516 (+8) and index.cjs 1471453 (+7), canonicalCI run 45163202497; workers and other buckets unchanged.",
+    "base": "67f965e446d1ea6a0e6d8688228b1e2d8dada833",
+    "sourceCommits": ["d09e029c3a20e1213760360afa7dc16c3ff0fc33"],
+    "canonicalCI": {
+      "run": "45163202497",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45163202497/job/137653511265",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45163202497/job/137653512203"
+      ]
+    },
+    "root": {
+      "delta": { "index.mjs": 8, "index.cjs": 7 },
+      "ceiling": { "index.mjs": 1539516, "index.cjs": 1471453 }
+    },
+    "reason": "A secret name over 64 characters has no key of its own, so the manifest's isSecretKeyPath refuses it: one added check in sdk-core, bundled into the web root. migrateSecrets ships at @tinycloud/sdk-services/secrets/migrate and is not part of the root bundle."
+  },
+  "tc3862ExplorerOriginRoot": {
+    "label": "recognize the Explorer origin for OpenKey account bootstrap (TC-3862)",
+    "ruling": "Naomi approved the exact root-only +6/+8 bytes for TC-3862 js-sdk #1146, conditional on matching SQLite and PostgreSQL measurements; both canonical merge-forward jobs in run 45187540570 agree. No other bucket changes.",
+    "base": "520726b1cb7f4cddf9cb0c45443afb55d2944dcb",
+    "sourceCommits": ["3605a389b76b778fa77bed7acce40c6047f0631b"],
+    "canonicalCI": {
+      "run": "45187540570",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45187540570/job/137736956143",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45187540570/job/137736955873"
+      ]
+    },
+    "root": {
+      "delta": { "index.mjs": 6, "index.cjs": 8 },
+      "ceiling": { "index.mjs": 1539522, "index.cjs": 1471461 }
+    },
+    "reason": "The Web SDK bundles the shared first-party allowlist, which recognizes the exact Explorer origin even when the owner has no location record. OpenKey handles account bootstrap. Details: TC-3862"
+  },
+  "tc3522InvocationRefusalRoot": {
+    "label": "retain signed proof attribution for invocation refusals (TC-3522)",
+    "ruling": "Naomi 2026-11-23 15:39:44Z: set the absolute index.mjs ceiling to 1539880 (1539830 measured in both canonical jobs plus 50 bytes); carry the TC-3862 index.cjs ceiling and leave every optional and worker ceiling unchanged.",
+    "base": "089087a0797e2f77661f98a9a7bfb5bd8b145f8c",
+    "sourceCommits": ["45cbb18e7b9c762063a4c23aac199e458df95a1d"],
+    "canonicalCI": {
+      "run": "45204181222",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45204181222/job/137795503048",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45204181222/job/137795503716"
+      ]
+    },
+    "root": {
+      "delta": { "index.mjs": 358, "index.cjs": 0 },
+      "ceiling": { "index.mjs": 1539880, "index.cjs": 1471461 }
+    },
+    "reason": "Both backends measured 1539830/1470750 gzip bytes at the pinned source before the TC-3862 merge-forward. The ceiling delta is relative to the TC-3862 row, not to that run's base. The Web root bundles SDK Services' invocation-time versus proof-refusal classification. Details: TC-3522"
+  },
+  "tc3810ReaderRoot": {
+    "label": "read wallet-signed ReCap delegation modes (TC-3810 A1)",
+    "ruling": "Naomi 15:40:24Z approved the exact combined canonical CI measurement up to +181 B ESM and +107 B CJS over #1148's measured bytes. Naomi 17:23Z: ceilings set to the canonical measurement from Replica run 45220085215 (+179/+110 over #1148); the CJS +3 B over the earlier allowance is accepted as minifier variance of the ruled reader change.",
+    "base": "eb4a66fd4525575618679e3204e8082a90c640ce",
+    "sourceCommits": [
+      "fde4cc70a2dc0e2c64cd9638f2f01dc1e696e117"
+    ],
+    "canonicalCI": {
+      "run": "45220085215",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45220085215/job/137851673053",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45220085215/job/137851672657"
+      ]
+    },
+    "root": {
+      "delta": {
+        "index.mjs": 179,
+        "index.cjs": 110
+      },
+      "ceiling": {
+        "index.mjs": 1540015,
+        "index.cjs": 1470863
+      }
+    },
+    "reason": "Both canonical jobs (SQLite and Postgres, run 45220085215, provisional head 3b44e890) measured 1540015/1470863 gzip bytes, 179/110 over #1148's measured 1539836/1470753. The Web SDK root reads signed attenuable and terminal ReCap delegation modes. Details: TC-3810"
+  },
+  "tc3975NamedKeyWarningRoot": {
+    "label": "report named-key omissions during sign-in (TC-3975)",
+    "ruling": "Naomi 2026-11-23 22:50:03Z: root-only allowance of up to +167 B ESM and +152 B CJS gzip for js-sdk #1144. Naomi 2026-11-23 23:26:47Z re-grant: exactly +149 B ESM and +193 B CJS over the TC-3810 ceilings, minifier drift after the master merge, source unchanged.",
+    "base": "c70e31715dbc62741625dfe2dfc6f30cece6deed",
+    "sourceCommits": [
+      "e11cfa271a872df5e9fed3f978e0d3f3ecb82b67"
+    ],
+    "canonicalCI": {
+      "run": "45285882988",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45285882988/job/138081954243",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45285882988/job/138081954136"
+      ]
+    },
+    "root": {
+      "delta": {
+        "index.mjs": 149,
+        "index.cjs": 193
+      },
+      "ceiling": {
+        "index.mjs": 1540164,
+        "index.cjs": 1471056
+      }
+    },
+    "reason": "Both canonical jobs (SQLite and Postgres, run 45285882988, head 7a6d21ed8 after the master merge) measured 1540164/1471056 gzip bytes, 149/193 over the TC-3810 ceilings of 1540015/1470863. Run 45177867274 at e11cfa27 before the merge measured 167/152 over the then-newest TC-3802 ceilings; the difference is minifier drift, source unchanged. The bytes are the Web SDK root's sign-in warning for secret key resources omitted when the node lacks encryption-named-keys-v1. Details: TC-3975"
+  },
+  "tc4082HostedOwnerRoot": {
+    "label": "sign in a hosted owner with no registry record (TC-4082)",
+    "ruling": "Naomi 2026-11-24 00:37:34Z: re-grant tc4082HostedOwnerRoot to exactly 1542306/1472943 (+2291/+2080 over tc3810ReaderRoot). Earlier grant, 2026-11-23 22:50:03Z: up to +2139/+1916 for the sign-in proof alone. Re-based onto tc3975NamedKeyWarningRoot after #1144 merged (Naomi 01:17Z: may move only by master's movement): the same +2291/+2080 now sits over tc3975NamedKeyWarningRoot's 1540164/1471056, so the ceilings are 1542455/1473136; CI decides. Naomi R2 2026-11-24 01:45:37Z: set tc4082HostedOwnerRoot to exactly 1542479/1473127 (+2315/+2071 over tc3975NamedKeyWarningRoot), ledger + policy only.",
+    "base": "878291c9f6e36812ba5785deb398a4117700c628",
+    "sourceCommits": [
+      "98f7a2e4932a40c5d56273177f50d5e0443a436a",
+      "952c889d8eedf252352bea7bf706a06a54c39c87",
+      "79534a0bc6e83e1e9489a5658b814086e3a09185",
+      "dc3282e0e9496e4089656c83d72d4064928fca91",
+      "bd7ce999c1d81017baa3cc20bd9c00e93ace96ad",
+      "d3ff712f8b2ca63b2fac3da31c9c40a833c8648a",
+      "63dfefb58a1384dc9b66faaf1e772e5edcecf75f"
+    ],
+    "canonicalCI": {
+      "run": "45305691554",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45305691554/job/138148858055",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45305691554/job/138148858149"
+      ]
+    },
+    "root": {
+      "delta": {
+        "index.mjs": 2315,
+        "index.cjs": 2071
+      },
+      "ceiling": {
+        "index.mjs": 1542479,
+        "index.cjs": 1473127
+      }
+    },
+    "reason": "5 reviewed TC-4082 commits + no-read fix 63dfefb58; Naomi 00:38Z. Both canonical jobs (SQLite and Postgres, run 45296681183 at debfa194e) measured 1542306/1472943 gzip bytes, 2291/2080 over tc3810ReaderRoot's 1540015/1470863. The Web SDK root carries the hosted-owner proof: the proof state in NodeUserAuthorization (begin, confirm, fail, restore candidate and adoption, proven-space routing, per-proof landed state), the TinyCloudNode restore, retire-on-failed-proof and sign-in handling around it, and one allowHostedOwnerProof line in TinyCloudWeb. The assess and read helpers load from the lazy space-hosting chunk, not the root. Details: TC-4082 Re-based onto tc3975NamedKeyWarningRoot after #1144 merged (Naomi 01:17Z: may move only by master's movement): the same +2291/+2080 now sits over tc3975NamedKeyWarningRoot's 1540164/1471056, so the ceilings are 1542455/1473136; CI decides. Run 45305691554 at 6ad3a0f2f (master 878291c9f merged) measured 1542479/1473127 on both SQLite and Postgres (the SQLite job 138148858055, the Postgres job 138148858149), +2315/+2071 over tc3975NamedKeyWarningRoot's 1540164/1471056: gzip non-additivity after the #1144 merge, source unchanged; Naomi 01:46Z"
+  },
+  "tc3891OwnerRegistryRecordRoot": {
+    "label": "TinyCloud One sign-in creates the owner's registry record (TC-3891)",
+    "ruling": "Naomi 2026-11-24 10:27Z TC-858: tc3891OwnerRegistryRecordRoot: web-sdk root cjs ceiling 1473127 → 1487555 (+14428, measured on CI cc3792132) for ensureOwnerRegistryRecord; mjs ceiling unchanged at 1542479 (measured 1501514, same 243 exports).",
+    "base": "cd5b9826dabff48cca74deafd067242e6b32c3eb",
+    "sourceCommits": [
+      "faf1a6689588403d6a14d0c9671b52dfd79f81c7",
+      "f3697c164871ec6d183ef13d78a3e0a68db16961",
+      "cc3792132fd5cabca449c675ecd50b3e8731404a"
+    ],
+    "canonicalCI": {
+      "run": "45367645133",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45367645133/job/138353435697",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45367645133/job/138353436205"
+      ]
+    },
+    "root": {
+      "delta": {
+        "index.mjs": 0,
+        "index.cjs": 14428
+      },
+      "ceiling": {
+        "index.mjs": 1542479,
+        "index.cjs": 1487555
+      }
+    },
+    "reason": "Both canonical jobs (SQLite and Postgres, run 45367645133 at cc3792132, merged with master cd5b9826d) measured 1501514/1487555 gzip bytes against tc4082HostedOwnerRoot's 1542479/1473127. The Web SDK root carries TinyCloudWeb.ensureOwnerRegistryRecord and the registry-publish module it imports: the create-only owner-signed v2 location record publish (publishLocationRecordV2 from @tinycloud/sdk-core/registry-publication), the TinyCloud One and Home origin gate, and the OpenKey or wallet signer. The import() is merged into the root because the web build pins LimitChunkCountPlugin({ maxChunks: 1 }); with it webpack stops concatenating sdk-core into index.mjs, which is why index.mjs fell by 40965 bytes with the same 243 exports. Not taken: a lazy entry, because @tinycloud/sdk-core/registry-publication imports the sdk-core root, so the chunk carried all of sdk-core (about 297 KB gzip) plus the links and issued-delegation async chunks, and its computed chunk import broke the openkey-example build. Details: TC-3891"
+  },
+  "tc4222PermissionLineRoot": {
+    "label": "permission dialog states exactly what a request grants (TC-4222)",
+    "ruling": "test-ruling: TC-4222 (13:06Z) - size ledger row tc4222PermissionLineRoot: web-sdk root cjs ceiling 1487555→1487567 (+12, CI a31ed78c, both jobs), mjs unchanged; scripts/*size-policy*.test.ts add the row beside every tc3891OwnerRegistryRecordRoot delete/undefined, and the replica-size-policy.test.ts filter gains it; no assertion value changes.",
+    "base": "ba48c9aa24b3a81665bbb29bbd139f4258984ca9",
+    "sourceCommits": [
+      "e2eb5662991f91caba3cbcbb73aed0bd6da401a7",
+      "625ca01a3bf5b4fd99b875686cb91073523a122f",
+      "9f57c0662087e8eb8157117aa1e31d488cea2883",
+      "b370dccc3aa88f0188c3c5536b705ba8c50827cf",
+      "a31ed78c89381164877789cbd3e86787786a7ac9"
+    ],
+    "canonicalCI": {
+      "run": "45397431219",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45397431219/job/138456809591",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45397431219/job/138456809184"
+      ]
+    },
+    "root": {
+      "delta": {
+        "index.mjs": 0,
+        "index.cjs": 12
+      },
+      "ceiling": {
+        "index.mjs": 1542479,
+        "index.cjs": 1487567
+      }
+    },
+    "reason": "Both canonical jobs (SQLite and Postgres, run 45397431219 at a31ed78c, base ba48c9aa) measured 1501525/1487567 gzip bytes against tc3891OwnerRegistryRecordRoot's 1542479/1487555. The Web SDK root passes the request's expiry and the app's optional caption to the permission prompt (requestPermissionsCore showModal); the derived line and its escaping render in the prompt. Not taken: hiding the expiry line unless a caption is passed (Naomi 13:06Z). Details: TC-4222"
+  },
+  "tc3522InvocationRefusalKvWorker": {
+    "label": "retain invocation-refusal attribution in the kv-storage worker (TC-3522)",
+    "ruling": "Naomi ACBX 2026-11-23: admit only the exact worker gzip bytes reproduced by SQLite and PostgreSQL, with zero headroom. Root, optional and gated ceilings are unchanged.",
+    "base": "71da2dd0fb6961f0bc342f7cfac43c084e91aa5d",
+    "sourceCommits": ["d2b8696ae792eaddea6fd8662ff451e4d307473e"],
+    "canonicalCI": {
+      "run": "45209040504",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45209040504/job/137812870821",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45209040504/job/137812870234"
+      ]
+    },
+    "worker": { "delta": 146, "ceiling": 781337 },
+    "reason": "The SDK Services KV refusal path ships in the hashed kv-storage worker. Both canonical jobs measured 781337 gzip -9 bytes, 146 above the TC-3947 ceiling of 781191."
+  },
+  "tc3522InvocationRefusalReplicaWorker": {
+    "label": "retain invocation-refusal attribution in the replica worker (TC-3522)",
+    "ruling": "Naomi ACBX 2026-11-23: admit only the exact worker gzip bytes reproduced by SQLite and PostgreSQL, with zero headroom. Root, optional and gated ceilings are unchanged.",
+    "base": "71da2dd0fb6961f0bc342f7cfac43c084e91aa5d",
+    "sourceCommits": ["d2b8696ae792eaddea6fd8662ff451e4d307473e"],
+    "canonicalCI": {
+      "run": "45209040504",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45209040504/job/137812870821",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45209040504/job/137812870234"
+      ]
+    },
+    "replicaWorker": { "delta": 156, "ceiling": 775076 },
+    "reason": "The SDK Services KV refusal path ships in replica.worker.js. Both canonical jobs measured 775076 gzip -9 bytes, 156 above the TC-3947 ceiling of 774920."
   }
 }

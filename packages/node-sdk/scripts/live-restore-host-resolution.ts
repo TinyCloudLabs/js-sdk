@@ -58,7 +58,7 @@ async function waitForNode(host: string, timeoutMs = 20000): Promise<void> {
 }
 
 async function main(): Promise<void> {
-  const { TinyCloudNode } = await import("../src/index.ts");
+  const { TinyCloudNode, ownerFullAccess } = await import("../src/index.ts");
   const { FileSessionStorage } = await import(
     "../src/storage/FileSessionStorage.ts"
   );
@@ -102,6 +102,7 @@ async function main(): Promise<void> {
       host, // explicit local host
       autoCreateSpace: true,
       sessionStorage: ownerStorage,
+      ...ownerFullAccess(),
     });
     await owner.signIn();
     const address = owner.address!;

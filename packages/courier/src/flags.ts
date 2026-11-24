@@ -1,7 +1,7 @@
 import type { ParsedArgs } from './args.js';
 import { CourierError } from './errors.js';
 
-const INIT = ['request', 'wait', 'timeout', 'grant-file', 'paste', 'resume', 'rotate-key', 'host', 'openkey-host', 'openkey-api-host', 'label', 'handle', 'expiry', 'key', 'key-file', 'force'];
+const INIT = ['request', 'wait', 'timeout', 'grant-file', 'paste', 'resume', 'rotate-key', 'host', 'openkey-host', 'openkey-api-host', 'label', 'handle', 'expiry', 'renew', 'key', 'key-file', 'force'];
 const TEXT = ['text', 'file', 'stdin'];
 const JOIN = ['consent', 'wait'];
 

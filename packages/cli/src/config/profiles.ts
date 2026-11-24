@@ -280,7 +280,8 @@ export class ProfileManager {
   // ── Key management ──────────────────────────────────────────────────
 
   /**
-   * Returns the parsed JWK for a profile, or null if no key exists.
+   * Returns the parsed JWK for a profile, or null if no key exists or the
+   * profile is signed out.
    */
   static async getKey(name: string): Promise<object | null> {
     return withPinnedProfileDirectory(name, async (directory) => {
@@ -290,6 +291,16 @@ export class ProfileManager {
       const key = await readJson<object>(join(directory, "key.json"));
       return (await readJson<ProfileConfig>(profileFile))?.authSignedOut === true ? null : key;
     });
+  }
+
+  /**
+   * Returns the parsed JWK for a profile even while it is signed out, or null
+   * if no key exists. Logout keeps the key; only sign-in reads it this way, so
+   * the next sign-in keeps the key that the profile's grants are bound to.
+   */
+  static async getStoredKey(name: string): Promise<object | null> {
+    return withPinnedProfileDirectory(name, async (directory) =>
+      directory ? readJson<object>(join(directory, "key.json")) : null);
   }
 
   /**

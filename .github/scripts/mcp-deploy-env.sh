@@ -63,20 +63,26 @@ write_mcp_deploy_env_file() {
     TC_MCP_INTROSPECTION_CLIENT_ID
     TC_MCP_INTROSPECTION_CLIENT_SECRET
     TC_MCP_NATIVE_SERVICE_CREDENTIAL
+    BETTERSTACK_SOURCE_TOKEN
     CERTBOT_EMAIL
   )
+  # Optional values are left out when unset or empty, so a missing one never blocks a deploy or a rollback.
+  local -a optional_keys=(BETTERSTACK_SOURCE_TOKEN)
   local -a entries=()
   local key value quoted
 
   validate_mcp_native_service_credential || return 1
 
   for key in "${keys[@]}"; do
-    if [[ ! -v $key ]]; then
-      echo "::error::$key is required for MCP deployment" >&2
-      return 1
-    fi
-    value=${!key}
+    value=
+    if [[ -v $key ]]; then value=${!key}; fi
     if [ -z "$value" ]; then
+      case " ${optional_keys[*]} " in
+        *" $key "*)
+          echo "::notice::$key is not set: the MCP log shipper stays idle and MCP log status is NOT AVAILABLE" >&2
+          continue
+          ;;
+      esac
       echo "::error::$key is required for MCP deployment" >&2
       return 1
     fi
