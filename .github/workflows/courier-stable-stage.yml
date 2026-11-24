@@ -139,6 +139,8 @@ jobs:
     needs: build
     if: github.ref == 'refs/heads/master'
     runs-on: ubuntu-latest
+    # NPM_TOKEN lives in the master-only npm-publish environment (TC-4281).
+    environment: npm-publish
     timeout-minutes: 90
     permissions:
       contents: read
