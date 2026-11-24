@@ -8,6 +8,8 @@ import {
 } from "node:crypto";
 import type { PermissionEntry } from "@tinycloud/node-sdk";
 import { publicJwk } from "@tinycloud/sdk-core";
+import type { OwnerRenewalOriginal } from "@tinycloud/sdk-core/delegations/renewal-receipt";
+import type { ApprovalRenewal } from "@tinycloud/share-envelope/links";
 import { DEFAULT_CHAIN_ID, DEFAULT_OPENKEY_DEVICE_API_HOST, ExitCode } from "../config/constants.js";
 import type { ProfileConfig } from "../config/types.js";
 import { CLIError } from "../output/errors.js";
@@ -32,9 +34,11 @@ import { assertNotLocalOwner, assertSessionReplaceable, commitLogin, readProfile
 import { announceFirstOwner, openKeyPrimaryFlag, warnIfNotPrimaryKey, withOwnerKeyPrimary } from "./owner-key.js";
 import { carryRefusedDelegation, isPermanentRefusal } from "./refusal.js";
 import { refusing } from "./refused-approval.js";
+import { admitDeviceRenewal, type DeviceRenewalReason } from "./device-renewal.js";
 
 /** OpenKey caps device-approved delegations at 30 days. */
 const DEVICE_DELEGATION_MAX_SECONDS = 30 * 24 * 60 * 60;
+const DEVICE_DELEGATION_SUGGESTED_SECONDS = 7 * 24 * 60 * 60;
 /** OpenKey's approval window is minutes; refuse a server asking us to poll for longer. */
 const DEVICE_APPROVAL_WINDOW_MAX_SECONDS = 60 * 60;
 const DEVICE_REASON_MAX_LENGTH = 200;
@@ -84,7 +88,7 @@ type DeviceBinding = {
 
 type DevicePollResponse =
   | { status: "pending"; interval: number }
-  | { status: "approved"; relay: DeviceRelayEnvelope; binding: DeviceBinding };
+  | { status: "approved"; relay: DeviceRelayEnvelope; binding: DeviceBinding; serverTime?: unknown };
 
 export interface DeviceAuthorizationInput {
   sessionDid: string;
@@ -117,6 +121,9 @@ export interface DeviceAuthorizationResult {
   declined: PermissionEntry[];
   /** OpenKey's unsigned report that the approving key is the account's primary key; absent when it did not say. */
   primary?: boolean;
+  /** Set only after successful node admission, or null with the reason the login stayed finite. */
+  renewal?: ApprovalRenewal | null;
+  renewalReason?: DeviceRenewalReason;
 }
 
 function digest(value: string): string {
@@ -441,6 +448,10 @@ function validateDevicePermissions(permissions: PermissionEntry[]): void {
  * verified session. Nothing is persisted here.
  */
 export async function acquireDeviceDelegation(input: DeviceAuthorizationInput): Promise<DeviceAuthorizationResult> {
+  return requestDeviceDelegation(input);
+}
+
+async function requestDeviceDelegation(input: DeviceAuthorizationInput & { renewalLeaseSeconds?: number }, captureAck?: (ack: () => Promise<void>) => void): Promise<DeviceAuthorizationResult> {
   assertNoCaveatLimits(input.permissions);
   validateDevicePermissions(input.permissions);
   // OpenKey's device flow admits one encryption entry, decrypt on the owner's own default network.
@@ -457,6 +468,10 @@ export async function acquireDeviceDelegation(input: DeviceAuthorizationInput): 
   if (!Number.isSafeInteger(ttlSeconds) || ttlSeconds < 60 || ttlSeconds > DEVICE_DELEGATION_MAX_SECONDS) {
     throw new CLIError("INVALID_EXPIRY", "Device authorization --expiry must be between 1 minute and 30 days.", ExitCode.USAGE_ERROR);
   }
+  const leaseSeconds = input.renewalLeaseSeconds;
+  const suggestedTtlSeconds = leaseSeconds !== undefined && input.expiry === undefined
+    ? Math.min(DEVICE_DELEGATION_SUGGESTED_SECONDS, ttlSeconds, leaseSeconds - 1)
+    : undefined;
   const reason = input.reason?.trim().slice(0, DEVICE_REASON_MAX_LENGTH);
   const openkeyHost = canonicalOrigin(input.openkeyHost ?? DEFAULT_OPENKEY_DEVICE_API_HOST, "OpenKey host");
   const nodeOrigin = canonicalOrigin(input.nodeOrigin, "TinyCloud node origin");
@@ -486,6 +501,8 @@ export async function acquireDeviceDelegation(input: DeviceAuthorizationInput): 
         nodeOrigin,
         shareOrigin,
         delegationTtlSeconds: ttlSeconds,
+        ...(suggestedTtlSeconds === undefined ? {} : { suggestedTtlSeconds }),
+        ...(leaseSeconds === undefined ? {} : { renewal: { version: 1, leaseLifetimeSeconds: leaseSeconds } }),
         ...(reason ? { reason } : {}),
       }),
     });
@@ -527,11 +544,13 @@ export async function acquireDeviceDelegation(input: DeviceAuthorizationInput): 
   while (Date.now() < deadline) {
     await wait(interval * 1000);
     let response: Response;
+    const pollStartedAt = performance.now();
     try {
       response = await fetchFn(`${openkeyHost}/api/device-authorizations/token`, {
         method: "POST",
         credentials: "omit",
         redirect: "error",
+        cache: "no-store",
         referrerPolicy: "no-referrer",
         headers: { accept: "application/json", "content-type": "application/json" },
         body: JSON.stringify({ transactionId: started.transactionId, deviceSecret, codeVerifier }),
@@ -541,6 +560,7 @@ export async function acquireDeviceDelegation(input: DeviceAuthorizationInput): 
       continue;
     }
     const value = await responseJson(response);
+    const receivedAt = performance.now();
     const code = errorCode(value);
     if (response.status >= 500 || (response.status === 429 && code !== "slow_down")) continue;
     if (code === "slow_down") {
@@ -564,8 +584,11 @@ export async function acquireDeviceDelegation(input: DeviceAuthorizationInput): 
       throw invalidResponse("OpenKey returned an invalid device authorization result");
     }
     const delegation = decryptRelayResult(result.relay, started.transactionId, relayKey);
+    const reason = delegation.renewalReason;
+    delete delegation.renewalReason;
+    let verified: DeviceAuthorizationResult;
     try {
-      return await verifyApproval({
+      verified = await verifyApproval({
         binding: result.binding,
         delegation,
         transactionId: started.transactionId,
@@ -583,6 +606,36 @@ export async function acquireDeviceDelegation(input: DeviceAuthorizationInput): 
       if (isPermanentRefusal(error)) carryRefusedDelegation(error, delegation);
       throw error;
     }
+    // verifyApproval validated these exact credentials; send only the Authorization header.
+    const { Authorization } = delegation.delegationHeader as OwnerRenewalOriginal["delegationHeader"];
+    const outcome = await admitDeviceRenewal({
+      renewal: delegation.renewal, reason, askedSeconds: leaseSeconds,
+      original: {
+        delegationHeader: { Authorization },
+        delegationCid: delegation.delegationCid as string,
+        verificationMethod: input.sessionDid,
+      },
+      ownerDid: verified.ownerDid, spaceId: verified.spaceId, expiresAt: verified.expiresAt, nodeOrigin,
+      serverTime: result.serverTime, pollStartedAt, receivedAt,
+    });
+    if (outcome.renewal) verified.session.renewal = outcome.renewal;
+    captureAck?.(async () => {
+      try {
+        const ack = await fetchFn(`${openkeyHost}/api/device-authorizations/${started.transactionId}/ack`, {
+          method: "POST",
+          credentials: "omit",
+          redirect: "error",
+          referrerPolicy: "no-referrer",
+          headers: { accept: "application/json", "content-type": "application/json" },
+          body: JSON.stringify({ deviceSecret, codeVerifier }),
+          signal: AbortSignal.timeout(5000),
+        });
+        if (!ack.ok) process.stderr.write(`Warning: Sign-in is saved, but OpenKey did not acknowledge delivery (HTTP ${ack.status}).\n`);
+      } catch {
+        process.stderr.write("Warning: Sign-in is saved, but OpenKey did not acknowledge delivery.\n");
+      }
+    });
+    return Object.assign(verified, outcome);
   }
   throw new CLIError("DEVICE_AUTH_EXPIRED", "OpenKey device authorization expired before approval. Run the command again.", ExitCode.AUTH_REQUIRED);
 }
@@ -594,6 +647,8 @@ export async function acquireDeviceDelegation(input: DeviceAuthorizationInput): 
  */
 export async function loginWithDeviceAuthorization(input: Omit<DeviceAuthorizationInput, "sessionDid" | "jwk"> & {
   profileName: string;
+  /** Owner renewal ask from `auth login --device`; other device flows omit it. */
+  renewalLeaseSeconds?: number;
   /** Explicitly allow replacing a live session that the new scope would narrow. */
   replaceSession?: boolean;
   /** Record `nodeOrigin` as the profile host (an explicit `--host`, or a profile without one). */
@@ -615,14 +670,15 @@ export async function loginWithDeviceAuthorization(input: Omit<DeviceAuthorizati
   const sessionDid = keyToDID(key);
   // OpenKey made the delegation before the CLI verified it: a permanent refusal is announced once (the key is deleted only
   // when this login made it, i.e. it was held in memory; a stored key is kept).
-  const result = await refusing({ profileName: input.profileName, key, storedKey: snapshot.key }, () => acquireDeviceDelegation({
+  let acknowledge: (() => Promise<void>) | undefined;
+  const result = await refusing({ profileName: input.profileName, key, storedKey: snapshot.key }, () => requestDeviceDelegation({
     ...input,
     permissions,
     sessionDid,
     jwk: key,
     openkeyHost: input.openkeyHost ?? resolveDeviceApiHost(existing),
     expectedOwner,
-  }));
+  }, (ack) => { acknowledge = ack; }));
   const profile: ProfileConfig = withOwnerKeyPrimary({
     ...existing,
     name: input.profileName,
@@ -640,13 +696,24 @@ export async function loginWithDeviceAuthorization(input: Omit<DeviceAuthorizati
   }, result.primary);
   // A device session never carries named-key authority.
   delete profile.namedKeys;
-  await commitLogin(input.profileName, snapshot, {
-    key,
-    session: result.session,
-    profile,
-    // The signed permissions, with their caveats; `approved` is the action summary.
-    approved: { scope: result.session.permissions, ownerDid: result.ownerDid, replaceSession: input.replaceSession === true },
-  });
+  try {
+    await commitLogin(input.profileName, snapshot, {
+      key,
+      session: result.session,
+      profile,
+      durable: true,
+      // The signed permissions, with their caveats; `approved` is the action summary.
+      approved: { scope: result.session.permissions, ownerDid: result.ownerDid, replaceSession: input.replaceSession === true },
+    });
+  } catch (error) {
+    if (result.renewal && error instanceof CLIError && error.code === "PROFILE_CHANGED_DURING_LOGIN") {
+      throw new CLIError(error.code,
+        `${error.message} The node admitted renewal lease ${result.renewal.receipt.leaseCid}; you can stop it under Renewing permissions in OpenKey Settings.`,
+        error.exitCode);
+    }
+    throw error;
+  }
+  await acknowledge?.();
   warnIfNotPrimaryKey(result.ownerDid, result.primary);
   announceFirstOwner(input.profileName, expectedOwner, result.ownerDid);
   return { profile, result };

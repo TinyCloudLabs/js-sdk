@@ -659,7 +659,7 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
     .option("--no-popup", "Print the OpenKey URL without opening a browser")
     .option("--method <method>", "Authentication method: local or openkey")
     .option("--manifest <fileOrBase64>", `Request only this manifest's permissions (one space, plus raw encryption network entries such as a secrets decrypt grant); ${SHARE_PUBLISHING_MANIFEST_REF} covers \`${CLI_NAME} share publish\``)
-    .option("--expiry <duration>", `OpenKey session lifetime, e.g. 1h or 7d (with --manifest: default 1h, or 7d for ${SHARE_PUBLISHING_MANIFEST_REF} so Share links keep their 7-day life; device login: at most 30d, default 30d)`)
+    .option("--expiry <duration>", `OpenKey session lifetime, e.g. 1h or 7d (with --manifest: default 1h, or 7d for ${SHARE_PUBLISHING_MANIFEST_REF}; device login: ceiling 30d, suggests 7d when asking for renewal)`)
     .option("--renew <duration>", "Ask the owner to let this sign-in renew itself for up to this long after approval, for example 30d. Default 30d, or none when the sign-in asks for encryption or secrets permissions. Must be longer than --expiry and at most 365d. The owner can approve it without renewal.")
     .option("--no-renew", "Ask for a sign-in that ends at its --expiry, with no renewal")
     .option("--owner <did>", "Sign in as this owner (did:pkh:eip155:CHAIN:ADDRESS): OpenKey preselects that key, e.g. one that is not the account's primary key, and an approval by any other identity is refused. With --manifest, also names the secrets owner for a manifest's `secrets` on a profile with no recorded owner")
@@ -674,8 +674,8 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
           throw new CLIError("INVALID_ARGUMENT", "--device and --paste are mutually exclusive.", ExitCode.USAGE_ERROR);
         }
         const renew: number | false | undefined = options.renew === undefined || options.renew === false ? options.renew : parseRenewOption(options.renew);
-        if (typeof renew === "number" && (options.device || options.paste || options.method === "local")) {
-          throw new CLIError("INVALID_ARGUMENT", "--renew needs OpenKey sign-in through an approval link: it can't be used with --device, --paste or --method local.", ExitCode.USAGE_ERROR);
+        if (typeof renew === "number" && (options.paste || options.method === "local")) {
+          throw new CLIError("INVALID_ARGUMENT", "--renew needs OpenKey sign-in: it can't be used with --paste or --method local.", ExitCode.USAGE_ERROR);
         }
         const scoped = options.device || options.manifest || options.expiry || options.owner;
         if (scoped && options.method === "local") {
@@ -719,12 +719,18 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
         const persistHost = globalOpts.host !== undefined;
 
         if (options.device) {
+          const expiry = options.expiry === undefined ? undefined : parseRequestedExpiry(parseExpiryOption(options.expiry)!);
+          const renewalLeaseSeconds = renewalLeaseFor(
+            renew ?? (withoutDefaultRenewal(loginPermissions!) ? false : undefined),
+            expiry === undefined ? 60 : Math.ceil(expiry.durationMs / 1000),
+          );
           const { profile, result } = await loginWithDeviceAuthorization({
             profileName: ctx.profile,
             nodeOrigin: ctx.host,
             shareOrigin: DEFAULT_SHARE_ORIGIN,
             permissions: loginPermissions!,
-            ...(options.expiry === undefined ? {} : { expiry: parseRequestedExpiry(parseExpiryOption(options.expiry)!) }),
+            expiry,
+            renewalLeaseSeconds,
             expectedOwner: owner,
             replaceSession: options.replaceSession === true,
             persistHost,
@@ -732,6 +738,9 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
           await persistReplicationLogin(ctx.profile, replicationOptions);
           if (replicationOptions.allowSecrets) writeReplicationSecretsWarning();
           reportDeclined(result.declined);
+          if (result.renewal === null) {
+            process.stderr.write(`Sign-in was saved without renewal (${result.renewalReason}) and ends at ${result.expiresAt}.\n`);
+          }
           // OpenKey hosts the space after the approval: wait for it before the first storage call can fail.
           await ensureSpaceSetup({ profile: ctx.profile, host: ctx.host }, result.session, result.session.permissions);
           outputJson({
@@ -747,6 +756,9 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
             permissions: result.approved,
             declined: result.declined,
             expiresAt: result.expiresAt,
+            ...(result.renewal === null ? { renewal: null, renewalReason: result.renewalReason }
+              : result.renewal ? { renewal: { leaseCid: result.renewal.receipt.leaseCid, leaseExpiresAt: result.renewal.receipt.leaseExpiresAt } }
+              : {}),
           });
           return;
         }
