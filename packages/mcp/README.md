@@ -376,6 +376,20 @@ missing row means the log status is not available, not that nothing happened.
 The allowed events and fields are listed in
 `packages/mcp/log-shipper/fields.json`, a copy of the central logging field list.
 
+The `dstack-ingress` service (TLS for `mcp.tinycloud.xyz`) does not use the
+image's nginx access log, which recorded the client address, the full request
+line (a whole `/connect?state=…` approval link), Referer, User-Agent and
+X-Forwarded-For in an unrotated file. Its `command` in the compose file removes
+that log and the error log file and writes one JSON line per request to stdout:
+known method, route class (`<other>` for a path not in its map), protocol,
+status, bytes and timings. Request errors log only at `emerg`. The container's
+Docker log is capped at 3 × 10 MB. When the server adds a route, add it to the
+map in the compose file. `packages/mcp/ingress/test-redacted-logging.sh`,
+run by the `MCP ingress logging` workflow, runs that command against the pinned
+image and fails if an approval link, token, header or client address reaches the
+container's output or a log file (TC-4260; the node's ingress has the same rule,
+TC-970).
+
 ### Post-deploy knowledge smoke
 
 After the `mcp-image.yml` deploy of `tinycloud-mcp` is live, QA runs the
