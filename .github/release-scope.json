@@ -15,7 +15,7 @@
   ],
   "baselines": {
     "@tinycloud/bootstrap": "2.10.0",
-    "@tinycloud/cli": "1.9.1",
+    "@tinycloud/cli": "1.9.2",
     "@tinycloud/courier": "0.8.2",
     "@tinycloud/node-sdk": "3.14.0",
     "@tinycloud/node-sdk-wasm": "1.8.0",
