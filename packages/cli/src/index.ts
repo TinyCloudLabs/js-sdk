@@ -2,6 +2,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  CHECK_TIMEOUT_MS,
   checkForUpdate,
   detectInstallKind,
   finishUpdateNotice,
@@ -21,22 +22,41 @@ const { version } = JSON.parse(
   readFileSync(new URL("../package.json", import.meta.url), "utf-8")
 );
 
-const updateCheck = isAutoUpdateEnabled(process.env)
+const updateCheckDeadline = Date.now() + CHECK_TIMEOUT_MS;
+let updateCheckSettled = false;
+const updateCheck = (isAutoUpdateEnabled(process.env)
   ? checkForUpdate({ currentVersion: version, cachePath: join(CONFIG_DIR, "update-check.json") }).catch(() => null)
-  : Promise.resolve(null);
+  : Promise.resolve(null)
+).finally(() => { updateCheckSettled = true; });
+
+async function flushOutput(): Promise<void> {
+  for (const stream of [process.stdout, process.stderr]) {
+    const flushed = Promise.withResolvers<void>();
+    stream.write("", () => flushed.resolve());
+    await flushed.promise;
+  }
+}
 
 registerUpdateNoticeFinalizer(async () => {
   // Only a command that finished cleanly gets the notice: a failing command's stderr is a structured JSON error
   // that callers parse, so nothing is appended to it.
-  if (program.opts().quiet === true || Number(process.exitCode ?? 0) !== 0) return;
-  const available = await updateCheck;
-  if (!available) return;
-  await new Promise<void>((resolve) => process.stdout.write("", () => resolve()));
-  await new Promise<void>((resolve) => process.stderr.write("", () => resolve()));
-  const packagePath = fileURLToPath(new URL("../", import.meta.url));
-  const installKind = detectInstallKind(packagePath, process.cwd(), homedir());
-  process.stderr.write(`${updateNotice(installKind, version, available)}\n`);
-  await new Promise<void>((resolve) => process.stderr.write("", () => resolve()));
+  if (program.opts().quiet !== true && Number(process.exitCode ?? 0) === 0) {
+    const deadline = Promise.withResolvers<null>();
+    setTimeout(() => deadline.resolve(null), Math.max(0, updateCheckDeadline - Date.now())).unref();
+    const available = await Promise.race([updateCheck, deadline.promise]);
+    if (available) {
+      await flushOutput();
+      const packagePath = fileURLToPath(new URL("../", import.meta.url));
+      const installKind = detectInstallKind(packagePath, process.cwd(), homedir());
+      process.stderr.write(`${updateNotice(installKind, version, available)}\n`);
+    }
+  }
+  // A check still in flight (a slow registry or DNS lookup) would hold the finished command open past the
+  // deadline, or a failing one for no notice at all. process.exit() keeps process.exitCode.
+  if (!updateCheckSettled) {
+    await flushOutput();
+    process.exit();
+  }
 });
 import { theme } from "./output/theme.js";
 import { setJsonOutputRequested, shouldOutputJson, outputWarnings } from "./output/formatter.js";

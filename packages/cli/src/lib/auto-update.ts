@@ -50,7 +50,7 @@ function compareVersions(left: ParsedVersion, right: ParsedVersion): number {
 }
 
 const DAY_MS = 24 * 60 * 60 * 1000;
-const CHECK_TIMEOUT_MS = 3_000;
+export const CHECK_TIMEOUT_MS = 3_000;
 const STALE_LOCK_MS = 120_000;
 
 type UpdateCache = { checkedAt: number; version: string | null };
