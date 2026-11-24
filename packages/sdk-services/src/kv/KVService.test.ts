@@ -2095,3 +2095,29 @@ describe("KVService stalled response bodies over loopback HTTP (TC-834)", () => 
     await expectSocketClosed();
   });
 });
+
+describe("KVService list on a space the node never hosted (TC-3566)", () => {
+  function service(status: number, body: string) {
+    const svc = new KVService({});
+    svc.initialize(createContext(async () => response(false, status, body)));
+    return svc;
+  }
+
+  test("a 404 'Space not found' is SPACE_NOT_HOSTED, with the status and message kept", async () => {
+    const result = await service(404, "Space not found").list({ prefix: "app/" });
+    expect(result).toMatchObject({
+      ok: false,
+      error: { code: ErrorCodes.SPACE_NOT_HOSTED, message: "Failed to list keys: 404 - Space not found", meta: { status: 404 } },
+    });
+  });
+
+  test("any other 404 stays NETWORK_ERROR", async () => {
+    const result = await service(404, "something else is missing").list({ prefix: "app/" });
+    expect(result).toMatchObject({ ok: false, error: { code: ErrorCodes.NETWORK_ERROR, meta: { status: 404 } } });
+  });
+
+  test("'Space not found' text on a non-404 status stays NETWORK_ERROR", async () => {
+    const result = await service(500, "Space not found").list({ prefix: "app/" });
+    expect(result).toMatchObject({ ok: false, error: { code: ErrorCodes.NETWORK_ERROR, meta: { status: 500 } } });
+  });
+});

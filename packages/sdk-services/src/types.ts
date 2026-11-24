@@ -111,6 +111,8 @@ export const ErrorCodes = {
   KV_SYNC_RESET_REQUIRED: "KV_SYNC_RESET_REQUIRED",
   /** HTTP 403 from the change feed: the retention grant was refused; `meta.reason` says why. */
   KV_RETENTION_GRANT_REFUSED: "KV_RETENTION_GRANT_REFUSED",
+  /** HTTP 404 "Space not found" from a list: the node has no hosted space by that name, so there is nothing to list yet. */
+  SPACE_NOT_HOSTED: "SPACE_NOT_HOSTED",
 
   // SQL-specific errors
   SQL_ERROR: "SQL_ERROR",
