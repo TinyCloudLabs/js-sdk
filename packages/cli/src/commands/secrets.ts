@@ -1276,7 +1276,37 @@ export function secretMigrateKeyPermissions(networkId: string, keyPaths: readonl
 export function secretMigrateKeyReason(index: number, count: number): string {
   return count === 1
     ? "Give each secret being moved its own key. This reaches only those secrets, not the rest of your encrypted data."
-    : `Give each secret being moved its own key (approval ${index} of ${count}). This reaches only those secrets, not the rest of your encrypted data.`;
+    : `Give each secret being moved its own key (key approval ${index} of ${count}). This reaches only those secrets, not the rest of your encrypted data.`;
+}
+
+/** The earliest expiry among the key grants already approved for these batches; undefined if any is not held. */
+function heldKeyExpiry(node: TinyCloudNode, batches: readonly PermissionEntry[][]): Date | undefined {
+  let earliest: Date | undefined;
+  for (const permissions of batches) {
+    const expiries = node.getRuntimePermissionDelegations(permissions).map((delegation) => delegation.expiry.getTime());
+    if (expiries.length === 0) return undefined;
+    const expiry = new Date(Math.min(...expiries));
+    if (earliest === undefined || expiry < earliest) earliest = expiry;
+  }
+  return earliest;
+}
+
+/**
+ * Key approval `index` of a split move failed, so nothing moved: say so, and which earlier key approvals stay held
+ * until when (Monica, TC-4248). Code and exit status stay the failure's own; a network failure keeps its own message,
+ * as does a failure whose held approvals can't be dated.
+ */
+export function secretMigrateKeyDeclined(error: unknown, index: number, count: number, heldUntil: Date | undefined): unknown {
+  if (!(error instanceof CLIError) || error.exitCode === ExitCode.NETWORK_ERROR) return error;
+  if (index > 1 && heldUntil === undefined) return error;
+  const until = heldUntil?.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+  const held = index === 1 ? ""
+    : index === 2 ? ` Key approval 1 stays valid until ${until} and reaches only those secrets' keys.`
+    : ` Key approvals 1 to ${index - 1} stay valid until ${until} and reach only those secrets' keys.`;
+  return Object.assign(
+    new CLIError(error.code, `Key approval ${index} of ${count} was declined, so no secret was moved.${held} To move the secrets, run \`${CLI_NAME} secrets migrate\`.`, error.exitCode, error.metadata),
+    { cause: error },
+  );
 }
 
 /**
@@ -2110,7 +2140,13 @@ export function registerSecretsCommand(
           authorizeKeys = async (keyPaths) => {
             const batches = await plan(keyPaths);
             for (const [index, batch] of batches.entries()) {
-              await approve(secretMigrateKeyPermissions(networkId, batch), secretMigrateKeyReason(index + 1, batches.length));
+              try {
+                await approve(secretMigrateKeyPermissions(networkId, batch), secretMigrateKeyReason(index + 1, batches.length));
+              } catch (error) {
+                if (batches.length === 1) throw error;
+                const held = batches.slice(0, index).map((earlier) => secretMigrateKeyPermissions(networkId, earlier));
+                throw secretMigrateKeyDeclined(error, index + 1, batches.length, heldKeyExpiry(node, held));
+              }
             }
           };
         }

@@ -1,6 +1,7 @@
 import { afterAll, beforeEach, expect, mock, test } from "bun:test";
 import { Command } from "commander";
 import type { PermissionEntry } from "@tinycloud/node-sdk";
+import { ExitCode } from "../config/constants.js";
 
 // TC-4248: an owner `secrets migrate` of many secrets asks for their keys in as many approvals as the activation
 // origin's header limit needs: one at a 256k ingress, several at 32k, one after another before anything moves, each
@@ -16,6 +17,9 @@ let outputs: Record<string, unknown>[] = [];
 let errors: unknown[] = [];
 let stderr: string[] = [];
 let ingressLimit = 0;
+/** The 1-based number of the key approval the owner declines (approval 0 is the kv + network one); 0: none. */
+let declineKeyApproval = 0;
+const HELD_UNTIL = new Date(2026, 10, 24, 14, 41);
 let checkedOrigins: string[] = [];
 
 mock.module("../config/profiles.js", () => ({
@@ -35,6 +39,7 @@ const node = {
   getEncryptionNetworkIdForSpace: () => NETWORK_ID,
   secrets: {},
   resolveRegisteredDelegationHost: async () => "https://enc.tinycloud.test",
+  getRuntimePermissionDelegations: () => [{ expiry: HELD_UNTIL }],
 };
 // Imported after mock.module so the command under test loads the mocks (as secrets-migrate.approvals.test.ts).
 const realSdk = await import("../lib/sdk.js");
@@ -44,6 +49,9 @@ const realAuth = await import("./auth.js");
 mock.module("./auth.js", () => ({
   ...realAuth,
   ensureDelegationAuthority: async (params: { requested: PermissionEntry[]; reason: string }) => {
+    if (declineKeyApproval > 0 && approvals.length === declineKeyApproval) {
+      throw new realErrors.CLIError("CANCELLED", "Interrupted before approval.", ExitCode.CANCELLED);
+    }
     approvals.push({ requested: params.requested, reason: params.reason });
   },
 }));
@@ -107,6 +115,7 @@ beforeEach(() => {
   stderr = [];
   checkedOrigins = [];
   moved = 0;
+  declineKeyApproval = 0;
 });
 
 test("at a 256k ingress, 140 keys are one key approval with today's reason", async () => {
@@ -132,7 +141,7 @@ test("at a 32k ingress, the keys are split into numbered exact-key approvals ask
   const asked = keyApprovals();
   expect(asked.length).toBeGreaterThan(1);
   expect(asked.map((approval) => approval.reason)).toEqual(asked.map((_, i) =>
-    `Give each secret being moved its own key (approval ${i + 1} of ${asked.length}). This reaches only those secrets, not the rest of your encrypted data.`));
+    `Give each secret being moved its own key (key approval ${i + 1} of ${asked.length}). This reaches only those secrets, not the rest of your encrypted data.`));
   expect(asked.flatMap((approval) => keyPathsOf(approval.requested))).toEqual([...KEYS].sort());
   for (const approval of asked) {
     for (const entry of approval.requested) {
@@ -156,4 +165,39 @@ test("a dry run reports the plan and asks for no key", async () => {
   expect(approvals).toHaveLength(1);
   expect(outputs[0]!.keyApprovals).toEqual({ requests: 1, budgetBytes: 183_488, budgetSource: "measured" });
   expect(moved).toBe(0);
+});
+
+for (const [declined, held] of [
+  [2, "Key approval 1 stays valid until 2:41 PM and reaches only those secrets' keys."],
+  [3, "Key approvals 1 to 2 stay valid until 2:41 PM and reach only those secrets' keys."],
+] as const) {
+  test(`a split move whose key approval ${declined} is declined moves nothing and says which key approvals stay held`, async () => {
+    ingressLimit = 32_751;
+    declineKeyApproval = declined;
+
+    await migrate();
+
+    expect(moved).toBe(0);
+    expect(outputs).toEqual([]);
+    expect(keyApprovals()).toHaveLength(declined - 1);
+    const [error] = errors as { code: string; exitCode: number; message: string }[];
+    const n = Number(/ of (\d+) was declined/.exec(error!.message)?.[1]);
+    expect(n).toBeGreaterThan(declined);
+    expect({ code: error!.code, exitCode: error!.exitCode, message: error!.message }).toEqual({
+      code: "CANCELLED",
+      exitCode: ExitCode.CANCELLED,
+      message: `Key approval ${declined} of ${n} was declined, so no secret was moved. ${held} To move the secrets, run \`tc secrets migrate\`.`,
+    });
+  });
+}
+
+test("a move asked in one key approval keeps today's error when it is declined", async () => {
+  ingressLimit = 256 * 1024 - 17;
+  declineKeyApproval = 1;
+
+  await migrate();
+
+  expect(moved).toBe(0);
+  expect(errors).toHaveLength(1);
+  expect((errors[0] as Error).message).toBe("Interrupted before approval.");
 });

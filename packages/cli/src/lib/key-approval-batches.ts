@@ -20,6 +20,8 @@ const BASE_RESERVE_BYTES = 3_000;
 const MAX_HALVINGS = 3;
 const CHECK_TIMEOUT_MS = 10_000;
 const CHECK_HEADER = "X-TinyCloud-Header-Check";
+/** nginx's "too large" page is ~200 B; more of a refusal body than this is never read. */
+const MAX_ERROR_BODY_BYTES = 4096;
 
 /**
  * Estimated `Authorization` bytes one exact-key resource adds when granted [decrypt, key.create]: the ReCap prose
@@ -93,11 +95,33 @@ export async function checkHeaderFits(
     await response.body?.cancel().catch(() => undefined);
     return "fits";
   }
-  const body = await response.text().catch(() => "");
-  if (response.status === 431 || (response.status === 400 && /Request Header Or Cookie Too Large/i.test(body))) {
+  if (response.status === 431) {
+    await response.body?.cancel().catch(() => undefined);
     return "too_large";
   }
-  return "unknown";
+  const body = await readHead(response, MAX_ERROR_BODY_BYTES);
+  return response.status === 400 && /Request Header Or Cookie Too Large/i.test(body) ? "too_large" : "unknown";
+}
+
+/** The first `limit` bytes of a response body as text; the rest is never read. */
+async function readHead(response: Response, limit: number): Promise<string> {
+  const reader = response.body?.getReader();
+  if (reader === undefined) return "";
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  try {
+    while (size < limit) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      chunks.push(value.subarray(0, limit - size));
+      size += Math.min(value.length, limit - size);
+    }
+  } catch {
+    // A body that fails part way is judged on what arrived.
+  } finally {
+    await reader.cancel().catch(() => undefined);
+  }
+  return new TextDecoder().decode(Buffer.concat(chunks));
 }
 
 export interface KeyApprovalPlan {

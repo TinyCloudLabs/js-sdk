@@ -55,11 +55,11 @@ async function signedHeaderBytes(resources: string[]): Promise<number> {
 
 /** An ingress that accepts header values up to `limit` bytes and answers like nginx above it. */
 function ingress(limit: number) {
-  const checks: { url: string; headers: Record<string, string>; bytes: number }[] = [];
+  const checks: { url: string; headers: Record<string, string>; bytes: number; redirect?: RequestRedirect }[] = [];
   const fetchImpl = (async (url: URL, init: RequestInit) => {
     const headers = init.headers as Record<string, string>;
     const bytes = Math.max(...Object.values(headers).map((value) => value.length));
-    checks.push({ url: String(url), headers, bytes });
+    checks.push({ url: String(url), headers, bytes, redirect: init.redirect });
     return bytes <= limit
       ? new Response('{"version":"1.26.24"}', { status: 200 })
       : new Response("<html><head><title>400 Request Header Or Cookie Too Large</title></head></html>", { status: 400 });
@@ -165,6 +165,23 @@ describe("checkHeaderFits", () => {
 
     expect(await checkHeaderFits("https://node.test/some/path", 5_000, fetchImpl)).toBe("fits");
 
-    expect(checks).toEqual([{ url: "https://node.test/version", headers: { "X-TinyCloud-Header-Check": "a".repeat(5_000) }, bytes: 5_000 }]);
+    expect(checks).toEqual([{
+      url: "https://node.test/version", headers: { "X-TinyCloud-Header-Check": "a".repeat(5_000) }, bytes: 5_000, redirect: "manual",
+    }]);
+  });
+
+  test("reads at most 4 KB of a refusal: a too-large page past that, or an endless body, is not a clear answer", async () => {
+    let pulled = 0;
+    const endless = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        pulled += 1024;
+        controller.enqueue(new Uint8Array(1024).fill(0x20));
+      },
+    });
+    const late = " ".repeat(5_000) + "400 Request Header Or Cookie Too Large";
+
+    expect(await checkHeaderFits(ORIGIN, 5_000, (async () => new Response(endless, { status: 400 })) as unknown as typeof fetch)).toBe("unknown");
+    expect(pulled).toBeLessThanOrEqual(8 * 1024);
+    expect(await checkHeaderFits(ORIGIN, 5_000, (async () => new Response(late, { status: 400 })) as unknown as typeof fetch)).toBe("unknown");
   });
 });
