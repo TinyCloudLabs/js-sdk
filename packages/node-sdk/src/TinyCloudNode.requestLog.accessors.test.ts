@@ -80,6 +80,7 @@ describe("TinyCloudNode request log, developer mode on, every threaded accessor"
     const fixture = await createHermeticEncryptedNode();
     const node = new TinyCloudNode({
       host: fixture.host,
+      tinycloudRegistryUrl: fixture.host,
       wasmBindings: new NodeWasmBindings(),
       requestLog: true,
     });
