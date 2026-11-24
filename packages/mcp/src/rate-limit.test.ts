@@ -3,8 +3,10 @@ import { describe, expect, test } from "bun:test";
 import {
   clientAddress,
   createRateLimiter,
+  createRateLimits,
   rateLimitFromEnv,
   rateLimitedToolResult,
+  refuseAuthenticated,
   toolClass,
   DEFAULT_RATE_LIMITS,
 } from "./rate-limit.js";
@@ -73,6 +75,21 @@ describe("client address", () => {
     expect(clientAddress(request(), 1)).toBe("unknown");
     expect(clientAddress(request("1.1.1.1"), 2)).toBe("unknown");
     expect(clientAddress(request("1.1.1.1"), 0)).toBeUndefined();
+  });
+});
+
+describe("authenticated request ceilings", () => {
+  test("a request its subject refuses gives back its client charge, so other users of that client keep the cap", () => {
+    const limits = createRateLimits({
+      ...DEFAULT_RATE_LIMITS,
+      client: { perMinute: 1, burst: 2 },
+      subjectRequests: { perMinute: 1, burst: 1 },
+      now: () => 1_000_000,
+    });
+    expect(refuseAuthenticated(limits, "chatgpt", "alice")).toBeUndefined();
+    for (let index = 0; index < 5; index += 1) expect(refuseAuthenticated(limits, "chatgpt", "alice")?.status).toBe(429);
+    expect(refuseAuthenticated(limits, "chatgpt", "bob")).toBeUndefined();
+    expect(refuseAuthenticated(limits, "chatgpt", "carol")?.status).toBe(429);
   });
 });
 

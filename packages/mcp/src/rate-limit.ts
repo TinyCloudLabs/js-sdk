@@ -27,8 +27,10 @@ export interface RateLimitConfig {
   /** Per client address: the `/connect` approval route, and bearer tokens the server has to reject. */
   readonly ip: RateRule;
   /**
-   * Trusted reverse proxies in front of the server. The client address is the Nth entry from the right
-   * of `X-Forwarded-For`. 0 turns address limits off (the header is client-controlled without a trusted proxy).
+   * Trusted reverse proxies in front of the server: set it to their exact count. The client address is the Nth
+   * entry from the right of `X-Forwarded-For`. 0 (the default) turns address limits off entirely, with no
+   * per-address or shared bucket: without a trusted proxy the header is client-controlled, and behind a TLS
+   * pass-through ingress the server sees no client address at all.
    */
   readonly trustedProxyHops: number;
   /** Cap on tracked keys; the oldest key is dropped first. */
@@ -57,7 +59,7 @@ export const DEFAULT_RATE_LIMITS: Omit<RateLimitConfig, "now"> = {
   subjectRequests: { perMinute: 240, burst: 60 },
   client: { perMinute: 6000, burst: 600 },
   ip: { perMinute: 60, burst: 20 },
-  trustedProxyHops: 1,
+  trustedProxyHops: 0,
   maxKeys: 10_000,
 };
 
@@ -192,13 +194,18 @@ export function refundAddress(limits: RateLimits, request: Request, bucket: stri
   if (address !== undefined) limits.limiter.refund(bucket, address, limits.config.ip);
 }
 
-/** 429 when an authenticated request is over its OAuth client's or its subject's request ceiling. */
+/**
+ * 429 when an authenticated request is over its OAuth client's or its subject's request ceiling. A request its
+ * subject refuses gives its client charge back, so one subject's flood does not spend the client's shared cap.
+ */
 export function refuseAuthenticated(limits: RateLimits, clientId: string, subject: unknown): Response | undefined {
   const byClient = limits.limiter.take("client", clientId, limits.config.client);
   if (!byClient.allowed) return rateLimitedResponse(byClient.retryAfterSeconds);
   if (typeof subject !== "string" || subject.length === 0) return undefined;
   const bySubject = limits.limiter.take("subject", subject, limits.config.subjectRequests);
-  return bySubject.allowed ? undefined : rateLimitedResponse(bySubject.retryAfterSeconds);
+  if (bySubject.allowed) return undefined;
+  limits.limiter.refund("client", clientId, limits.config.client);
+  return rateLimitedResponse(bySubject.retryAfterSeconds);
 }
 
 const ON_VALUES = ["1", "true", "on", "yes"];
@@ -223,7 +230,7 @@ function limitFromEnv(value: string | undefined, name: string, fallback: RateRul
 /**
  * Rate limits from the environment. Off unless `TC_MCP_RATE_LIMIT` is 1/true/on/yes; when on, the defaults apply
  * except where a `TC_MCP_RATE_LIMIT_<NAME>_PER_MINUTE` (CONNECT, READ, WRITE, SUBJECT, CLIENT, IP) or
- * `TC_MCP_TRUSTED_PROXY_HOPS` overrides one.
+ * `TC_MCP_TRUSTED_PROXY_HOPS` overrides one. Address limits stay off unless `TC_MCP_TRUSTED_PROXY_HOPS` is at least 1.
  */
 export function rateLimitFromEnv(env: Readonly<Record<string, string | undefined>>): RateLimitConfig | undefined {
   const flag = (env.TC_MCP_RATE_LIMIT ?? "").trim().toLowerCase();

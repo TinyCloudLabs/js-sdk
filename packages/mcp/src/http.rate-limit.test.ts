@@ -1,5 +1,5 @@
 import "../../operations/test-support/test-bootstrap.mjs";
-import { afterEach, expect, setDefaultTimeout, test } from "bun:test";
+import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { generateKeyPair, exportJWK, SignJWT } from "jose";
 import { createServer, type Server } from "node:http";
 import { mkdtemp, rm } from "node:fs/promises";
@@ -9,7 +9,7 @@ import { join } from "node:path";
 import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
 
 import { createHostedMcpApp, type HostedMcpApp, type HostedMcpConfig } from "./http.js";
-import type { RateLimitConfig } from "./rate-limit.js";
+import { rateLimitFromEnv, type RateLimitConfig } from "./rate-limit.js";
 import { registerMcpFixtureServer, resetMcpRegistryFixture } from "./test-support/registry-fixture.mjs";
 
 const resources: Array<() => Promise<void>> = [];
@@ -274,6 +274,53 @@ test("an OpenKey introspection outage is a 500, not a bad token: the address is 
   expect((await attempt("Bearer not-a-token")).status).toBe(401);
   expect((await attempt("Bearer not-a-token")).status).toBe(401);
   expect((await attempt("Bearer not-a-token")).status).toBe(429);
+});
+
+describe("trusted proxy hops from the environment", () => {
+  // An address burst of 1, so a single charged request would empty an address's bucket.
+  const fromEnv = (extra: Record<string, string> = {}) =>
+    rateLimitFromEnv({ TC_MCP_RATE_LIMIT: "on", TC_MCP_RATE_LIMIT_IP_PER_MINUTE: "1", ...extra })!;
+  const badToken = (app: HostedMcpApp, forwarded?: string) => hostedFetch(app, "https://mcp.test/mcp", {
+    method: "POST",
+    headers: {
+      authorization: "Bearer not-a-token",
+      "content-type": "application/json",
+      accept: "application/json, text/event-stream",
+      ...(forwarded === undefined ? {} : { "x-forwarded-for": forwarded }),
+    },
+    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
+  });
+  const connectPage = (app: HostedMcpApp, forwarded?: string) => hostedFetch(app, "https://mcp.test/connect?state=missing", {
+    headers: forwarded === undefined ? {} : { "x-forwarded-for": forwarded },
+  });
+
+  test("unset, address limits are off: rotating X-Forwarded-For and bad tokens never get an address 429", async () => {
+    const config = fromEnv();
+    expect(config.trustedProxyHops).toBe(0);
+    const { app } = await start(config);
+    for (let index = 0; index < 5; index += 1) {
+      expect((await badToken(app, `198.51.100.${index}`)).status).toBe(401);
+      expect((await badToken(app, "198.51.100.200")).status).toBe(401);
+      expect((await connectPage(app, `198.51.100.${index}`)).status).not.toBe(429);
+    }
+    // A client that sends no X-Forwarded-For is not locked out by the failures above, nor by its own.
+    for (let index = 0; index < 3; index += 1) {
+      expect((await badToken(app)).status).toBe(401);
+      expect((await connectPage(app)).status).not.toBe(429);
+    }
+  });
+
+  test("set to 1, address limits apply as before", async () => {
+    const config = fromEnv({ TC_MCP_TRUSTED_PROXY_HOPS: "1" });
+    expect(config.trustedProxyHops).toBe(1);
+    const { app } = await start(config);
+    expect((await badToken(app, "198.51.100.1")).status).toBe(401);
+    expect((await badToken(app, "198.51.100.1")).status).toBe(429);
+    expect((await badToken(app, "6.6.6.6, 198.51.100.1")).status).toBe(429);
+    expect((await badToken(app, "198.51.100.2")).status).toBe(401);
+    expect((await connectPage(app, "198.51.100.3")).status).not.toBe(429);
+    expect((await connectPage(app, "198.51.100.3")).status).toBe(429);
+  });
 });
 
 async function hostedFetch(app: HostedMcpApp, input: Parameters<typeof fetch>[0], init?: RequestInit): Promise<Response> {
