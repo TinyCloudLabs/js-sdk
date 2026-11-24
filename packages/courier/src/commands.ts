@@ -20,7 +20,7 @@ import { revokePeer } from './revoke.js';
 import { courierNode, peerKv, currentInbound, assertInboundLive, renewalBinding } from './node.js';
 import { REVOKE_URL } from './grant-refusal.js';
 import { courierGrantRequest, grantFromInput, installRefusing, isShortCode, noSpaceError, pendingSpaceError, receiveGrant, resumeAwaitingGrant, resumeGrant } from './grant.js';
-import { completeApproval, DEFAULT_WAIT_MS, MAX_WAIT_MS, renewalLeaseFor, requestApproval, waitApproval } from './grant-request.js';
+import { assertWaitKeepsSaved, completeApproval, DEFAULT_WAIT_MS, MAX_WAIT_MS, renewalLeaseFor, requestApproval, waitApproval } from './grant-request.js';
 import { approvalPhase, assertPendingReadable, clearPending, holdsApproval, loadPending, readApprovalEntry, stageOf } from './approval-phase.js';
 import {
   artifactA, artifactWithDelegation, parseArtifact, peerRecordBody, validateArtifactIdentity,
@@ -109,7 +109,8 @@ export async function cmdInit(args: ParsedArgs) {
   if (renewFlag !== undefined && !args.has('request') && !args.has('wait') && !args.has('resume')) {
     fail('usage', '--renew needs --request or --wait: only the approval link can ask the owner for a renewal.');
   }
-  renewalLeaseFor(renewFlag, Math.floor(expiryMs / 1000));
+  // A plain `--wait` without --expiry checks --renew against the saved request's lifetime instead (assertWaitKeepsSaved).
+  if (!args.has('wait') || args.has('rotate-key') || args.get('expiry') !== undefined) renewalLeaseFor(renewFlag, Math.floor(expiryMs / 1000));
   if (args.has('resume') && (args.has('request') || args.has('grant-file') || args.has('paste') || args.has('rotate-key'))) {
     fail('usage', `\`${cmd('init --resume')}\` cannot be combined with --request, --grant-file, --paste or --rotate-key.`);
   }
@@ -192,6 +193,8 @@ export async function cmdInit(args: ParsedArgs) {
   profile.label = labelFlag ?? profile.label;
   if (handleFlag) profile.selfHandle = handleFlag;
   profile.courierDid = bareDid(key.did);
+  // `--wait` never replaces a saved request, nor installs an approval against other hosts: refused before this run's flags are saved.
+  if (args.has('wait') && !rotate) assertWaitKeepsSaved(profile, key, args.get('expiry'), { openkeyApiHost: apiHostFlag, renew: renewFlag });
   if (rotate) {
     profile.peers = {};
     profile.ownerDid = undefined;
@@ -209,7 +212,7 @@ export async function cmdInit(args: ParsedArgs) {
 
   if (args.has('request')) {
     const pending = await requestApproval(profile, key, args.get('expiry'), { openkeyApiHost: apiHostFlag, renew: renewFlag });
-    console.error(`Send the owner this link to approve (it expires ${pending.requestExpiresAt}). Copy it exactly, never retype it:\n${pending.approvalUrl}\nThen run \`${cmd('init --wait --timeout 60s')}\` to collect the approval.`);
+    console.error(`Send the owner this link to approve (it expires ${pending.requestExpiresAt}). Copy it exactly, never retype it:\n${pending.approvalUrl}\nThen run \`${cmd('init --wait --timeout 60s')}\` to collect the approval. --wait uses the saved request, so do not repeat --expiry or --renew.`);
     console.error(initRequestNextLine());
     // A resumed request keeps the lifetime it was made with.
     const lifetime = pending.request.grantLifetimeSeconds * 1000 === expiryMs ? expiry : `${pending.request.grantLifetimeSeconds}s`;

@@ -59,6 +59,7 @@ import { abortableSleep, DEFAULT_WAIT_TIMEOUT, parseWaitTimeout, runSecretsWait 
 import { isBotHistoryScope, secretKeyResource, secretKeyResourceForVaultPath, isOverlongStoredScope, unreadableSecretNote } from "../lib/secret-keys.js";
 import { canonicalNetworkUrn } from "../lib/owner-did.js";
 import { migrateSecrets } from "@tinycloud/sdk-services/secrets/migrate";
+import { keyApprovalsLine, planKeyApprovals, type KeyApprovalPlan } from "../lib/key-approval-batches.js";
 import { resolveProfilePosture, type CLIContext, type ProfileConfig } from "../config/types.js";
 import {
   ensureDelegationAuthority,
@@ -1271,6 +1272,61 @@ export function secretMigrateKeyPermissions(networkId: string, keyPaths: readonl
   }));
 }
 
+/** The reason on each key approval: today's text when one request holds every key, numbered when the move is split. */
+export function secretMigrateKeyReason(index: number, count: number): string {
+  return count === 1
+    ? "Give each secret being moved its own key. This reaches only those secrets, not the rest of your encrypted data."
+    : `Give each secret being moved its own key (key approval ${index} of ${count}). This reaches only those secrets, not the rest of your encrypted data.`;
+}
+
+/** The earliest expiry among the key grants already approved for these batches; undefined if any is not held. */
+function heldKeyExpiry(node: TinyCloudNode, batches: readonly PermissionEntry[][]): Date | undefined {
+  let earliest: Date | undefined;
+  for (const permissions of batches) {
+    const expiries = node.getRuntimePermissionDelegations(permissions).map((delegation) => delegation.expiry.getTime());
+    if (expiries.length === 0) return undefined;
+    const expiry = new Date(Math.min(...expiries));
+    if (earliest === undefined || expiry < earliest) earliest = expiry;
+  }
+  return earliest;
+}
+
+/**
+ * Key approval `index` of a split move failed, so nothing moved: say so, and which earlier key approvals stay held
+ * until when (Monica, TC-4248). Code and exit status stay the failure's own; a network failure keeps its own message,
+ * as does a failure whose held approvals can't be dated.
+ */
+export function secretMigrateKeyDeclined(error: unknown, index: number, count: number, heldUntil: Date | undefined): unknown {
+  if (!(error instanceof CLIError) || error.exitCode === ExitCode.NETWORK_ERROR) return error;
+  if (index > 1 && heldUntil === undefined) return error;
+  const until = heldUntil?.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+  const held = index === 1 ? ""
+    : index === 2 ? ` Key approval 1 stays valid until ${until} and reaches only those secrets' keys.`
+    : ` Key approvals 1 to ${index - 1} stay valid until ${until} and reach only those secrets' keys.`;
+  return Object.assign(
+    new CLIError(error.code, `Key approval ${index} of ${count} was declined, so no secret was moved.${held} To move the secrets, run \`${CLI_NAME} secrets migrate\`.`, error.exitCode, error.metadata),
+    { cause: error },
+  );
+}
+
+/**
+ * The origin the key approvals are activated on: the registry's route for the network when it has one, else the
+ * profile's host. Undefined when routing fails, so the plan falls back to the 32k budget.
+ */
+async function secretMigrateActivationOrigin(
+  node: TinyCloudNode,
+  networkId: string,
+  keyPaths: readonly string[],
+  host: string,
+): Promise<string | undefined> {
+  if (keyPaths.length === 0) return undefined;
+  try {
+    return (await node.resolveRegisteredDelegationHost(secretMigrateKeyPermissions(networkId, keyPaths.slice(0, 1)), host)) ?? host;
+  } catch {
+    return undefined;
+  }
+}
+
 function formatSecretScopeFlag(options: SecretScopeOptions | undefined): string {
   return options?.scope ? ` --scope ${JSON.stringify(options.scope)}` : "";
 }
@@ -2043,6 +2099,8 @@ export function registerSecretsCommand(
         const networkId = secretMigrateNetworkId(node, spaceUri);
         const dryRun = options.dryRun === true;
         let authorizeKeys: ((keyPaths: readonly string[]) => Promise<void>) | undefined;
+        let previewKeys: ((keyPaths: readonly string[]) => Promise<void>) | undefined;
+        let keyApprovals: { requests: number; budgetBytes: number; budgetSource: KeyApprovalPlan["budgetSource"] } | undefined;
         if (!authOptions(options)?.privateKey) {
           const profile = await ProfileManager.getProfile(ctx.profile);
           if (!canRequestOwnerPermissions(profile)) {
@@ -2068,9 +2126,28 @@ export function registerSecretsCommand(
               ? secretCommandReason("list")
               : "Give each of your older-format secrets its own key. This needs access to all your encrypted data, because only that access can read the older format.",
           );
-          // Each secret's own key, named one by one once the list is known: never the whole `secrets/` prefix.
+          // Each secret's own key, named one by one once the list is known: never the whole `secrets/` prefix. Split so
+          // each signed request fits the node's header limit (TC-4248); the requests follow one another with nothing in
+          // between, and nothing moves until the last is approved.
+          const plan = async (keyPaths: readonly string[]) => {
+            const planned = await planKeyApprovals(keyPaths, (keyPath) => secretKeyResource(networkId, keyPath),
+              await secretMigrateActivationOrigin(node, networkId, keyPaths, ctx.host));
+            keyApprovals = { requests: planned.batches.length, budgetBytes: planned.budgetBytes, budgetSource: planned.budgetSource };
+            process.stderr.write(keyApprovalsLine(keyApprovals) + "\n");
+            return planned.batches;
+          };
+          previewKeys = async (keyPaths) => { await plan(keyPaths); };
           authorizeKeys = async (keyPaths) => {
-            await approve(secretMigrateKeyPermissions(networkId, keyPaths), "Give each secret being moved its own key. This reaches only those secrets, not the rest of your encrypted data.");
+            const batches = await plan(keyPaths);
+            for (const [index, batch] of batches.entries()) {
+              try {
+                await approve(secretMigrateKeyPermissions(networkId, batch), secretMigrateKeyReason(index + 1, batches.length));
+              } catch (error) {
+                if (batches.length === 1) throw error;
+                const held = batches.slice(0, index).map((earlier) => secretMigrateKeyPermissions(networkId, earlier));
+                throw secretMigrateKeyDeclined(error, index + 1, batches.length, heldKeyExpiry(node, held));
+              }
+            }
           };
         }
         // No spinner around the run: the key approval inside it may open a browser and print to stderr.
@@ -2079,11 +2156,12 @@ export function registerSecretsCommand(
           ...(options.scope ? { scope: options.scope } : {}),
           dryRun,
           ...(authorizeKeys === undefined ? {} : { authorizeKeys }),
+          ...(previewKeys === undefined ? {} : { previewKeys }),
         });
         if (!result.ok) {
           throw cliErrorFromService(result.error);
         }
-        outputJson({ ...result.data, ...(spaceUri ? { space: spaceUri } : {}) });
+        outputJson({ ...result.data, ...(spaceUri ? { space: spaceUri } : {}), ...(keyApprovals ? { keyApprovals } : {}) });
       } catch (error) {
         return handleError(error);
       }

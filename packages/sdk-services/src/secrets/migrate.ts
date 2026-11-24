@@ -18,9 +18,14 @@ export interface SecretMigrateOptions {
   dryRun?: boolean;
   /**
    * Called once, before anything moves and never on a dry run, with the exact key path of every selected secret that
-   * has one, so a caller can get decrypt and key creation on exactly those keys. A throw stops the migration.
+   * still has to move, so a caller can get decrypt and key creation on exactly those keys. A throw stops the migration.
+   * When it is given, each secret is first classified with a dry-run reseal (a read, no decrypt or key call), so a
+   * secret already on its own key or one that cannot be read is never in the request, and a rerun after a stop asks
+   * only for the rest.
    */
   authorizeKeys?: (keyPaths: readonly string[]) => Promise<void>;
+  /** Called once on a dry run with the key paths `authorizeKeys` would get (never with none), so a caller can plan the approvals. */
+  previewKeys?: (keyPaths: readonly string[]) => Promise<void>;
 }
 
 /** Counts only: a migration report never names a secret or carries a value. */
@@ -94,9 +99,7 @@ export async function migrateSecrets(
     }
   }
   if (moves.length === 0) return { ok: true, data: report };
-  if (!dryRun) await options.authorizeKeys?.(moves.map((move) => move.keyPath));
-  for (const { vaultKey, keyPath } of moves) {
-    const result = await reseal(vaultKey, keyPath, { dryRun });
+  const count = (result: VaultResealResult): void => {
     if (result.status === "skipped") {
       report.skipped[result.reason] = (report.skipped[result.reason] ?? 0) + 1;
     } else if (result.status === "already") {
@@ -104,6 +107,29 @@ export async function migrateSecrets(
     } else {
       report.moved += 1;
     }
+  };
+  let toMove = moves;
+  if (dryRun || options.authorizeKeys !== undefined) {
+    // Classify with a dry-run reseal; on a real run, `already` and `skipped` are final here and only `pending` moves.
+    const pending: typeof moves = [];
+    for (const move of moves) {
+      const result = await reseal(move.vaultKey, move.keyPath, { dryRun: true });
+      if (result.status === "pending") {
+        pending.push(move);
+        if (!dryRun) continue;
+      }
+      count(result);
+    }
+    if (dryRun) {
+      if (pending.length > 0) await options.previewKeys?.(pending.map((move) => move.keyPath));
+      return { ok: true, data: report };
+    }
+    if (pending.length === 0) return { ok: true, data: report };
+    await options.authorizeKeys!(pending.map((move) => move.keyPath));
+    toMove = pending;
+  }
+  for (const { vaultKey, keyPath } of toMove) {
+    count(await reseal(vaultKey, keyPath, { dryRun: false }));
   }
   return { ok: true, data: report };
 }

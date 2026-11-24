@@ -255,6 +255,13 @@
       "index.mjs": 0,
       "index.cjs": 0,
       "note": "Replica gzip growth measured against this PR's merge base"
+    },
+    {
+      "pr": "#1180",
+      "ticket": "TC-4237",
+      "index.mjs": -1,
+      "index.cjs": 0,
+      "note": "Replica gzip growth measured against this PR's merge base"
     }
   ],
   "phase2Ratchet": {
@@ -3889,6 +3896,36 @@
       }
     },
     "reason": "Both canonical jobs (SQLite and Postgres, run 45367645133 at cc3792132, merged with master cd5b9826d) measured 1501514/1487555 gzip bytes against tc4082HostedOwnerRoot's 1542479/1473127. The Web SDK root carries TinyCloudWeb.ensureOwnerRegistryRecord and the registry-publish module it imports: the create-only owner-signed v2 location record publish (publishLocationRecordV2 from @tinycloud/sdk-core/registry-publication), the TinyCloud One and Home origin gate, and the OpenKey or wallet signer. The import() is merged into the root because the web build pins LimitChunkCountPlugin({ maxChunks: 1 }); with it webpack stops concatenating sdk-core into index.mjs, which is why index.mjs fell by 40965 bytes with the same 243 exports. Not taken: a lazy entry, because @tinycloud/sdk-core/registry-publication imports the sdk-core root, so the chunk carried all of sdk-core (about 297 KB gzip) plus the links and issued-delegation async chunks, and its computed chunk import broke the openkey-example build. Details: TC-3891"
+  },
+  "tc4222PermissionLineRoot": {
+    "label": "permission dialog states exactly what a request grants (TC-4222)",
+    "ruling": "test-ruling: TC-4222 (13:06Z) - size ledger row tc4222PermissionLineRoot: web-sdk root cjs ceiling 1487555→1487567 (+12, CI a31ed78c, both jobs), mjs unchanged; scripts/*size-policy*.test.ts add the row beside every tc3891OwnerRegistryRecordRoot delete/undefined, and the replica-size-policy.test.ts filter gains it; no assertion value changes.",
+    "base": "ba48c9aa24b3a81665bbb29bbd139f4258984ca9",
+    "sourceCommits": [
+      "e2eb5662991f91caba3cbcbb73aed0bd6da401a7",
+      "625ca01a3bf5b4fd99b875686cb91073523a122f",
+      "9f57c0662087e8eb8157117aa1e31d488cea2883",
+      "b370dccc3aa88f0188c3c5536b705ba8c50827cf",
+      "a31ed78c89381164877789cbd3e86787786a7ac9"
+    ],
+    "canonicalCI": {
+      "run": "45397431219",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45397431219/job/138456809591",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45397431219/job/138456809184"
+      ]
+    },
+    "root": {
+      "delta": {
+        "index.mjs": 0,
+        "index.cjs": 12
+      },
+      "ceiling": {
+        "index.mjs": 1542479,
+        "index.cjs": 1487567
+      }
+    },
+    "reason": "Both canonical jobs (SQLite and Postgres, run 45397431219 at a31ed78c, base ba48c9aa) measured 1501525/1487567 gzip bytes against tc3891OwnerRegistryRecordRoot's 1542479/1487555. The Web SDK root passes the request's expiry and the app's optional caption to the permission prompt (requestPermissionsCore showModal); the derived line and its escaping render in the prompt. Not taken: hiding the expiry line unless a caption is passed (Naomi 13:06Z). Details: TC-4222"
   },
   "tc3522InvocationRefusalKvWorker": {
     "label": "retain invocation-refusal attribution in the kv-storage worker (TC-3522)",

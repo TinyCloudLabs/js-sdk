@@ -36,6 +36,11 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/tinycloudlabs/web-sdk.git"
+    "url": "https://github.com/TinyCloudLabs/js-sdk.git",
+    "directory": "packages/bootstrap"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
   }
 }
