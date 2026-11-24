@@ -106,9 +106,9 @@ for (const [label, change, item] of [
 }
 
 /** A saved request the owner approved whose result is already saved locally (an interrupted --wait), so it holds the approval. */
-async function savedApproved(t, fx, request) {
+async function savedApproved(t, fx, request, approval = {}) {
   const { saved } = await savedOneDay(t, request);
-  await fx.approve(readHome('approval-pending.json').approvalUrl);
+  await fx.approve(readHome('approval-pending.json').approvalUrl, approval);
   const crash = crashAtWrite(t, 'approval-pending.json', { phase: 'after', when: (c) => c.resultEnvelope !== undefined });
   await assert.rejects(cmdInit(parseArgs(['--wait'])), (error) => error instanceof Crash);
   crash.disarm();
@@ -143,4 +143,22 @@ scenario('(k) a saved 1d request with a 5d lease: --wait --renew 5d resumes it (
   assert.equal(other.code, 2, other.stderr);
   assert.match(other.stderr, /is saved with --expiry 1d --renew 5d\./);
   assertUnchanged(fx, files);
+});
+
+scenario('(l) an approval held for an older permission set is not refused by --wait; the install refuses it and drops the request', async ({ t, fx, request, courier }) => {
+  // An older Courier asked for (and the owner signed) the set without the hooks entry: the held request and the signed grant agree.
+  const older = (entry) => entry.service !== 'tinycloud.hooks';
+  await savedApproved(t, fx, request, { grant: { omit: ['tinycloud.hooks'] } });
+  const held = readHome('approval-pending.json');
+  fs.writeFileSync(homeFile('approval-pending.json'), JSON.stringify({ ...held, request: { ...held.request, permissions: held.request.permissions.filter(older) } }), { mode: 0o600 });
+  const run = await courier('--wait', '--timeout', '5s');
+  assert.doesNotMatch(run.stderr, /different settings/, 'not refused by the settings check');
+  assert.equal(run.code, 1, run.stderr);
+  assert.match(run.stderr, /\[grant-incomplete\] OpenKey grant is missing tinycloud\.hooks/, 'Courier installs only its current AGENT_GRANT');
+  assert.equal(fs.existsSync(homeFile('grant.json')), false, 'nothing was installed');
+  assert.equal(fs.existsSync(homeFile('approval-pending.json')), false, 'the refused approval is dropped');
+  assert.equal(fx.acks.length, 0);
+  const again = await courier('--request');
+  assert.equal(again.code, 0, again.stderr);
+  assert.equal(fx.created.length, 2, '`init --request` asks again');
 });
