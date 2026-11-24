@@ -1,0 +1,34 @@
+# Tests the hosted MCP ingress's request logging, embedded in packages/mcp/docker-compose.phala.yml (TC-4260). No
+# secrets, no network beyond pulling the pinned dstack-ingress image.
+name: MCP ingress logging
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/mcp-ingress.yml
+      - packages/mcp/docker-compose.phala.yml
+      - packages/mcp/ingress/**
+  push:
+    branches: [master]
+    paths:
+      - .github/workflows/mcp-ingress.yml
+      - packages/mcp/docker-compose.phala.yml
+      - packages/mcp/ingress/**
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  redacted-logging:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Test redacted ingress logging
+        shell: bash
+        run: bash packages/mcp/ingress/test-redacted-logging.sh

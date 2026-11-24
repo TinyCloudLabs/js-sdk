@@ -58,6 +58,85 @@ services:
     volumes:
       - /var/run/dstack.sock:/var/run/dstack.sock
       - cert-data:/etc/letsencrypt
+    # TC-4260 (the node's TC-970 fix): the image's nginx.conf writes every raw request line (a full `/connect?state=`
+    # approval link), the client address, Referer, User-Agent and X-Forwarded-For to /var/log/nginx/access.log, and
+    # request errors with the client address and request line to error.log: regular files nothing rotates (no
+    # logrotate binary or cron in the image). After the image's entrypoint has set up certificates and the server
+    # block, this drops both files and logs one JSON line per request to stdout: known method, route class, status,
+    # bytes and timings. Never the query string, raw path, client address or any header. Request-context errors log
+    # only at `emerg`, because nginx embeds the client address and request line in them at every level. It refuses to
+    # start nginx if the pinned image's nginx.conf changes shape. Embedded because Phala deploys only this file;
+    # packages/mcp/ingress/test-redacted-logging.sh runs this exact text. `$$` is a literal `$` after compose
+    # interpolation. A path the connector adds is logged as `<other>` until it is added to the map.
+    command:
+      - /bin/sh
+      - -ec
+      - |
+        sed -i \
+          -e '/^[[:space:]]*access_log[[:space:]]/d' \
+          -e 's#^error_log[[:space:]].*#error_log  /dev/stderr notice;#' \
+          /etc/nginx/nginx.conf
+        if grep -q -e 'access_log' -e '/var/log/nginx' /etc/nginx/nginx.conf \
+          || ! grep -q '^error_log  /dev/stderr notice;$$' /etc/nginx/nginx.conf; then
+          echo 'ingress: unexpected /etc/nginx/nginx.conf; not starting nginx with its request logging' >&2
+          exit 1
+        fi
+        mkdir -p /var/log/nginx
+        rm -f /var/log/nginx/access.log /var/log/nginx/error.log
+        # nginx opens its compiled-in error.log while parsing the config.
+        ln -s /dev/stderr /var/log/nginx/error.log
+        cat > /etc/nginx/conf.d/00-redacted-logging.conf <<'NGINX_LOGGING'
+        map $$uri $$tc_route {
+            default                                             "<other>";
+            /                                                   /;
+            /mcp                                                /mcp;
+            /healthz                                            /healthz;
+            /connect                                            /connect;
+            /native/grant                                       /native/grant;
+            /mcp/server-card                                    /mcp/server-card;
+            /auth.md                                            /auth.md;
+            /llms.txt                                           /llms.txt;
+            /robots.txt                                         /robots.txt;
+            /sitemap.xml                                        /sitemap.xml;
+            /webmcp.js                                          /webmcp.js;
+            /.well-known/oauth-protected-resource               /.well-known/oauth-protected-resource;
+            /.well-known/oauth-protected-resource/mcp           /.well-known/oauth-protected-resource/mcp;
+            /.well-known/oauth-authorization-server             /.well-known/oauth-authorization-server;
+            /.well-known/ai-catalog.json                        /.well-known/ai-catalog.json;
+            /.well-known/poppy.json                             /.well-known/poppy.json;
+            /.well-known/mcp/server-card.json                   /.well-known/mcp/server-card.json;
+            /.well-known/api-catalog                            /.well-known/api-catalog;
+            /.well-known/agent-card.json                        /.well-known/agent-card.json;
+            /.well-known/agent-skills/index.json                /.well-known/agent-skills/index.json;
+            ~^/\.well-known/agent-skills/[^/]+/SKILL\.md$$      "/.well-known/agent-skills/<skill>/SKILL.md";
+            ~^/evidences/                                       "/evidences/<file>";
+        }
+        map $$request_method $$tc_method {
+            default     "<other>";
+            GET         GET;
+            HEAD        HEAD;
+            POST        POST;
+            PUT         PUT;
+            PATCH       PATCH;
+            DELETE      DELETE;
+            OPTIONS     OPTIONS;
+        }
+        log_format tc_redacted escape=json
+            '{"time":"$$time_iso8601","method":"$$tc_method","route":"$$tc_route",'
+            '"protocol":"$$server_protocol","status":$$status,"bytes":$$body_bytes_sent,'
+            '"request_time":$$request_time,"upstream_status":"$$upstream_status",'
+            '"upstream_connect_time":"$$upstream_connect_time",'
+            '"upstream_response_time":"$$upstream_response_time"}';
+        access_log /dev/stdout tc_redacted;
+        error_log /dev/stderr emerg;
+        NGINX_LOGGING
+        exec nginx -g 'daemon off;'
+    # Bounded: the access log above goes to stdout. Keep json-file, which `docker logs` and the dstack log API read.
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     restart: unless-stopped
 
   # Private Better Stack log shipper (source tinycloud_mcp). Only a fixed allowlist of typed events leaves the CVM:
