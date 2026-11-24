@@ -1,8 +1,7 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { test } from 'node:test';
-import { MAX_APPROVAL_LEASE_SECONDS } from '@tinycloud/share-envelope/links';
-import { AGENT_GRANT_EXPIRY, COURIER_DEFAULT_LEASE_SECONDS } from '../dist/keys.js';
+import { AGENT_GRANT_EXPIRY, COURIER_DEFAULT_LEASE_SECONDS, COURIER_MAX_LEASE_SECONDS } from '../dist/keys.js';
 import { AGENT_GRANT_MAX_MS } from '../dist/authority.js';
 import { renewalLeaseFor } from '../dist/grant-request.js';
 import { loadOwnerEpisode, OWNER_ASK_AHEAD_MS, preflightOwner } from '../dist/interim-owner.js';
@@ -22,10 +21,10 @@ test('--renew: default, off, a named lease, and the refused lengths', () => {
   assert.ok(COURIER_DEFAULT_LEASE_SECONDS > GRANT_SECONDS, 'the default lease outlasts the default grant');
   assert.equal(renewalLeaseFor(undefined, GRANT_SECONDS), COURIER_DEFAULT_LEASE_SECONDS);
   assert.equal(renewalLeaseFor('off', GRANT_SECONDS), null);
-  assert.equal(renewalLeaseFor(days(MAX_APPROVAL_LEASE_SECONDS), GRANT_SECONDS), MAX_APPROVAL_LEASE_SECONDS);
+  assert.equal(renewalLeaseFor(days(COURIER_MAX_LEASE_SECONDS), GRANT_SECONDS), COURIER_MAX_LEASE_SECONDS);
   // A grant at least as long as the default lease asks for none by default.
   assert.equal(renewalLeaseFor(undefined, COURIER_DEFAULT_LEASE_SECONDS), null);
-  assert.throws(() => renewalLeaseFor(days(MAX_APPROVAL_LEASE_SECONDS + 86_400), GRANT_SECONDS), usage);
+  assert.throws(() => renewalLeaseFor(days(COURIER_MAX_LEASE_SECONDS + 86_400), GRANT_SECONDS), usage);
   assert.throws(() => renewalLeaseFor(days(GRANT_SECONDS), GRANT_SECONDS), usage);
   assert.throws(() => renewalLeaseFor(days(GRANT_SECONDS - 86_400), GRANT_SECONDS), usage);
   assert.throws(() => renewalLeaseFor('soon', GRANT_SECONDS), usage);
@@ -34,8 +33,8 @@ test('--renew: default, off, a named lease, and the refused lengths', () => {
 scenario('init --request asks for the default lease; --renew names one; --renew off asks for none', async ({ fx, request }) => {
   const asked = await request();
   assert.deepEqual(await askedLease(fx, asked.openkeyUrl), { version: 1, leaseLifetimeSeconds: COURIER_DEFAULT_LEASE_SECONDS });
-  const named = await request('--renew', '120d');
-  assert.deepEqual(await askedLease(fx, named.openkeyUrl), { version: 1, leaseLifetimeSeconds: 120 * 86_400 });
+  const named = await request('--renew', '60d');
+  assert.deepEqual(await askedLease(fx, named.openkeyUrl), { version: 1, leaseLifetimeSeconds: 60 * 86_400 });
   const off = await request('--renew', 'off');
   assert.equal(await askedLease(fx, off.openkeyUrl), undefined);
 });
@@ -43,7 +42,7 @@ scenario('init --request asks for the default lease; --renew names one; --renew 
 scenario('a refused --renew stops before any request is made', async ({ fx, courier }) => {
   for (const argv of [
     ['--request', '--renew', days(GRANT_SECONDS)],
-    ['--request', '--renew', days(MAX_APPROVAL_LEASE_SECONDS + 86_400)],
+    ['--request', '--renew', days(COURIER_MAX_LEASE_SECONDS + 86_400)],
     ['--wait', '--expiry', '7d', '--renew', '7d'],
     // A pasted code or grant file cannot carry a lease.
     ['--paste', '--renew', days(COURIER_DEFAULT_LEASE_SECONDS)],
@@ -61,7 +60,7 @@ scenario('a saved request is resumed only for the same lease ask: a request with
   const leased = await request();
   assert.equal((await request()).openkeyUrl, leased.openkeyUrl);
   assert.equal((await request('--renew', days(COURIER_DEFAULT_LEASE_SECONDS))).openkeyUrl, leased.openkeyUrl);
-  const other = await request('--renew', '120d');
+  const other = await request('--renew', '60d');
   assert.notEqual(other.openkeyUrl, leased.openkeyUrl, 'a named lease of another length is a new request');
   assert.equal((await request()).openkeyUrl, other.openkeyUrl, 'the default ask resumes a leased request of any length');
   const off = await request('--renew', 'off');
