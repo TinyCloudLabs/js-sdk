@@ -7,10 +7,14 @@ import { JSDOM } from "jsdom";
 
 import type { Manifest, PermissionEntry } from "@tinycloud/sdk-core";
 import { SECRET_KEY_GRANT_DEFAULT_MS, SECRET_KEY_GRANT_MAX_MS } from "@tinycloud/node-sdk";
-import { EXPIRY } from "@tinycloud/sdk-core";
+import { EXPIRY, expandPermissionEntries } from "@tinycloud/sdk-core";
+
+// node-sdk's own lifetime rule is not exported from an entry web-sdk imports; pin against its source.
+import { isSecretKeyEntry, resolveExpiryMs, secretKeyGrantExpiryMs } from "../../../node-sdk/src/delegateToHelpers";
 
 import type { TinyCloudWeb as TinyCloudWebType } from "../../src/modules/tcw";
 import { requestPermissionsCore, type RequestPermissionsOptions } from "../../src/modules/requestPermissionsCore";
+import { grantLifetimeMs } from "../../src/notifications/permissionLine";
 
 type Loose = Record<PropertyKey, unknown>;
 
@@ -200,5 +204,102 @@ describe("requestPermissions passes the caption and lifetime to the prompt", () 
     await request.requestPermissions([botHistory], { expiryMs: 7 * DAY_MS, caption: "TrustBot's chat history" });
 
     expect(shown[0]).toMatchObject({ expiryMs: 7 * DAY_MS, caption: "TrustBot's chat history" });
+  });
+});
+
+describe("hidden characters in the request", () => {
+  const RLO = "\u202E";
+  const spoofed: PermissionEntry = {
+    service: "tinycloud.encryption",
+    path: `${NETWORK}/secrets/scoped/tinychat-bot-history/${RLO}yrotsih-tob`,
+    actions: ["decrypt"],
+  };
+
+  test("an RLO in a key path is shown as a visible escape, in the line and in the technical details", () => {
+    const root = render({ additional: [spoofed], expiryMs: 7 * DAY_MS });
+
+    expect(lines(root)).toEqual([
+      "Decrypt with the key secrets/scoped/tinychat-bot-history/\\u{202E}yrotsih-tob (only this key), for up to 7 days.",
+    ]);
+    const resource = [...root.querySelectorAll(".dictionary-row")]
+      .find((row) => row.querySelector("dt")?.textContent === "Resource")!
+      .querySelector("dd")!.textContent;
+    expect(resource).toBe(`${NETWORK}/secrets/scoped/tinychat-bot-history/\\u{202E}yrotsih-tob`);
+    expect(root.innerHTML).not.toContain(RLO);
+  });
+
+  test("controls, zero-width and isolate characters in a space, path and unknown action are escaped, never dropped", () => {
+    const root = render({
+      additional: [{ service: "tinycloud.kv", space: "de\u2066fault", path: "items\u200B/", actions: ["get", "sy\u0007nc"] }],
+    });
+
+    expect(lines(root)).toEqual([
+      "Read and use “sy\\u{0007}nc” on everything under items\\u{200B}/ in the de\\u{2066}fault space, for up to 7 days.",
+    ]);
+    expect(root.innerHTML).not.toMatch(/[\u0007\u200B\u2066]/);
+  });
+
+  test("an RLO in the app name or the on-behalf-of name is shown escaped in the title, description and caption label", () => {
+    const root = render({ appName: `Tiny${RLO}tahC`, additional: [botHistory], caption: "TrustBot's chat history" });
+    expect(root.querySelector("#tc-permission-title")?.textContent).toBe("Tiny\\u{202E}tahC is requesting additional permissions");
+    expect(caption(root)!.textContent).toBe("Label from Tiny\\u{202E}tahC: TrustBot's chat history");
+    expect(root.innerHTML).not.toContain(RLO);
+
+    const onBehalf = render({ appName: `Tiny${RLO}tahC`, onBehalfOf: `Trust${RLO}toB`, additional: [botHistory] });
+    expect(onBehalf.querySelector("#tc-permission-title")?.textContent)
+      .toBe("Trust\\u{202E}toB in Tiny\\u{202E}tahC is asking for more access");
+    expect(onBehalf.querySelector("#tc-permission-description")?.textContent?.trim())
+      .toBe("Review what Trust\\u{202E}toB will be allowed to do before you approve.");
+    expect(onBehalf.innerHTML).not.toContain(RLO);
+  });
+});
+
+describe("the stated lifetime is the node's, and the longer one on any doubt", () => {
+  // node-sdk runtime-grants.ts:141-143: the node expands the request, then picks the secret-key rule when any
+  // expanded entry is a secret's key. A request it cannot expand is refused; the prompt then states the longer rule.
+  function nodeLifetime(entries: PermissionEntry[], expiry: number | undefined): number {
+    let expanded: PermissionEntry[];
+    try {
+      expanded = expandPermissionEntries(entries);
+    } catch {
+      return resolveExpiryMs(expiry);
+    }
+    return expanded.some(isSecretKeyEntry) ? secretKeyGrantExpiryMs(expiry) : resolveExpiryMs(expiry);
+  }
+  const encryption = (path: string, actions = ["decrypt"]): PermissionEntry => ({ service: "tinycloud.encryption", path, actions });
+  const cases: Array<[string, PermissionEntry[]]> = [
+    ["the bot-history key", [botHistory]],
+    ["the bot-history key with a lower-case owner", [encryption(KEY.replace(OWNER, OWNER.toLowerCase()), ["decrypt", "key.create"])]],
+    // node-sdk TinyCloudNode.runtimePermissions.test.ts:1552-1566
+    ["a secret's key", [encryption(`${NETWORK}/secrets/api_key`)]],
+    ["a secret's key beside a kv read", [
+      { service: "tinycloud.kv", space: "secrets", path: "vault/secrets/API_KEY", actions: ["tinycloud.kv/get"] },
+      encryption(`${NETWORK}/secrets/api_key`),
+    ]],
+    ["a did:key owner's secret key", [encryption("urn:tinycloud:encryption:did:key:z6MkPrincipal:default/secrets/anthropic_api_key")]],
+    ["a whole network", [encryption(NETWORK)]],
+    ["the share prefix", [encryption(`${NETWORK}/share/`)]],
+    ["`secrets` without a trailing slash", [encryption(`${NETWORK}/secrets`)]],
+    ["a `secrets/` prefix", [encryption(`${NETWORK}/secrets/`)]],
+    ["an upper-case secret name", [encryption(`${NETWORK}/secrets/API_KEY`)]],
+    ["the short service name", [{ service: "encryption", path: KEY, actions: ["decrypt"] }]],
+    ["a secret on another network", [encryption(`urn:tinycloud:encryption:${OWNER}:other/secrets/api_key`)]],
+    ["a secrets-space kv entry only", [{ service: "tinycloud.kv", space: "secrets", path: "vault/secrets/API_KEY", actions: ["get"] }]],
+  ];
+
+  for (const [name, entries] of cases) {
+    test(`${name}: same as the node`, () => {
+      for (const expiry of [undefined, 59 * 60_000, 30 * DAY_MS]) {
+        expect(grantLifetimeMs(entries, expiry)).toBe(nodeLifetime(entries, expiry));
+      }
+    });
+  }
+
+  test("a shape the node does not treat as a secret's key gets 7 days, never the 1-hour default", () => {
+    for (const path of [`${NETWORK}/secrets`, `${NETWORK}/secrets/`, `${NETWORK}/secrets/API_KEY`]) {
+      expect(lines(render({ additional: [encryption(path)] }))[0]).toEndWith("for up to 7 days.");
+    }
+    expect(lines(render({ additional: [{ service: "encryption", path: KEY, actions: ["decrypt"] }] }))[0])
+      .toEndWith("for up to 7 days.");
   });
 });

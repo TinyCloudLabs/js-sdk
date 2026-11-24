@@ -30,6 +30,8 @@ import {
   grantLifetimeMs,
   normalizeCaption,
   PERMISSION_LINE_COPY,
+  showHiddenCharacters,
+  visibleEntry,
 } from "./permissionLine";
 
 export interface PermissionRequestModalOptions {
@@ -104,24 +106,28 @@ export class TinyCloudPermissionRequestModal extends HTMLElement {
   }
 
   private render(): void {
+    // Every request-derived string is shown with hidden characters escaped (see `showHiddenCharacters`).
     const entriesHtml = this.options.additional
-      .map((entry) => this.renderEntry(entry))
+      .map((entry) => this.renderEntry(visibleEntry(entry)))
       .join("");
     const lifetimeMs = grantLifetimeMs(this.options.additional, this.options.expiryMs);
     const linesHtml = this.options.additional
       .map((entry) => `<li class="permission-line" data-role="permission-line">${escapeHtml(derivePermissionLine(entry, lifetimeMs))}</li>`)
       .join("");
+    // The app name and the "on behalf of" name are app-controlled too: hidden characters in them are shown escaped.
+    const shownAppName = showHiddenCharacters(this.options.appName);
+    const shownOnBehalfOf = this.options.onBehalfOf === undefined ? undefined : showHiddenCharacters(this.options.onBehalfOf);
     // The caption's text is set below through textContent, never parsed as HTML.
     const caption = normalizeCaption(this.options.caption);
     const captionMarkup = caption === undefined
       ? ""
-      : `<p class="app-caption" data-role="app-caption"><span class="app-caption-source">${escapeHtml(PERMISSION_LINE_COPY.captionSource(this.options.appName))}</span> <span data-role="app-caption-text"></span></p>`;
+      : `<p class="app-caption" data-role="app-caption"><span class="app-caption-source">${escapeHtml(PERMISSION_LINE_COPY.captionSource(shownAppName))}</span> <span data-role="app-caption-text"></span></p>`;
 
     // We deliberately HTML-escape every dynamic string below. appName and
     // path come straight from user-controlled manifest input; dropping
     // them into innerHTML without escaping would be an XSS vector.
-    const appName = escapeHtml(this.options.appName);
-    const onBehalfOf = this.options.onBehalfOf === undefined ? undefined : escapeHtml(this.options.onBehalfOf);
+    const appName = escapeHtml(shownAppName);
+    const onBehalfOf = shownOnBehalfOf === undefined ? undefined : escapeHtml(shownOnBehalfOf);
     const title = onBehalfOf === undefined
       ? `${appName} is requesting additional permissions`
       : `${onBehalfOf} in ${appName} is asking for more access`;

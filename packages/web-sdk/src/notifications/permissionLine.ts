@@ -2,12 +2,13 @@
  * The plain-words line the permission prompt shows for each requested entry, and the app's optional caption beneath
  * the lines (TC-4222). The line is built only from the request: the exact resource, each action and the grant's
  * lifetime. It is never broader or vaguer than the request; an action it has no words for is shown verbatim.
+ * Control, zero-width and direction characters in request-derived text are shown as visible escapes, never as is.
  *
  * Every user-visible string is in {@link PERMISSION_LINE_COPY}.
  */
 
 import type { PermissionEntry } from "@tinycloud/sdk-core";
-import { EXPIRY, SERVICE_SHORT_TO_LONG } from "@tinycloud/sdk-core";
+import { EXPIRY, expandPermissionEntries, SERVICE_SHORT_TO_LONG } from "@tinycloud/sdk-core";
 
 const ENCRYPTION = "tinycloud.encryption";
 
@@ -109,12 +110,37 @@ export const PERMISSION_LINE_COPY = {
 /** Longest caption shown, in characters; a longer one is cut and ends with "…". */
 export const CAPTION_MAX_LENGTH = 120;
 
+/**
+ * C0 and C1 controls, zero-width characters (U+200B-200D, U+FEFF) and direction marks, embeddings, overrides and
+ * isolates (U+200E-200F, U+202A-202E, U+2066-2069): characters that hide or reorder text.
+ */
+const HIDDEN_CHARACTERS = /[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]/g;
+
+/** `text` with every hidden character shown as a visible escape such as `\u{202E}`, so it never reads cleaner than it is. */
+export function showHiddenCharacters(text: string): string {
+  return text.replace(HIDDEN_CHARACTERS, (char) => `\\u{${char.charCodeAt(0).toString(16).toUpperCase().padStart(4, "0")}}`);
+}
+
+/** `entry` with its service, space, path and actions passed through {@link showHiddenCharacters}, for display only. */
+export function visibleEntry(entry: PermissionEntry): PermissionEntry {
+  return {
+    ...entry,
+    service: showHiddenCharacters(entry.service),
+    ...(entry.space === undefined ? {} : { space: showHiddenCharacters(entry.space) }),
+    path: showHiddenCharacters(entry.path),
+    actions: entry.actions.map(showHiddenCharacters),
+  };
+}
+
 const DAY_MS = 24 * 60 * 60 * 1000;
-// The node's runtime-grant lifetime (node-sdk `secretKeyGrantExpiryMs` and `resolveExpiryMs`, applied in
-// runtime-grants): a grant that touches any secret's key lasts 1 hour unless asked and never over 7 days; any other
-// grant lasts 7 days unless asked. Every grant also ends with the session, hence "for up to".
+// The node's runtime-grant lifetime: a grant whose expanded entries include any secret's key lasts 1 hour unless
+// asked and never over 7 days; any other grant lasts 7 days unless asked (node-sdk runtime-grants.ts:141-143 with
+// delegateToHelpers.ts `isSecretKeyEntry`, `secretKeyGrantExpiryMs`, `resolveExpiryMs`). Every grant also ends with
+// the session, hence "for up to". The 1-hour rule is the shorter one, so it applies only when the node's own test on
+// the node's own expansion says so; anything else gets the longer lifetime. A test pins this against node-sdk.
 const SECRET_KEY_GRANT_DEFAULT_MS = 60 * 60_000;
 const SECRET_KEY_GRANT_MAX_MS = 7 * DAY_MS;
+/** node-sdk delegateToHelpers.ts:77 `SECRET_KEY_RESOURCE`, applied as its `isSecretKeyEntry` applies it. */
 const SECRET_KEY_RESOURCE = /^urn:tinycloud:encryption:[^/]+\/secrets(?:\/|$)/;
 
 /** Encryption entries' reach: a whole network, keys under a prefix, or one key. Undefined for other services. */
@@ -136,13 +162,21 @@ export function encryptionReach(entry: PermissionEntry): EncryptionReach | undef
 
 /** The lifetime the node gives the grant for `entries`, before it is cut to the session's end. */
 export function grantLifetimeMs(entries: readonly PermissionEntry[], expiryMs: number | undefined): number {
-  const secretKey = entries.some((entry) => longService(entry.service) === ENCRYPTION && SECRET_KEY_RESOURCE.test(entry.path));
+  let secretKey: boolean;
+  try {
+    secretKey = expandPermissionEntries(entries)
+      .some((entry) => entry.service === ENCRYPTION && SECRET_KEY_RESOURCE.test(entry.path));
+  } catch {
+    // The node refuses entries it cannot expand; until then, state the longer lifetime.
+    secretKey = false;
+  }
   if (!secretKey) return expiryMs ?? EXPIRY.SESSION_MS;
   return Math.min(expiryMs ?? SECRET_KEY_GRANT_DEFAULT_MS, SECRET_KEY_GRANT_MAX_MS);
 }
 
-/** The plain-words line for one entry, granted for `lifetimeMs`. */
-export function derivePermissionLine(entry: PermissionEntry, lifetimeMs: number): string {
+/** The plain-words line for one entry, granted for `lifetimeMs`. Hidden characters in the request are shown escaped. */
+export function derivePermissionLine(requested: PermissionEntry, lifetimeMs: number): string {
+  const entry = visibleEntry(requested);
   const reach = encryptionReach(entry);
   const words = reach === undefined
     ? PERMISSION_LINE_COPY.actions[longService(entry.service)] ?? {}
@@ -157,14 +191,14 @@ export function derivePermissionLine(entry: PermissionEntry, lifetimeMs: number)
 }
 
 /**
- * The caption as shown: a string with control and direction-override characters removed, whitespace folded to
- * single spaces, trimmed and cut to {@link CAPTION_MAX_LENGTH} characters. Undefined when nothing is left.
+ * The caption as shown: whitespace folded to single spaces, hidden characters (see {@link showHiddenCharacters})
+ * removed, trimmed and cut to {@link CAPTION_MAX_LENGTH} characters. Undefined when nothing is left.
  */
 export function normalizeCaption(caption: unknown): string | undefined {
   if (typeof caption !== "string") return undefined;
   const folded = caption
-    .replace(/[\u0000-\u0008\u000e-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]/g, "")
     .replace(/\s+/g, " ")
+    .replace(HIDDEN_CHARACTERS, "")
     .trim();
   const chars = Array.from(folded);
   if (chars.length === 0) return undefined;
