@@ -12,11 +12,15 @@
 //      changeset with the same name and text),
 //   2. runs `changeset version`,
 //   3. puts every out-of-scope package back (version, CHANGELOG) except its dependency pins on in-scope
-//      packages, which follow the new in-scope versions so the workspace still links,
+//      packages, which follow the new in-scope versions so the workspace still links; and puts back every
+//      in-scope package's pins on out-of-scope packages, dropping the "Updated dependencies" lines for them
+//      from its new CHANGELOG entry (a dependent bump of a held package is a version nobody publishes),
 //   4. refuses the result unless each in-scope bump is a stable, same-major, higher version, the result
 //      matches the locked inventory (`expect`, when set), no in-scope package requires a
-//      prerelease of a package outside the scope, and no planned version already exists on npm (a version
-//      slot is immutable: master's source must never take a number another commit published).
+//      prerelease of a package outside the scope, every in-scope runtime pin on a workspace package is
+//      either this release's version of it or a held version npm already has, and no planned version
+//      already exists on npm (a version slot is immutable: master's source must never take a number
+//      another commit published).
 //
 // Baselines: `baselines` in the scope file names the version each in-scope package is at, and it must be
 // the newest stable version npm has for it. It is an input of the go commit: whatever was published from
@@ -210,6 +214,29 @@ export function prereleaseRuntimePins(manifests, scope) {
   return problems;
 }
 
+// In-scope packages whose runtime dependencies on a workspace package would not install from npm: a pin on an
+// in-scope package must be the version this release gives it, and a pin on a held package must be that package's
+// own version and already on npm (asked once per held pin; when npm cannot be asked, the release is refused).
+export function uninstallablePins(manifests, scope, versionsOf) {
+  const byName = new Map(manifests.map((m) => [m.manifest.name, m.manifest]));
+  const problems = [];
+  for (const name of scope) {
+    const manifest = byName.get(name);
+    if (!manifest) continue;
+    for (const field of RUNTIME_FIELDS) {
+      for (const [dep, spec] of Object.entries(manifest[field] ?? {})) {
+        const target = byName.get(dep);
+        if (!target) continue;
+        const pinned = String(spec).startsWith("workspace:") ? target.version : String(spec).replace(/^[=^~v]/, "");
+        const requires = `${name}@${manifest.version} requires ${dep}@${pinned} (${field})`;
+        if (pinned !== target.version) problems.push(`${requires}, but the workspace has ${dep}@${target.version}${scope.includes(dep) ? "" : " outside the release scope"}`);
+        else if (!scope.includes(dep) && !versionsOf(dep).includes(pinned)) problems.push(`${requires}, which is outside the release scope and not on npm`);
+      }
+    }
+  }
+  return problems;
+}
+
 // What the run changed, judged against the versions before it: { name, from, to, level }[] for the in-scope packages.
 export function releaseInventory(before, after, scope) {
   const out = [];
@@ -314,6 +341,57 @@ export function pinsFollow(raw, renamed) {
   return moved ? `${JSON.stringify(manifest, null, 2)}\n` : raw;
 }
 
+// An in-scope manifest after `changeset version`, with its pins on held packages put back to what they were before
+// (`changeset version` moves them to dependent bumps that the put-back undoes, versions nobody publishes).
+export function pinsStay(raw, beforeManifest, heldNames) {
+  const manifest = JSON.parse(raw);
+  let moved = false;
+  for (const field of DEP_FIELDS) {
+    for (const [dep, spec] of Object.entries(manifest[field] ?? {})) {
+      const was = beforeManifest[field]?.[dep];
+      if (heldNames.has(dep) && was !== undefined && spec !== was) {
+        manifest[field][dep] = was;
+        moved = true;
+      }
+    }
+  }
+  return moved ? `${JSON.stringify(manifest, null, 2)}\n` : raw;
+}
+
+const DEPENDENCY_BULLET = /^- Updated dependencies\b/;
+const DEPENDENCY_ITEM = /^\s+- (@?[^@\s]+)@\S+$/;
+
+// An in-scope CHANGELOG after `changeset version` (`after`), its new entry without the "Updated dependencies" items
+// that name a held package, and without the bullet or heading that leaves empty. The rest of the file is untouched.
+export function changelogWithoutHeld(before, after, heldNames) {
+  if (before === undefined) return after;
+  const old = before.split("\n");
+  const lines = after.split("\n");
+  let start = 0;
+  while (start < old.length && start < lines.length && old[start] === lines[start]) start += 1;
+  let tail = 0;
+  while (tail < old.length - start && tail < lines.length - start && old[old.length - 1 - tail] === lines[lines.length - 1 - tail]) tail += 1;
+  let entry = lines.slice(start, lines.length - tail);
+  const original = entry.join("\n");
+  entry = entry.filter((line) => !(DEPENDENCY_ITEM.test(line) && heldNames.has(DEPENDENCY_ITEM.exec(line)[1])));
+  entry = entry.filter((line, i) => {
+    if (!DEPENDENCY_BULLET.test(line)) return true;
+    let next = i + 1;
+    while (next < entry.length && DEPENDENCY_BULLET.test(entry[next])) next += 1;
+    return next < entry.length && DEPENDENCY_ITEM.test(entry[next]);
+  });
+  entry = entry.filter((line, i) => {
+    if (!line.startsWith("### ")) return true;
+    let next = i + 1;
+    while (next < entry.length && entry[next].trim() === "") next += 1;
+    return next < entry.length && !entry[next].startsWith("#");
+  });
+  entry = entry.filter((line, i) => line.trim() !== "" || i === 0 || entry[i - 1].trim() !== "");
+  if (entry.join("\n") === original) return after;
+  if (tail > 0 && entry.at(-1)?.trim() === "" && lines[lines.length - tail].trim() === "") entry.pop();
+  return [...lines.slice(0, start), ...entry, ...lines.slice(lines.length - tail)].join("\n");
+}
+
 export function scopedVersion(root, { scope, runChangesetVersion = defaultChangesetVersion, versionsOf = npmVersions, log = console.log } = {}) {
   scope ??= readScope(root);
   if (!scope.enabled) fail(`${SCOPE_FILE} has "enabled": false; refusing to version`);
@@ -331,6 +409,9 @@ export function scopedVersion(root, { scope, runChangesetVersion = defaultChange
   const beforeVersions = new Map(before.map((m) => [m.manifest.name, m.manifest.version]));
   const held = before.filter((m) => !scope.packages.includes(m.manifest.name));
   const heldChangelogs = new Map(held.map((m) => [m.dir, existsSync(join(m.dir, "CHANGELOG.md")) ? readFileSync(join(m.dir, "CHANGELOG.md"), "utf8") : undefined]));
+  const releasing = before.filter((m) => scope.packages.includes(m.manifest.name));
+  const releasingChangelogs = new Map(releasing.map((m) => [m.dir, existsSync(join(m.dir, "CHANGELOG.md")) ? readFileSync(join(m.dir, "CHANGELOG.md"), "utf8") : undefined]));
+  const heldNames = new Set(held.map((m) => m.manifest.name));
 
   // 1. set aside the held part of every changeset
   const setAside = [];
@@ -363,6 +444,13 @@ export function scopedVersion(root, { scope, runChangesetVersion = defaultChange
     if (changelog !== undefined) writeFileSync(join(m.dir, "CHANGELOG.md"), changelog);
   }
   for (const entry of setAside) writeFileSync(entry.path, entry.held);
+  // ... and every in-scope package keeps its pins on held packages: a dependent bump of a held package is a version
+  // that this release does not publish.
+  for (const m of releasing) {
+    writeFileSync(m.file, pinsStay(readFileSync(m.file, "utf8"), m.manifest, heldNames));
+    const changelog = join(m.dir, "CHANGELOG.md");
+    if (existsSync(changelog)) writeFileSync(changelog, changelogWithoutHeld(releasingChangelogs.get(m.dir), readFileSync(changelog, "utf8"), heldNames));
+  }
 
   // 4. verify
   const inventory = releaseInventory(beforeVersions, afterVersions, scope.packages);
@@ -374,6 +462,7 @@ export function scopedVersion(root, { scope, runChangesetVersion = defaultChange
       outOfScopeChanges: held.filter((m) => final.find((f) => f.dir === m.dir)?.manifest.version !== m.manifest.version).map((m) => m.manifest.name),
     }),
     ...(inventory.length ? prereleaseRuntimePins(final, scope.packages) : []),
+    ...(inventory.length ? uninstallablePins(final, scope.packages, cached) : []),
     ...takenVersions(inventory, cached),
   ];
   log(`changeset version moved ${inventory.length} in-scope package(s); put back ${putBack} out-of-scope package(s) that it had bumped as dependents.`);

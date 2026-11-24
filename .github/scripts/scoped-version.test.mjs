@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
 
-import { baselineProblems, pinsFollow, pendingCount, readScope, scopedVersion, splitChangeset, takenVersions, verifyInventory } from "./scoped-version.mjs";
+import { baselineProblems, changelogWithoutHeld, pinsFollow, pendingCount, readScope, scopedVersion, splitChangeset, takenVersions, uninstallablePins, verifyInventory } from "./scoped-version.mjs";
 
 const changeset = (bumps, body = "Change.\n\nDetails: TC-1\n") =>
   `---\n${Object.entries(bumps).map(([name, bump]) => `"${name}": ${bump}`).join("\n")}\n---\n\n${body}`;
@@ -127,4 +127,53 @@ test("refuses a manifest that is not at the scope file's baseline, and enabling 
   assert.throws(() => scopedVersion(stale.root, { runChangesetVersion: fakeChangesetVersion(), versionsOf: npm(), log: () => {} }), /a is at 2\.0\.0 but the scope file's baseline is 1\.9\.0/);
   const open = workspace(t, { scope: { baselines: undefined } });
   assert.throws(() => readScope(open.root), /"baselines" has no version for a/);
+});
+
+// `a` (in scope) requires a held stable `d`; `changeset version` bumps d as a dependent of something and moves a's pin
+// and CHANGELOG to that d, a version the put-back undoes.
+function heldDependency(t, { pin = "1.0.0" } = {}) {
+  const ws = workspace(t, { a: { dependencies: { d: pin } } });
+  ws.write("packages/d/package.json", json({ name: "d", version: "1.0.0" }));
+  const runChangesetVersion = (root) => {
+    fakeChangesetVersion()(root);
+    const a = JSON.parse(readFileSync(join(root, "packages/a/package.json"), "utf8"));
+    writeFileSync(join(root, "packages/a/package.json"), json({ ...a, dependencies: { d: "1.0.1" } }));
+    writeFileSync(join(root, "packages/a/CHANGELOG.md"), "# a\n\n## 2.0.1\n\n### Patch Changes\n\n- abc1234: Change.\n\n  Details: TC-1\n\n- Updated dependencies [def5678]\n  - d@1.0.1\n\n## 2.0.0\n");
+    writeFileSync(join(root, "packages/d/package.json"), json({ name: "d", version: "1.0.1" }));
+  };
+  return { ws, runChangesetVersion };
+}
+
+test("an in-scope package keeps its pins on held packages, and its CHANGELOG does not name their unreleased versions", (t) => {
+  const { ws, runChangesetVersion } = heldDependency(t);
+  const result = scopedVersion(ws.root, { runChangesetVersion, versionsOf: npm({ a: ["2.0.0"], d: ["1.0.0"] }), log: () => {} });
+  assert.deepEqual(result.inventory, [{ name: "a", from: "2.0.0", to: "2.0.1", level: "patch" }]);
+  const a = JSON.parse(ws.read("packages/a/package.json"));
+  assert.equal(a.version, "2.0.1");
+  assert.deepEqual(a.dependencies, { d: "1.0.0" });
+  assert.equal(JSON.parse(ws.read("packages/d/package.json")).version, "1.0.0");
+  assert.equal(ws.read("packages/a/CHANGELOG.md"), "# a\n\n## 2.0.1\n\n### Patch Changes\n\n- abc1234: Change.\n\n  Details: TC-1\n\n## 2.0.0\n");
+});
+
+test("a dependency entry keeps its in-scope items, and a section left with only held items goes", () => {
+  const before = "# a\n\n## 2.0.0\n";
+  const mixed = "# a\n\n## 2.0.1\n\n### Patch Changes\n\n- Updated dependencies [def5678]\n  - @x/d@1.0.1\n  - @x/s@3.1.0\n\n## 2.0.0\n";
+  assert.equal(changelogWithoutHeld(before, mixed, new Set(["@x/d"])), "# a\n\n## 2.0.1\n\n### Patch Changes\n\n- Updated dependencies [def5678]\n  - @x/s@3.1.0\n\n## 2.0.0\n");
+  const heldOnly = "# a\n\n## 2.0.1\n\n### Minor Changes\n\n- abc1234: Change.\n\n### Patch Changes\n\n- Updated dependencies [def5678]\n- Updated dependencies [def5678]\n  - @x/d@1.0.1\n\n## 2.0.0\n";
+  assert.equal(changelogWithoutHeld(before, heldOnly, new Set(["@x/d"])), "# a\n\n## 2.0.1\n\n### Minor Changes\n\n- abc1234: Change.\n\n## 2.0.0\n");
+});
+
+test("refuses an in-scope pin on a held version npm does not have, on another version than the workspace's, or when npm cannot be asked", (t) => {
+  const { ws, runChangesetVersion } = heldDependency(t);
+  assert.throws(() => scopedVersion(ws.root, { runChangesetVersion, versionsOf: npm({ a: ["2.0.0"] }), log: () => {} }), /a@2\.0\.1 requires d@1\.0\.0 \(dependencies\), which is outside the release scope and not on npm/);
+  const stray = heldDependency(t, { pin: "1.0.2" });
+  assert.throws(() => scopedVersion(stray.ws.root, { runChangesetVersion: stray.runChangesetVersion, versionsOf: npm({ a: ["2.0.0"], d: ["1.0.0", "1.0.2"] }), log: () => {} }), /a@2\.0\.1 requires d@1\.0\.2 \(dependencies\), but the workspace has d@1\.0\.0 outside the release scope/);
+  const offline = (name) => {
+    if (name === "d") throw new Error("npm view d versions failed: ENOTFOUND registry.npmjs.org");
+    return ["2.0.0"];
+  };
+  const third = heldDependency(t);
+  assert.throws(() => scopedVersion(third.ws.root, { runChangesetVersion: third.runChangesetVersion, versionsOf: offline, log: () => {} }), /ENOTFOUND/);
+  const manifests = [{ manifest: { name: "a", version: "2.0.1", dependencies: { s: "3.1.0" } } }, { manifest: { name: "s", version: "3.1.1" } }];
+  assert.match(uninstallablePins(manifests, ["a", "s"], npm())[0], /a@2\.0\.1 requires s@3\.1\.0 \(dependencies\), but the workspace has s@3\.1\.1$/);
 });
