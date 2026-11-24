@@ -11,12 +11,13 @@ if (basename(process.argv[1] ?? "") === "tc") {
 // Courier guard's record of this executable survives a version switch.
 process.argv[1] = fileURLToPath(import.meta.url);
 
-// Run the newest verified version under ~/.tinycloud/versions, else this install's own build.
-let entry = "../dist/index.js";
+// Run the newest verified version under ~/.tinycloud/versions, else this install's own build. A chosen version that
+// fails to load falls back to this install's own build inside launch().
+let launcher = null;
 try {
-  const { launchTarget } = await import("../dist/launcher.js");
-  entry = launchTarget(process.argv[1]) ?? entry;
+  launcher = await import("../dist/launcher.js");
 } catch {
   // A build without the launcher runs itself.
 }
-import(entry);
+if (launcher) launcher.launch(process.argv[1]);
+else import("../dist/index.js");

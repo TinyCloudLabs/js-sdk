@@ -6,13 +6,14 @@ import {
   autoUpdateCovers,
   autoUpdateOffReason,
   baseInstall,
-  onPath,
   pendingSwitch,
   readGlobalConfig,
   startAutoUpdateIfDue,
   startBackgroundUpdate,
+  takeAutoUpdateNotices,
 } from "./lib/self-update.js";
 import { recordedInstallKind } from "./lib/install-kind.js";
+import { resolveNpm } from "./lib/npm-command.js";
 import { readPointer, writeLease } from "./lib/versions.js";
 import { TC_OPTIONS_BEFORE_COURIER } from "./commands/courier.js";
 import { readFileSync } from "node:fs";
@@ -25,11 +26,13 @@ import { closeReplication } from "./lib/replication-registry.js";
 const { version } = JSON.parse(
   readFileSync(new URL("../package.json", import.meta.url), "utf-8")
 );
-// TC-4276: this process's global install, and whether it may update itself (npm or bun global installs only; the
-// background pass verifies that before installing anything).
+// TC-4276: this process's global install, and whether it may update itself (npm or bun global installs only).
+// `detectInstallKind` is a path guess; `verifiedKind` is what the background pass or `upgrade` verified (with npm and
+// bun themselves) for this exact global install, null until one of them has run.
 const base = baseInstall();
 const installKind = detectInstallKind(base.packageDir, process.cwd(), homedir());
-const selfUpdating = installKind === "npm-global" || installKind === "bun-global";
+const verifiedKind = recordedInstallKind(base.root, base.packageDir, base.version);
+const selfUpdating = installKind === "npm-global" || installKind === "bun-global" || verifiedKind !== null;
 import { theme } from "./output/theme.js";
 import { setJsonOutputRequested, shouldOutputJson, outputWarnings } from "./output/formatter.js";
 import { ProfileManager } from "./config/profiles.js";
@@ -241,15 +244,23 @@ function showUpdateNotice(): void {
   try {
     const check = readUpdateCheck(version, cachePath);
     if (check.due && !backgroundStarted) startUpdateCheck(fileURLToPath(new URL("./update-check-entry.js", import.meta.url)), version, cachePath);
+    const offReason = autoUpdateOffReason(process.env, readGlobalConfig());
+    const npmFound = resolveNpm(process.env) !== null;
+    const pinned = pinnedHere();
+    // TC-4276 consent: once per versions root, where automatic updates are on for a verified install; and once after
+    // each automatic switch. User-facing copy: Monica.
+    if (verifiedKind !== null) {
+      for (const line of takeAutoUpdateNotices(base.root, version, offReason === null && npmFound && !pinned)) process.stderr.write(`${line}\n`);
+    }
     // A release the background updater installs itself gets no notice (TC-4276). Only an install the updater has
     // verified counts; `detectInstallKind` is a path guess.
-    const offered = check.version && selfUpdating && autoUpdateCovers({
-      installKind: recordedInstallKind(base.root, base.packageDir, base.version) ?? "unknown",
+    const offered = check.version && autoUpdateCovers({
+      installKind: verifiedKind ?? "unknown",
       current: version,
       available: check.version,
-      offReason: autoUpdateOffReason(process.env, readGlobalConfig()),
-      npmOnPath: onPath("npm"),
-      pinned: pinnedHere(),
+      offReason,
+      npmOnPath: npmFound,
+      pinned,
     }) ? null : check.version;
     if (offered) process.stderr.write(`${updateNotice(installKind, version, offered)}\n`);
     // User-facing copy: TC-4276, approved by Monica.
@@ -267,7 +278,9 @@ function pinnedHere(): boolean {
 }
 
 // A Courier process, and any process started from a versioned install, leases its version: the updater neither
-// prunes it nor switches away from the version a running Courier uses (TC-4276).
+// prunes it nor switches away from the version a running Courier uses (TC-4276). The verified kind counts even where
+// the path guess misses the install, and a guessed one counts before the first verification, so no Courier the
+// updater could act on runs unleased.
 if (selfUpdating && (argv[0] === "courier" || version !== base.version)) {
   writeLease(base.root, { version, courier: argv[0] === "courier" });
 }

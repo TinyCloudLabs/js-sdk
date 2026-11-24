@@ -4,6 +4,7 @@ import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSyn
 import { tmpdir } from "node:os";
 import { delimiter, join, resolve } from "node:path";
 import { recordInstallKind } from "../src/lib/install-kind.js";
+import { FIRST_RUN_NOTICE } from "../src/lib/self-update.js";
 
 // TC-4276 (Naomi's ruling): a patch or minor the background updater installs itself gets no "update available"
 // notice; a major, or an install with automatic updates off, keeps it. Runs the built CLI as an npm global install.
@@ -102,5 +103,21 @@ describe.skipIf(process.platform !== "linux")("update notice with automatic upda
     cli.verified();
     cli.config({ autoUpdate: false });
     expect(cli.noticeFor(newerMinor)).toContain(`TinyCloud CLI ${newerMinor} is available.`);
+  });
+
+  test("a verified install says once, in a terminal, that it updates itself and how to turn that off", () => {
+    const cli = npmGlobalInstall();
+    cli.verified();
+    const first = cli.noticeFor(installed);
+    for (const line of FIRST_RUN_NOTICE) expect(first).toContain(line);
+    expect(cli.noticeFor(installed)).not.toContain(FIRST_RUN_NOTICE[0]);
+  });
+
+  test("no first-run notice where automatic updates are off, or before the install is verified", () => {
+    const off = npmGlobalInstall();
+    off.verified();
+    off.config({ autoUpdate: false });
+    expect(off.noticeFor(installed)).not.toContain(FIRST_RUN_NOTICE[0]);
+    expect(npmGlobalInstall().noticeFor(installed)).not.toContain(FIRST_RUN_NOTICE[0]);
   });
 });

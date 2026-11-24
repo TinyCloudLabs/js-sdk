@@ -560,6 +560,16 @@ On either recovery path, an orphaned `.recover-*` claim can hold a replacement o
 
 `PROFILE_LOCK_TIMEOUT` naming `profile-locks/{name}` means its turn lock is damaged (for example by a disk error): when no `tinycloud` or MCP process is using that profile, remove `~/.tinycloud/profile-locks/{name}`; it is recreated on the next write. A write that waited for the lock while `tinycloud profile delete` removed the profile fails with `PROFILE_NOT_FOUND` instead of recreating it.
 
+## Automatic Updates
+
+The CLI installs newer patch and minor releases of your channel in the background and uses them from the next command. A major release is never installed automatically; you get a notice instead.
+
+- **Checks:** each version has been on your channel for 6 hours and passes the provenance and npm signature checks. It must run before the CLI switches to it, and a failed switch returns to the previous version.
+- **Files:** versions live in `~/.tinycloud/versions/`. The log is `~/.tinycloud/versions/auto-update.log`.
+- **Off switches:** `TC_NO_AUTO_UPDATE=1` or `"autoUpdate": false` in `~/.tinycloud/config.json`. It is off when `CI` is set to anything but `false` or `0`.
+- **`tinycloud upgrade`** updates on request. `--to <version>` switches to an exact version and pauses automatic updates; `--yes` skips the question and is needed outside a terminal. A refusal's `reason` is one of `UNSUPPORTED_INSTALL`, `NEEDS_YES`, `DECLINED`, `LOCKED`, `NPM_NOT_FOUND`, `INVALID_VERSION`, `VERSION_NOT_FOUND`, `TARGET_TOO_OLD`, `REGISTRY_UNAVAILABLE`, `COURIER_RUNNING`, `PROVENANCE_MISSING`, `PROVENANCE_INVALID`, `PROVENANCE_UNAVAILABLE`, `SIGNATURE_INVALID` or `DEPENDENCY_NOT_FROM_REGISTRY`.
+- The standalone `courier` package isn't updated this way.
+
 ## DID Formats
 
 - **Session key**: `did:key:z6Mk...#z6Mk...` — generated at init
@@ -569,7 +579,7 @@ Use `--json` for machine-readable output; interactive commands can render human 
 
 General storage/auth exit codes: 0 success, 1 operation error (including `PROFILE_MIGRATION_REQUIRED` and `PROBE_FAILED`), 2 invalid input, 3 authentication required, 4 not found, 5 permission denied, 6 network error, 7 node error, 8 pending (`tinycloud secrets wait`; `onboard` and `auth grant` with `--timeout`, where it is an approval still pending or OpenKey not reachable), 10 storage full, 130 interrupted (`CANCELLED`). `tinycloud share` uses its own: 1 profile lock timeout, sender-history retry or unconfirmed revocation (`PROFILE_LOCK_TIMEOUT`, `SHARE_HISTORY_RETRY`, `SHARE_REVOKE_UNCONFIRMED`), 3 upload authority required, 4 unavailable, expired, revoked bearer link, upload failed or revocation refused (`SHARE_LINK_UNAVAILABLE`, `SHARE_REVOKED`, `SHARE_REVOKE_REJECTED`), 5 permission denied (`PERMISSION_DENIED`, `SHARE_ISSUER_KEY_UNAVAILABLE`) or verification failed, 6 recipient authorization required or network error, 7 byte limit, 8 (unused by share: output conflicts, unsafe filenames and unsafe folder paths are exit 2 `OUTPUT_EXISTS`, `UNSAFE_FILENAME`, `UNSAFE_PATH`), 9 partial success, 10 storage full.
 
-`tinycloud upgrade` uses its own: 0 success; 12: `tinycloud upgrade` refused; nothing changed (`reason` in the JSON). 13: the update failed; the previous version runs. 14: the update failed and the previous version couldn't be restored; the output names the recovery command.
+`tinycloud upgrade` uses its own: 0 success; 1: `tinycloud upgrade` hit an unexpected error before changing anything; the current version runs. 12: `tinycloud upgrade` refused; nothing changed (`reason` in the JSON). 13: the update failed; the previous version runs. 14: the update failed and the previous version couldn't be restored; the output names the recovery command.
 
 `tinycloud secrets put` seals to the network key by default. Set `TC_SECRETS_NAMED_KEY_WRITES=1` to seal to the secret's own key. With opt-in, a node without `encryption-named-keys-v1` returns `NAMED_KEYS_UNSUPPORTED` (exit 11) before any secret permission request or write. A failed feature check returns `NAMED_KEYS_CHECK_FAILED` (exit 6). Adopt readers for both formats before enabling per-secret keys for writes.
 

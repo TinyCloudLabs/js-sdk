@@ -313,9 +313,17 @@ jobs:
       # Fails red when a published version requires an internal version npm
       # does not show (even one npm accepted), and prints the commands that move
       # its dist-tag back and forward. It never moves a dist-tag itself.
+      # Then fails red when a CLI version this run published is not marked
+      # _hasShrinkwrap by npm: the CLI's prepack writes the npm-shrinkwrap.json
+      # that pins its runtime tree into the published tarball
+      # (packages/cli/scripts/release-shrinkwrap.mjs, TC-4276), and a prepack
+      # that did not run would publish it unpinned. Same step, so the attempt
+      # shapes in check-npm-release-provenance.mjs stay as they are.
       - name: Confirm npm has every released version
         if: steps.check.outputs.pending != '0'
-        run: node .github/scripts/check-npm-release-provenance.mjs post-publish "$RUNNER_TEMP/changeset-publish.log"
+        run: |
+          node .github/scripts/check-npm-release-provenance.mjs post-publish "$RUNNER_TEMP/changeset-publish.log"
+          node packages/cli/scripts/release-shrinkwrap.mjs published "$RUNNER_TEMP/changeset-publish.log"
         env:
           RELEASE_DIST_TAGS_FILE: ${{ runner.temp }}/npm-dist-tags.json
           RELEASE_SCOPE_FILE: .github/release-scope.json
@@ -501,9 +509,14 @@ jobs:
           retention-days: 1
           if-no-files-found: error
 
+      # As in the release job; a release commit from before the CLI's shrinkwrap has no script and is not checked for it.
       - name: Confirm npm has every released version
         if: steps.unfinished.outputs.sha != ''
-        run: node "$RUNNER_TEMP/release-scripts/check-npm-release-provenance.mjs" post-publish "$RUNNER_TEMP/changeset-publish.log"
+        run: |
+          node "$RUNNER_TEMP/release-scripts/check-npm-release-provenance.mjs" post-publish "$RUNNER_TEMP/changeset-publish.log"
+          if [ -f packages/cli/scripts/release-shrinkwrap.mjs ]; then
+            node packages/cli/scripts/release-shrinkwrap.mjs published "$RUNNER_TEMP/changeset-publish.log"
+          fi
         env:
           RELEASE_DIST_TAGS_FILE: ${{ runner.temp }}/npm-dist-tags.json
           RELEASE_SCOPE_FILE: .github/release-scope.json

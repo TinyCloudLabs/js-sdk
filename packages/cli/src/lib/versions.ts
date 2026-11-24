@@ -4,12 +4,14 @@
  *
  *   <root>/current.json                     pointer {version, base, auto, pinned, previous?}: replaced by rename only
  *   <root>/<X.Y.Z>/node_modules/@tinycloud/cli/   an npm --prefix install of exactly that version, never rewritten
- *   <root>/<X.Y.Z>/.verified                written last, after provenance and the smoke test passed
- *   <root>/.leases/<pid>.json               {pid, version, courier}: a process that may still use <version>
+ *   <root>/<X.Y.Z>/.verified                written last, after provenance and the smoke test passed; the launcher
+ *                                           deletes it when that version fails to load, so no run chooses it again
+ *   <root>/.leases/<pid>.json               {pid, version, courier, start}: a process that may still use <version>
  *
  * The root is `TC_VERSIONS_DIR`, else `~/.tinycloud/versions` under the real home (not TC_HOME: the binary is per user).
  */
-import { closeSync, fsyncSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, unlinkSync, writeSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { closeSync, fsyncSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, unlinkSync, writeSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve, sep } from "node:path";
 
@@ -140,15 +142,34 @@ export function launchContext(): LaunchContext | undefined {
   return (globalThis as { [LAUNCH_CONTEXT]?: LaunchContext })[LAUNCH_CONTEXT];
 }
 
+/**
+ * A lease not rewritten for this long is stale whatever its pid says: the bound on a reused pid when the start time
+ * can't be read (Windows) or wasn't recorded. A holder renews its lease well inside it, so a long-running Courier keeps it.
+ */
+export const LEASE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+const LEASE_RENEW_MS = 60 * 60 * 1000;
+/** `ps` reports start times to the second, and Node's clock starts a little after the process does. */
+const START_SLACK_MS = 5000;
+
 /** Record that this process may use `version` until it exits. Returns the release function. */
 export function writeLease(root: string, lease: Omit<Lease, "pid">): () => void {
   const file = join(root, ".leases", `${process.pid}.json`);
+  const content = JSON.stringify({ pid: process.pid, ...lease, start: processStartTime(process.pid) });
   try {
-    writeFileAtomic(file, JSON.stringify({ pid: process.pid, ...lease }));
+    writeFileAtomic(file, content);
   } catch {
     return () => undefined;
   }
+  const renew = setInterval(() => {
+    try {
+      writeFileAtomic(file, content);
+    } catch {
+      // Retried on the next tick; the lease only goes stale after a day without one.
+    }
+  }, LEASE_RENEW_MS);
+  renew.unref();
   const release = () => {
+    clearInterval(renew);
     try {
       unlinkSync(file);
     } catch {
@@ -159,7 +180,10 @@ export function writeLease(root: string, lease: Omit<Lease, "pid">): () => void 
   return release;
 }
 
-/** Leases whose process still exists. Leases of exited processes are removed. A reused pid only keeps a version longer. */
+/**
+ * Leases of processes that still run. A lease is stale, and removed, once its pid is dead, its pid now belongs to a
+ * process started at another time than the one recorded, or it has gone unrenewed for {@link LEASE_MAX_AGE_MS}.
+ */
 export function liveLeases(root: string, alive: (pid: number) => boolean = processAlive): Lease[] {
   const directory = join(root, ".leases");
   let names: string[];
@@ -175,7 +199,7 @@ export function liveLeases(root: string, alive: (pid: number) => boolean = proce
     try {
       const value = JSON.parse(readFileSync(file, "utf8")) as Record<string, unknown>;
       if (typeof value.pid !== "number" || !Number.isSafeInteger(value.pid) || !isVersion(value.version)) continue;
-      if (!alive(value.pid)) {
+      if (!alive(value.pid) || Date.now() - statSync(file).mtimeMs > LEASE_MAX_AGE_MS || startChanged(value.start, value.pid)) {
         rmSync(file, { force: true });
         continue;
       }
@@ -194,6 +218,38 @@ export function processAlive(pid: number): boolean {
   } catch (error) {
     return (error as NodeJS.ErrnoException).code === "EPERM";
   }
+}
+
+/**
+ * When `pid` started, as a token to compare with a later reading, or null when it can't be read (Windows, no /proc or
+ * `ps`). Linux: the boot id and the start time in clock ticks since boot. Elsewhere `@<epoch ms>`, from `ps`.
+ */
+export function processStartTime(pid: number): string | null {
+  if (process.platform === "win32") return null;
+  if (process.platform === "linux") {
+    try {
+      const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+      // Field 22; the fields after the parenthesised command name start at field 3.
+      const ticks = stat.slice(stat.lastIndexOf(")") + 2).split(" ")[19] ?? "";
+      return /^\d+$/.test(ticks) ? `${readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim()}:${ticks}` : null;
+    } catch {
+      return null;
+    }
+  }
+  // This process's own start needs no `ps`: every versioned run writes a lease, and a spawn costs more than the launch.
+  if (pid === process.pid) return `@${Math.round(performance.timeOrigin)}`;
+  const ps = spawnSync("ps", ["-o", "lstart=", "-p", String(pid)], { encoding: "utf8", timeout: 2000, env: { ...process.env, LC_ALL: "C", TZ: "UTC" } });
+  const started = ps.status === 0 ? Date.parse(`${ps.stdout.trim()} UTC`) : Number.NaN;
+  return Number.isFinite(started) ? `@${started}` : null;
+}
+
+/** Whether `pid` now belongs to a process started at another time than `recorded`; false when either is unknown. */
+function startChanged(recorded: unknown, pid: number): boolean {
+  if (typeof recorded !== "string") return false;
+  const current = processStartTime(pid);
+  if (current === null) return false;
+  if (recorded.startsWith("@") && current.startsWith("@")) return Math.abs(Number(recorded.slice(1)) - Number(current.slice(1))) > START_SLACK_MS;
+  return recorded !== current;
 }
 
 /** Installed version directories, newest naming not implied. */

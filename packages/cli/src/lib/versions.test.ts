@@ -1,8 +1,19 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { activeVersion, liveLeases, markVerified, versionPackageDir, versionsRoot, writeFileAtomic, writeLease, writePointer } from "./versions.js";
+import {
+  activeVersion,
+  LEASE_MAX_AGE_MS,
+  liveLeases,
+  markVerified,
+  processStartTime,
+  versionPackageDir,
+  versionsRoot,
+  writeFileAtomic,
+  writeLease,
+  writePointer,
+} from "./versions.js";
 
 const dirs: string[] = [];
 afterEach(() => {
@@ -58,5 +69,37 @@ describe("leases", () => {
     expect(liveLeases(root, () => true)).toEqual([{ pid: process.pid, version: "1.9.5", courier: true }]);
     release();
     expect(liveLeases(root)).toEqual([]);
+  });
+
+  test("this process's fresh lease is live and records when the process started", () => {
+    const root = join(scratch(), "versions");
+    const release = writeLease(root, { version: "1.9.5", courier: false });
+    const start = processStartTime(process.pid);
+    expect(start).not.toBeNull();
+    expect(JSON.parse(readFileSync(join(root, ".leases", `${process.pid}.json`), "utf8")).start).toBe(start);
+    expect(liveLeases(root)).toEqual([{ pid: process.pid, version: "1.9.5", courier: false }]);
+    release();
+  });
+
+  test("a lease whose pid now belongs to a process started at another time is stale", () => {
+    const root = join(scratch(), "versions");
+    const start = processStartTime(process.pid)!;
+    // The same pid, started a minute earlier: a process that exited and whose pid this one reused.
+    const earlier = start.startsWith("@") ? `@${Number(start.slice(1)) - 60_000}` : start.replace(/\d+$/, (ticks) => String(Number(ticks) - 6000));
+    const file = join(root, ".leases", `${process.pid}.json`);
+    writeFileAtomic(file, JSON.stringify({ pid: process.pid, version: "1.9.4", courier: true, start: earlier }));
+    expect(liveLeases(root)).toEqual([]);
+    expect(existsSync(file)).toBe(false);
+  });
+
+  test("a lease not renewed for 24 h is stale even while its pid and start time match", () => {
+    const root = join(scratch(), "versions");
+    const file = join(root, ".leases", `${process.pid}.json`);
+    writeFileAtomic(file, JSON.stringify({ pid: process.pid, version: "1.9.4", courier: true, start: processStartTime(process.pid) }));
+    expect(liveLeases(root)).toHaveLength(1);
+    const old = new Date(Date.now() - LEASE_MAX_AGE_MS - 60_000);
+    utimesSync(file, old, old);
+    expect(liveLeases(root)).toEqual([]);
+    expect(existsSync(file)).toBe(false);
   });
 });

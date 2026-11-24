@@ -81,6 +81,8 @@ function refusalLine(result: Extract<UpgradeResult, { status: "refused" }>, manu
     case "PROVENANCE_MISSING": return `TinyCloud CLI ${to} has no provenance record, so it can't be verified and wasn't installed.`;
     case "PROVENANCE_INVALID": return `TinyCloud CLI ${to} failed the provenance check, so it wasn't installed.`;
     case "SIGNATURE_INVALID": return `A package in TinyCloud CLI ${to} failed npm's signature check, so it wasn't installed.`;
+    case "PROVENANCE_UNAVAILABLE": return `Couldn't reach the provenance service to verify TinyCloud CLI ${to}, so nothing was installed. Check your network and retry in a few minutes.`;
+    case "DEPENDENCY_NOT_FROM_REGISTRY": return `TinyCloud CLI ${to} depends on a package that isn't from the npm registry, so it can't be verified and nothing was installed.`;
   }
 }
 

@@ -7,22 +7,50 @@
  * - Any other `@tinycloud/*` package that has an attestation must carry the same identity; one without is allowed and
  *   reported (TC-4278 republishes the last unattested ones).
  */
-import { createPublicKey, verify as verifySignature } from "node:crypto";
+import { createHash, createPublicKey, verify as verifySignature } from "node:crypto";
+import { readTarballFiles } from "./tarball.js";
 import { CLI_PACKAGE } from "./versions.js";
 
 export const REGISTRY = "https://registry.npmjs.org";
+/**
+ * The Release workflow's Fulcio certificate identity. Every field is compared for exact equality with the verified
+ * certificate (Naomi, TC-4276): no pattern matching, because sigstore's own SAN policy is a regex and would accept
+ * `…@refs/heads/master-evil`.
+ */
 export const RELEASE_IDENTITY = {
   certificateIssuer: "https://token.actions.githubusercontent.com",
   certificateIdentityURI: "https://github.com/TinyCloudLabs/js-sdk/.github/workflows/changesets.yml@refs/heads/master",
+  /** Fulcio extensions 1.3.6.1.4.1.57264.1.12 / .14 / .15: source repository URI, ref and (rename-proof) id. */
+  sourceRepositoryURI: "https://github.com/TinyCloudLabs/js-sdk",
+  sourceRepositoryRef: "refs/heads/master",
+  sourceRepositoryId: "913991042",
 } as const;
 const SLSA_PROVENANCE = "https://slsa.dev/provenance/v1";
+const FULCIO_SOURCE_OIDS = {
+  "1.3.6.1.4.1.57264.1.12": RELEASE_IDENTITY.sourceRepositoryURI,
+  "1.3.6.1.4.1.57264.1.14": RELEASE_IDENTITY.sourceRepositoryRef,
+  "1.3.6.1.4.1.57264.1.15": RELEASE_IDENTITY.sourceRepositoryId,
+} as const;
 
-export type VerificationCode = "PROVENANCE_MISSING" | "PROVENANCE_INVALID" | "SIGNATURE_INVALID";
+export type VerificationCode =
+  | "PROVENANCE_MISSING"
+  | "PROVENANCE_INVALID"
+  | "PROVENANCE_UNAVAILABLE"
+  | "SIGNATURE_INVALID"
+  | "DEPENDENCY_NOT_FROM_REGISTRY";
 
 export class VerificationError extends Error {
   constructor(readonly code: VerificationCode, readonly packageId: string, detail: string) {
     super(`${packageId}: ${detail}`);
     this.name = "VerificationError";
+  }
+}
+
+/** Sigstore's trust root or transparency data couldn't be fetched: nothing was verified either way. */
+export class ProvenanceUnavailableError extends Error {
+  constructor(cause: unknown) {
+    super(`sigstore trust root unavailable: ${cause instanceof Error ? cause.message : String(cause)}`);
+    this.name = "ProvenanceUnavailableError";
   }
 }
 
@@ -42,12 +70,61 @@ export interface ReleaseRegistry {
   keys(): Promise<RegistryKey[]>;
   /** Publish time in ms, only needed for a signature made with a key that has since expired. */
   publishedAt(name: string, version: string): Promise<number>;
+  /** The package's tarball from the registry, unchecked. */
+  tarball(name: string, version: string): Promise<Uint8Array>;
 }
 
-/** Verifies a Sigstore bundle against the identity policy; throws when it does not hold. */
-export type BundleVerifier = (bundle: unknown, policy: typeof RELEASE_IDENTITY) => Promise<void>;
+/** The signer of a verified bundle, as @sigstore/verify reports it. */
+export interface SignerIdentity {
+  subjectAlternativeName?: string;
+  extensions?: { issuer?: string };
+  oids?: { oid?: { id: number[] }; value: Uint8Array }[];
+}
 
-export interface LockedPackage { name: string; version: string; integrity: string }
+/**
+ * Verifies a Sigstore bundle cryptographically (certificate chain, transparency log, signature) with no identity
+ * policy, and returns its signer for `releaseIdentityMismatch`. Throws `ProvenanceUnavailableError` when the trust
+ * root can't be fetched; any other throw means the bundle doesn't verify.
+ */
+export type BundleVerifier = (bundle: unknown) => Promise<SignerIdentity>;
+
+/** A Fulcio v2 extension value: a DER UTF8String. */
+function derUtf8(value: Uint8Array): string | null {
+  const bytes = Buffer.from(value);
+  if (bytes[0] !== 0x0c || bytes.length < 2) return null;
+  let length = bytes[1];
+  let offset = 2;
+  if (length & 0x80) {
+    const count = length & 0x7f;
+    if (count === 0 || count > 2 || bytes.length < 2 + count) return null;
+    length = 0;
+    for (let index = 0; index < count; index += 1) length = length * 256 + bytes[2 + index];
+    offset = 2 + count;
+  }
+  return bytes.length === offset + length ? bytes.subarray(offset).toString("utf8") : null;
+}
+
+/** Why `identity` isn't the Release workflow's, or null when it is. Exact string equality only. */
+export function releaseIdentityMismatch(identity: SignerIdentity): string | null {
+  if (identity.subjectAlternativeName !== RELEASE_IDENTITY.certificateIdentityURI) {
+    return `signed by ${JSON.stringify(identity.subjectAlternativeName)}, not the Release workflow`;
+  }
+  if (identity.extensions?.issuer !== RELEASE_IDENTITY.certificateIssuer) return `issuer ${JSON.stringify(identity.extensions?.issuer)}`;
+  for (const [oid, expected] of Object.entries(FULCIO_SOURCE_OIDS)) {
+    const values = (identity.oids ?? []).filter((entry) => entry.oid?.id.join(".") === oid).map((entry) => derUtf8(entry.value));
+    if (values.length !== 1 || values[0] !== expected) return `certificate extension ${oid} is ${JSON.stringify(values)}, not ${JSON.stringify(expected)}`;
+  }
+  return null;
+}
+
+export interface LockedPackage {
+  name: string;
+  version: string;
+  integrity: string;
+  /** Lockfile flags: a dev package isn't installed with the CLI; an optional one may be skipped on this platform. */
+  dev?: boolean;
+  optional?: boolean;
+}
 
 export function packageUrlPath(name: string): string {
   return name.startsWith("@") ? `@${encodeURIComponent(name.slice(1))}` : encodeURIComponent(name);
@@ -91,11 +168,15 @@ export async function verifyProvenance(registry: ReleaseRegistry, verifyBundle: 
   if (!subject || subject.name !== purl(manifest.name, manifest.version) || subject.digest?.sha512 !== sha512Hex(manifest.dist.integrity)) {
     throw new VerificationError("PROVENANCE_INVALID", id, "provenance does not name this package's tarball");
   }
+  let signer: SignerIdentity;
   try {
-    await verifyBundle(provenance.bundle, RELEASE_IDENTITY);
+    signer = await verifyBundle(provenance.bundle);
   } catch (error) {
+    if (error instanceof ProvenanceUnavailableError) throw new VerificationError("PROVENANCE_UNAVAILABLE", id, error.message);
     throw new VerificationError("PROVENANCE_INVALID", id, `provenance does not verify: ${(error as Error).message}`);
   }
+  const mismatch = releaseIdentityMismatch(signer);
+  if (mismatch) throw new VerificationError("PROVENANCE_INVALID", id, `provenance ${mismatch}`);
   return true;
 }
 
@@ -125,8 +206,10 @@ export async function verifyCliRelease(registry: ReleaseRegistry, verifyBundle: 
 }
 
 /**
- * The registry packages of an npm v2/v3 lockfile. Anything that does not come from the npm registry refuses; packages
- * bundled inside another tarball are covered by that tarball's integrity.
+ * The registry packages of an npm v2/v3 lockfile. Anything that isn't a registry tarball (git, file, link, a tarball
+ * URL, or an alias to one of those) refuses with `DEPENDENCY_NOT_FROM_REGISTRY`; the updater checks this on a
+ * lockfile-only resolve, before anything is downloaded or run. Packages bundled inside another tarball are covered by
+ * that tarball's integrity.
  */
 export function lockedPackages(lockfile: unknown): LockedPackage[] {
   if (!lockfile || typeof lockfile !== "object" || !("packages" in lockfile) || !lockfile.packages || typeof lockfile.packages !== "object") {
@@ -140,12 +223,77 @@ export function lockedPackages(lockfile: unknown): LockedPackage[] {
     const version = "version" in entry ? entry.version : undefined;
     const integrity = "integrity" in entry ? entry.integrity : undefined;
     const resolved = "resolved" in entry ? entry.resolved : undefined;
-    if (typeof version !== "string" || typeof integrity !== "string" || typeof resolved !== "string" || !resolved.startsWith(`${REGISTRY}/`)) {
-      throw new VerificationError("SIGNATURE_INVALID", path, "not a package from the npm registry");
+    const link = "link" in entry && entry.link === true;
+    if (link || typeof version !== "string" || typeof integrity !== "string" || typeof resolved !== "string" || !isRegistryTarball(resolved, name)) {
+      throw new VerificationError("DEPENDENCY_NOT_FROM_REGISTRY", path, `not a package from the npm registry (${JSON.stringify(resolved ?? null)})`);
     }
-    packages.push({ name, version, integrity });
+    packages.push({
+      name,
+      version,
+      integrity,
+      ...("dev" in entry && entry.dev === true ? { dev: true } : {}),
+      ...("optional" in entry && entry.optional === true ? { optional: true } : {}),
+    });
   }
   return packages;
+}
+
+/** `https://registry.npmjs.org/<name>/-/<file>.tgz`: the registry's own tarball URL for `name`. */
+function isRegistryTarball(resolved: string, name: string): boolean {
+  let url: URL;
+  try {
+    url = new URL(resolved);
+  } catch {
+    return false;
+  }
+  return url.origin === REGISTRY && url.search === "" && url.hash === "" &&
+    url.pathname.startsWith(`/${name}/-/`) && url.pathname.endsWith(".tgz") && !url.pathname.slice(name.length + 4).includes("/");
+}
+
+function sha512Base64(data: Uint8Array): string {
+  return createHash("sha512").update(data).digest("base64");
+}
+
+/**
+ * The runtime dependency tree the verified CLI release pins in its `npm-shrinkwrap.json` (TC-4276, Naomi's
+ * dependencies gate), read from the downloaded tarball after checking it is the signed one. Nothing is installed or
+ * run: a dependency that isn't a registry tarball refuses here. Null when the release has no shrinkwrap.
+ */
+export async function releaseShrinkwrap(registry: ReleaseRegistry, cli: VersionManifest): Promise<LockedPackage[] | null> {
+  const id = `${cli.name}@${cli.version}`;
+  const tarball = await registry.tarball(cli.name, cli.version);
+  const expected = cli.dist.integrity.split(/\s+/).find((part) => part.startsWith("sha512-"))?.slice("sha512-".length);
+  if (!expected || sha512Base64(tarball) !== expected) throw new VerificationError("SIGNATURE_INVALID", id, "downloaded tarball is not the one the registry signed");
+  let file: Buffer | undefined;
+  try {
+    file = readTarballFiles(tarball, ["npm-shrinkwrap.json"]).get("npm-shrinkwrap.json");
+  } catch {
+    throw new VerificationError("SIGNATURE_INVALID", id, "unreadable tarball");
+  }
+  if (!file) return null;
+  let shrinkwrap: unknown;
+  try {
+    shrinkwrap = JSON.parse(file.toString("utf8"));
+  } catch {
+    throw new VerificationError("SIGNATURE_INVALID", id, "unreadable npm-shrinkwrap.json");
+  }
+  return lockedPackages(shrinkwrap).filter((entry) => !entry.dev);
+}
+
+/**
+ * The staging lockfile npm resolved must be the release's shrinkwrap plus the CLI itself: the same packages, versions
+ * and integrities, nothing more and nothing less (wherever npm places them).
+ */
+export function checkResolvedAgainstShrinkwrap(resolved: LockedPackage[], shrinkwrap: LockedPackage[], cli: VersionManifest): void {
+  const key = (entry: LockedPackage) => `${entry.name}@${entry.version} ${entry.integrity}`;
+  const want = new Set([...shrinkwrap.map(key), key({ name: cli.name, version: cli.version, integrity: cli.dist.integrity })]);
+  const got = new Set(resolved.filter((entry) => !entry.dev).map(key));
+  const extra = [...got].filter((entry) => !want.has(entry));
+  const missing = [...want].filter((entry) => !got.has(entry));
+  if (extra.length > 0 || missing.length > 0) {
+    throw new VerificationError("SIGNATURE_INVALID", `${cli.name}@${cli.version}`,
+      `resolved tree differs from the release's npm-shrinkwrap.json (extra: ${extra.slice(0, 3).join(", ") || "none"}; missing: ${missing.slice(0, 3).join(", ") || "none"})`);
+  }
 }
 
 /**
@@ -165,7 +313,9 @@ export async function verifyStagedTree(
   }
   const keys = await registry.keys();
   const unattested: string[] = [];
-  const queue = [...new Map(packages.map((entry) => [`${entry.name}@${entry.version}`, entry])).values()];
+  // Every distinct (name, version, integrity) is checked: a second entry for the same version with another
+  // integrity must not hide behind the first.
+  const queue = [...new Map(packages.map((entry) => [`${entry.name}@${entry.version}\0${entry.integrity}`, entry])).values()];
   const worker = async (): Promise<void> => {
     for (let entry = queue.shift(); entry; entry = queue.shift()) {
       const id = `${entry.name}@${entry.version}`;
@@ -175,7 +325,7 @@ export async function verifyStagedTree(
       }
       if (entry.name === CLI_PACKAGE) continue;
       await verifyRegistrySignature(registry, manifest, keys);
-      if (entry.name.startsWith("@tinycloud/") && !await verifyProvenance(registry, verifyBundle, manifest)) unattested.push(id);
+      if (entry.name.startsWith("@tinycloud/") && !await verifyProvenance(registry, verifyBundle, manifest) && !unattested.includes(id)) unattested.push(id);
     }
   };
   await Promise.all(Array.from({ length: Math.min(concurrency, queue.length) }, worker));
@@ -225,13 +375,29 @@ export function npmRegistry(timeoutMs = 30_000): ReleaseRegistry {
       if (!Number.isFinite(time)) throw new Error(`no publish time for ${name}@${version}`);
       return time;
     },
+    async tarball(name, version) {
+      const url = `${REGISTRY}/${name}/-/${name.split("/").pop()}-${version}.tgz`;
+      const response = await fetch(url, { signal: AbortSignal.timeout(Math.max(timeoutMs, 120_000)) });
+      if (response.status !== 200) throw new Error(`${url} returned ${response.status}`);
+      return new Uint8Array(await response.arrayBuffer());
+    },
   };
 }
 
-/** Sigstore verification with the pinned `sigstore` dependency, loaded only when an update runs. */
+/**
+ * Sigstore verification with the pinned `sigstore` dependency, loaded only when an update runs. The trust root is
+ * fetched once per process (TUF, cached in `tufCachePath`); failing to fetch it is `ProvenanceUnavailableError`.
+ * No identity policy goes to sigstore: its SAN check is a regex, so `releaseIdentityMismatch` decides the identity.
+ */
 export function sigstoreVerifier(tufCachePath: string): BundleVerifier {
-  return async (bundle, policy) => {
-    const { verify } = await import("sigstore");
-    await verify(bundle as Parameters<typeof verify>[0], { ...policy, tufCachePath });
+  let verifier: Promise<{ verify(bundle: never): { identity?: SignerIdentity } }> | undefined;
+  return async (bundle) => {
+    const pending = verifier ??= import("sigstore").then(({ createVerifier }) => createVerifier({ tufCachePath })).catch((error: unknown) => {
+      verifier = undefined;
+      throw new ProvenanceUnavailableError(error);
+    });
+    const { identity } = (await pending).verify(bundle as never);
+    if (!identity) throw new Error("the bundle has no certificate identity");
+    return identity;
   };
 }

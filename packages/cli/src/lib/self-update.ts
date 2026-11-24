@@ -7,19 +7,22 @@
  * `tinycloud upgrade` run through here, under one cross-process lock.
  */
 import { spawn } from "node:child_process";
-import { accessSync, appendFileSync, constants, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, truncateSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, truncateSync } from "node:fs";
 import { homedir } from "node:os";
-import { delimiter, join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { CONFIG_FILE } from "../config/constants.js";
 import { checkForUpdate, compareVersionStrings, isAutoUpdateEnabled, selectUpdateVersion, type InstallKind } from "./auto-update.js";
 import { acquireInstallLock, type InstallLock } from "./install-lock.js";
 import { bunGlobalModules, recordInstallKind, verifyInstallKind, type GlobalRoots } from "./install-kind.js";
+import { resolveNpm } from "./npm-command.js";
 import {
+  checkResolvedAgainstShrinkwrap,
   lockedPackages,
   npmRegistry,
   packageUrlPath,
   REGISTRY,
+  releaseShrinkwrap,
   sigstoreVerifier,
   VerificationError,
   verifyCliRelease,
@@ -71,8 +74,11 @@ const DAY_MS = 24 * HOUR_MS;
 export const SOAK_MS = 6 * HOUR_MS;
 /** How long a foreground command waits before it may start another background check. */
 const SPAWN_CLAIM_MS = 15 * 60 * 1000;
-/** The first release with the launcher. An older version would run the old in-place `upgrade`. */
-export const MIN_TARGET_VERSION = "1.9.4";
+/**
+ * The first launcher-capable release (with its npm-shrinkwrap.json); an older version would run the old in-place
+ * `upgrade`. This must move if the launcher release ships under another version.
+ */
+export const MIN_TARGET_VERSION = "1.10.0";
 
 export type RefusalReason =
   | "UNSUPPORTED_INSTALL"
@@ -115,8 +121,13 @@ export interface UpdaterDeps {
   now(): number;
   registry: ReleaseRegistry & { distTags(): Promise<Record<string, string>> };
   verifyBundle: BundleVerifier;
-  /** `npm install` exactly `@tinycloud/cli@<version>` into `directory`, running no install scripts. */
-  stage(directory: string, version: string): Promise<void>;
+  /**
+   * Write a `package.json` depending on exactly `@tinycloud/cli@<version>` in `directory` and resolve its
+   * `package-lock.json` (`npm install --package-lock-only --ignore-scripts`): no dependency is downloaded or run.
+   */
+  resolve(directory: string, version: string): Promise<void>;
+  /** Install exactly `directory`'s `package-lock.json` (`npm ci --ignore-scripts`). */
+  install(directory: string): Promise<void>;
   /** Run `node <bin> ...args` with automatic updates off; resolve its exit code and stdout. */
   run(bin: string, args: string[]): Promise<{ code: number | null; stdout: string }>;
   log(line: string): void;
@@ -196,38 +207,60 @@ function livePointer(deps: UpdaterDeps): Pointer | null {
 }
 
 /**
- * Make `version` present and verified under the root: provenance and registry signatures first, then a script-free
- * npm install into a staging directory, the whole tree's signatures, and a smoke test of the staged copy alone.
+ * Make `version` present and verified under the root. Nothing is downloaded by npm, and no package code runs, until
+ * every package is verified:
+ * 1. the CLI release's registry signature and provenance;
+ * 2. its tarball's `npm-shrinkwrap.json`: every runtime dependency must be a registry tarball (a git, file, link or
+ *    URL dependency refuses with DEPENDENCY_NOT_FROM_REGISTRY; npm runs a git dependency's `prepare` script even
+ *    under `--ignore-scripts`, so it must never reach npm);
+ * 3. a lockfile-only npm resolve in a staging directory, which must equal the shrinkwrap plus the CLI;
+ * 4. every locked package's registry signature, and provenance for `@tinycloud/*`;
+ * 5. `npm ci --ignore-scripts` of exactly that lockfile, then a check that what was installed is what was locked;
+ * 6. a smoke test of the staged copy alone.
  */
 export async function prepareVersion(deps: UpdaterDeps, version: string, from: string): Promise<string[]> {
   if (version === deps.base.version || isVerified(deps.root, version)) return [];
+  const refused = (error: unknown) => new UpdateStop(error instanceof VerificationError
+    ? { status: "refused", reason: error.code, from, to: version, detail: error.message }
+    : { status: "refused", reason: /\b404\b/.test(String((error as Error).message)) ? "VERSION_NOT_FOUND" : "REGISTRY_UNAVAILABLE", from, to: version });
   let manifest;
+  let shrinkwrap;
   try {
     manifest = await verifyCliRelease(deps.registry, deps.verifyBundle, version);
+    shrinkwrap = await releaseShrinkwrap(deps.registry, manifest);
   } catch (error) {
-    throw new UpdateStop(error instanceof VerificationError
-      ? { status: "refused", reason: error.code, from, to: version, detail: error.message }
-      : { status: "refused", reason: /\b404\b/.test(String((error as Error).message)) ? "VERSION_NOT_FOUND" : "REGISTRY_UNAVAILABLE", from, to: version });
+    throw refused(error);
   }
+  // Every launcher-capable release (MIN_TARGET_VERSION and later) ships its shrinkwrap.
+  if (!shrinkwrap) throw new UpdateStop({ status: "refused", reason: "TARGET_TOO_OLD", from, to: version, detail: "the release has no npm-shrinkwrap.json" });
   mkdirSync(deps.root, { recursive: true, mode: 0o700 });
   const staging = join(deps.root, `.staging-${version}-${process.pid}-${Math.random().toString(36).slice(2)}`);
   const failed = (reason: FailureReason, detail?: string) =>
     new UpdateStop({ status: "failed-rolled-back", reason, from, to: version, current: from, ...(detail ? { detail } : {}) });
-  try {
+  const npmStep = async (step: () => Promise<void>) => {
     try {
-      await deps.stage(staging, version);
+      await step();
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") throw new UpdateStop({ status: "refused", reason: "NPM_NOT_FOUND", from, to: version });
       throw failed("INSTALL_FAILED", (error as Error).message);
     }
+  };
+  try {
+    mkdirSync(staging, { mode: 0o700 });
+    await npmStep(() => deps.resolve(staging, version));
+    const lockfile = readJson(join(staging, "package-lock.json"));
     let unattested: string[];
     try {
-      unattested = await verifyStagedTree(deps.registry, deps.verifyBundle, lockedPackages(readJson(join(staging, "package-lock.json"))), manifest);
+      const locked = lockedPackages(lockfile);
+      checkResolvedAgainstShrinkwrap(locked, shrinkwrap, manifest);
+      unattested = await verifyStagedTree(deps.registry, deps.verifyBundle, locked, manifest);
     } catch (error) {
-      if (error instanceof VerificationError) throw new UpdateStop({ status: "refused", reason: error.code, from, to: version, detail: error.message });
-      throw new UpdateStop({ status: "refused", reason: "REGISTRY_UNAVAILABLE", from, to: version });
+      throw refused(error);
     }
     for (const id of unattested) deps.log(`${id} has no provenance attestation; its registry signature verified`);
+    await npmStep(() => deps.install(staging));
+    const mismatch = installedTreeMismatch(staging, lockfile);
+    if (mismatch) throw failed("INSTALL_FAILED", mismatch);
     const packageDir = join(staging, "node_modules", "@tinycloud", "cli");
     if (!existsSync(join(packageDir, "dist", "launcher.js"))) throw new UpdateStop({ status: "refused", reason: "TARGET_TOO_OLD", from, to: version });
     const smoke = await deps.run(join(packageDir, "bin", "tinycloud"), ["--version"]);
@@ -244,6 +277,31 @@ export async function prepareVersion(deps: UpdaterDeps, version: string, from: s
   } finally {
     rmSync(staging, { recursive: true, force: true });
   }
+}
+
+/**
+ * Why the tree `npm ci` installed in `directory` isn't exactly `lockfile`, or null when it is: every locked package
+ * present with its name and version (an optional one may be skipped on this platform), and npm's own record of the
+ * install (`node_modules/.package-lock.json`) naming nothing else.
+ */
+export function installedTreeMismatch(directory: string, lockfile: unknown): string | null {
+  const locked = (lockfile as { packages?: Record<string, Record<string, unknown>> } | undefined)?.packages ?? {};
+  const hidden = readJson(join(directory, "node_modules", ".package-lock.json"));
+  const installed = hidden && typeof hidden === "object" && "packages" in hidden && hidden.packages && typeof hidden.packages === "object"
+    ? Object.keys(hidden.packages)
+    : null;
+  if (!installed) return "npm left no record of the install";
+  const extra = installed.filter((path) => !(path in locked) || locked[path]?.dev === true);
+  if (extra.length > 0) return `installed ${extra[0]}, which the verified lockfile doesn't hold`;
+  for (const [path, entry] of Object.entries(locked)) {
+    if (path === "" || entry.dev === true || entry.inBundle === true) continue;
+    const name = typeof entry.name === "string" ? entry.name : path.slice(path.lastIndexOf("node_modules/") + "node_modules/".length);
+    const manifest = readJson(join(directory, path, "package.json"));
+    if (manifest === undefined && entry.optional === true && !installed.includes(path)) continue;
+    const got = manifest && typeof manifest === "object" && "name" in manifest && "version" in manifest ? `${String(manifest.name)}@${String(manifest.version)}` : "nothing";
+    if (got !== `${name}@${String(entry.version)}`) return `${path} holds ${got}, not the verified ${name}@${String(entry.version)}`;
+  }
+  return null;
 }
 
 /** Move a directory out of the way in one rename, then delete it: no reader ever sees half a version. */
@@ -321,10 +379,38 @@ function holdsLock(deps: UpdaterDeps): boolean {
 
 /** The background updater: one pass, under the lock. */
 export async function runAutoUpdate(deps: UpdaterDeps): Promise<AutoOutcome> {
-  return withLock(deps, autoUpdateLocked, () => ({ action: "locked" }));
+  return withLock<AutoOutcome>(deps, async (locked) => {
+    const before = readPointer(locked.root);
+    const from = current(locked);
+    const attempt: { to?: string } = {};
+    try {
+      return await autoUpdateLocked(locked, attempt);
+    } catch (error) {
+      if (attempt.to === undefined) throw error;
+      const result = await recoverFromUnexpected(locked, before, from, attempt.to, error);
+      locked.log(`${attempt.to}: ${result.status}${"detail" in result && result.detail ? `: ${result.detail}` : ""}`);
+      return { action: "failed", version: attempt.to, result };
+    }
+  }, () => ({ action: "locked" }));
 }
 
-async function autoUpdateLocked(deps: UpdaterDeps): Promise<AutoOutcome> {
+/**
+ * An unexpected error (not an `UpdateStop`) during an update. Before the pointer changed, nothing did: the error
+ * propagates (`tinycloud upgrade` exits 1). After, the pointer is restored as after a failed switch, and the result
+ * says whether that worked (exit 13 or 14).
+ */
+async function recoverFromUnexpected(deps: UpdaterDeps, before: Pointer | null, from: string, to: string | undefined, error: unknown): Promise<UpgradeResult> {
+  if (to === undefined || JSON.stringify(readPointer(deps.root)) === JSON.stringify(before)) throw error;
+  return restore(deps, before, from, to, error instanceof Error ? error.message : String(error));
+}
+
+/**
+ * Whether a follow-down waits out the soak too (Naomi, TC-4276: yes, from the local first-seen of the lower tag).
+ * One switch, so the rule is easy to change.
+ */
+const FOLLOW_DOWN_SOAKS = true;
+
+async function autoUpdateLocked(deps: UpdaterDeps, attempt: { to?: string }): Promise<AutoOutcome> {
   const now = deps.now();
   const state = readState(deps.root);
   const next = (at: number) => writeNextCheck(deps.root, at);
@@ -354,16 +440,11 @@ async function autoUpdateLocked(deps: UpdaterDeps): Promise<AutoOutcome> {
       next(now + DAY_MS);
       return { action: "major-available", version: tag };
     }
-    if (state.soak?.channel !== channel || state.soak.version !== tag) state.soak = { channel, version: tag, firstSeen: now };
-    const dueAt = state.soak.firstSeen + SOAK_MS;
-    if (now < dueAt) {
-      writeState(deps.root, state);
-      next(dueAt);
-      return { action: "soaking", version: tag, dueAt };
-    }
     target = tag;
   } else if (isVersion(tag) && pointer?.auto && channelOf(tag) === channel && majorOf(tag) === majorOf(active) &&
-             (compareVersionStrings(tag, active) ?? 0) < 0) {
+             (compareVersionStrings(tag, active) ?? 0) < 0 &&
+             // Never below the version installed by hand: that's the floor the user chose.
+             (compareVersionStrings(tag, deps.base.version) ?? -1) >= 0) {
     target = tag;
     followDown = true;
   } else {
@@ -371,6 +452,16 @@ async function autoUpdateLocked(deps: UpdaterDeps): Promise<AutoOutcome> {
     next(now + DAY_MS);
     return { action: "none" };
   }
+  if (!followDown || FOLLOW_DOWN_SOAKS) {
+    if (state.soak?.channel !== channel || state.soak.version !== tag) state.soak = { channel, version: tag, firstSeen: now };
+    const dueAt = state.soak.firstSeen + SOAK_MS;
+    if (now < dueAt) {
+      writeState(deps.root, state);
+      next(dueAt);
+      return { action: "soaking", version: tag, dueAt };
+    }
+  }
+  attempt.to = target;
 
   try {
     await prepareVersion(deps, target, active);
@@ -395,6 +486,7 @@ async function autoUpdateLocked(deps: UpdaterDeps): Promise<AutoOutcome> {
     return { action: "failed", version: target, result };
   }
   prune(deps);
+  writeFileAtomic(join(deps.root, LAST_SWITCH_FILE), `${JSON.stringify({ from: active, to: target, down: followDown })}\n`);
   deps.log(`${followDown ? "followed the tag down" : "switched"} ${active} -> ${target}`);
   return { action: followDown ? "followed-down" : "switched", version: target, from: active };
 }
@@ -415,16 +507,18 @@ export async function runManualUpgrade(deps: UpdaterDeps, options: ManualOptions
     return { status: "refused", reason: "TARGET_TOO_OLD", from, to: options.to };
   }
   return withLock<UpgradeResult>(deps, async (locked) => {
+    const before = readPointer(locked.root);
+    const attempt: { to?: string } = {};
     try {
-      return await manualLocked(locked, options, from);
+      return await manualLocked(locked, options, from, attempt);
     } catch (error) {
       if (error instanceof UpdateStop) return error.result;
-      throw error;
+      return recoverFromUnexpected(locked, before, from, attempt.to, error);
     }
   }, () => ({ status: "refused", reason: "LOCKED", from }));
 }
 
-async function manualLocked(deps: UpdaterDeps, options: ManualOptions, from: string): Promise<UpgradeResult> {
+async function manualLocked(deps: UpdaterDeps, options: ManualOptions, from: string, attempt: { to?: string }): Promise<UpgradeResult> {
   const pointer = livePointer(deps);
   let target = options.to;
   if (target === undefined) {
@@ -448,11 +542,14 @@ async function manualLocked(deps: UpdaterDeps, options: ManualOptions, from: str
     return { status: "ok", from, to: from, changed: false };
   }
   if (options.confirm && !await options.confirm(from, target)) return { status: "refused", reason: "DECLINED", from, to: target };
+  attempt.to = target;
   const unattested = await prepareVersion(deps, target, from);
   if (courierRunning(deps, from)) return { status: "refused", reason: "COURIER_RUNNING", from, to: target };
   const result = await switchTo(deps, target, { auto: false, pinned: options.to !== undefined });
   if (result.status === "ok") {
     writeState(deps.root, {});
+    // `upgrade` reports its own switch; an earlier automatic one is no longer news.
+    rmSync(join(deps.root, LAST_SWITCH_FILE), { force: true });
     prune(deps);
     return unattested.length > 0 ? { ...result, unattested } : result;
   }
@@ -487,19 +584,6 @@ export function autoUpdateCovers(input: {
     input.offReason === null && input.npmOnPath && !input.pinned &&
     // The updater stays on the install's channel; #1054 may offer a beta install the higher `latest`.
     channelOf(input.available) === channelOf(input.current) && majorOf(input.available) === majorOf(input.current);
-}
-
-/** Whether an executable named `command` is on PATH, as the updater's `npm` lookup would find it. */
-export function onPath(command: string, env: NodeJS.ProcessEnv = process.env): boolean {
-  const names = process.platform === "win32" ? [`${command}.cmd`, `${command}.exe`] : [command];
-  return (env.PATH ?? "").split(delimiter).some((directory) => directory !== "" && names.some((name) => {
-    try {
-      accessSync(join(directory, name), constants.X_OK);
-      return statSync(join(directory, name)).isFile();
-    } catch {
-      return false;
-    }
-  }));
 }
 
 /**
@@ -552,7 +636,13 @@ export async function runBackgroundUpdate(currentVersion: string, cachePath: str
   recordInstallKind(base.root, base.packageDir, base.version, kind);
   if (!kind) return;
   const log = (line: string) => appendUpdateLog(base.root, line);
-  const outcome = await runAutoUpdate(defaultUpdater(base, log, tags));
+  let outcome: AutoOutcome;
+  try {
+    outcome = await runAutoUpdate(defaultUpdater(base, log, tags));
+  } catch (error) {
+    log(`unexpected error, nothing changed: ${error instanceof Error ? error.message : String(error)}`);
+    return;
+  }
   if (outcome.action !== "none" && outcome.action !== "locked") log(JSON.stringify(outcome));
 }
 
@@ -560,6 +650,42 @@ export async function runBackgroundUpdate(currentVersion: string, cachePath: str
 export function pendingSwitch(root: string, active: string): string | null {
   const pending = readState(root).pending;
   return pending && pending !== active && isVerified(root, pending) ? pending : null;
+}
+
+/** The last automatic switch, `{from, to, down}`, until a terminal run of `to` has said so. */
+const LAST_SWITCH_FILE = "last-switch.json";
+/** Written once the first-run notice has been shown for this versions root. */
+const FIRST_RUN_FILE = "first-run-notice.json";
+
+// User-facing copy: TC-4276, Monica (20:28Z), verbatim.
+export const FIRST_RUN_NOTICE = [
+  "TinyCloud CLI updates itself: it installs verified patch and minor releases of your channel in the background, once each has been on your channel for 6 hours. Major releases are never installed automatically. Log: ~/.tinycloud/versions/auto-update.log",
+  "To turn this off, set \"autoUpdate\": false in ~/.tinycloud/config.json, or set TC_NO_AUTO_UPDATE=1.",
+];
+
+function switchedLine(from: string, to: string, down: boolean): string {
+  return down
+    ? `TinyCloud CLI moved back to ${to} (was ${from}) because your channel moved back.`
+    : `TinyCloud CLI updated to ${to} (was ${from}).`;
+}
+
+/**
+ * The automatic-update lines a terminal run of `running` shows, each once: the first-run notice (only where automatic
+ * updates are on for a verified install; the caller checks), then the line for an automatic switch to `running`.
+ * Marks them shown.
+ */
+export function takeAutoUpdateNotices(root: string, running: string, autoUpdating: boolean): string[] {
+  const lines: string[] = [];
+  if (autoUpdating && !existsSync(join(root, FIRST_RUN_FILE))) {
+    writeFileAtomic(join(root, FIRST_RUN_FILE), `${JSON.stringify({ shown: running })}\n`);
+    lines.push(...FIRST_RUN_NOTICE);
+  }
+  const last = readJson(join(root, LAST_SWITCH_FILE));
+  if (last && typeof last === "object" && "to" in last && last.to === running && "from" in last && isVersion(last.from)) {
+    rmSync(join(root, LAST_SWITCH_FILE), { force: true });
+    lines.push(switchedLine(last.from, running, "down" in last && last.down === true));
+  }
+  return lines;
 }
 
 export function appendUpdateLog(root: string, line: string, now: Date = new Date()): void {
@@ -573,10 +699,12 @@ export function appendUpdateLog(root: string, line: string, now: Date = new Date
   }
 }
 
-function runProcess(command: string, args: string[], env: NodeJS.ProcessEnv, timeoutMs: number): Promise<{ code: number | null; stdout: string; stderr: string }> {
+interface ProcessResult { code: number | null; stdout: string; stderr: string }
+
+function runProcess(command: string, args: string[], options: { env: NodeJS.ProcessEnv; cwd: string; timeoutMs: number }): Promise<ProcessResult> {
   // Executor form: the CLI supports Node 20, which lacks Promise.withResolvers.
   return new Promise((done, reject) => {
-    const child = spawn(command, args, { env, stdio: ["ignore", "pipe", "pipe"], timeout: timeoutMs });
+    const child = spawn(command, args, { env: options.env, cwd: options.cwd, shell: false, stdio: ["ignore", "pipe", "pipe"], timeout: options.timeoutMs });
     let stdout = "";
     let stderr = "";
     child.stdout.on("data", (chunk) => { stdout += chunk; });
@@ -586,12 +714,20 @@ function runProcess(command: string, args: string[], env: NodeJS.ProcessEnv, tim
   });
 }
 
+/** Run npm (found by `resolveNpm`, never through a shell) in `cwd`; ENOENT when there's no npm. */
+function runNpm(args: string[], cwd: string, timeoutMs: number, env: NodeJS.ProcessEnv = process.env): Promise<ProcessResult> {
+  const npm = resolveNpm(env);
+  if (!npm) return Promise.reject(Object.assign(new Error("npm not found"), { code: "ENOENT" }));
+  return runProcess(npm.command, [...npm.args, ...args], { env, cwd, timeoutMs });
+}
+
 /** npm's and bun's global `node_modules` on this machine, for `verifyInstallKind`. */
 export function systemGlobalRoots(env: NodeJS.ProcessEnv = process.env): GlobalRoots {
   return {
     async npm() {
       try {
-        const result = await runProcess("npm", ["root", "-g"], env, 30_000);
+        // From the home directory: a project .npmrc in the current directory must not move npm's global prefix.
+        const result = await runNpm(["root", "-g"], homedir(), 30_000, env);
         return result.code === 0 && result.stdout.trim() ? result.stdout.trim() : null;
       } catch {
         return null;
@@ -626,7 +762,11 @@ export function productionDeps(
     base,
     now: Date.now,
     registry: {
-      ...registry,
+      manifest: (name, version) => registry.manifest(name, version),
+      attestations: (name, version) => registry.attestations(name, version),
+      keys: () => registry.keys(),
+      publishedAt: (name, version) => registry.publishedAt(name, version),
+      tarball: (name, version) => registry.tarball(name, version),
       async distTags() {
         if (fetchedTags) return fetchedTags;
         const response = await fetch(`${REGISTRY}/-/package/${packageUrlPath(CLI_PACKAGE)}/dist-tags`, { signal: AbortSignal.timeout(30_000) });
@@ -637,14 +777,19 @@ export function productionDeps(
       },
     },
     verifyBundle,
-    async stage(directory, version) {
-      const result = await runProcess("npm", [
-        "install", "--prefix", directory, "--ignore-scripts", "--no-audit", "--no-fund", "--registry", `${REGISTRY}/`, `${CLI_PACKAGE}@${version}`,
-      ], process.env, 15 * 60 * 1000);
-      if (result.code !== 0) throw new Error(`npm install exited ${result.code}: ${result.stderr.trim().split("\n").slice(-3).join(" ")}`);
+    async resolve(directory, version) {
+      writeFileAtomic(join(directory, "package.json"), `${JSON.stringify({ private: true, dependencies: { [CLI_PACKAGE]: version } })}\n`);
+      const result = await runNpm([
+        "install", "--package-lock-only", "--ignore-scripts", "--no-audit", "--no-fund", "--registry", `${REGISTRY}/`,
+      ], directory, 5 * 60 * 1000);
+      if (result.code !== 0) throw new Error(`npm install --package-lock-only exited ${result.code}: ${result.stderr.trim().split("\n").slice(-3).join(" ")}`);
+    },
+    async install(directory) {
+      const result = await runNpm(["ci", "--ignore-scripts", "--no-audit", "--no-fund", "--registry", `${REGISTRY}/`], directory, 15 * 60 * 1000);
+      if (result.code !== 0) throw new Error(`npm ci exited ${result.code}: ${result.stderr.trim().split("\n").slice(-3).join(" ")}`);
     },
     async run(bin, args) {
-      const { code, stdout } = await runProcess(process.execPath, [bin, ...args], { ...process.env, TC_NO_AUTO_UPDATE: "1" }, 120_000);
+      const { code, stdout } = await runProcess(process.execPath, [bin, ...args], { env: { ...process.env, TC_NO_AUTO_UPDATE: "1" }, cwd: dirname(bin), timeoutMs: 120_000 });
       return { code, stdout };
     },
     log,

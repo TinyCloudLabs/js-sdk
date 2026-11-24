@@ -1,9 +1,20 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync, statSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { existsSync, mkdirSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { FakeRegistry, OTHER_IDENTITY, fakeUpdater, type FakeUpdater } from "../test-support/self-update-fakes.js";
-import { autoUpdateCovers, autoUpdateOffReason, pendingSwitch, runAutoUpdate, runManualUpgrade, SOAK_MS } from "./self-update.js";
+import { FakeRegistry, OTHER_IDENTITY, fakeUpdater, fakeVerifier, lockfileFor, type FakeUpdater } from "../test-support/self-update-fakes.js";
+import {
+  autoUpdateCovers,
+  autoUpdateOffReason,
+  FIRST_RUN_NOTICE,
+  pendingSwitch,
+  productionDeps,
+  runAutoUpdate,
+  runManualUpgrade,
+  SOAK_MS,
+  takeAutoUpdateNotices,
+} from "./self-update.js";
 import { isVerified, readPointer, versionPackageDir } from "./versions.js";
 
 const HOUR = 60 * 60 * 1000;
@@ -230,26 +241,45 @@ describe("running processes", () => {
   });
 });
 
+/** Move the latest tag back to `version` and run the updater once the soak has passed. */
+async function rollBackAndSoak(fake: FakeUpdater, version: string) {
+  fake.registry.tags.latest = version;
+  expect(await runAutoUpdate(fake.deps)).toMatchObject({ action: "soaking", version });
+  fake.clock.now += SOAK_MS - 1;
+  expect(await runAutoUpdate(fake.deps)).toMatchObject({ action: "soaking", version });
+  fake.clock.now += 1;
+  return runAutoUpdate(fake.deps);
+}
+
 describe("following the tag down", () => {
-  test("an automatically installed version follows a lower tag in the same major, without a soak", async () => {
+  test("an automatically installed version follows a lower tag in the same major once it has soaked, down to the installed version", async () => {
     const fake = fakeUpdater("1.9.4", registryWith("1.9.5", "1.9.6"));
     await releaseAndSoak(fake, "1.9.5");
     await releaseAndSoak(fake, "1.9.6");
-    fake.registry.tags.latest = "1.9.5";
-    expect(await runAutoUpdate(fake.deps)).toEqual({ action: "followed-down", version: "1.9.5", from: "1.9.6" });
+    expect(await rollBackAndSoak(fake, "1.9.5")).toEqual({ action: "followed-down", version: "1.9.5", from: "1.9.6" });
     expect(fake.active()).toBe("1.9.5");
 
-    fake.registry.tags.latest = "1.9.4";
-    expect(await runAutoUpdate(fake.deps)).toEqual({ action: "followed-down", version: "1.9.4", from: "1.9.5" });
+    expect(await rollBackAndSoak(fake, "1.9.4")).toEqual({ action: "followed-down", version: "1.9.4", from: "1.9.5" });
     expect(fake.active()).toBe("1.9.4");
+  });
+
+  test("a tag below the version installed by hand is never followed", async () => {
+    const fake = fakeUpdater("1.9.5", registryWith("1.9.4", "1.9.6"));
+    await releaseAndSoak(fake, "1.9.6");
+    fake.registry.tags.latest = "1.9.4";
+    fake.clock.now += SOAK_MS * 10;
+    expect(await runAutoUpdate(fake.deps)).toEqual({ action: "none" });
+    fake.clock.now += SOAK_MS * 10;
+    expect(await runAutoUpdate(fake.deps)).toEqual({ action: "none" });
+    expect(fake.active()).toBe("1.9.6");
+    expect(fake.staged).toEqual(["1.9.6"]);
   });
 
   test("a rolled-back tag that fails verification is not followed", async () => {
     const fake = fakeUpdater("1.9.4", registryWith("1.9.6"));
     fake.registry.publish("@tinycloud/cli", "1.9.5", { attested: false });
     await releaseAndSoak(fake, "1.9.6");
-    fake.registry.tags.latest = "1.9.5";
-    expect(await runAutoUpdate(fake.deps)).toMatchObject({ action: "failed", result: { reason: "PROVENANCE_MISSING" } });
+    expect(await rollBackAndSoak(fake, "1.9.5")).toMatchObject({ action: "failed", result: { reason: "PROVENANCE_MISSING" } });
     expect(fake.active()).toBe("1.9.6");
   });
 
@@ -261,10 +291,10 @@ describe("following the tag down", () => {
     expect(await runAutoUpdate(manual.deps)).toEqual({ action: "none" });
     expect(manual.active()).toBe("1.9.6");
 
-    const pinned = fakeUpdater("1.9.4", registryWith("1.9.6"));
-    await runManualUpgrade(pinned.deps, { installKind: "npm-global", to: "1.9.6" });
-    pinned.registry.tags.latest = "1.9.5";
-    expect(await runAutoUpdate(pinned.deps)).toEqual({ action: "pinned", version: "1.9.6" });
+    const pinned = fakeUpdater("1.10.0", registryWith("1.10.2"));
+    await runManualUpgrade(pinned.deps, { installKind: "npm-global", to: "1.10.2" });
+    pinned.registry.tags.latest = "1.10.1";
+    expect(await runAutoUpdate(pinned.deps)).toEqual({ action: "pinned", version: "1.10.2" });
 
     const major = fakeUpdater("2.0.0", registryWith("2.0.1"));
     await releaseAndSoak(major, "2.0.1");
@@ -284,18 +314,18 @@ describe("manual upgrade", () => {
     }
   });
 
-  test("--to pins an exact version (down too), a plain upgrade unpins, and --to below 1.9.4 refuses", async () => {
-    const fake = fakeUpdater("1.9.4", registryWith("1.9.5", "1.9.6"));
-    fake.registry.tags.latest = "1.9.6";
-    expect(await runManualUpgrade(fake.deps, { installKind: "bun-global" })).toMatchObject({ status: "ok", to: "1.9.6" });
-    expect(await runManualUpgrade(fake.deps, { installKind: "bun-global", to: "1.9.5" })).toMatchObject({ status: "ok", from: "1.9.6", to: "1.9.5", changed: true });
-    expect(readPointer(fake.deps.root)).toMatchObject({ version: "1.9.5", pinned: true });
-    fake.registry.tags.latest = "1.9.5";
+  test("--to pins an exact version (down too), a plain upgrade unpins, and --to below 1.10.0 refuses", async () => {
+    const fake = fakeUpdater("1.10.0", registryWith("1.10.1", "1.10.2", "1.9.9"));
+    fake.registry.tags.latest = "1.10.2";
+    expect(await runManualUpgrade(fake.deps, { installKind: "bun-global" })).toMatchObject({ status: "ok", to: "1.10.2" });
+    expect(await runManualUpgrade(fake.deps, { installKind: "bun-global", to: "1.10.1" })).toMatchObject({ status: "ok", from: "1.10.2", to: "1.10.1", changed: true });
+    expect(readPointer(fake.deps.root)).toMatchObject({ version: "1.10.1", pinned: true });
+    fake.registry.tags.latest = "1.10.1";
     expect(await runManualUpgrade(fake.deps, { installKind: "bun-global" })).toMatchObject({ status: "ok", changed: false });
-    expect(readPointer(fake.deps.root)).toMatchObject({ version: "1.9.5", pinned: false });
-    expect(await runManualUpgrade(fake.deps, { installKind: "bun-global", to: "1.9.3" })).toMatchObject({ status: "refused", reason: "TARGET_TOO_OLD" });
+    expect(readPointer(fake.deps.root)).toMatchObject({ version: "1.10.1", pinned: false });
+    expect(await runManualUpgrade(fake.deps, { installKind: "bun-global", to: "1.9.9" })).toMatchObject({ status: "refused", reason: "TARGET_TOO_OLD" });
     expect(await runManualUpgrade(fake.deps, { installKind: "bun-global", to: "latest" })).toMatchObject({ status: "refused", reason: "INVALID_VERSION" });
-    expect(await runManualUpgrade(fake.deps, { installKind: "bun-global", to: "1.9.9" })).toMatchObject({ status: "refused", reason: "VERSION_NOT_FOUND" });
+    expect(await runManualUpgrade(fake.deps, { installKind: "bun-global", to: "1.10.9" })).toMatchObject({ status: "refused", reason: "VERSION_NOT_FOUND" });
   });
 
   test("without --to a lower tag is never a downgrade", async () => {
@@ -311,5 +341,103 @@ describe("manual upgrade", () => {
     expect(await runManualUpgrade(fake.deps, { installKind: "npm-global", confirm: async () => false })).toMatchObject({ status: "refused", reason: "DECLINED" });
     expect(fake.staged).toEqual([]);
     expect(readPointer(fake.deps.root)).toBeNull();
+  });
+});
+
+describe("dependencies are checked before npm installs or runs anything", () => {
+  test("a release pinning a git dependency whose prepare script writes a marker is refused, and the marker never exists", async () => {
+    // The real npm behind `productionDeps`, against a local git repository: had the shrinkwrap reached npm, npm would
+    // have cloned the dependency and run its `prepare` script even with --ignore-scripts.
+    const fake = fakeUpdater("1.10.0");
+    const repo = join(fake.dir, "evil-dep");
+    const marker = join(fake.dir, "prepare-ran");
+    mkdirSync(repo);
+    writeFileSync(join(repo, "package.json"), JSON.stringify({
+      name: "evil-dep",
+      version: "1.0.0",
+      scripts: { prepare: `node -e "require('fs').writeFileSync(${JSON.stringify(marker)}, 'ran')"` },
+    }));
+    const git = (...args: string[]) => execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@example.com", ...args], { cwd: repo, stdio: "pipe" }).toString().trim();
+    git("init", "-q");
+    git("add", ".");
+    git("commit", "-qm", "evil");
+    const resolved = `git+file://${repo}#${git("rev-parse", "HEAD")}`;
+    fake.registry.publish("@tinycloud/cli", "1.10.1", { shrinkwrap: lockfileFor([{ name: "evil-dep", version: "1.0.0", resolved }]) });
+    fake.registry.tags.latest = "1.10.1";
+    const deps = productionDeps(fake.deps.root, fake.deps.base, fake.registry, fakeVerifier, (line) => fake.logs.push(line), { latest: "1.10.1" });
+
+    expect(await runManualUpgrade(deps, { installKind: "npm-global" })).toMatchObject({ status: "refused", reason: "DEPENDENCY_NOT_FROM_REGISTRY", to: "1.10.1" });
+    expect(existsSync(marker)).toBe(false);
+    expect(readdirSync(fake.deps.root).filter((entry) => entry.startsWith(".staging-"))).toEqual([]);
+    expect(readPointer(fake.deps.root)).toBeNull();
+  });
+
+  test("a release without npm-shrinkwrap.json is refused as too old", async () => {
+    const fake = fakeUpdater("1.10.0");
+    fake.registry.publish("@tinycloud/cli", "1.10.1", { shrinkwrap: false });
+    fake.registry.tags.latest = "1.10.1";
+    expect(await runManualUpgrade(fake.deps, { installKind: "npm-global" })).toMatchObject({ status: "refused", reason: "TARGET_TOO_OLD" });
+    expect(fake.staged).toEqual([]);
+  });
+
+  test("an install that doesn't match the verified lockfile is discarded", async () => {
+    const fake = fakeUpdater("1.10.0", registryWith("1.10.1"));
+    fake.afterInstall = (directory) => writeFileSync(join(directory, "node_modules", "chalk", "package.json"), JSON.stringify({ name: "chalk", version: "6.6.6" }));
+    fake.registry.tags.latest = "1.10.1";
+    expect(await runManualUpgrade(fake.deps, { installKind: "npm-global" })).toMatchObject({ status: "failed-rolled-back", reason: "INSTALL_FAILED", current: "1.10.0" });
+    expect(fake.active()).toBe("1.10.0");
+    expect(isVerified(fake.deps.root, "1.10.1")).toBe(false);
+  });
+});
+
+describe("unexpected errors", () => {
+  test("before anything changed, the error surfaces (exit 1) and nothing is switched", async () => {
+    const fake = fakeUpdater("1.10.0", registryWith("1.10.1"));
+    fake.registry.tags.latest = "1.10.1";
+    fake.deps.run = async () => { throw new TypeError("boom"); };
+    await expect(runManualUpgrade(fake.deps, { installKind: "npm-global", to: "1.10.1" })).rejects.toThrow("boom");
+    expect(readPointer(fake.deps.root)).toBeNull();
+  });
+
+  test("after the pointer moved, it is restored and reported as a rolled-back failure", async () => {
+    const fake = fakeUpdater("1.10.0", registryWith("1.10.1"));
+    fake.registry.tags.latest = "1.10.1";
+    const run = fake.deps.run;
+    let checks = 0;
+    fake.deps.run = async (bin, args) => {
+      if (bin === fake.deps.base.bin && checks++ === 0) throw new Error("spawn EAGAIN");
+      return run(bin, args);
+    };
+    expect(await runManualUpgrade(fake.deps, { installKind: "npm-global" })).toMatchObject({ status: "failed-rolled-back", reason: "SWITCH_FAILED", current: "1.10.0", detail: "spawn EAGAIN" });
+    expect(fake.active()).toBe("1.10.0");
+  });
+});
+
+describe("telling the user", () => {
+  test("the first-run notice shows once, and only where automatic updates are on", () => {
+    const fake = fakeUpdater("1.10.0");
+    mkdirSync(fake.deps.root, { recursive: true });
+    expect(takeAutoUpdateNotices(fake.deps.root, "1.10.0", false)).toEqual([]);
+    expect(takeAutoUpdateNotices(fake.deps.root, "1.10.0", true)).toEqual(FIRST_RUN_NOTICE);
+    expect(takeAutoUpdateNotices(fake.deps.root, "1.10.0", true)).toEqual([]);
+  });
+
+  test("an automatic switch, and a follow-down, are each reported once by the version switched to; a manual upgrade clears it", async () => {
+    const fake = fakeUpdater("1.9.4", registryWith("1.9.5", "1.9.6"));
+    mkdirSync(fake.deps.root, { recursive: true });
+    writeFileSync(join(fake.deps.root, "first-run-notice.json"), "{}");
+    await releaseAndSoak(fake, "1.9.6");
+    expect(takeAutoUpdateNotices(fake.deps.root, "1.9.4", true)).toEqual([]);
+    expect(takeAutoUpdateNotices(fake.deps.root, "1.9.6", true)).toEqual(["TinyCloud CLI updated to 1.9.6 (was 1.9.4)."]);
+    expect(takeAutoUpdateNotices(fake.deps.root, "1.9.6", true)).toEqual([]);
+
+    expect(await rollBackAndSoak(fake, "1.9.5")).toMatchObject({ action: "followed-down" });
+    expect(takeAutoUpdateNotices(fake.deps.root, "1.9.5", true)).toEqual(["TinyCloud CLI moved back to 1.9.5 (was 1.9.6) because your channel moved back."]);
+
+    expect(await rollBackAndSoak(fake, "1.9.4")).toMatchObject({ action: "followed-down" });
+    fake.registry.tags.latest = "1.9.6";
+    expect(await runManualUpgrade(fake.deps, { installKind: "npm-global" })).toMatchObject({ status: "ok", to: "1.9.6" });
+    expect(takeAutoUpdateNotices(fake.deps.root, "1.9.4", true)).toEqual([]);
+    expect(takeAutoUpdateNotices(fake.deps.root, "1.9.6", true)).toEqual([]);
   });
 });
