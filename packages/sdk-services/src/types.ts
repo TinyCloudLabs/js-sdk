@@ -127,6 +127,12 @@ export const ErrorCodes = {
   STORAGE_LIMIT_REACHED: "STORAGE_LIMIT_REACHED",
   /** The node answered the usage read without usage numbers (it predates the read). */
   STORAGE_STATUS_UNAVAILABLE: "STORAGE_STATUS_UNAVAILABLE",
+  /**
+   * HTTP 507 `sql_database_size_limit` (SQL and DuckDB): the database is at
+   * the node's size limit for one database, so nothing was changed. Not
+   * retryable: the same request fails again until the database is smaller.
+   */
+  DATABASE_SIZE_LIMIT: "DATABASE_SIZE_LIMIT",
 
   // DuckDB-specific errors
   DUCKDB_ERROR: "DUCKDB_ERROR",

@@ -23,6 +23,7 @@ import {
   storageRejectionError,
   parseStorageRejection,
   nodeRetryError,
+  databaseSizeLimitError,
 } from "../errors";
 import {
   formatServiceResponseError,
@@ -584,6 +585,8 @@ export class SQLService extends BaseService implements ISQLService {
     if (response.status === 413 && parseStorageRejection(errorText)) {
       return err(storageRejectionError("sql", 413, meta, errorText));
     }
+    const sizeLimit = databaseSizeLimitError("sql", response.status, meta, errorText);
+    if (sizeLimit) return err(sizeLimit);
     const retryError = nodeRetryError("sql", `SQL ${operation} failed: ${response.status} - ${errorText}`, response, errorText);
     if (retryError) return err(retryError);
 
