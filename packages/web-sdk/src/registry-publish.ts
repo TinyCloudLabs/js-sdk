@@ -112,7 +112,10 @@ export interface EnsureOwnerRegistryRecordOptions {
  *    caller input: a signed record pointing at the wrong node is the real attacker gain.
  * 4. An existing record is never overwritten or merged. `publishLocationRecordV2`'s
  *    pre-sign re-read refuses the publish if a record has appeared since the verdict.
- * 5. Sign-out or account switch is caught by `assertCurrent` after every await.
+ * 5. `assertCurrent` runs after each await here and last in `onPrepared`, before the
+ *    signature prompt. A sign-out or account switch by then throws: nothing is signed or
+ *    PUT, and the call returns `"unavailable"`. One during the signature prompt or the PUT
+ *    is not stopped; the PUT goes ahead and the check after it returns `"unavailable"`.
  * 6. OpenKey's registry-record sign refusal maps to `"needs-one"`. Every other error is
  *    swallowed and funnelled through `onError`; this never throws.
  */
