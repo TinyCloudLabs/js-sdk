@@ -47,50 +47,44 @@ As a concrete example: `@tinycloud/web-sdk@2.0.4` pins `@tinycloud/web-sdk-wasm@
 
 ## How releases actually happen
 
-There are two release paths in this repo and you need to know which one you're looking at.
+There is one release path in this repo: stable releases from `master`. Pre mode and the beta cycle are gone (no `.changeset/pre.json`).
 
-### Beta releases: via changesets, from master
+### Stable releases: via changesets, from master, scoped
 
-`.github/workflows/changesets.yml` runs on every push to `master`. If there are pending changeset files under `.changeset/*.md`, it runs `bun changeset version` (which consumes them and emits beta version bumps, because the repo is held in pre-mode), commits the bumps as `chore: beta version packages [skip ci]` and pushes that commit to `master`, then publishes to npm under the `beta` dist-tag.
+`.github/workflows/changesets.yml` runs on every push to `master`. It versions and publishes plain stable versions to the `latest` dist-tag for **only** the packages listed in `.github/release-scope.json`. Every other workspace package keeps its version, CHANGELOG and pending changesets until a maintainer adds it to that list. The `enabled` field in that file is the only switch of this workflow: while it is `false`, a push to `master` releases nothing.
 
-This path only works while `.changeset/pre.json` is present. Do not run `bun changeset pre exit` casually — that file is what makes `changeset version` produce `X.Y.Z-beta.N` instead of a stable bump. The team uses pre-mode as the steady state.
+The `Release` job:
 
-### Stable releases: via the Stable Release job
+1. Counts pending changesets that name an in-scope package (a changeset naming both kinds is split at release time; the held part is written back unchanged).
+2. Requires a maintainer sign-off for any pending `major` changeset (`check-major-release-signoff.mjs release`) and refuses to start while an earlier release is unfinished.
+3. Runs `scoped-version.mjs version`: `changeset version`, then every out-of-scope package is put back (a dependent bump is not a release), and the result is refused unless each in-scope bump is a stable same-major increase, matches the locked inventory (`expect`, when set), no in-scope package requires a prerelease of a package outside the scope, and no planned version already exists on npm. Before versioning, each package's `baselines` entry in the scope file must equal its manifest and be the newest stable version npm has; stables published from another commit since (the Courier route, a later SDK patch) are re-baselined first. A successful run rewrites `baselines` to what it released and clears `expect`.
+4. Builds, checks the CLI's node release pin and the internal dependency pins, and commits `chore: release stable packages [skip ci]`.
+5. Checks npm (provenance and earlier accepted-but-not-visible versions) for the packages that commit versioned, pushes the commit to `master` with the release deploy key, then publishes in dependency order, waiting for npm to serve each layer.
+6. Confirms npm has every released version; `GitHub Releases` creates one GitHub Release per published package version.
 
-Stable releases are cut by the `Stable Release` job in `.github/workflows/changesets.yml`. It runs only on manual dispatch with `confirm` set to `release`, and always checks out and releases `master` (no ref guard):
-
-```bash
-gh workflow run changesets.yml --ref master -f confirm=release
-```
-
-The job:
-
-1. Exits pre mode (`bun changeset pre exit`) and runs `bun changeset version`, which turns pending changesets into stable versions.
-2. Builds, checks the CLI's node release pin, and commits `chore: release stable packages`.
-3. Commits `chore: enter beta pre-release mode` (`bun changeset pre enter beta`) on top of it.
-4. Pushes both commits to `master` in one push using the release deploy key, then publishes to npm under the `latest` dist-tag.
-5. Confirms npm has every current version, then creates the GitHub release `v<web-sdk version>` at the release commit.
-
-Because the job re-enters beta mode itself, `.changeset/pre.json` needs no manual rebaseline after a stable release.
+`node .github/scripts/scoped-version.mjs plan` runs step 3 in a throwaway copy and prints the inventory.
 
 Guards:
 
-- A stable release fails for any package that would leave pre mode at a higher major than it entered (`check-major-release-signoff.mjs stable`), unless a commit message in the current pre-release cycle, from the commit that added `.changeset/pre.json` through `master`'s HEAD, has an `approve-major-release:` line listing that package. The check reads every commit message in that range, including squash-merge messages, not only empty commits. Recovery runs that finish an unfinished stable release skip this check.
-- If the push fails, nothing is published. Dispatch the job again.
-- If an earlier stable run pushed but did not finish publishing, the next dispatch finishes that release from its commit and graduates nothing new. Beta runs refuse to run until then.
+- A pending `major` changeset releases only after an `approve-major-release:` line naming the package appears in a commit message between the commit that added the changeset and `master`'s HEAD.
+- If the push fails, nothing is published; the run for the newer commit releases the changesets.
+- If a run pushed but did not finish publishing, dispatch the workflow with `resume: release`: it publishes exactly the missing versions from their release commit and versions nothing. Pushes refuse to run until then. A resume publishes to `latest` on a dispatch, so it checks the commit instead of trusting its subject: author and committer must be `github-actions[bot]`; the versions must be in that commit's release scope; the previous version must still be the newest stable on npm; each missing version must be strictly above npm's newest stable (`latest` never moves down); and a major bump needs the same sign-off as a normal release. Otherwise it refuses and a maintainer publishes by hand.
+- A version staged or published earlier from another commit (the Courier 0.8.0 set, 0.8.1) is a baseline: provenance and publishing look only at packages the release commit versioned, and a missing baseline stops the run instead of being published from master's source.
 
-Break-glass only: `.github/workflows/raw-publish.yml` (manual dispatch, optional dist-tag override and dry run) publishes each package at its current version and skips versions npm already has. It does not run the pre-mode, changeset versioning, or GitHub release steps, so afterwards check `.changeset/pre.json` and create the GitHub release by hand.
+To release a held package, a maintainer adds it to `packages` in `.github/release-scope.json` in a reviewed PR, with its manifest at its last stable release and a `baselines` entry.
+
+`raw-publish.yml` and `manual-release.yml` were removed (TC-4123): they published from any ref, to `latest` by default, and ignored the release gate. Releases publish only through `changesets.yml`; to finish an interrupted stable release, dispatch it again as above. `courier-stable-stage.yml` stages a sealed plan under the `staging` dist-tag and `npm-latest-rollback.yml` moves `latest`; neither publishes from an arbitrary ref.
 
 ### How releases push
 
-`changesets.yml` pushes its release commits (`chore: beta version packages [skip ci]`, `chore: release stable packages [skip ci]`, `chore: enter beta pre-release mode [skip ci]`) to `master` over SSH with a **deploy key**, not a personal access token. Every release commit carries `[skip ci]`, so the push does not start another beta run.
+`changesets.yml` pushes its release commits (`chore: release stable packages [skip ci]`) to `master` over SSH with a **deploy key**, not a personal access token. Every release commit carries `[skip ci]`, so the push does not start another release run.
 
 - **Secret:** `RELEASE_DEPLOY_KEY` (repository secret) holds the private half of the key. The public half is a deploy key on `TinyCloudLabs/js-sdk` with **write access**.
 - **Ruleset bypass:** when `master` is protected, the deploy key is the only actor allowed to bypass the ruleset, so it is the only way for the workflow to push straight to `master`. Everything else goes through pull requests.
 - **How it is used:** `.github/scripts/release-deploy-key.sh install` writes the key to a `0600` file under `$RUNNER_TEMP` and pins GitHub's published host keys; the push steps run `git push git@github.com:TinyCloudLabs/js-sdk.git master` with `GIT_SSH_COMMAND` set to `-o IdentitiesOnly=yes -o StrictHostKeyChecking=yes` against that file. The key is never printed and is removed when the job ends.
 - **Fails closed:** if `RELEASE_DEPLOY_KEY` is missing or unreadable, the job fails before `changeset version` runs. There is no fallback to `GH_TOKEN` for pushes.
 - **Key lifetime:** each job deletes the key right after its master push succeeds, and again in an `always()` cleanup step. Pushes use `ssh -F /dev/null`, so no ssh config on the runner applies.
-- **Release calls use the job token:** `gh release create` / `gh release view` in the stable job use `github.token` (the stable job alone has `contents: write`; the beta job has `contents: read`). Neither job needs `id-token`: publishing uses `NPM_TOKEN`, with no provenance.
+- **Release calls use the job token:** the `GitHub Releases` job alone has `contents: write`; the `Release` and `Release resume` jobs have `contents: read` and `id-token: write` for npm provenance, and publish with `NPM_TOKEN`.
 
 ## Practical guidance
 

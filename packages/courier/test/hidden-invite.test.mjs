@@ -6,11 +6,17 @@ import { fileURLToPath } from 'node:url';
 const cli = fileURLToPath(new URL('../dist/cli.js', import.meta.url));
 const tc = fileURLToPath(new URL('../../cli/bin/tinycloud', import.meta.url));
 
-test('Courier and tc courier help omit invite from their command listings', () => {
+test('help leads with invitation links and puts manual pairing under Advanced', () => {
   for (const args of [[cli, '--help'], [tc, 'courier', '--help']]) {
     const result = spawnSync(process.execPath, args, { env: process.env, encoding: 'utf8' });
     assert.equal(result.status, 0, result.stderr);
-    assert.match(result.stdout, /\bjoin\b/);
-    assert.doesNotMatch(result.stdout, /\binvite\b/);
+    const [primary, advanced] = result.stdout.split('\nAdvanced');
+    assert.match(primary, /^\s+invite --session\b/m);
+    assert.match(primary, /^\s+invite serve\b/m);
+    assert.match(primary, /^\s+join\b/m);
+    assert.doesNotMatch(primary, /^\s+pair (?:start|accept)\b/m);
+    assert.match(advanced ?? '', /^\s+pair start\b/m);
+    assert.match(advanced ?? '', /^\s+pair accept\b/m);
+    assert.doesNotMatch(result.stdout, /--mode[^\n]*\bemail\b|^\s+invite [^\n]*--(?:invite-)?email\b/m);
   }
 });

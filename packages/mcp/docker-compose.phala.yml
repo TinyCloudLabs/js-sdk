@@ -15,9 +15,24 @@ services:
       - TC_MCP_APPROVAL_TTL_SECONDS=900
       - TC_MCP_OAUTH_METADATA_URL=https://api.openkey.so/.well-known/oauth-authorization-server/api/auth
       - TC_OPENKEY_HOST=https://openkey.so
-      - TC_HOST=https://node.tinycloud.xyz
+      # Held at the last recorded deployed value; confirm against the running compose before any deploy.
+      - TC_HOST=https://tee.node.tinycloud.xyz
     volumes:
       - mcp-state:/var/lib/tinycloud-mcp
+    labels:
+      tc.logship: tinycloud-mcp
+    # The host Docker daemon sends GELF to the log shipper below; the app never joins its network. Non-blocking UDP
+    # can lose lines; a bounded local copy (cache-max-size x cache-max-file) stays readable with `docker logs`.
+    logging:
+      driver: gelf
+      options:
+        gelf-address: udp://127.0.0.1:12201
+        gelf-compression-type: none
+        labels: tc.logship
+        mode: non-blocking
+        max-buffer-size: 4m
+        cache-max-size: "10m"
+        cache-max-file: "3"
     restart: unless-stopped
 
   dstack-ingress:
@@ -45,6 +60,303 @@ services:
       - cert-data:/etc/letsencrypt
     restart: unless-stopped
 
+  # Private Better Stack log shipper (source tinycloud_mcp). Only a fixed allowlist of typed events leaves the CVM:
+  # free text, paths, hosts, tokens and container metadata are dropped in the VRL below. The config is embedded
+  # because Phala deploys only this file; packages/mcp/log-shipper/ tests this exact text. Without
+  # BETTERSTACK_SOURCE_TOKEN the sidecar idles and ships nothing; the MCP service does not depend on it.
+  vector:
+    image: timberio/vector:0.59.0-alpine@sha256:0e36bc2a290039e9b6a5e92f04bd2f133223506f72d09682c1df16c015172b7a
+    restart: unless-stopped
+    init: true
+    user: "10001:10001"
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 64m
+    memswap_limit: 64m
+    cpus: 0.5
+    ports:
+      - 127.0.0.1:12201:12201/udp
+    networks:
+      - logship
+    tmpfs:
+      - /var/lib/vector:rw,noexec,nosuid,size=8m,uid=10001,gid=10001,mode=0700
+    environment:
+      BETTERSTACK_SOURCE_TOKEN: ${BETTERSTACK_SOURCE_TOKEN:-}
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - |
+        umask 077
+        if [ -z "$$BETTERSTACK_SOURCE_TOKEN" ]; then
+          printf '%s\n' 'log shipping disabled: no source token' >&2
+          exec tail -f /dev/null
+        fi
+        mkdir -p /var/lib/vector/secrets
+        printf '%s' "$$BETTERSTACK_SOURCE_TOKEN" > /var/lib/vector/secrets/bs_token
+        unset BETTERSTACK_SOURCE_TOKEN
+        cat > /var/lib/vector/vector.yaml <<'VECTOR_CONFIG'
+        data_dir: /var/lib/vector
+        secret:
+          bs:
+            type: directory
+            path: /var/lib/vector/secrets
+            remove_trailing_whitespace: true
+        sources:
+          gelf_in:
+            type: socket
+            mode: udp
+            address: 0.0.0.0:12201
+            max_length: 262144
+            receive_buffer_bytes: 1048576
+            framing:
+              method: chunked_gelf
+              chunked_gelf:
+                decompression: Auto
+            decoding:
+              codec: bytes
+          tick:
+            type: demo_logs
+            format: shuffle
+            lines: ["tick"]
+            interval: 60
+        transforms:
+          envelope:
+            type: remap
+            inputs: [gelf_in]
+            drop_on_error: true
+            drop_on_abort: true
+            source: |
+              packet = string(.message) ?? ""
+              if length(packet) > 65536 {
+                . = {"reason": "oversized"}
+              } else {
+                outer, err = parse_json(packet)
+                if err != null || !is_object(outer) || (outer.version != "1.1" && outer.version != "1.0") {
+                  . = {"reason": "malformed_envelope"}
+                } else if exists(outer.partial_message) || exists(outer._partial_message) {
+                  . = {"reason": "partial"}
+                } else if (get(outer, ["_tc.logship"]) ?? null) != "tinycloud-mcp" {
+                  . = {"reason": "unexpected_label"}
+                } else {
+                  . = {"message": string(outer.short_message) ?? ""}
+                }
+              }
+          classify:
+            type: remap
+            inputs: [envelope]
+            drop_on_error: true
+            drop_on_abort: true
+            source: |
+              if exists(.reason) {
+                . = {"reason": .reason}
+              } else {
+                msg = strip_whitespace(string(.message) ?? "")
+                ts = format_timestamp!(now(), format: "%Y-%m-%dT%H:%M:%S%.3fZ")
+                tools = ["tinycloud_status", "tinycloud_auth_status", "tinycloud_auth_capabilities", "tinycloud_auth_request", "tinycloud_auth_read_scope", "tinycloud_auth_import", "tinycloud_account_spaces_list", "tinycloud_account_applications_list", "tinycloud_kv_list", "tinycloud_kv_get", "tinycloud_read", "tinycloud_kv_head", "tinycloud_kv_put", "tinycloud_kv_delete", "tinycloud_knowledge_list", "tinycloud_knowledge_read", "tinycloud_sql_schema_inspect", "tinycloud_sql_query", "tinycloud_sql_execute", "tinycloud_secrets_get", "tinycloud_secrets_status", "tinycloud_apps_context", "tinycloud_apps_read", "tinycloud_apps_write", "tinycloud_apps_query", "tinycloud_connect"]
+                stable_codes = ["INPUT_INVALID", "OPERATION_NOT_FOUND", "OPERATION_VERSION_UNSUPPORTED", "PROFILE_NOT_FOUND", "PROFILE_POSTURE_NOT_ALLOWED", "PROFILE_OWNER_OPT_IN_REQUIRED", "PROFILE_MIGRATION_REQUIRED", "AUTH_REQUIRED", "PERMISSION_DENIED", "SESSION_NOT_FOUND", "PERMISSION_HINT_INVALID", "DELEGATION_ARTIFACT_INVALID", "DELEGATION_EXPIRED", "DELEGATION_AUDIENCE_MISMATCH", "DELEGATION_HOST_MISMATCH", "DELEGATION_REJECTED", "ENCRYPTION_NETWORK_UNRESOLVED", "NODE_UNREACHABLE", "NODE_NOT_RESPONDING", "DECRYPTION_DEPENDENCY_UNAVAILABLE", "NODE_IDENTITY_MISMATCH", "PARTIAL_NODE_WRITE", "RESOURCE_NOT_ROUTED", "REGISTRY_UNAVAILABLE", "NODE_NOT_FOUND", "NODE_REGISTRY_ENTRY_EXISTS", "NODE_ERROR", "STORAGE_QUOTA_EXCEEDED", "KV_NOT_FOUND", "KV_PRECONDITION_FAILED", "KV_CONFLICT", "KV_RESPONSE_TOO_LARGE", "SQL_QUERY_INVALID", "SQL_EXECUTION_FAILED", "SQL_RESULT_LIMIT_EXCEEDED", "SQL_VALUE_UNSAFE", "READ_SOURCE_CHANGED", "READ_CONTEXT_MISMATCH", "SECRET_READ_FAILED", "SECRET_DECRYPT_FAILED", "SECRET_LEGACY_ENVELOPE", "OUTPUT_INVALID", "INTERNAL_ERROR"]
+                status_codes = ["ok", "unavailable", "authority_required", "setup_required", "COPY_PARTIAL", "PARTIAL"]
+                client_codes = ["REQUEST_EXPIRED", "RESULT_EXPIRED", "ACKNOWLEDGED", "NOT_FOUND", "ACK_CONFLICT", "REQUEST_BINDING", "UNAVAILABLE", "NETWORK", "RESULT_INVALID"]
+                detail_codes = ["STATE_MISSING", "STATE_INVALID", "STATE_EXPIRED", "STATE_NOT_PENDING", "TENANT_MISSING"]
+                approval_codes = ["UNKNOWN", "NODE_UNAVAILABLE", "APPROVAL_OWNER_MISMATCH", "RENEWAL_LEASE_MISMATCH", "RENEWAL_GRANT_ENDS_TOO_SOON", "RENEWAL_RENEWER_CHANGED", "RENEWAL_LEASE_ORIGINAL_EXPIRED", "CALLBACK_INCOMPLETE", "SESSION_RESTORE_FAILED", "SESSION_MISMATCH", "RESULT_OWNER_MISMATCH", "APPROVAL_PREDATES_REQUEST", "RESTORE_SESSION_KEY_REPLACEMENT_UNSUPPORTED", "AUTH_EXPIRED"]
+                stages = ["restore_approval", "siwe_runtime_delegation", "auth_import", "activation", "renewal", "collect", "owner", "unknown"]
+                details = ["state_missing", "state_invalid", "state_expired", "state_not_pending", "tenant_missing", "none"]
+                connect_reasons = ["state_missing", "state_invalid", "state_expired", "state_not_pending", "tenant_missing", "openkey_unavailable", "unknown"]
+                delegation_reasons = ["host_mismatch", "expired", "cid_mismatch", "authority_invalid", "proof_missing", "proof_invalid", "owner_mismatch", "audience_mismatch", "resources_mismatch", "unsupported", "activation_rejected", "activation_unavailable", "activation_unauthenticated", "unknown"]
+                codes = append(append(append(append(stable_codes, status_codes), client_codes), detail_codes), approval_codes)
+                out = {"reason": "unclassified"}
+                if length(msg) > 2048 {
+                  out = {"reason": "oversized"}
+                } else if starts_with(msg, "{") {
+                  call, err = parse_json(msg)
+                  if err == null && is_object(call) {
+                    tool = string(call.tool) ?? ""
+                    code = string(call.code) ?? ""
+                    dur = int(call.durationMs) ?? -1
+                    rep = int(call.replayedGrants) ?? -1
+                    if dur >= 0 && dur <= 86400000 && rep >= 0 && rep <= 100000 {
+                      if !includes(tools, tool) { tool = "other" }
+                      if !includes(codes, code) { code = "other" }
+                      out = {"ts": ts, "level": "info", "event": "mcp_tool_call", "svc": "mcp", "tool": tool, "code": code, "duration_ms": dur, "replayed_grants": rep}
+                    }
+                  }
+                } else if starts_with(msg, "[tinycloud-mcp-http] ") {
+                  body = slice(msg, 21) ?? ""
+                  if match(body, r'^listening on [^\s]{1,255}:[0-9]{1,5}\z') {
+                    out = {"ts": ts, "level": "info", "event": "mcp_listening", "svc": "mcp"}
+                  } else if body == "MCP request failed" {
+                    out = {"ts": ts, "level": "error", "event": "mcp_request_failed", "svc": "mcp"}
+                  } else if body == "Startup failed." {
+                    out = {"ts": ts, "level": "error", "event": "mcp_startup_failed", "svc": "mcp"}
+                  } else if starts_with(body, "OpenKey token introspection refused the MCP client credentials (401)") {
+                    out = {"ts": ts, "level": "error", "event": "mcp_introspection_refused", "svc": "mcp"}
+                  } else if body == "approval dropped: reason=openkey_origin_changed" {
+                    out = {"ts": ts, "level": "warn", "event": "mcp_approval_dropped", "svc": "mcp", "reason": "openkey_origin_changed"}
+                  } else if body == "approval renewal admission deferred: code=NODE_UNAVAILABLE" {
+                    out = {"ts": ts, "level": "warn", "event": "mcp_approval_renewal_deferred", "svc": "mcp", "code": "NODE_UNAVAILABLE"}
+                  } else {
+                    m, err = parse_regex(body, r'^connect rejected: reason=(?P<reason>[^\s]{1,128}) path=[^\s]{1,256}\z')
+                    if err == null {
+                      reason = string(m.reason) ?? "other"
+                      if !includes(connect_reasons, reason) { reason = "other" }
+                      out = {"ts": ts, "level": "warn", "event": "mcp_connect_rejected", "svc": "mcp", "reason": reason}
+                    } else {
+                      m, err = parse_regex(body, r'^approval collection failed: code=(?P<code>[^\s]{1,128})\z')
+                      if err == null {
+                        code = string(m.code) ?? "other"
+                        if !includes(codes, code) { code = "other" }
+                        out = {"ts": ts, "level": "warn", "event": "mcp_approval_collection_failed", "svc": "mcp", "code": code}
+                      } else {
+                        m, err = parse_regex(body, r'^approval acknowledgement failed: code=(?P<code>[^\s]{1,128})\z')
+                        if err == null {
+                          code = string(m.code) ?? "other"
+                          if !includes(codes, code) { code = "other" }
+                          out = {"ts": ts, "level": "warn", "event": "mcp_approval_ack_failed", "svc": "mcp", "code": code}
+                        } else {
+                          m, err = parse_regex(body, r'^approval result rejected: stage=(?P<stage>[^\s]{1,64}) code=(?P<code>[^\s]{1,128})(?: reason=(?P<reason>[^\s]{1,128}))?(?: detail=(?P<detail>[^\s]{1,128}))?\z')
+                          if err == null {
+                            stage = string(m.stage) ?? "other"
+                            if !includes(stages, stage) { stage = "other" }
+                            code = string(m.code) ?? "other"
+                            if !includes(codes, code) { code = "other" }
+                            out = {"ts": ts, "level": "warn", "event": "mcp_approval_result_rejected", "svc": "mcp", "stage": stage, "code": code}
+                            if is_string(m.reason) {
+                              reason = string(m.reason) ?? "other"
+                              if !includes(delegation_reasons, reason) { reason = "other" }
+                              out.reason = reason
+                            }
+                            if is_string(m.detail) {
+                              detail = string(m.detail) ?? "other"
+                              if !includes(details, detail) { detail = "other" }
+                              out.detail = detail
+                            }
+                          } else {
+                            m, err = parse_regex(body, r'^tenant node host migrated: from=(?P<from>[^\s]{1,200}) to=(?P<to>[^\s]{1,200})\z')
+                            if err == null {
+                              from_host = "other"
+                              to_host = "other"
+                              if m.from == "https://node.tinycloud.xyz" { from_host = "node" } else if m.from == "https://tee.node.tinycloud.xyz" { from_host = "tee_node" }
+                              if m.to == "https://node.tinycloud.xyz" { to_host = "node" } else if m.to == "https://tee.node.tinycloud.xyz" { to_host = "tee_node" }
+                              out = {"ts": ts, "level": "warn", "event": "mcp_node_host_migrated", "svc": "mcp", "from_host": from_host, "to_host": to_host}
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+                . = out
+              }
+          # Disjoint by construction: an accepted event is counted once, as an event; only a record with no event
+          # name is a drop. Events with a reason field (rejections) must never reach drop_count.
+          route:
+            type: route
+            inputs: [classify]
+            route:
+              event: exists(.event)
+              dropped: '!exists(.event) && exists(.reason)'
+          rate_cap:
+            type: throttle
+            inputs: [route.event]
+            threshold: 120
+            window_secs: 60
+            key_field: "{{ event }}"
+          event_count:
+            type: remap
+            inputs: [route.event]
+            drop_on_error: true
+            drop_on_abort: true
+            source: |
+              . = {"event_name": .event, "count": 1}
+          event_reduce:
+            type: reduce
+            inputs: [event_count]
+            group_by: [event_name]
+            end_every_period_ms: 60000
+            expire_after_ms: 75000
+            flush_period_ms: 1000
+            merge_strategies:
+              count: sum
+          event_output:
+            type: remap
+            inputs: [event_reduce]
+            drop_on_error: true
+            drop_on_abort: true
+            source: |
+              . = {"ts": format_timestamp!(now(), format: "%Y-%m-%dT%H:%M:%S%.3fZ"), "level": "info", "event": "mcp_logship_event_total", "svc": "mcp", "event_name": .event_name, "count": .count}
+          drop_count:
+            type: remap
+            inputs: [route.dropped, route._unmatched]
+            drop_on_error: true
+            drop_on_abort: true
+            source: |
+              reason = string(.reason) ?? "unclassified"
+              if !includes(["malformed_envelope", "unexpected_label", "partial", "oversized", "unclassified"], reason) {
+                reason = "unclassified"
+              }
+              . = {"reason": reason, "count": 1}
+          drop_reduce:
+            type: reduce
+            inputs: [drop_count]
+            group_by: [reason]
+            end_every_period_ms: 60000
+            expire_after_ms: 75000
+            flush_period_ms: 1000
+            merge_strategies:
+              count: sum
+          drop_output:
+            type: remap
+            inputs: [drop_reduce]
+            drop_on_error: true
+            drop_on_abort: true
+            source: |
+              . = {"ts": format_timestamp!(now(), format: "%Y-%m-%dT%H:%M:%S%.3fZ"), "level": "warn", "event": "mcp_logship_dropped_total", "svc": "mcp", "reason": .reason, "count": .count}
+          heartbeat:
+            type: remap
+            inputs: [tick]
+            drop_on_error: true
+            drop_on_abort: true
+            source: |
+              . = {"ts": format_timestamp!(now(), format: "%Y-%m-%dT%H:%M:%S%.3fZ"), "level": "info", "event": "mcp_logship_heartbeat", "svc": "mcp"}
+        sinks:
+          betterstack:
+            type: http
+            inputs: [rate_cap, event_output, drop_output, heartbeat]
+            method: post
+            uri: https://s2795439.us-west-2a.betterstackdata.com/
+            encoding:
+              codec: json
+            framing:
+              method: newline_delimited
+            compression: gzip
+            auth:
+              strategy: bearer
+              token: SECRET[bs.bs_token]
+            batch:
+              max_bytes: 262144
+              timeout_secs: 1
+            buffer:
+              type: memory
+              max_events: 1000
+              when_full: block
+            request:
+              timeout_secs: 10
+              retry_max_duration_secs: 300
+            healthcheck:
+              enabled: false
+        VECTOR_CONFIG
+        exec vector --config /var/lib/vector/vector.yaml
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+
 volumes:
   cert-data:
   mcp-state:
+
+networks:
+  logship:
+    driver: bridge

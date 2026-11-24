@@ -1,0 +1,54 @@
+# Tests the Vector log shipper embedded in packages/mcp/docker-compose.phala.yml. It runs on its own, apart from the
+# `Publish hosted MCP image` workflow: a shipper test never gates a deploy or a rollback. No secrets, no network
+# beyond pulling the pinned Vector image.
+name: MCP log shipper
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/mcp-log-shipper.yml
+      - packages/mcp/docker-compose.phala.yml
+      - packages/mcp/log-shipper/**
+      # The allowlisted tool names, codes and stages come from this code.
+      - packages/mcp/src/**
+      - packages/operations/generated/operations.json
+      - packages/node-sdk/src/delegation.ts
+      - packages/node-sdk/src/TinyCloudNode.ts
+      - packages/operations/src/**
+      - packages/sdk-core/src/delegations/**
+      - packages/share-envelope/src/links/approval-client.ts
+  push:
+    branches: [master]
+    paths:
+      - .github/workflows/mcp-log-shipper.yml
+      - packages/mcp/docker-compose.phala.yml
+      - packages/mcp/log-shipper/**
+      - packages/mcp/src/**
+      - packages/operations/generated/operations.json
+      - packages/node-sdk/src/delegation.ts
+      - packages/share-envelope/src/links/approval-client.ts
+      - packages/node-sdk/src/TinyCloudNode.ts
+      - packages/operations/src/**
+      - packages/sdk-core/src/delegations/**
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  shipper:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Test the MCP log shipper
+        shell: bash
+        run: bash packages/mcp/log-shipper/test-shipper.sh
+      # Renders the compose file and starts only the sidecar without a token (nothing is sent anywhere).
+      - name: Smoke the compose file and the idle sidecar
+        shell: bash
+        run: bash packages/mcp/log-shipper/smoke-compose.sh

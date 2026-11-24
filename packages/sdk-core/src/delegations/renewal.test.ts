@@ -9,9 +9,11 @@ import { DelegationStatusSchema } from "./types.schema";
 import { encodeDagCbor } from "./cacao";
 import {
   MAX_RENEWAL_HISTORY_STAMPS,
+  RENEWAL_RENEWER_CHANGED,
   verifyRenewalHistory,
   type RenewalStampHistoryEntry,
 } from "./renewal";
+import renewalHistoryNode12622 from "./fixtures/renewal-history-node-1.26.22.json";
 
 const originalCid = "bafkreigh2akiscaildcw7v5h2q7v7m2k4p5g7v2b6n2m7w4x6r4h3a2b6e";
 const leaseCid = "bafkreigh2akiscaildcw7v5h2q7v7m2k4p5g7v2b6n2m7w4x6r4h3a2b6f";
@@ -82,6 +84,31 @@ describe("verifyRenewalHistory", () => {
     expect(verify([stamp])).toEqual({ effectiveExpiry: 1_750_000_000, latestStampCid: stamp.cid });
   });
 
+  test("accepts two node-signed stamps from the same lease generation", () => {
+    const first = makeStamp({ generation: 1, previousStampCid: leaseCid, newEnd: 1_710_000_000 });
+    const second = makeStamp({ generation: 1, previousStampCid: first.cid, newEnd: 1_750_000_000 });
+    expect(verify([second, first])).toEqual({ effectiveExpiry: 1_750_000_000, latestStampCid: second.cid });
+  });
+
+  test("verifies the two-stamp status history captured from loopback node v1.26.22", () => {
+    const { effectiveExpiry, ...input } = renewalHistoryNode12622;
+    expect(verifyRenewalHistory({ ...input, ancestorEffectiveExpiry: effectiveExpiry })).toEqual({
+      effectiveExpiry,
+      latestStampCid: input.history[1].cid,
+    });
+  });
+
+  test("refuses a signed stamp that regresses to an earlier lease generation", () => {
+    const first = makeStamp({ generation: 2, previousStampCid: leaseCid, newEnd: 1_710_000_000 });
+    const second = makeStamp({ generation: 1, previousStampCid: first.cid, newEnd: 1_750_000_000 });
+    expect(() => verify([second, first])).toThrow("Renewal history chain is invalid");
+  });
+
+  test("refuses a signed first stamp with lease generation zero", () => {
+    const stamp = makeStamp({ generation: 0, previousStampCid: leaseCid, newEnd: 1_750_000_000 });
+    expect(() => verify([stamp])).toThrow("Renewal history chain is invalid");
+  });
+
   test("refuses a changed signature, a gap, or a stamp for another delegation", () => {
     const first = makeStamp({ generation: 1, previousStampCid: leaseCid, newEnd: 1_710_000_000 });
     const second = makeStamp({ generation: 2, previousStampCid: first.cid, newEnd: 1_750_000_000 });
@@ -103,14 +130,21 @@ describe("verifyRenewalHistory", () => {
       history: [stamp],
       now: 1_700_000_000,
     })).toThrow();
-    expect(() => verifyRenewalHistory({
-      originalCid,
-      leaseCid,
-      leaseExpiresAt: 1_800_000_000,
-      nodeIdentity: { ...identity, renewerEpoch: 2 },
-      history: [stamp],
-      now: 1_700_000_000,
-    })).toThrow();
+    // A rotated renewer epoch never renews this lease again: a coded refusal, not a transient failure.
+    let rotated: unknown;
+    try {
+      verifyRenewalHistory({
+        originalCid,
+        leaseCid,
+        leaseExpiresAt: 1_800_000_000,
+        nodeIdentity: { ...identity, renewerEpoch: 2 },
+        history: [stamp],
+        now: 1_700_000_000,
+      });
+    } catch (error) {
+      rotated = error;
+    }
+    expect(rotated).toMatchObject({ code: RENEWAL_RENEWER_CHANGED });
     expect(() => verifyRenewalHistory({
       originalCid,
       leaseCid,

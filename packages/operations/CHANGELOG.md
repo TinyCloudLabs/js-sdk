@@ -1,5 +1,252 @@
 # @tinycloud/operations
 
+## 0.10.0-beta.20
+
+### Patch Changes
+
+- Updated dependencies [03d49fe]
+  - @tinycloud/sdk-core@3.14.0-beta.21
+  - @tinycloud/node-sdk@3.14.0-beta.21
+
+## 0.10.0-beta.19
+
+### Patch Changes
+
+- Updated dependencies [f2ce056]
+- Updated dependencies [f2ce056]
+- Updated dependencies [f2ce056]
+  - @tinycloud/sdk-services@3.14.0-beta.20
+  - @tinycloud/sdk-core@3.14.0-beta.20
+  - @tinycloud/node-sdk@3.14.0-beta.20
+
+## 0.10.0-beta.18
+
+### Patch Changes
+
+- @tinycloud/sdk-core@3.14.0-beta.19
+- @tinycloud/sdk-services@3.14.0-beta.19
+- @tinycloud/node-sdk@3.14.0-beta.19
+
+## 0.10.0-beta.17
+
+### Patch Changes
+
+- 60e7682: Fixed: `tc secrets get` (and `secrets run`) on a profile whose scoped OpenKey login named only that secret's own key (`…:default/secrets/<name>` with `decrypt`) was refused with "lacks the scoped decrypt authority" and asked for decrypt on the whole network. A signed session reports a grant with no limits as an empty caveat list, and the check that lets the secret's own key stand in for the network decrypt only accepted a grant with no caveats field. An empty caveat list now counts as no caveats; a grant with a real caveat is still refused.
+
+  Details: TC-3802
+
+## 0.10.0-beta.16
+
+### Minor Changes
+
+- 532d5eb: Manifest permissions can name one secret's own key (`urn:tinycloud:encryption:<owner>:default/secrets/<name>`) with `decrypt` or `key.create`. Any `secrets/` prefix is still refused, and so is a key path of more than 64 segments. `--keys` refuses folders under `secrets/`.
+
+  A `secrets:` block in a manifest asks for the network decrypt and for each secret's own key, so secrets not yet migrated stay readable.
+
+  `tc secrets migrate [NAME…] [--scope] [--dry-run]` and `migrateSecrets()` (from `@tinycloud/sdk-services/secrets/migrate`, not the package root) move secrets in the older format onto each secret's own key. A secret moves only after its new copy decrypts to the same bytes and only if nothing wrote it in between; anything else leaves the old copy. A name over 64 characters has no key of its own: it is counted as staying in the older format, and the others still move. The output gives counts only. The command asks the owner twice: once to read the older format, then for exactly the keys of the secrets being moved. `migrateSecrets()` takes an `authorizeKeys(keyPaths)` callback for that second step. A dry run asks only to list and read.
+
+  `tinycloud.secrets.get` reports `SECRET_LEGACY_ENVELOPE` for a secret still in the older format, with the network decrypt to approve.
+
+  With `TC_SECRETS_NAMED_KEY_WRITES=1`, `tc secrets put` asks to save and read that secret and to create and decrypt only its own key, so saving and then reading it takes one approval. Without it, `put` keeps saving in the older format.
+
+  `tc secrets network grant` signs the grant with the owner's wallet, so `tc account delegations revoke <cid>` can end it. It lasts 1 hour unless `--expiry` asks for longer, at most 7 days (longer values are cut to 7 days), and its output gives the grant's `expiresAt`. A profile that signs in through OpenKey is refused with the steps for a wallet key (`TC_PRIVATE_KEY`, or `tc init --key-only` then `tc auth login --method local`).
+
+  `tc auth grant` can now approve an agent's request for one secret's own key. With a local key, the owner's wallet signs a one-use session that holds exactly the requested keys, cuts the grant from it (1 hour unless the request asks for longer, at most 7 days) and ends it; the stored session is unchanged. With an OpenKey owner, the request may carry decrypt on one exact `secrets/<name>` key; a `secrets/` prefix, the whole network and key creation are still refused.
+
+  `tc secrets list` shows a secret whose name or scope is over 64 characters with a note that this version can't read or delete it and which CLI version can (`unreadable` in the JSON output); nothing is hidden. `migrateSecrets()` refuses a vault that cannot move secrets before asking for any key.
+
+  TinyChat's bot-history key and data live under a reserved scope. `tc secrets list`, `delete`, `put`, `migrate`, `request` and `manage` refuse that scope, in any spelling that canonicalises to it, before they sign in or ask; `migrateSecrets()` neither counts nor reseals anything under it; and the `tinycloud.secrets.get` and `tinycloud.secrets.status` operations and Secret Manager links refuse it.
+
+  `tc auth grant` also refuses an agent request that names a key in that reserved scope, in any letter case, for a local-key owner and an OpenKey owner, before it prints the scope, contacts anything, signs or stores a grant.
+
+  Fixed: approving a secret command from an OpenKey owner profile failed with "invalid approval request", because the request carried a local-only `skipPrefix` field. The approval request now leaves it out.
+
+  Details: TC-3802
+
+### Patch Changes
+
+- Updated dependencies [532d5eb]
+  - @tinycloud/sdk-core@3.14.0-beta.18
+  - @tinycloud/sdk-services@3.14.0-beta.18
+  - @tinycloud/node-sdk@3.14.0-beta.18
+
+## 0.9.2-beta.15
+
+### Patch Changes
+
+- Updated dependencies [52f7d4c]
+  - @tinycloud/sdk-services@3.14.0-beta.17
+  - @tinycloud/sdk-core@3.14.0-beta.17
+  - @tinycloud/node-sdk@3.14.0-beta.17
+
+## 0.9.2-beta.14
+
+### Patch Changes
+
+- Updated dependencies [9919d97]
+- Updated dependencies [9919d97]
+  - @tinycloud/node-sdk@3.14.0-beta.16
+
+## 0.9.2-beta.13
+
+### Patch Changes
+
+- Updated dependencies [171a7b3]
+  - @tinycloud/sdk-services@3.14.0-beta.15
+  - @tinycloud/sdk-core@3.14.0-beta.15
+  - @tinycloud/node-sdk@3.14.0-beta.15
+
+## 0.9.2-beta.12
+
+### Patch Changes
+
+- Updated dependencies [979145a]
+  - @tinycloud/sdk-services@3.14.0-beta.14
+  - @tinycloud/node-sdk@3.14.0-beta.14
+  - @tinycloud/sdk-core@3.14.0-beta.14
+
+## 0.9.2-beta.11
+
+### Patch Changes
+
+- 3d5cd63: A renewal lease issued to a renewer the node no longer advertises fails with the coded error `RENEWAL_RENEWER_CHANGED` (`RenewalRenewerChangedError` from `@tinycloud/sdk-core/delegations/renewal`). Lease admission, renewal history checks and node-sdk's renewal restore throw it, and `restoreStoredSession` reads it as an expired session (`AUTH_EXPIRED`), so callers ask the owner for a new approval. The CLI matches the code, not the message. Courier's saved-renewal recovery reports it as `renewal-approval-required`.
+
+  Details: TC-3617
+
+- Updated dependencies [3d5cd63]
+  - @tinycloud/sdk-core@3.14.0-beta.13
+  - @tinycloud/node-sdk@3.14.0-beta.13
+
+## 0.9.2-beta.10
+
+### Patch Changes
+
+- Updated dependencies [2790836]
+  - @tinycloud/node-sdk@3.14.0-beta.12
+
+## 0.9.2-beta.9
+
+### Patch Changes
+
+- Updated dependencies [acb3dd2]
+  - @tinycloud/sdk-core@3.14.0-beta.11
+  - @tinycloud/node-sdk@3.14.0-beta.11
+
+## 0.9.2-beta.8
+
+### Patch Changes
+
+- Updated dependencies [778e1e2]
+  - @tinycloud/sdk-core@3.14.0-beta.10
+  - @tinycloud/node-sdk@3.14.0-beta.10
+
+## 0.9.2-beta.7
+
+### Patch Changes
+
+- Updated dependencies [fbdbaa7]
+- Updated dependencies [fbdbaa7]
+  - @tinycloud/node-sdk@3.14.0-beta.8
+  - @tinycloud/sdk-core@3.14.0-beta.8
+
+## 0.9.2-beta.6
+
+### Patch Changes
+
+- Updated dependencies [d382af8]
+  - @tinycloud/node-sdk@3.14.0-beta.7
+  - @tinycloud/sdk-core@3.14.0-beta.7
+
+## 0.9.2-beta.5
+
+### Patch Changes
+
+- Updated dependencies [7d438ee]
+  - @tinycloud/sdk-core@3.14.0-beta.6
+  - @tinycloud/node-sdk@3.14.0-beta.6
+
+## 0.9.2-beta.4
+
+### Patch Changes
+
+- 2cb453f: A login, grant or decrypt grant made through the CLI, `@tinycloud/operations` or the MCP server without an expiry still lasts 30 days. The SDK's default for the same requests is 7 days.
+
+  Details: TC-3443
+
+- Updated dependencies [2cb453f]
+  - @tinycloud/sdk-core@3.14.0-beta.5
+  - @tinycloud/node-sdk@3.14.0-beta.5
+  - @tinycloud/sdk-services@3.14.0-beta.5
+
+## 0.9.2-beta.3
+
+### Patch Changes
+
+- Updated dependencies [4e4d845]
+  - @tinycloud/node-sdk@3.14.0-beta.4
+
+## 0.9.2-beta.2
+
+### Patch Changes
+
+- Updated dependencies [628be3c]
+  - @tinycloud/sdk-core@3.14.0-beta.3
+  - @tinycloud/node-sdk@3.14.0-beta.3
+
+## 0.9.2-beta.1
+
+### Patch Changes
+
+- Updated dependencies [18a0e38]
+- Updated dependencies [81884ce]
+  - @tinycloud/sdk-core@3.14.0-beta.2
+  - @tinycloud/node-sdk@3.14.0-beta.2
+
+## 0.9.2-beta.0
+
+### Patch Changes
+
+- Updated dependencies
+  - @tinycloud/node-sdk@3.14.0-beta.1
+
+## 0.9.1
+
+### Patch Changes
+
+- 0576031: The CLI, the hosted MCP server and Courier now use `https://node.tinycloud.xyz` as the default TinyCloud node, in place of `https://tee.node.tinycloud.xyz`. Profiles that already store a host keep it. To choose a node: for the CLI, pass `--host <url>`, set `TC_HOST` or create a profile with `tinycloud profile create <name> --host <url>`; for the MCP server, set `TC_HOST`; for Courier, pass `--host <url>` or set `COURIER_HOST`.
+
+  Details: TC-2923
+
+- df0de7e: The profile turn lock no longer fails with `Turn N of the turn lock ... is unreadable` when a turn number is published again while another process reads it. A paused process may publish a removed turn number again; a reader that found no owner record and then found the directory present now reads the record again instead of calling the turn damaged. A directory that is still present without an owner record on the second read is damaged, as before.
+
+  Details: TC-3208
+
+- ca8ae20: New hosted connections now find apps saved in the original `default/xyz.tinycloud.agent-data/` layout before making one with the same name. When `tinycloud_apps_context` names one of your own apps that isn't in the new layout, or `tinycloud_apps_write` creates an app, the connection asks the owner for a separate, read-only approval to read the original app list (OpenKey approves one space at a time). Once approved, the older app with that name is used and a duplicate is refused. Listing apps, published apps such as `healthlog`, and apps already in the new layout need no extra approval. If the owner declines, only the call that needed the list stops; retrying it shows the same request. Connections that already read the original list are unchanged.
+
+  Details: TC-3141
+
+- Updated dependencies [0490f71]
+- Updated dependencies [9f3ca26]
+- Updated dependencies [2395340]
+- Updated dependencies [634753d]
+- Updated dependencies [b758e71]
+- Updated dependencies [c7741ab]
+- Updated dependencies [9f3ca26]
+- Updated dependencies [1f961e4]
+- Updated dependencies [400cf7f]
+- Updated dependencies [7399b14]
+  - @tinycloud/sdk-services@3.13.0
+  - @tinycloud/node-sdk@3.13.0
+  - @tinycloud/sdk-core@3.13.0
+
+## 0.9.1-beta.11
+
+### Patch Changes
+
+- df0de7e: The profile turn lock no longer fails with `Turn N of the turn lock ... is unreadable` when a turn number is published again while another process reads it. A paused process may publish a removed turn number again; a reader that found no owner record and then found the directory present now reads the record again instead of calling the turn damaged. A directory that is still present without an owner record on the second read is damaged, as before.
+
+  Details: TC-3208
+
 ## 0.9.1-beta.10
 
 ### Patch Changes

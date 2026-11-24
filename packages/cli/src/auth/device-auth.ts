@@ -12,7 +12,8 @@ import { DEFAULT_CHAIN_ID, DEFAULT_OPENKEY_DEVICE_API_HOST, ExitCode } from "../
 import type { ProfileConfig } from "../config/types.js";
 import { CLIError } from "../output/errors.js";
 import { assertNoCaveatLimits } from "../lib/caveat-refusal.js";
-import { deviceRefusal, deviceRefusalMessage } from "../lib/raw-encryption.js";
+import { normalizePkhIdentifier } from "../lib/space.js";
+import { deviceRefusal, deviceRefusalMessage, isRawEncryptionPermission } from "../lib/raw-encryption.js";
 import { generateKey, keyToDID } from "./local-key.js";
 import { validateDelegationCallbackPayload } from "./browser-auth.js";
 import {
@@ -425,6 +426,15 @@ function writeApprovalPrompt(prompt: DeviceApprovalPrompt): void {
   );
 }
 
+function validateDevicePermissions(permissions: PermissionEntry[]): void {
+  validateLoginPermissions(permissions);
+  const spaces = new Set(permissions.filter(permission => !isRawEncryptionPermission(permission))
+    .map(permission => normalizePkhIdentifier(permission.space!)));
+  if (spaces.size !== 1) {
+    throw new CLIError("INVALID_LOGIN_SCOPE", "Device sign-in needs permissions in exactly one TinyCloud space.", ExitCode.USAGE_ERROR);
+  }
+}
+
 /**
  * Request exactly `permissions` through OpenKey device authorization, wait
  * for the owner's approval for the whole approval window, and return the
@@ -432,13 +442,13 @@ function writeApprovalPrompt(prompt: DeviceApprovalPrompt): void {
  */
 export async function acquireDeviceDelegation(input: DeviceAuthorizationInput): Promise<DeviceAuthorizationResult> {
   assertNoCaveatLimits(input.permissions);
-  validateLoginPermissions(input.permissions);
+  validateDevicePermissions(input.permissions);
   // OpenKey's device flow admits one encryption entry, decrypt on the owner's own default network.
   const refused = deviceRefusal(input.permissions);
   if (refused !== undefined) {
     throw new CLIError(
       "DEVICE_AUTH_UNSUPPORTED_SCOPE",
-      deviceRefusalMessage(refused, "this request", "Use another OpenKey approval method for this request."),
+      deviceRefusalMessage(refused, "Use another OpenKey approval method for this request."),
       ExitCode.USAGE_ERROR,
     );
   }
@@ -594,7 +604,7 @@ export async function loginWithDeviceAuthorization(input: Omit<DeviceAuthorizati
   assertNotLocalOwner(input.profileName, existing, "Device login");
   // Every profile that recorded an owner stays with that owner.
   const expectedOwner = expectedOwnerFor(input.profileName, existing, input.expectedOwner);
-  validateLoginPermissions(input.permissions);
+  validateDevicePermissions(input.permissions);
   const permissions = scopedLoginPermissions(input.permissions);
   // Early refusal on the request; the commit re-checks the approved scope.
   if (input.replaceSession !== true) {

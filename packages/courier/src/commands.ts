@@ -14,13 +14,13 @@ import { CourierError, CourierPending, errInfo } from './errors.js';
 import { AGENT_GRANT, AGENT_GRANT_EXPIRY, COURIER_SPACE, DEFAULT_HOST, EXT, k, peerReadPermissions, PREFIX } from './keys.js';
 import {
   loadProfile, saveProfile, withProfileTransaction, assertNotPaired, getPeer, profileDir, profileExists, loadKey, saveKey,
-  type AgentKey, type Profile, type StoredPeer,
+  type AgentKey, type Profile, type ProfileSave, type StoredPeer,
 } from './profile.js';
 import { revokePeer } from './revoke.js';
 import { courierNode, peerKv, currentInbound, assertInboundLive, renewalBinding } from './node.js';
 import { REVOKE_URL } from './grant-refusal.js';
 import { courierGrantRequest, grantFromInput, installRefusing, isShortCode, noSpaceError, pendingSpaceError, receiveGrant, resumeAwaitingGrant, resumeGrant } from './grant.js';
-import { completeApproval, DEFAULT_WAIT_MS, MAX_WAIT_MS, requestApproval, waitApproval } from './grant-request.js';
+import { completeApproval, DEFAULT_WAIT_MS, MAX_WAIT_MS, renewalLeaseFor, requestApproval, waitApproval } from './grant-request.js';
 import { approvalPhase, assertPendingReadable, clearPending, holdsApproval, loadPending, readApprovalEntry, stageOf } from './approval-phase.js';
 import {
   artifactA, artifactWithDelegation, parseArtifact, peerRecordBody, PEER_DELEGATION_EXPIRY, validateArtifactIdentity,
@@ -102,6 +102,12 @@ export async function cmdInit(args: ParsedArgs) {
   const expiry = args.get('expiry') ?? AGENT_GRANT_EXPIRY;
   const expiryMs = durationMs(expiry);
   if (!expiryMs || expiryMs > AGENT_GRANT_MAX_MS) fail('usage', `--expiry must be a duration such as 7d, at most ${AGENT_GRANT_EXPIRY}.`);
+  // A renewal lease travels only in the signed approval request (--request, --wait): a pasted code or grant file cannot carry one.
+  const renewFlag = initValue(args, 'renew');
+  if (renewFlag !== undefined && !args.has('request') && !args.has('wait') && !args.has('resume')) {
+    fail('usage', '--renew needs --request or --wait: only the approval link can ask the owner for a renewal.');
+  }
+  renewalLeaseFor(renewFlag, Math.floor(expiryMs / 1000));
   if (args.has('resume') && (args.has('request') || args.has('grant-file') || args.has('paste') || args.has('rotate-key'))) {
     fail('usage', `\`${cmd('init --resume')}\` cannot be combined with --request, --grant-file, --paste or --rotate-key.`);
   }
@@ -142,7 +148,7 @@ export async function cmdInit(args: ParsedArgs) {
     // An approval the owner gave, with no grant saved to install first, is collected by `--wait`, never discarded or shadowed by a cleanup.
     if (state.action === 'wait' && heldApproval(state.inputs.approval) && profile.status !== 'ready') {
       console.error(`${adviceFor(state)} Continuing as \`${cmd('init --wait')}\`.`);
-      await collectApproval(profile, loadKey(), { expiry: args.get('expiry'), openkeyApiHost: apiHostFlag, waitMs });
+      await collectApproval(profile, loadKey(), { expiry: args.get('expiry'), renew: renewFlag, openkeyApiHost: apiHostFlag, waitMs });
       return;
     }
     if (profile.status === 'awaiting-grant' && await resumeAwaitingGrant(profile)) {
@@ -200,7 +206,7 @@ export async function cmdInit(args: ParsedArgs) {
   if (rotate) console.error('Agent key rotated. Existing peer pairings must be re-established; the old grant remains valid until expiry.');
 
   if (args.has('request')) {
-    const pending = await requestApproval(profile, key, args.get('expiry'), { openkeyApiHost: apiHostFlag });
+    const pending = await requestApproval(profile, key, args.get('expiry'), { openkeyApiHost: apiHostFlag, renew: renewFlag });
     console.error(`Send the owner this link to approve (it expires ${pending.requestExpiresAt}). Copy it exactly, never retype it:\n${pending.approvalUrl}\nThen run \`${cmd('init --wait --timeout 60s')}\` to collect the approval.`);
     console.error(initRequestNextLine());
     // A resumed request keeps the lifetime it was made with.
@@ -210,7 +216,7 @@ export async function cmdInit(args: ParsedArgs) {
   }
 
   if (args.has('wait')) {
-    await collectApproval(profile, key, { expiry: args.get('expiry'), openkeyApiHost: apiHostFlag, waitMs });
+    await collectApproval(profile, key, { expiry: args.get('expiry'), renew: renewFlag, openkeyApiHost: apiHostFlag, waitMs });
     return;
   }
 
@@ -263,9 +269,9 @@ function dropOpenRequest(): void {
 }
 
 /** `init --wait`: create or resume the approval request, wait for the owner, install the result and acknowledge it. `--resume` hands off here while an approval is saved. */
-async function collectApproval(profile: Profile, key: AgentKey, options: { expiry?: string; openkeyApiHost?: string; waitMs: number }): Promise<void> {
+async function collectApproval(profile: Profile, key: AgentKey, options: { expiry?: string; renew?: string; openkeyApiHost?: string; waitMs: number }): Promise<void> {
   const deadline = Date.now() + options.waitMs;
-  const { pending, resumed } = await waitApproval(profile, key, options.expiry, { openkeyApiHost: options.openkeyApiHost });
+  const { pending, resumed } = await waitApproval(profile, key, options.expiry, { openkeyApiHost: options.openkeyApiHost, renew: options.renew });
   if (stageOf(pending) !== 'committed') {
     console.error(`${resumed ? 'Resuming the saved approval request.' : 'Created an approval request.'} Owner: approve it in OpenKey (copy the link exactly, never retype it):\n${pending.approvalUrl}\nWaiting for approval (up to ${Math.round(options.waitMs / 1000)} s). Run \`${cmd('init --wait')}\` again after an interruption; no new approval is needed.`);
   }
@@ -297,7 +303,7 @@ export async function cmdPair(args: ParsedArgs) {
   if (sub === 'start') return pairStart(args);
   if (sub === 'accept') return pairAccept(args);
   if (sub === 'renew') return pairRenew(args);
-  fail('usage', `Usage: ${cmd('pair start <peer> | pair accept <artifact-json|--file f|--stdin> | pair renew [peer] [--force] [--renew-artifact]')}`);
+  fail('usage', `For private links, use \`${cmd('invite --help')}\` or \`${cmd('join --help')}\`. For advanced manual pairing, see \`${cmd('pair --help')}\`.`);
 }
 
 async function pairStart(args: ParsedArgs) {
@@ -507,7 +513,7 @@ async function renewOutbound(active: Ctx, peer: StoredPeer, force: boolean, arti
   });
 }
 
-async function issueOutbound(active: Ctx, peer: StoredPeer, force: boolean, save: () => void, artifact: boolean): Promise<PortableDelegation | undefined> {
+async function issueOutbound(active: Ctx, peer: StoredPeer, force: boolean, save: ProfileSave, artifact: boolean): Promise<PortableDelegation | undefined> {
   const result = await maintainOutbound(active.node, active.profile, peer, save, { force, manual: true, extendOnly: artifact });
   if (result.reason === 'overlong') {
     fail('renew-throttled', `Access for ${oneLine(peer.handle)} already runs longer than the peer accepts${peerLimitNote(peer) ? ` (${peerLimitNote(peer)})` : ''}. A shorter grant is published automatically on the next renewal tick. Nothing was exported.`);
@@ -573,7 +579,13 @@ export async function cmdRevoke(args: ParsedArgs) {
   await withProfileTransaction(async (profile, save) => {
     const peer = profile.peers[handle] ?? fail('unknown-peer', `No pairing with ${shown}. If you already revoked it, there's nothing left to do.`);
     const node = await courierNode(profile);
-    await revokePeer(node, profile, handle, save);
+    await revokePeer(node, profile, handle, () => {
+      try { save(); }
+      catch (error) {
+        // A concurrent revoke completed this same removal; never restore its peer or mask a recreated pairing.
+        if (!(error instanceof CourierError) || error.code !== 'peer-revoked' || loadProfile().peers[handle]) throw error;
+      }
+    });
     delete profile.peers[handle];
     save();
     clearLocalCaches();

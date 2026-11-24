@@ -73,6 +73,11 @@ export interface ProfileConfig {
   /** Explicit logout fences profile-key auto-login until a verified explicit login commits. */
   authSignedOut?: boolean;
   /**
+   * Set with `authSignedOut` by a logout that keeps the profile key (TC-3434); crash recovery keeps `key.json` only
+   * when this is set, so an interrupted logout that meant to delete the key still deletes it.
+   */
+  authKeyRetained?: boolean;
+  /**
    * Another account's logout removed both credentials but not yet the profile's legacy
    * `replicas/` mirror; startup (or the next logout) finishes that erase.
    */

@@ -22,12 +22,36 @@ exercised under exact Node `20.19.4` for both CommonJS and ESM entrypoints.
 
 CI enforcement lives in `.github/workflows/tc-191-i0-gate.yml`. It pins Node
 `20.19.4` and the repository-declared Bun `1.2.0`, installs only with
-`bun install --frozen-lockfile`, builds the local workspace entrypoints and the
-operations package needed by the CLI suites, then runs the seven focused suites
-below. The test step
-sets npm offline and its registry to loopback, so the local `npm pack` engine
-check cannot use the npm registry. The suites use fake/local boundaries; they do
-not call OpenKey or public TinyCloud nodes.
+`bun install --frozen-lockfile`, and builds the local workspace entrypoints once.
+Four standard `ubuntu-latest` jobs consume that run's build artifact: Courier,
+packed CLI, packed SDK entrypoints, and the remaining focused contracts/public API.
+Every test command retains a disposable private HOME. npm is offline with a
+loopback registry during tests, so local packing cannot use the npm registry.
+The suites use fake/local boundaries; they do not call OpenKey or public TinyCloud
+nodes. The existing two live-node-only Courier skips are unchanged.
+Their exact paths, `packages/courier/test/interim-local.test.mjs` and
+`packages/courier/test/revoke-issued-local.test.mjs`, are pinned as skip-only:
+they must produce skipped-event evidence and no actually-run testcases. Missing
+files, new skip-only files, or a formerly skip-only file starting to run fail the
+gate until that exception is explicitly reviewed. Coverage prints them as
+`SKIPPED`, never `EXECUTED`.
+
+The file groups and full I0 discovery live in `.github/scripts/i0-shards.py`;
+Courier's original `*.test.mjs` and `*.test.ts` globs are discovered on every run.
+Each shard uploads a list derived from non-skipped Bun JUnit testcases or Node
+test-result events correlated with the runtime's completed file wrapper, plus
+successful non-test script checks. Courier runs one Node file per invocation at
+Node's original default parallelism (`availableParallelism() - 1`); helper-defined
+tests are attributed to the real test file, and empty files fail coverage.
+Mixed run/skip files
+still count as executed. `I0 shard coverage` rejects missing,
+extra, or duplicate files and missing shard reports. The unchanged
+`I0 compatibility and MCP contract` check requires the build, all four shards, and
+coverage verification to succeed, including when a dependency fails or cancels.
+
+Shared outputs do not replace the independent packaging checks: packed CLI and
+SDK entrypoints still rebuild from `git archive HEAD`, and the public API script
+still rebuilds and packs its original package graph.
 
 ## Canonical MCP import contract
 

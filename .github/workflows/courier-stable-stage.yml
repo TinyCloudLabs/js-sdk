@@ -1,0 +1,195 @@
+# Staging route for approved Courier stable releases, driven by sealed plans
+# (.github/scripts/courier-stable-stage-plans.json, reviewed with the route; script:
+# .github/scripts/courier-stable-stage.mjs). It stages npm packages under the dist-tag `staging`
+# only: it never moves `latest`, writes no git tag or GitHub Release, pushes nothing, and touches
+# neither changesets.yml nor pre mode.
+#
+# A plan names an exact, already pushed version commit (`releaseSha`, made ahead of time with the
+# script's `prepare` command and reviewed), its base, the exact paths it changes relative to that
+# base, the packages that may change with their stable versions, and the exact external pins. The
+# one input only picks a plan id; the script rejects anything that is not a key of the policy file,
+# and the id reaches it through the environment, never through shell text. A plan whose release
+# commit is not sealed (null) refuses to run. Nothing a dispatcher types selects code, branch,
+# package, version or tag. It runs only when dispatched on master, and the script re-checks that
+# the dispatched commit is on master.
+#
+# Credential boundary: the `build` job builds the release commit and holds no secret (contents:
+# read). The `stage` job holds NPM_TOKEN in the one publish step only; it installs nothing, runs no
+# package script (--ignore-scripts), and publishes the sealed commit's package directories filled
+# with the build job's tarballs after re-verifying them against the plan at the route commit and
+# re-packing each to exactly the verified bytes.
+#
+# Lineage: the publish runs in a checkout of the release commit, so npm records that commit as
+# `gitHead`; the stage job checks that npm's record equals it.
+name: Courier stable staging
+
+on:
+  workflow_dispatch:
+    inputs:
+      plan:
+        description: Sealed plan id from .github/scripts/courier-stable-stage-plans.json
+        type: string
+        required: true
+
+# The same queue as Release (changesets.yml): never overlaps a beta or stable run, never cancelled.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build and pack the release commit
+    if: github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    permissions:
+      contents: read
+    env:
+      PLAN: ${{ inputs.plan }}
+    outputs:
+      manifest-sha256: ${{ steps.pack.outputs.manifest_sha256 }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Test the staging route
+        run: node --test .github/scripts/courier-stable-stage.test.mjs
+
+      # The release commit predates these scripts: keep the route's copy and run every script from it.
+      - name: Keep the route scripts
+        run: cp -R .github/scripts "$RUNNER_TEMP/route-scripts"
+
+      # The release commit sits on a release ref, not master: fetch it by its exact sha (read-only token; this job
+      # holds no other).
+      - name: Fetch the release commit
+        run: |
+          sha="$(node "$RUNNER_TEMP/route-scripts/courier-stable-stage.mjs" release-sha)"
+          if ! git cat-file -e "${sha}^{commit}" 2>/dev/null; then
+            auth="$(printf 'x-access-token:%s' "$GITHUB_TOKEN" | base64 -w0)"
+            git -c "http.extraheader=Authorization: Basic ${auth}" fetch --no-tags origin "$sha"
+          fi
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+
+      # Route-head provenance and release-commit provenance: a dispatch on master at a commit master contains; the
+      # release commit descends from the plan's base with exactly the sealed delta and version-only manifests.
+      - name: Check the route head and the release commit
+        run: node "$RUNNER_TEMP/route-scripts/courier-stable-stage.mjs" guard-route
+
+      - name: Check out the release commit
+        run: git checkout --quiet --detach "$(node "$RUNNER_TEMP/route-scripts/courier-stable-stage.mjs" release-sha)"
+
+      - uses: oven-sh/setup-bun@v1
+        with:
+          bun-version: latest
+          no-cache: true
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Install wasm-pack
+        uses: ./.github/actions/install-wasm-pack
+
+      # The commit carries its own settled lockfile.
+      - run: bun install --frozen-lockfile
+
+      # The plan's packages and everything they build from (wasm included), through the workspace's own build.
+      - name: Build
+        run: |
+          mapfile -t filters < <(node "$RUNNER_TEMP/route-scripts/courier-stable-stage.mjs" build-filters)
+          bunx turbo build "${filters[@]}"
+        env:
+          BUILD_SETUP_ENABLED: true
+          NODE_OPTIONS: --max-old-space-size=6144
+
+      # The node release pin belongs to the CLI: run it only for plans that stage @tinycloud/cli.
+      - name: Plan flags
+        id: flags
+        run: node "$RUNNER_TEMP/route-scripts/courier-stable-stage.mjs" plan-flags >> "$GITHUB_OUTPUT"
+
+      - name: Verify node release pin
+        if: steps.flags.outputs.node_release_check == 'true'
+        run: bun run --cwd packages/cli check:node-release
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+
+      - name: Pack and check the tarballs
+        id: pack
+        run: |
+          out="$RUNNER_TEMP/stage-artifact"
+          node "$RUNNER_TEMP/route-scripts/courier-stable-stage.mjs" pack "$out"
+          node "$RUNNER_TEMP/route-scripts/courier-stable-stage.mjs" verify-tarballs "$out"
+          echo "manifest_sha256=$(sha256sum "$out/manifest.json" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: courier-stable-staging
+          path: ${{ runner.temp }}/stage-artifact
+          retention-days: 14
+          if-no-files-found: error
+
+  stage:
+    name: Stage on npm (tag staging)
+    needs: build
+    if: github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      # npm provenance for packages whose manifest asks for it (courier: publishConfig.provenance).
+      id-token: write
+    env:
+      PLAN: ${{ inputs.plan }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Keep the route scripts
+        run: cp -R .github/scripts "$RUNNER_TEMP/route-scripts"
+
+      # The route commit is on master and the plan is sealed.
+      - name: Check the route head
+        run: node "$RUNNER_TEMP/route-scripts/courier-stable-stage.mjs" verify-route
+
+      # npm records the checkout's HEAD as gitHead, so publish from exactly the sealed release commit.
+      - name: Check out the release commit
+        run: |
+          sha="$(node "$RUNNER_TEMP/route-scripts/courier-stable-stage.mjs" release-sha)"
+          if ! git cat-file -e "${sha}^{commit}" 2>/dev/null; then
+            auth="$(printf 'x-access-token:%s' "$GITHUB_TOKEN" | base64 -w0)"
+            git -c "http.extraheader=Authorization: Basic ${auth}" fetch --no-tags origin "$sha"
+          fi
+          git checkout --quiet --detach "$sha"
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: courier-stable-staging
+          path: ${{ runner.temp }}/stage-artifact
+
+      - name: Verify the tarballs
+        run: node "$RUNNER_TEMP/route-scripts/courier-stable-stage.mjs" verify-tarballs "$RUNNER_TEMP/stage-artifact" "$MANIFEST_SHA256"
+        env:
+          MANIFEST_SHA256: ${{ needs.build.outputs.manifest-sha256 }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          registry-url: 'https://registry.npmjs.org'
+
+      # The only step with the token. Layer by layer in dependency order, each layer served by npm before the
+      # next; versions npm already has with these exact bytes are skipped, different bytes stop the run.
+      - name: Publish with the staging tag
+        run: node "$RUNNER_TEMP/route-scripts/courier-stable-stage.mjs" publish "$RUNNER_TEMP/stage-artifact"
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          MANIFEST_SHA256: ${{ needs.build.outputs.manifest-sha256 }}

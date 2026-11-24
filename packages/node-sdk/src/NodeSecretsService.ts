@@ -1,5 +1,7 @@
 import {
   ErrorCodes,
+  namedKeysPutRefusal,
+  secretNameTooLongRefusal,
   resolveSecretListPrefix,
   resolveSecretPath,
   expandPermissionEntries,
@@ -9,6 +11,7 @@ import {
   type Manifest,
   type PermissionEntry,
   type Result,
+  type SecretGetOptions,
   type SecretScopeOptions,
   type SecretPutOptions,
   type ServiceError,
@@ -78,11 +81,13 @@ function secretPermissionEntries(
     skipPrefix: true,
   });
 
-  if (action === "get" && encryptionNetworkId !== undefined) {
+  // Named-key writes ask for key.create on the secret, not a prefix.
+  // Reads check the exact key first; network-wrapped records use network decrypt.
+  if ((action === "get" || action === "put") && encryptionNetworkId !== undefined) {
     entries.push({
       service: "tinycloud.encryption",
-      path: encryptionNetworkId,
-      actions: ["decrypt"],
+      path: `${encryptionNetworkId}/${resolveSecretPath(name, options).keyPath}`,
+      actions: [action === "get" ? "decrypt" : "key.create"],
       skipPrefix: true,
     });
   }
@@ -124,6 +129,8 @@ export interface NodeSecretsServiceConfig {
    */
   uncoveredEntries?: (permissions: PermissionEntry[]) => PermissionEntry[];
   getEncryptionNetworkId?: () => string;
+  /** Whether the node has named keys. `put` is refused up front when it does not (`false`) and when it cannot be checked (`undefined`). */
+  namedKeysSupported?: () => boolean | undefined | Promise<boolean | undefined>;
   resolveSpace?: (space: string) => string;
   getUnlockSigner?: () => unknown;
 }
@@ -163,9 +170,14 @@ export class NodeSecretsService implements ISecretsService {
     this.service.lock();
   }
 
+  /**
+   * Never asks for authority unless `options.requestPermission`: a read with
+   * no live grant for the secret's own key is `DECRYPT_DENIED`, without a
+   * wallet prompt, so a background read cannot sign (TC-3801).
+   */
   async get(
     name: string,
-    options?: SecretScopeOptions,
+    options?: SecretGetOptions,
   ): ReturnType<ISecretsService["get"]> {
     const permission = await this.ensurePermission(name, options, "get");
     if (!permission.ok) return permission;
@@ -176,7 +188,7 @@ export class NodeSecretsService implements ISecretsService {
 
   async getEntry(
     name: string,
-    options?: SecretScopeOptions,
+    options?: SecretGetOptions,
   ): ReturnType<ISecretsService["getEntry"]> {
     const permission = await this.ensurePermission(name, options, "get");
     if (!permission.ok) return permission;
@@ -190,6 +202,12 @@ export class NodeSecretsService implements ISecretsService {
     value: string,
     options?: SecretPutOptions,
   ): ReturnType<ISecretsService["put"]> {
+    const tooLong = secretNameTooLongRefusal(name);
+    if (tooLong) return tooLong;
+    if (options?.namedKey === true && this.config.namedKeysSupported) {
+      const refusal = namedKeysPutRefusal(await this.config.namedKeysSupported());
+      if (refusal) return refusal;
+    }
     const permission = await this.ensurePermission(name, options, "put");
     if (!permission.ok) return permission;
     return options === undefined
@@ -230,19 +248,17 @@ export class NodeSecretsService implements ISecretsService {
 
   private async ensurePermission(
     name: string,
-    options: SecretScopeOptions | undefined,
+    options: (SecretGetOptions & SecretPutOptions) | undefined,
     action: SecretAction,
   ): Promise<Result<void, ServiceError | VaultError>> {
+    // Writes and lists still ask as before; a read asks only when told to.
+    const mayAsk = action !== "get" || options?.requestPermission === true;
     const target = name || "secrets";
     let permissionEntries: PermissionEntry[];
+    const needsNamedKey = action === "get" || (action === "put" && options?.namedKey === true);
+    const networkId = needsNamedKey ? this.config.getEncryptionNetworkId?.() : undefined;
     try {
-      permissionEntries = secretPermissionEntries(
-        name,
-        options,
-        action,
-        this.space,
-        action === "get" ? this.config.getEncryptionNetworkId?.() : undefined,
-      );
+      permissionEntries = secretPermissionEntries(name, options, action, this.space, networkId);
     } catch (error) {
       return secretsError(
         ErrorCodes.INVALID_INPUT,
@@ -250,8 +266,16 @@ export class NodeSecretsService implements ISecretsService {
         error instanceof Error ? error : undefined,
       );
     }
+    // A held network decrypt grant can open a network-wrapped record, but
+    // is never requested as a fallback and is not allowed under namedKeyOnly.
+    const [kvEntry, keyEntry] = permissionEntries;
+    const networkRead = action === "get" && networkId !== undefined && keyEntry !== undefined &&
+      keyEntry.path !== networkId && options?.namedKeyOnly !== true &&
+      (!mayAsk || !this.config.canEscalate())
+      ? [kvEntry!, { ...keyEntry, path: networkId }]
+      : undefined;
 
-    if (this.hasPermission(permissionEntries)) {
+    if (this.hasPermission(permissionEntries) || (networkRead !== undefined && this.hasPermission(networkRead))) {
       return ok();
     }
 
@@ -259,6 +283,9 @@ export class NodeSecretsService implements ISecretsService {
     try {
       escalation =
         this.config.uncoveredEntries?.(permissionEntries) ?? permissionEntries;
+      if (escalation.length > 0 && networkRead !== undefined && this.config.uncoveredEntries?.(networkRead).length === 0) {
+        escalation = [];
+      }
     } catch (error) {
       return this.escalationError(action, target, error);
     }
@@ -268,6 +295,8 @@ export class NodeSecretsService implements ISecretsService {
     if (this.config.uncoveredEntries !== undefined && escalation.length === 0) {
       return ok();
     }
+
+    if (!mayAsk) return this.readDenied(name, options, escalation, keyEntry);
 
     if (!this.config.canEscalate()) {
       return secretsError(
@@ -282,6 +311,34 @@ export class NodeSecretsService implements ISecretsService {
     } catch (error) {
       return this.escalationError(action, target, error);
     }
+  }
+
+  /**
+   * A read that may not ask: missing decrypt on the secret's own key is
+   * `DECRYPT_DENIED` naming that key; a missing KV read stays a plain denial.
+   */
+  private readDenied(
+    name: string,
+    options: SecretGetOptions | undefined,
+    missing: PermissionEntry[],
+    keyEntry: PermissionEntry | undefined,
+  ): Result<never, ServiceError | VaultError> {
+    if (keyEntry !== undefined && missing.some((entry) => entry.service === "tinycloud.encryption")) {
+      return {
+        ok: false,
+        error: {
+          code: "DECRYPT_DENIED",
+          service: "vault",
+          key: resolveSecretPath(name, options).vaultKey,
+          message: `No live grant to decrypt ${name}; ask for permissionHint, or read with requestPermission.`,
+          permissionHint: { service: "tinycloud.encryption", path: keyEntry.path, actions: ["tinycloud.encryption/decrypt"] },
+        },
+      };
+    }
+    return secretsError(
+      ErrorCodes.PERMISSION_DENIED,
+      `No live grant to read ${name}; read with requestPermission to ask for it.`,
+    );
   }
 
   private escalationError(

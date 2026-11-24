@@ -42,10 +42,19 @@ describe("NodeSecretsService.getEntry", () => {
         "urn:tinycloud:encryption:did:key:z6MkPrincipal:default",
     });
 
-    const result = await secrets.getEntry("GITHUB_TOTP", { scope: "food" });
+    const background = await secrets.getEntry("GITHUB_TOTP", { scope: "food" });
+    expect(background.ok ? undefined : background.error.code).toBe("DECRYPT_DENIED");
+    expect(grantPermissions).not.toHaveBeenCalled();
+    expect(getEntry).not.toHaveBeenCalled();
+
+    const result = await secrets.getEntry("GITHUB_TOTP", { scope: "food", requestPermission: true });
 
     expect(result).toEqual({ ok: true, data: ENTRY });
-    expect(getEntry).toHaveBeenCalledWith("GITHUB_TOTP", { scope: "food" });
+    expect(getEntry).toHaveBeenCalledWith("GITHUB_TOTP", { scope: "food", requestPermission: true });
     expect(grantPermissions).toHaveBeenCalledTimes(1);
+    expect(grantPermissions.mock.calls[0]).toEqual([[
+      { service: "tinycloud.kv", space: "secrets", path: "vault/secrets/scoped/food/GITHUB_TOTP", actions: ["get"], skipPrefix: true },
+      { service: "tinycloud.encryption", path: "urn:tinycloud:encryption:did:key:z6MkPrincipal:default/secrets/scoped/food/github_totp", actions: ["decrypt"], skipPrefix: true },
+    ]]);
   });
 });

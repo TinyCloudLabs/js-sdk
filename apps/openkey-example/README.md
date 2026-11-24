@@ -161,8 +161,10 @@ The main authentication flow uses the SDK's built-in `OpenKeyProvider` and passe
 
 ```typescript
 import { OpenKey, OpenKeyProvider } from '@openkey/sdk';
-import { TinyCloudWeb } from '@tinycloud/web-sdk';
+import { TinyCloudWeb, type Manifest } from '@tinycloud/web-sdk';
 import { providers } from 'ethers';
+
+const manifest: Manifest = { app_id: 'com.example.notes', name: 'Notes' };
 
 const connectAndSignIn = async () => {
   // 1. Connect to OpenKey (iframe modal)
@@ -178,6 +180,7 @@ const connectAndSignIn = async () => {
   // 4. Create TinyCloudWeb with the provider
   const tcw = new TinyCloudWeb({
     provider: web3Provider,
+    manifest,
     siweConfig: {
       statement: 'Sign in to the TinyCloud OpenKey example app.',
       domain: window.location.hostname,
@@ -192,8 +195,10 @@ const connectAndSignIn = async () => {
 If you need to override the nonce in an example, use a fixed placeholder and document that production code must fetch a one-time nonce from your backend:
 
 ```typescript
+const manifest = { app_id: 'com.example.notes', name: 'Notes' };
 const tcw = new TinyCloudWeb({
   provider: web3Provider,
+  manifest,
   siweConfig: {
     nonce: '1234', // Example only. In production, fetch a random one-time nonce from your server.
     statement: 'Sign in to the TinyCloud OpenKey example app.',

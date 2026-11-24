@@ -28,6 +28,7 @@ import {
   isRequestTimeoutError,
   nodeRetryError,
 } from "../errors";
+import { invocationRefusalMeta, refusedInvocations } from "../invocationRefusal";
 import { IKVService } from "./IKVService";
 import { PrefixedKVService, IPrefixedKVService } from "./PrefixedKVService";
 import {
@@ -107,10 +108,37 @@ function comparePathsByBytes(a: string, b: string): number {
 const REVOKED_BODY =
   /^(?:Invalid invocation: )?delegation-(?:(revoked): [A-Za-z0-9]+|(ancestor-revoked): ancestor=[A-Za-z0-9]+ invoked=[A-Za-z0-9]+)$/;
 
+/** The codes a node since 1.25.17 puts beside the text of a revocation refusal (TC-2381). */
+const NODE_REVOCATION_CODES: ReadonlySet<string> = new Set(["delegation_revoked", "parent_revoked", "ancestor_revoked"]);
+
+/**
+ * The refusal text of a 401 body. A node since 1.25.17 answers a revoked chain with
+ * `{"code": "<revocation code>", "error": "<text>"}`; an older node answers the text alone.
+ * Only that envelope is opened; any other body, JSON or not, is returned as it is.
+ */
+function refusalTextOf(body: string): string {
+  const trimmed = body.trim();
+  if (!trimmed.startsWith("{")) return trimmed;
+  try {
+    const parsed: unknown = JSON.parse(trimmed);
+    if (
+      isJsonObject(parsed) &&
+      typeof parsed.code === "string" &&
+      NODE_REVOCATION_CODES.has(parsed.code) &&
+      typeof parsed.error === "string"
+    ) {
+      return parsed.error;
+    }
+  } catch {
+    // Not JSON: the text is the refusal.
+  }
+  return trimmed;
+}
+
 function revocationCodeOf(
   body: string
 ): typeof ErrorCodes.AUTH_DELEGATION_REVOKED | typeof ErrorCodes.AUTH_DELEGATION_ANCESTOR_REVOKED | undefined {
-  const match = REVOKED_BODY.exec(body.trim());
+  const match = REVOKED_BODY.exec(refusalTextOf(body));
   if (match === null) return undefined;
   return match[1] !== undefined ? ErrorCodes.AUTH_DELEGATION_REVOKED : ErrorCodes.AUTH_DELEGATION_ANCESTOR_REVOKED;
 }
@@ -793,10 +821,12 @@ export class KVService extends BaseService implements IKVService {
     const detail = errorText.trim().length > 0
       ? errorText
       : response.statusText || "authorization failed";
+    const invocationMeta = invocationRefusalMeta(refusedInvocations.get(response), errorText);
     return err(authUnauthorizedError("kv", `${context}: ${response.status} - ${detail}`, {
       status: response.status,
       ...extraMeta,
       ...capability,
+      ...invocationMeta,
     }));
   }
 

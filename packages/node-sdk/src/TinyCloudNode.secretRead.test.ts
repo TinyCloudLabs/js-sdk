@@ -37,8 +37,14 @@ describe("TinyCloudNode.readSecret", () => {
     })).resolves.toEqual({ status: "ok", value: "secret value" });
 
     expect(getBaseVault).toHaveBeenCalledWith(TARGET_SPACE);
+    // The secret's own key, AAD-bound; with no network decrypt authority held,
+    // only a copy sealed to that key opens (TC-3801).
     expect(getBaseVault.mock.results[0]?.value.readNetworkEncrypted)
-      .toHaveBeenCalledWith("secrets/scoped/production-app/API_KEY");
+      .toHaveBeenCalledWith("secrets/scoped/production-app/API_KEY", {
+        expectAad: true,
+        keyPath: "secrets/scoped/production-app/api_key",
+        namedKeyOnly: true,
+      });
   });
 
   test.each([

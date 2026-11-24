@@ -21,6 +21,14 @@ export const DEFAULT_PROFILE = "default";
 export const DEFAULT_CHAIN_ID = 1;
 
 /**
+ * Lifetime of a CLI login session and of a CLI grant or delegation that names no `--expiry`.
+ * The CLI keeps 30 days; the SDK's own default (`EXPIRY.SESSION_MS`) is shorter, so every
+ * CLI call that would fall back to it passes this instead.
+ */
+export const CLI_DEFAULT_SESSION_EXPIRY_DAYS = 30;
+export const CLI_DEFAULT_SESSION_EXPIRY_MS = CLI_DEFAULT_SESSION_EXPIRY_DAYS * 24 * 60 * 60 * 1000;
+
+/**
  * How long a login commit or an import rollback waits for the profile lock.
  * Both run after slow work that must not be lost, so they wait out a crashed
  * holder: longer than the store's 30 s stale-lock threshold, after which a
@@ -41,6 +49,8 @@ export const ExitCode = {
   PENDING: 8,
   /** A write was refused because the owner's TinyCloud storage is full. */
   STORAGE_FULL: 10,
+  /** A secrets write was refused because the node has no per-secret keys (`NAMED_KEYS_UNSUPPORTED`); nothing was saved. */
+  NAMED_KEYS_UNSUPPORTED: 11,
   /** Interrupted by SIGINT/SIGTERM (`CANCELLED`). */
   CANCELLED: 130,
 } as const;

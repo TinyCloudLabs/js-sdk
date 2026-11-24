@@ -10,10 +10,22 @@ import type { ApprovalWait } from "./approval-wait.js";
 import { ProfileManager } from "../config/profiles.js";
 import { dropPendingDelegationFor, pendingDelegationFor, savePendingDelegation } from "./pending-code.js";
 
+/** OpenKey PR #430 response metadata. Readiness never grants authority. */
+export interface RequestedSpaceStatus {
+  space: string;
+  spaceId: string;
+  spaceReady: boolean | null;
+  spacePending?: true;
+  spaceError?: string;
+}
+
 export interface DelegationData {
   delegationHeader: { Authorization: string };
   delegationCid: string;
+  /** Primary route only; permission resources retain their own spaces. */
   spaceId: string;
+  requestedSpaces?: RequestedSpaceStatus[];
+  spaceReady?: boolean | null;
   [key: string]: unknown;
 }
 
@@ -66,7 +78,8 @@ export interface AuthFlowOptions {
   expiryChangeable?: boolean;
   /**
    * Ask the owner for a renewal lease of at most this many seconds with the signed approval request. The result's
-   * lease is verified and admitted at the node before the login saves it. No command sets this yet.
+   * lease is verified and admitted at the node before the login saves it. Set by `refreshOpenKeySession` on the
+   * approval-request path only (see `renewalLeaseFor`); a paste link or device login never carries one.
    */
   renewalLeaseSeconds?: number;
 }

@@ -13,6 +13,9 @@
 // Platform-agnostic client types (canonical definitions)
 export {
   ClientSession,
+  type ClientSignInResult,
+  type SignInResult,
+  type SignInWarning,
   EnsData,
   SiweConfig,
   ServerHost,
@@ -604,6 +607,12 @@ export {
   type VaultError,
   // Secrets Service
   SecretsService,
+  NAMED_KEYS_UNSUPPORTED,
+  NAMED_KEYS_UNSUPPORTED_MESSAGE,
+  NAMED_KEYS_CHECK_FAILED,
+  NAMED_KEYS_CHECK_FAILED_MESSAGE,
+  namedKeysPutRefusal,
+  namedKeysUnsupportedResult,
   DEFAULT_SECRET_TYPE,
   SECRET_TYPES,
   isSecretType,
@@ -613,8 +622,12 @@ export {
   appSecretScope,
   SECRET_SCOPE_RE,
   MAX_SECRET_SCOPE_LENGTH,
+  MAX_SECRET_NAME_LENGTH,
   TC832_RESERVED_SCOPES,
   parseSecretCatalogKey,
+  parseStoredSecretCatalogKey,
+  secretNameTooLongMessage,
+  secretNameTooLongRefusal,
   resolveSecretListPrefix,
   resolveSecretPath,
   type ISecretsService,
@@ -627,6 +640,7 @@ export {
   type ParsedSecretCatalogKey,
   type SecretScopeOptions,
   type SecretPutOptions,
+  type SecretGetOptions,
   // Encryption Service (network-scoped)
   EncryptionService,
   DecryptTransportResponseError,
@@ -954,6 +968,9 @@ export {
   // Functions
   applyPrefix,
   composeManifestRequest,
+  resolveManifestOwner,
+  manifestUsesOwnerPlaceholder,
+  MANIFEST_OWNER_PLACEHOLDER,
   expandActionShortNames,
   expandPermissionEntries,
   expandDelegationPermissionEntries,
@@ -1038,6 +1055,7 @@ export {
   createLocalStorageLocalNodeIdentityStore,
   discoverLocalTinyCloudNode,
   exactHttpOrigin,
+  isKnownTinyCloudNode,
   fetchLocationRecord,
   httpUrlToMultiaddr,
   locationPayloadForRecord,
@@ -1237,5 +1255,13 @@ export {
 
 export { endToEndNodeHost, sameTinyCloudNode } from "./tinycloud-node";
 export { AccountSetupRequiredError } from "./account-setup";
+export {
+  GENERIC_APP_ID_WITHOUT_HOST,
+  genericAppId,
+  genericAppManifest,
+  genericAppManifestWarning,
+  ownerFullAccess,
+  warnOnceWithoutAppHost,
+} from "./owner-access";
 export { FIRST_PARTY_ORIGINS, FIRST_PARTY_PAGES_SUBDOMAINS, isFirstPartyOrigin } from "@tinycloud/bootstrap";
 export { verifiedDelegationRouting, delegationTouchesVault, sessionTouchesVault, spaceIdsEqual } from "./delegations/portable";

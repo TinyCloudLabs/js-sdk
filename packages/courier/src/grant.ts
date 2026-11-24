@@ -32,6 +32,8 @@ export interface DelegateRequest {
 
 export interface GrantPayload {
   renewal?: ApprovalRenewal;
+  /** The owner answered a lease ask with a grant that ends at its own expiry. */
+  renewalChoice?: 'finite';
   delegationHeader: { Authorization: string };
   delegationCid: string;
   spaceId: string;
@@ -379,6 +381,7 @@ function ownerGrant(payload: GrantPayload, expiresAt: Date): OwnerGrant {
   return {
     v: 1,
     ...(payload.renewal ? { renewal: payload.renewal } : {}),
+    ...(payload.renewalChoice ? { renewalChoice: payload.renewalChoice } : {}),
     delegationHeader: payload.delegationHeader,
     delegationCid: payload.delegationCid,
     spaceId: payload.spaceId,
@@ -396,6 +399,7 @@ function ownerGrant(payload: GrantPayload, expiresAt: Date): OwnerGrant {
 function grantPayload(grant: OwnerGrant): GrantPayload {
   return {
     ...(grant.renewal ? { renewal: grant.renewal } : {}),
+    ...(grant.renewalChoice ? { renewalChoice: grant.renewalChoice } : {}),
     delegationHeader: grant.delegationHeader,
     delegationCid: grant.delegationCid,
     spaceId: grant.spaceId,

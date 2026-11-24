@@ -6,6 +6,7 @@ import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { TinyCloudNode } from "./TinyCloudNode";
+import { ownerFullAccess } from "@tinycloud/sdk-core";
 import { NodeWasmBindings } from "./NodeWasmBindings";
 import { PrivateKeySigner } from "./signers/PrivateKeySigner";
 import { pkhDid } from "@tinycloud/bootstrap";
@@ -74,6 +75,7 @@ describe.skipIf(!NODE_BIN)("delegateTo against a real node", () => {
       autoCreateSpace: true,
       autoBootstrapAccount: false,
       enablePublicSpace: false,
+      ...ownerFullAccess(),
     });
     await node.signIn();
     return node;

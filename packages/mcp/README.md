@@ -134,14 +134,25 @@ personal-record tools, and omits local-only `tinycloud_secrets_status` and
 exact requested operation; approved delegations arrive only through that flow,
 which binds them to the requesting OpenKey account and stored request.
 
+Opening an approval URL creates an OpenKey approval request signed by the
+tenant's own key and redirects to its OpenKey link. The server collects the
+approved delegation from OpenKey's result API: in the background every 2
+seconds for the first minute and every 10 seconds after that, and before each
+call from that account. A refused approval leaves the same URL usable for a
+new attempt. `TC_OPENKEY_API_HOST` names the OpenKey API origin results are
+fetched from; it defaults to `https://api.openkey.so` when `TC_OPENKEY_HOST` is
+`https://openkey.so`, and to `TC_OPENKEY_HOST` otherwise. Results are fetched
+only from that origin. `TC_LINKS_API_ORIGIN` names the links service that holds
+the request (default `https://api.tinycloud.xyz`). Both must be `https` origins.
+
 The hosted server also serves a restricted surface with only `tinycloud_connect`
 and the four personal-record tools, for assistant directories: `/chatgpt/mcp`,
 `/claude/mcp`, `/grok/mcp` and `/muse/mcp` beside `/mcp`. Every address is its
 own OAuth resource with its own protected-resource metadata, approval route
 (`/<prefix>/connect`) and tenant state, so a token or approval for one opens no
 other. An address works only once OpenKey issues tokens for its audience and
-accepts its approval callback, and the server's token-status client is
-registered for it. The addresses list the same five tools. `/claude/mcp` also
+the server's token-status client is registered for it. The addresses list the
+same five tools. `/claude/mcp` also
 repeats each tool's `title` as `annotations.title`, where Claude's directory
 reads the listing name; the other addresses do not.
 
@@ -195,9 +206,15 @@ move's completed `steps` (`written`, `deleted`): an `ok` envelope can contain
 partial failures. Report partial outcomes rather than replaying the batch.
 `TIMEZONE_REQUIRED` requires setting the owner's timezone before writing.
 
-Production requests 30-day grants and uses 15-minute approval links. Expired or
+Production requests 30-day grants and uses 15-minute approval links. The
+connection approval also asks the owner for a 90-day renewal lease: with it,
+the node renews the account grant until the lease ends; without it, the grant
+ends after 30 days. Per-request grants are renewed by the owner. Expired or
 missing sessions return a fresh link in `error.details`; expired grants use
-`authority_required`. Approvals are renewed by the owner, not automatically.
+`authority_required`. A lease the node no longer renews (it ended, or the
+node's renewer changed) starts a fresh connection approval. To stop renewal,
+open OpenKey Settings, go to Renewing permissions and select Stop renewal.
+Removing the connection does not stop renewal.
 
 The hosted server checks the account approval with the node when a client
 connects or calls an authenticated tool. Successful checks are cached for up
@@ -297,7 +314,9 @@ TinyCloud production uses `docker-compose.phala.yml`. The manual
 and deploys that image to the `tinycloud-mcp` Phala CVM. Its `production`
 environment requires `PHALA_CLOUD_API_KEY`, `CLOUDFLARE_API_TOKEN`, a stable
 32-byte-or-longer `TC_MCP_STATE_SECRET`, `TC_MCP_INTROSPECTION_CLIENT_ID`,
-`TC_MCP_INTROSPECTION_CLIENT_SECRET`, and `TC_MCP_NATIVE_SERVICE_CREDENTIAL`.
+`TC_MCP_INTROSPECTION_CLIENT_SECRET`, and `TC_MCP_NATIVE_SERVICE_CREDENTIAL`. The
+Better Stack source token `BETTERSTACK_SOURCE_TOKEN` is optional: without it the
+log shipper idles and the deploy is not blocked.
 
 The workflow writes a mode-`0600` complete application environment file from
 the production values and uses that same file for Phala's encrypted environment
@@ -320,6 +339,20 @@ fails closed. The allowlist is changed only by a reviewed PR. The logic is
 workflow checks again after the deploy. It never changes the OS. If the check
 fails, set the OS by hand and re-run:
 `phala api -X PATCH /cvms/<id>/os-image -F os_image_name=dstack-0.5.12`.
+
+The compose file also runs a Vector sidecar that sends the container's stderr to
+the private `tinycloud_mcp` Better Stack source as a small fixed set of events.
+The Vector configuration is embedded in `docker-compose.phala.yml` (the only
+file Phala deploys) and is tested by `packages/mcp/log-shipper/test-shipper.sh`,
+which the `MCP log shipper` workflow runs. Only a fixed set of event names and
+typed fields is forwarded; each tool, code, reason, stage and detail is one of
+the known values, otherwise `other`. Lines that do not match are counted
+(`mcp_logship_dropped_total`), not forwarded. Per-minute counts of each event
+(`mcp_logship_event_total`) show when the forwarding cap applied, and
+`mcp_logship_heartbeat` marks the shipper as running. Logs are best effort: a
+missing row means the log status is not available, not that nothing happened.
+The allowed events and fields are listed in
+`packages/mcp/log-shipper/fields.json`, a copy of the central logging field list.
 
 ### Post-deploy knowledge smoke
 

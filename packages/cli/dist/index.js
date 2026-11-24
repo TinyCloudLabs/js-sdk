@@ -145,7 +145,7 @@ import {
   tinycloudConfigPath,
   tinycloudHomePath
 } from "@tinycloud/operations/state";
-var CONFIG_DIR, PROFILES_DIR, CONFIG_FILE, DEFAULT_HOST, DEFAULT_OPENKEY_HOST, DEFAULT_OPENKEY_DEVICE_API_HOST, DEFAULT_PROFILE, PROFILE_COMMIT_LOCK_TIMEOUT_MS, ExitCode, OPENKEY_SPACE_SETUP_RETRY_HINT;
+var CONFIG_DIR, PROFILES_DIR, CONFIG_FILE, DEFAULT_HOST, DEFAULT_OPENKEY_HOST, DEFAULT_OPENKEY_DEVICE_API_HOST, DEFAULT_PROFILE, CLI_DEFAULT_SESSION_EXPIRY_DAYS, CLI_DEFAULT_SESSION_EXPIRY_MS, PROFILE_COMMIT_LOCK_TIMEOUT_MS, ExitCode, OPENKEY_SPACE_SETUP_RETRY_HINT;
 var init_constants = __esm({
   "src/config/constants.ts"() {
     "use strict";
@@ -156,6 +156,8 @@ var init_constants = __esm({
     DEFAULT_OPENKEY_HOST = "https://openkey.so";
     DEFAULT_OPENKEY_DEVICE_API_HOST = "https://api.openkey.so";
     DEFAULT_PROFILE = "default";
+    CLI_DEFAULT_SESSION_EXPIRY_DAYS = 30;
+    CLI_DEFAULT_SESSION_EXPIRY_MS = CLI_DEFAULT_SESSION_EXPIRY_DAYS * 24 * 60 * 60 * 1e3;
     PROFILE_COMMIT_LOCK_TIMEOUT_MS = 45e3;
     ExitCode = {
       SUCCESS: 0,
@@ -170,6 +172,8 @@ var init_constants = __esm({
       PENDING: 8,
       /** A write was refused because the owner's TinyCloud storage is full. */
       STORAGE_FULL: 10,
+      /** A secrets write was refused because the node has no per-secret keys (`NAMED_KEYS_UNSUPPORTED`); nothing was saved. */
+      NAMED_KEYS_UNSUPPORTED: 11,
       /** Interrupted by SIGINT/SIGTERM (`CANCELLED`). */
       CANCELLED: 130
     };
@@ -615,7 +619,7 @@ import {
   isValidSecretName,
   SECRET_REQUEST_MAX_NAMES
 } from "@tinycloud/operations/secret-request";
-import { authorizationVerdictOf, parseCapabilityResource, SERVICE_LONG_TO_SHORT, validatedCapabilityOf } from "@tinycloud/sdk-core";
+import { authorizationVerdictOf, NAMED_KEYS_CHECK_FAILED, NAMED_KEYS_CHECK_FAILED_MESSAGE, NAMED_KEYS_UNSUPPORTED, NAMED_KEYS_UNSUPPORTED_MESSAGE, parseCapabilityResource, SERVICE_LONG_TO_SHORT, validatedCapabilityOf } from "@tinycloud/sdk-core";
 import { routingFailure } from "@tinycloud/sdk-services";
 function setActiveProfileName(name) {
   activeProfileName = name;
@@ -942,6 +946,23 @@ async function writeJsonDurable(filePath, data) {
   } catch (error) {
     await rm2(tempPath, { force: true }).catch(() => void 0);
     throw error;
+  }
+}
+async function syncAuthCredentialFiles(directory) {
+  for (const name of ["key.json", "session.json"]) {
+    const handle = await open2(join3(directory, name), fsConstants2.O_RDONLY | fsConstants2.O_NOFOLLOW);
+    try {
+      if (!(await handle.stat()).isFile()) throw new Error(`${name} is not a regular credential file.`);
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
+  }
+  const parent = await open2(directory, "r");
+  try {
+    await parent.sync();
+  } finally {
+    await parent.close();
   }
 }
 async function fileExists(filePath) {
@@ -2238,9 +2259,16 @@ var init_hmac = __esm({
 });
 
 // ../sdk-core/src/manifest.ts
-import { resolveSecretPath, SECRET_NAME_RE, parseNetworkId } from "@tinycloud/sdk-services";
-import { parseEncryptionResource } from "@tinycloud/sdk-services/encryption/resource";
-var import_ms, SERVICE_SHORT_TO_LONG, ENCRYPTION_PERMISSION_SERVICE, ENCRYPTION_MANIFEST_SPACE, SERVICE_LONG_TO_SHORT2, KEY_SEGMENT, KEY_APP_ID, KEY_PATH;
+import { isReservedSecretSpaceKeyPath, resolveSecretPath, SECRET_NAME_RE, parseNetworkId, parseSecretCatalogKey } from "@tinycloud/sdk-services";
+import { formatKeyResource, parseEncryptionResource } from "@tinycloud/sdk-services/encryption/resource";
+function isSecretKeyPath(keyPath) {
+  const segments = keyPath.split("/");
+  const name = segments[segments.length - 1];
+  if (segments.length < 2 || segments[0] !== "secrets" || !SECRET_KEY_NAME_SEGMENT.test(name)) return false;
+  if (segments.some((segment) => segment.length > 64)) return false;
+  return parseSecretCatalogKey([...segments.slice(1, -1), name.toUpperCase()].join("/")) !== void 0;
+}
+var import_ms, SERVICE_SHORT_TO_LONG, ENCRYPTION_PERMISSION_SERVICE, ENCRYPTION_MANIFEST_SPACE, SERVICE_LONG_TO_SHORT2, SECRET_KEY_NAME_SEGMENT, KEY_SEGMENT, KEY_APP_ID, KEY_PATH;
 var init_manifest = __esm({
   "../sdk-core/src/manifest.ts"() {
     "use strict";
@@ -2262,13 +2290,24 @@ var init_manifest = __esm({
         Object.entries(SERVICE_SHORT_TO_LONG).map(([s, l]) => [l, s])
       )
     );
+    SECRET_KEY_NAME_SEGMENT = /^[a-z][a-z0-9_]{0,63}$/;
     KEY_SEGMENT = "[a-z0-9][a-z0-9._-]{0,63}";
     KEY_APP_ID = new RegExp(`^${KEY_SEGMENT}$`);
     KEY_PATH = new RegExp(`^${KEY_SEGMENT}(?:/${KEY_SEGMENT}){2,7}$`);
   }
 });
 
+// src/lib/secret-keys.ts
+import { BOT_HISTORY_KEY_PATH, MAX_SECRET_SCOPE_LENGTH, parseSecretCatalogKey as parseSecretCatalogKey2, SECRET_SCOPE_RE, secretKeyPath } from "@tinycloud/sdk-services";
+import { formatKeyResource as formatKeyResource2 } from "@tinycloud/sdk-services/encryption/resource";
+var init_secret_keys = __esm({
+  "src/lib/secret-keys.ts"() {
+    "use strict";
+  }
+});
+
 // src/lib/raw-encryption.ts
+import { BOT_HISTORY_KEY_PATH as BOT_HISTORY_KEY_PATH2 } from "@tinycloud/sdk-services";
 function isRawEncryptionPermission(permission2) {
   return (permission2.service === ENCRYPTION_PERMISSION_SERVICE || permission2.service === "encryption") && typeof permission2.path === "string" && permission2.path.startsWith("urn:tinycloud:encryption:");
 }
@@ -2278,11 +2317,16 @@ function isVerifiedRawEncryptionPermission(permission2) {
 function isDeviceDefaultDecrypt(permission2) {
   return permission2.service === ENCRYPTION_PERMISSION_SERVICE && permission2.space === "default" && permission2.path === "" && permission2.actions.length === 1 && permission2.actions[0] === "tinycloud.encryption/decrypt" && !permission2.caveats?.length;
 }
+var BOT_HISTORY_KEY_FOLDER, BOT_HISTORY_SCOPE;
 var init_raw_encryption = __esm({
   "src/lib/raw-encryption.ts"() {
     "use strict";
     init_manifest();
+    init_constants();
+    init_errors();
     init_safe_text();
+    BOT_HISTORY_KEY_FOLDER = BOT_HISTORY_KEY_PATH2.slice(0, BOT_HISTORY_KEY_PATH2.lastIndexOf("/"));
+    BOT_HISTORY_SCOPE = BOT_HISTORY_KEY_FOLDER.slice(BOT_HISTORY_KEY_FOLDER.lastIndexOf("/") + 1);
   }
 });
 
@@ -2296,8 +2340,12 @@ function canonicalOwnerDid(did2, label = "--owner") {
   return `did:pkh:eip155:${match[1]}:${ensureEip55(match[2])}`;
 }
 function rawEncryptionOwnerMatches(path, ownerDid) {
-  const match = /^urn:tinycloud:encryption:(did:pkh:eip155:[1-9]\d*:0x[0-9a-fA-F]{40}):([a-z0-9][a-z0-9-]*)(?:\/share\/(?:[0-9a-f]{32})?)?$/.exec(path);
+  const match = /^urn:tinycloud:encryption:(did:pkh:eip155:[1-9]\d*:0x[0-9a-fA-F]{40}):([a-z0-9][a-z0-9-]*)(?:\/(.*))?$/.exec(path);
   if (!match) return false;
+  const rest = match[3];
+  if (rest !== void 0 && !/^share\/(?:[0-9a-f]{32})?$/.test(rest) && !(match[2] === "default" && isSecretKeyPath(rest))) {
+    return false;
+  }
   try {
     return canonicalOwnerDid(match[1]) === canonicalOwnerDid(ownerDid);
   } catch {
@@ -2309,6 +2357,7 @@ var init_owner_did = __esm({
     "use strict";
     init_constants();
     init_errors();
+    init_manifest();
   }
 });
 
@@ -2363,6 +2412,7 @@ async function replayAdditionalDelegations(node, profile, options) {
 var init_permissions = __esm({
   "src/lib/permissions.ts"() {
     "use strict";
+    init_secret_keys();
     init_storage2();
     init_profiles();
     init_errors();
@@ -7473,19 +7523,26 @@ async function assertPendingRemoteLogoutSession(name, expected) {
     }
   }, { requireProfile: true });
 }
-async function clearProfileCredentials(name, syncDirectory = false, legacyCleanup = false) {
+async function clearProfileCredentials(name, syncDirectory = false, legacyCleanup = false, keepKey = false) {
   await ProfileManager.withLock(name, async () => {
     const profile = await ProfileManager.getProfile(name);
-    const { namedKeys: _namedKeys, ...signedOutProfile } = profile;
+    const { namedKeys: _namedKeys, authKeyRetained: _authKeyRetained, ...signedOutProfile } = profile;
     await rm5(join10(profilePath4(name), "approval-pending.json"), { force: true });
-    await ProfileManager.setProfileDurable(name, { ...signedOutProfile, authSignedOut: true, ...legacyCleanup ? { legacyReplicaCleanup: true } : {} });
+    await ProfileManager.setProfileDurable(name, {
+      ...signedOutProfile,
+      authSignedOut: true,
+      ...keepKey ? { authKeyRetained: true } : {},
+      ...legacyCleanup ? { legacyReplicaCleanup: true } : {}
+    });
     let failed = false;
     let error;
-    try {
-      await ProfileManager.removeKey(name);
-    } catch (cause) {
-      failed = true;
-      error = cause;
+    if (!keepKey) {
+      try {
+        await ProfileManager.removeKey(name);
+      } catch (cause) {
+        failed = true;
+        error = cause;
+      }
     }
     try {
       await ProfileManager.clearSession(name);
@@ -7510,7 +7567,7 @@ async function finishSignedOutCredentialRemoval(name) {
     throw error;
   });
   if (profile?.authSignedOut !== true) return;
-  for (const file of ["session.json", "key.json"]) {
+  for (const file of profile.authKeyRetained === true ? ["session.json"] : ["session.json", "key.json"]) {
     try {
       await lstat5(join10(profilePath4(name), file));
     } catch (error) {
@@ -7518,8 +7575,9 @@ async function finishSignedOutCredentialRemoval(name) {
       throw error;
     }
     await ProfileManager.withLock(name, async () => {
-      if ((await ProfileManager.getProfile(name)).authSignedOut === true) {
-        await clearProfileCredentials(name, true);
+      const current = await ProfileManager.getProfile(name);
+      if (current.authSignedOut === true) {
+        await clearProfileCredentials(name, true, false, current.authKeyRetained === true);
       }
     }, { requireProfile: true });
     return;
@@ -7644,6 +7702,7 @@ var init_logout_pending = __esm({
     init_profile_gate();
     init_profiles();
     init_constants();
+    init_types();
     init_errors();
     init_profile_replicas();
     init_replication_log();
@@ -7665,8 +7724,9 @@ __export(sdk_exports, {
   selectSignerJwk: () => selectSignerJwk,
   storedSessionVerifiesLocally: () => storedSessionVerifiesLocally
 });
-import { createProfileRegistryCacheStore, createProfileRegistrySequenceStore } from "@tinycloud/operations/state";
+import { createProfileRegistryCacheStore, createProfileRegistrySequenceStore, profilePath as profilePath5 } from "@tinycloud/operations/state";
 import { TinyCloudNode, signedCompactUcanExpiry } from "@tinycloud/node-sdk";
+import { ownerFullAccess } from "@tinycloud/sdk-core";
 import { CLI_NAME as CLI_NAME9 } from "@tinycloud/operations/cli-name";
 import { liveStoredLease, ownerSessionLacksProof, restoreStoredSession } from "@tinycloud/operations/profile";
 function configuredRegistryUrl(contextUrl, profile) {
@@ -7754,7 +7814,8 @@ async function restoreProfileSessionNode(ctx) {
       onRegistryFallback: recordRegistryFallbackWarning,
       ...tinycloudRegistryUrl === void 0 ? {} : { tinycloudRegistryUrl },
       host: ctx.host,
-      ...profile.authMethod === "local" && profile.privateKey ? { privateKey: profile.privateKey } : {}
+      ...profile.authMethod === "local" && profile.privateKey ? { privateKey: profile.privateKey, ...ownerFullAccess() } : {},
+      sessionExpirationMs: CLI_DEFAULT_SESSION_EXPIRY_MS
     });
     await restoreProfileSession(node, ctx.profile, profile, persistedSessionData(ctx.profile, profile, session, key), session);
     return { node };
@@ -7782,7 +7843,8 @@ async function storedSessionVerifiesLocally(profileName) {
       ...cliRetryPolicy(),
       ...tinycloudRegistryUrl === void 0 ? {} : { tinycloudRegistryUrl },
       host: profile.host ?? DEFAULT_HOST,
-      ...local ? { privateKey: profile.privateKey } : {}
+      ...local ? { privateKey: profile.privateKey, ...ownerFullAccess() } : {},
+      sessionExpirationMs: CLI_DEFAULT_SESSION_EXPIRY_MS
     });
     await restoreProfileSession(node, profileName, profile, persistedSessionData(profileName, profile, session, key), session);
     return true;
@@ -7834,6 +7896,9 @@ async function createSDKInstance(ctx, options) {
       ...tinycloudRegistryUrl === void 0 ? {} : { tinycloudRegistryUrl },
       host: ctx.host,
       privateKey: effectivePrivateKey,
+      // The local owner key signs for every action on its own default space.
+      ...ownerFullAccess(),
+      sessionExpirationMs: CLI_DEFAULT_SESSION_EXPIRY_MS,
       ...replication2 ? { replication: replication2 } : {}
     });
     if (node2.replication) registerReplication(ctx.profile, node2.replication);
@@ -7879,6 +7944,8 @@ async function createSDKInstance(ctx, options) {
     ...tinycloudRegistryUrl === void 0 ? {} : { tinycloudRegistryUrl },
     host: ctx.host,
     privateKey: options?.privateKey,
+    ...options?.privateKey ? ownerFullAccess() : {},
+    sessionExpirationMs: CLI_DEFAULT_SESSION_EXPIRY_MS,
     ...replication ? { replication } : {}
   });
   if (node.replication) registerReplication(ctx.profile, node.replication);
@@ -7904,7 +7971,7 @@ async function createSDKInstance(ctx, options) {
   }
   return node;
 }
-async function bootstrapDelegatedSession(ctx, delegation) {
+async function bootstrapDelegatedSession(ctx, delegation, options = {}) {
   const written = await ProfileManager.withLock(ctx.profile, async () => {
     const previousProfile = await ProfileManager.getProfile(ctx.profile);
     if (resolveProfilePosture(previousProfile) !== "delegate-session") {
@@ -7922,7 +7989,8 @@ async function bootstrapDelegatedSession(ctx, delegation) {
         ExitCode.PERMISSION_DENIED
       );
     }
-    if (await ProfileManager.getSession(ctx.profile) !== null) {
+    const previousSession = await ProfileManager.getSession(ctx.profile);
+    if (previousSession !== null && options.replaceSession !== true) {
       throw new CLIError(
         "PROFILE_CHANGED_DURING_IMPORT",
         `Profile "${ctx.profile}" gained a session (another login or import) after this import checked it. Nothing was saved; run the import again.`,
@@ -7930,7 +7998,11 @@ async function bootstrapDelegatedSession(ctx, delegation) {
       );
     }
     if (signedLifetimePassed(delegation)) throw delegationExpiredError();
-    const jwk = signerJwkForProfile(ctx.profile, void 0, await ProfileManager.getKey(ctx.profile));
+    const jwk = signerJwkForProfile(
+      ctx.profile,
+      previousSession && "jwk" in previousSession ? previousSession.jwk : void 0,
+      await ProfileManager.getStoredKey(ctx.profile)
+    );
     const session = {
       delegationHeader: delegation.delegationHeader,
       delegationCid: delegation.cid,
@@ -7938,15 +8010,25 @@ async function bootstrapDelegatedSession(ctx, delegation) {
       jwk,
       verificationMethod: sessionDid
     };
-    const { namedKeys: _namedKeys, ...previousFields } = previousProfile;
+    const {
+      namedKeys: _namedKeys,
+      authSignedOut: _authSignedOut,
+      authKeyRetained: _authKeyRetained,
+      ...previousFields
+    } = previousProfile;
     const profile = { ...previousFields, sessionDid, spaceId: delegation.spaceId };
     try {
       await ProfileManager.setSession(ctx.profile, session);
-      await ProfileManager.setProfile(ctx.profile, profile);
+      if (previousProfile.authSignedOut === true) {
+        await syncAuthCredentialFiles(profilePath5(ctx.profile));
+        await ProfileManager.setProfileDurable(ctx.profile, profile);
+      } else {
+        await ProfileManager.setProfile(ctx.profile, profile);
+      }
     } catch (error) {
-      throw annotate(error, await restoreBeforeBootstrap(ctx.profile, previousProfile));
+      throw annotate(error, await restoreBeforeBootstrap(ctx.profile, previousProfile, previousSession));
     }
-    return { previousProfile, profile, session };
+    return { previousProfile, previousSession, profile, session };
   });
   const abandon = async (cause) => {
     const reported = cause instanceof CLIError && cause.code === "AUTH_REQUIRED" && signedLifetimePassed(delegation) ? delegationExpiredError() : cause;
@@ -7959,7 +8041,7 @@ async function bootstrapDelegatedSession(ctx, delegation) {
       if (profile === null || BOOTSTRAP_PROFILE_FIELDS.some((field) => profile[field] !== written.profile[field]) || JSON.stringify(session) !== JSON.stringify(written.session)) {
         return `Profile "${ctx.profile}" changed while the import was pending (another login, logout or profile update), so its newer state was kept and the provisional session was not rolled back.`;
       }
-      return restoreBeforeBootstrap(ctx.profile, written.previousProfile);
+      return restoreBeforeBootstrap(ctx.profile, written.previousProfile, written.previousSession);
     }, { timeoutMs: PROFILE_COMMIT_LOCK_TIMEOUT_MS }).catch((error) => (
       // The lock or a read failed: the import's error stays the one reported.
       `Rolling back the provisional session of profile "${ctx.profile}" could not run (${failureName(error)}); check \`${CLI_NAME9} --profile ${ctx.profile} context\`.`
@@ -7974,15 +8056,15 @@ async function bootstrapDelegatedSession(ctx, delegation) {
   }
   return { node, abandon };
 }
-async function restoreBeforeBootstrap(profileName, previousProfile) {
+async function restoreBeforeBootstrap(profileName, previousProfile, previousSession) {
   const failures = [];
   for (const write of [
-    () => ProfileManager.clearSession(profileName),
+    () => previousSession === null ? ProfileManager.clearSession(profileName) : ProfileManager.setSession(profileName, previousSession),
     () => ProfileManager.updateProfile(profileName, (current) => {
       const restored = { ...current };
       for (const field of BOOTSTRAP_PROFILE_FIELDS) {
         if (previousProfile[field] === void 0) delete restored[field];
-        else restored[field] = previousProfile[field];
+        else Object.assign(restored, { [field]: previousProfile[field] });
       }
       return restored;
     })
@@ -8034,6 +8116,7 @@ var init_sdk = __esm({
   "src/lib/sdk.ts"() {
     "use strict";
     init_profiles();
+    init_storage2();
     init_types();
     init_errors();
     init_constants();
@@ -8046,7 +8129,7 @@ var init_sdk = __esm({
     init_replication_registry();
     init_logout_pending();
     init_replication_registry();
-    BOOTSTRAP_PROFILE_FIELDS = ["sessionDid", "spaceId"];
+    BOOTSTRAP_PROFILE_FIELDS = ["sessionDid", "spaceId", "authSignedOut", "authKeyRetained"];
   }
 });
 
@@ -8202,7 +8285,7 @@ import {
   assertRealProfileDirectory,
   ProfileSymlinkError as ProfileSymlinkError2,
   namedProfilePath as namedProfilePath2,
-  profilePath as profilePath5,
+  profilePath as profilePath6,
   readSession,
   recordProfileDeletion,
   refuseWriteToDeletedProfile as refuseWriteToDeletedProfile2,
@@ -8306,7 +8389,7 @@ var init_profiles = __esm({
       }
       /** Owner-only profile directory (0700), created or tightened before any write into it. */
       static async ensureProfileDir(name) {
-        const profileDir = profilePath5(name);
+        const profileDir = profilePath6(name);
         if (profileDir !== join11(PROFILES_DIR, name)) {
           await chmod3(profileDir, PRIVATE_DIR_MODE);
           return profileDir;
@@ -8372,7 +8455,7 @@ var init_profiles = __esm({
       }
       /** Removes profile.json under the profile lock (rollback of a profile a failed login created). */
       static async removeProfileConfig(name) {
-        await _ProfileManager.withLock(name, () => rm6(join11(profilePath5(name), "profile.json"), { force: true }));
+        await _ProfileManager.withLock(name, () => rm6(join11(profilePath6(name), "profile.json"), { force: true }));
       }
       /**
        * Returns true if a profile directory exists.
@@ -8427,7 +8510,7 @@ var init_profiles = __esm({
           return;
         }
         await _ProfileManager.withLock(name, async () => {
-          const directory = profilePath5(name);
+          const directory = profilePath6(name);
           for (const file of ["session.json", "key.json"]) await rm6(join11(directory, file), { force: true });
           for (const entry of await readdir5(directory)) {
             if (entry !== ".lock" && entry !== "profile.json") await rm6(join11(directory, entry), { recursive: true, force: true });
@@ -8438,7 +8521,8 @@ var init_profiles = __esm({
       }
       // ── Key management ──────────────────────────────────────────────────
       /**
-       * Returns the parsed JWK for a profile, or null if no key exists.
+       * Returns the parsed JWK for a profile, or null if no key exists or the
+       * profile is signed out.
        */
       static async getKey(name) {
         return withPinnedProfileDirectory2(name, async (directory) => {
@@ -8448,6 +8532,14 @@ var init_profiles = __esm({
           const key = await readJson(join11(directory, "key.json"));
           return (await readJson(profileFile))?.authSignedOut === true ? null : key;
         });
+      }
+      /**
+       * Returns the parsed JWK for a profile even while it is signed out, or null
+       * if no key exists. Logout keeps the key; only sign-in reads it this way, so
+       * the next sign-in keeps the key that the profile's grants are bound to.
+       */
+      static async getStoredKey(name) {
+        return withPinnedProfileDirectory2(name, async (directory) => directory ? readJson(join11(directory, "key.json")) : null);
       }
       /**
        * Saves a JWK key under the profile lock (0600, in an owner-only profile
@@ -8462,7 +8554,7 @@ var init_profiles = __esm({
       }
       /** Removes key.json under the profile lock (rollback of a key a failed login created). */
       static async removeKey(name) {
-        await _ProfileManager.withLock(name, () => rm6(join11(profilePath5(name), "key.json"), { force: true }));
+        await _ProfileManager.withLock(name, () => rm6(join11(profilePath6(name), "key.json"), { force: true }));
       }
       // ── Session management ──────────────────────────────────────────────
       /**
@@ -8495,7 +8587,7 @@ var init_profiles = __esm({
        * created or tightened to 0700.
        */
       static async getCacheDir(name) {
-        const alreadyPinned = profilePath5(name) !== namedProfilePath2(name);
+        const alreadyPinned = profilePath6(name) !== namedProfilePath2(name);
         return _ProfileManager.withLock(name, async () => {
           const cacheDir = join11(await _ProfileManager.ensureProfileDir(name), "cache");
           await ensureDir(cacheDir);
@@ -16156,7 +16248,7 @@ var init_browser = __esm({
 });
 
 // src/lib/apps-agent-preset.ts
-import { DEFAULT_EXPIRY, parseExpiry, SERVICE_LONG_TO_SHORT as SERVICE_LONG_TO_SHORT3, VAULT_PERMISSION_SERVICE } from "@tinycloud/sdk-core";
+import { parseExpiry, SERVICE_LONG_TO_SHORT as SERVICE_LONG_TO_SHORT3, VAULT_PERMISSION_SERVICE } from "@tinycloud/sdk-core";
 import { CLI_NAME as CLI_NAME13 } from "@tinycloud/operations/cli-name";
 var APPS_AGENT_EXPIRY_DAYS, APPS_AGENT_EXPIRY;
 var init_apps_agent_preset = __esm({
@@ -16232,6 +16324,9 @@ function parseKeysPrefix(input, ownerDid) {
   if (prefix === "apps" || prefix.startsWith("apps/")) {
     throw invalid2("folders under `apps/` belong to apps and can't be used from the CLI.");
   }
+  if (prefix === "secrets" || prefix.startsWith("secrets/")) {
+    throw invalid2("folders under `secrets/` belong to TinyCloud Secrets and can't be used with `--keys`.");
+  }
   try {
     return { prefix, resource: formatPrefixResource(namedKeysNetworkId(ownerDid), prefix) };
   } catch (error) {
@@ -16260,7 +16355,7 @@ var init_named_keys = __esm({
 });
 
 // src/auth/scoped-login.ts
-import { EXPIRY, technicalExpiryRefusal } from "@tinycloud/sdk-core";
+import { technicalExpiryRefusal } from "@tinycloud/sdk-core";
 import { NodeWasmBindings, signedCompactUcanExpiry as signedCompactUcanExpiry2 } from "@tinycloud/node-sdk";
 import { isLocalOwnerProfile as isLocalOwnerProfile2, liveStoredLease as liveStoredLease2, ownerSessionLacksProof as ownerSessionLacksProof2 } from "@tinycloud/operations/profile";
 import { CLI_NAME as CLI_NAME14 } from "@tinycloud/operations/cli-name";
@@ -16460,6 +16555,7 @@ function withoutRequestedKeyRow(signed, keys, signerDid) {
 }
 function verifyScopedLogin(data, key, sessionDid, requested, expected = {}) {
   const notStored = expected.purpose === "grant" ? "No grant was stored." : "No scoped session was saved.";
+  const soNotStored = expected.purpose === "grant" ? "so no grant was stored." : "so no session was saved.";
   let signed;
   try {
     signed = verifySignedSession(data, key, sessionDid, expected);
@@ -16475,10 +16571,15 @@ function verifyScopedLogin(data, key, sessionDid, requested, expected = {}) {
     throw error;
   }
   const spaceId = data.spaceId;
-  for (const permission2 of requested) {
-    if (isRawEncryptionPermission(permission2) || isRawCidRevocationPermission(permission2)) continue;
-    if (normalizePkhIdentifier(ownerSpaceId(permission2.space ?? "", signed.ownerDid)) !== normalizePkhIdentifier(spaceId)) {
-      throw new CLIError("OPENKEY_SCOPE_MISMATCH", `The approved space differs from the requested space. ${notStored}`, ExitCode.PERMISSION_DENIED);
+  const spaces = [...new Set(requested.filter((p) => !isRawEncryptionPermission(p) && !isRawCidRevocationPermission(p)).map((p) => normalizePkhIdentifier(ownerSpaceId(p.space ?? "", signed.ownerDid))))].sort();
+  const primary = spaces.find((space) => space.endsWith(":applications")) ?? spaces[0];
+  if (primary && normalizePkhIdentifier(spaceId) !== primary) {
+    throw new CLIError("OPENKEY_SCOPE_MISMATCH", `OpenKey approved a different space than the one requested, ${soNotStored}`, ExitCode.PERMISSION_DENIED);
+  }
+  if (spaces.length > 1 || data.requestedSpaces !== void 0) {
+    const entries = data.requestedSpaces;
+    if (!Array.isArray(entries) || entries.length !== spaces.length || new Set(entries.map((entry) => typeof entry?.spaceId === "string" ? normalizePkhIdentifier(entry.spaceId) : entry?.spaceId)).size !== spaces.length || entries.some((entry) => !entry || typeof entry.space !== "string" || typeof entry.spaceId !== "string" || !spaces.includes(normalizePkhIdentifier(entry.spaceId)) || normalizePkhIdentifier(ownerSpaceId(entry.space, signed.ownerDid)) !== normalizePkhIdentifier(entry.spaceId) || ![true, false, null].includes(entry.spaceReady) || entry.spacePending !== void 0 && entry.spacePending !== true || entry.spaceError !== void 0 && typeof entry.spaceError !== "string") || data.spaceReady === true !== entries.every((entry) => entry.spaceReady === true)) {
+      throw new CLIError("OPENKEY_SCOPE_MISMATCH", `OpenKey's approval doesn't match the requested spaces, ${soNotStored}`, ExitCode.PERMISSION_DENIED);
     }
   }
   const legacyNested = [];
@@ -16492,11 +16593,14 @@ function verifyScopedLogin(data, key, sessionDid, requested, expected = {}) {
       throw new CLIError("OPENKEY_SCOPE_MISMATCH", `OpenKey signed decrypt for a network not owned by the approving identity. ${notStored}`, ExitCode.PERMISSION_DENIED);
     }
   }
-  if (!scopeCovers(requested, approved, signed.ownerDid)) {
+  if (!expected.exactApproval && !scopeCovers(requested, approved, signed.ownerDid)) {
     throw new CLIError("OPENKEY_GRANT_BROADENED", `The signed grant contains authority beyond the requested ${expected.purpose === "grant" ? "grant" : "manifest"}. ${notStored}`, ExitCode.PERMISSION_DENIED);
   }
-  if (expected.exactApproval && !scopeCovers(approved, requested, signed.ownerDid)) {
-    throw new CLIError("OPENKEY_APPROVAL_NARROWER", `The approval was narrower than the request. Approve all of it, or ask the agent to request less. ${notStored}`, ExitCode.PERMISSION_DENIED);
+  if ((expected.exactApproval || spaces.length > 1) && !scopeCovers(approved, requested, signed.ownerDid)) {
+    const approvedSpaces = new Set(approved.filter((permission2) => !isRawEncryptionPermission(permission2) && !isRawCidRevocationPermission(permission2)).map((permission2) => normalizePkhIdentifier(ownerSpaceId(permission2.space ?? "default", signed.ownerDid))));
+    const missingSpaces = [...new Set(requested.filter((permission2) => !isRawEncryptionPermission(permission2) && !isRawCidRevocationPermission(permission2)).filter((permission2) => !approvedSpaces.has(normalizePkhIdentifier(ownerSpaceId(permission2.space ?? "default", signed.ownerDid)))).map((permission2) => permission2.space ?? "default"))];
+    const message = missingSpaces.length > 0 ? `The owner didn't approve access to ${missingSpaces.map((space) => `"${space}"`).join(", ")}, and this task needs every requested space, ${soNotStored}` : `The approval was narrower than the request, ${soNotStored}`;
+    throw new CLIError("OPENKEY_APPROVAL_NARROWER", message, ExitCode.PERMISSION_DENIED);
   }
   const session = withVerifiedAuthority({ ...data, jwk: key }, { ...signed, permissions: approved });
   return { session, legacyNested };
@@ -16528,7 +16632,7 @@ import { createHash as createHash2 } from "crypto";
 import { constants as fsConstants6 } from "fs";
 import { open as open14, rm as rm8 } from "fs/promises";
 import { join as join15 } from "path";
-import { profilePath as profilePath6 } from "@tinycloud/operations/state";
+import { profilePath as profilePath7 } from "@tinycloud/operations/state";
 var init_pending_code = __esm({
   "src/auth/pending-code.ts"() {
     "use strict";
@@ -16542,12 +16646,14 @@ var init_pending_code = __esm({
 import { createProfileRegistryCacheStore as createProfileRegistryCacheStore3, createProfileRegistrySequenceStore as createProfileRegistrySequenceStore3 } from "@tinycloud/operations/state";
 import { TCWSessionManager, importKey, initPanicHook } from "@tinycloud/node-sdk-wasm";
 import { PrivateKeySigner } from "@tinycloud/node-sdk";
+import { ownerFullAccess as ownerFullAccess2 } from "@tinycloud/sdk-core";
 import { randomBytes as randomBytes4 } from "crypto";
 var init_local_key = __esm({
   "src/auth/local-key.ts"() {
     "use strict";
     init_replication_config();
     init_warnings();
+    init_constants();
   }
 });
 
@@ -16572,7 +16678,7 @@ import { join as join16 } from "path";
 import { REPLICA_LOGOUT_PENDING_FILE as REPLICA_LOGOUT_PENDING_FILE3 } from "@tinycloud/node-sdk";
 import { CLI_NAME as CLI_NAME15 } from "@tinycloud/operations/cli-name";
 import { isLocalOwnerProfile as isLocalOwnerProfile3, ownerSessionLacksProof as ownerSessionLacksProof3 } from "@tinycloud/operations/profile";
-import { ProfileLockTimeoutError as ProfileLockTimeoutError3, profilePath as profilePath7 } from "@tinycloud/operations/state";
+import { ProfileLockTimeoutError as ProfileLockTimeoutError3, profilePath as profilePath8 } from "@tinycloud/operations/state";
 var init_login_commit = __esm({
   "src/auth/login-commit.ts"() {
     "use strict";
@@ -16599,7 +16705,7 @@ var init_owner_key = __esm({
 
 // src/auth/refused-approval.ts
 import { rmdir as rmdir4 } from "fs/promises";
-import { profilePath as profilePath8 } from "@tinycloud/operations/state";
+import { profilePath as profilePath9 } from "@tinycloud/operations/state";
 var init_refused_approval = __esm({
   "src/auth/refused-approval.ts"() {
     "use strict";
@@ -16686,6 +16792,7 @@ var init_device_auth = __esm({
     init_constants();
     init_errors();
     init_caveat_refusal();
+    init_space();
     init_raw_encryption();
     init_local_key();
     init_browser_auth();
@@ -16913,10 +17020,10 @@ import { createECDH as createECDH2, createHash as createHash4, createPrivateKey,
 import { open as open15 } from "fs/promises";
 import { join as join17 } from "path";
 import { setTimeout as wait } from "timers/promises";
-import { additionalDelegationsPath, profilePath as profilePath9 } from "@tinycloud/operations/state";
+import { additionalDelegationsPath, profilePath as profilePath10 } from "@tinycloud/operations/state";
 import { principalDidEquals } from "@tinycloud/node-sdk";
 import { canonicalizeRecapCaveats, parseSignedCompactUcanAttenuation as parseSignedCompactUcanAttenuation2 } from "@tinycloud/sdk-core";
-import { admitOwnerRenewalLease, RENEWAL_LEASE_ORIGINAL_EXPIRED } from "@tinycloud/sdk-core/delegations/renewal";
+import { admitOwnerRenewalLease, RENEWAL_LEASE_ORIGINAL_EXPIRED, RENEWAL_RENEWER_CHANGED } from "@tinycloud/sdk-core/delegations/renewal";
 import { RENEWAL_ADMISSION_LEAD_MS, verifyOwnerRenewalLease } from "@tinycloud/sdk-core/delegations/renewal-receipt";
 function invalid(message) {
   return new CLIError("APPROVAL_RESULT_INVALID", message, ExitCode.PERMISSION_DENIED);
@@ -16948,7 +17055,7 @@ async function updatePending(profile, update) {
   }, { requireProfile: true });
 }
 async function activePending(profile) {
-  const path = join17(profilePath9(profile), STATE_FILE);
+  const path = join17(profilePath10(profile), STATE_FILE);
   if (!(await readJson(path))?.length) return [];
   return ProfileManager.withLock(profile, async () => {
     const entries = await readJson(path) ?? [];
@@ -17119,7 +17226,7 @@ async function admitApprovedRenewal(host, entry, verified) {
     if (error instanceof Error && "code" in error && error.code === RENEWAL_LEASE_ORIGINAL_EXPIRED) {
       throw new CLIError("AUTH_EXPIRED", "The approved session has expired. No session was saved.", ExitCode.AUTH_REQUIRED);
     }
-    if (error instanceof Error && error.message === "Renewal node identity changed") {
+    if (error instanceof Error && "code" in error && error.code === RENEWAL_RENEWER_CHANGED) {
       throw refused("This renewal names a different TinyCloud node than the one you signed in to, so it wasn't turned on. Sign in again for a new approval.");
     }
     throw Object.assign(new CLIError(
@@ -17217,7 +17324,8 @@ async function acquireApprovalRequest(_did, options) {
     targetDid: signer.did,
     targetPublicJwk,
     nodeOrigin: options.host,
-    permissions: options.permissions,
+    // `skipPrefix` tells the local SDK not to prefix a path; the signed request is strict and its paths are final.
+    permissions: options.permissions.map(({ skipPrefix: _skipPrefix, ...entry2 }) => entry2),
     ...options.reason ? { reason: options.reason } : {},
     grantLifetimeSeconds: grantLifetimeSeconds(options.expiry),
     ...options.renewalLeaseSeconds === void 0 ? {} : { renewal: { version: 1, leaseLifetimeSeconds: options.renewalLeaseSeconds } }

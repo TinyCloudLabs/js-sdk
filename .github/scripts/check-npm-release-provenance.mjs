@@ -83,6 +83,8 @@ import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs
 import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 
+import { baselineProblems, isAbove, newestStable, npmVersions } from "./scoped-version.mjs";
+
 const RELEASE_COMMIT = /^chore: (beta version packages|release stable packages)\b/;
 const STABLE_RELEASE_COMMIT = /^chore: release stable packages\b/;
 const BETA_RELEASE_COMMIT = /^chore: beta version packages\b/;
@@ -118,25 +120,18 @@ function gh(args) {
   return result.stdout;
 }
 
-// The one attempt shape that proves a Release attempt never pushed or published. Steps are found
+// The attempt shapes that prove a Release attempt never pushed or published. Steps are found
 // by name because their numbers move with every workflow edit; a workflow edit that renames or
-// adds a step makes this shape unrecognised, which fails closed until the list is updated.
+// adds a step makes the shape unrecognised, which fails closed until the list is updated.
 //
-// "Beta Release" lists every step of the job (GitHub's own setup, post and complete steps
-// included). The steps in BETA_NEVER_RAN must not have started: pushing, publishing, and the
-// two steps that only run after a publish. Every other step is one that cannot push or publish
-// and may have any outcome. "Stable Release" and "Beta GitHub Releases" (which only runs when
-// the beta job published) must not have started at all.
-const BETA_JOB = "Beta Release";
-const NEVER_STARTED_JOBS = ["Stable Release", "Beta GitHub Releases"];
-const BETA_NEVER_RAN = new Set([
-  "Push beta version bumps",
-  "Publish beta to npm",
-  "Keep the publish log for beta-github-releases",
-  "Confirm npm has every current version",
-]);
-const BETA_STEPS = new Set([
-  ...BETA_NEVER_RAN,
+// The publishing job lists every step of the job (GitHub's own setup, post and complete steps
+// included). The steps in `neverRan` must not have started: pushing, publishing, and the
+// steps that only run after a publish. Every other step is one that cannot push or publish
+// and may have any outcome. The jobs in `neverStarted` must not have started at all; the jobs in
+// `free` cannot push or publish and may have any outcome.
+// Two shapes are known: the stable-only workflow ("Release") and the one before it ("Beta Release"),
+// whose runs can still be inside the window of runs this check reads.
+const SETUP_STEPS = [
   "Set up job",
   "Run actions/checkout@v4",
   "Run oven-sh/setup-bun@v1",
@@ -146,12 +141,9 @@ const BETA_STEPS = new Set([
   "Check for pending changesets",
   "Install release deploy key",
   "Require sign-off for major bumps",
-  "List pending changesets",
-  "Refuse to run while a stable release is unfinished",
   "Version and build",
   "Verify node release pin",
   "Check internal dependency pins",
-  "Commit beta version bumps",
   "Setup Node for npm publish",
   "Check npm before publishing",
   "Record whether this run published versions",
@@ -160,40 +152,87 @@ const BETA_STEPS = new Set([
   "Post Run oven-sh/setup-bun@v1",
   "Post Run actions/checkout@v4",
   "Complete job",
-]);
+];
+const BETA_SHAPE = {
+  job: "Beta Release",
+  neverStarted: ["Stable Release", "Beta GitHub Releases"],
+  free: [],
+  neverRan: new Set([
+    "Push beta version bumps",
+    "Publish beta to npm",
+    "Keep the publish log for beta-github-releases",
+    "Confirm npm has every current version",
+  ]),
+  steps: new Set([
+    ...SETUP_STEPS,
+    "Push beta version bumps",
+    "Publish beta to npm",
+    "Keep the publish log for beta-github-releases",
+    "Confirm npm has every current version",
+    "List pending changesets",
+    "Refuse to run while a stable release is unfinished",
+    "Commit beta version bumps",
+  ]),
+};
+const RELEASE_SHAPE = {
+  job: "Release",
+  neverStarted: ["Release resume", "GitHub Releases"],
+  free: ["Release gate"],
+  neverRan: new Set([
+    "Push release version bumps",
+    "Publish stable to npm",
+    "Keep the publish log for github-releases",
+    "Confirm npm has every released version",
+  ]),
+  steps: new Set([
+    ...SETUP_STEPS,
+    "Push release version bumps",
+    "Publish stable to npm",
+    "Keep the publish log for github-releases",
+    "Confirm npm has every released version",
+    "List the release scope and pending changesets",
+    "Refuse to run while a release is unfinished",
+    "Commit release version bumps",
+  ]),
+};
+const SHAPES = [BETA_SHAPE, RELEASE_SHAPE];
 
 // Did a Release attempt provably never push or publish? Decided from the jobs-for-attempt
 // data ({ total_count, jobs: [{ name, status, conclusion, steps }] }), for an attempt whose log
-// cannot be read (a cancelled attempt has none). The data must be exactly the recognised shape
+// cannot be read (a cancelled attempt has none). The data must be exactly a recognised shape
 // above, with nothing unknown, missing, duplicated or contradictory; anything else is not proof:
 // { ok: false, reason }.
 export function attemptNeverPublished(data) {
   const no = (reason) => ({ ok: false, reason });
   const jobs = data?.jobs;
-  const expected = [BETA_JOB, ...NEVER_STARTED_JOBS];
   if (!Array.isArray(jobs) || data.total_count !== jobs.length) return no("the attempt's job list is missing or incomplete");
   const names = jobs.map((job) => job?.name);
-  if (names.length !== expected.length || !expected.every((name) => names.filter((n) => n === name).length === 1)) {
-    return no(`the attempt's jobs are ${JSON.stringify(names)}, not exactly ${JSON.stringify(expected)}`);
+  const shape = SHAPES.find((candidate) => {
+    const expected = [candidate.job, ...candidate.neverStarted, ...candidate.free];
+    return names.length === expected.length && expected.every((name) => names.filter((n) => n === name).length === 1);
+  });
+  if (!shape) {
+    return no(`the attempt's jobs are ${JSON.stringify(names)}, not exactly ${JSON.stringify([BETA_SHAPE.job, ...BETA_SHAPE.neverStarted])}`);
   }
   // A job that never started has no steps. A started job always lists at least its setup step.
   const neverStarted = (job) => job.status === "completed" && (job.conclusion === "skipped" || job.conclusion === "cancelled") && Array.isArray(job.steps) && job.steps.length === 0;
   for (const job of jobs) {
-    if (job.name !== BETA_JOB) {
+    if (shape.free.includes(job.name)) continue;
+    if (job.name !== shape.job) {
       if (!neverStarted(job)) return no(`"${job.name}" is ${job.status}/${job.conclusion ?? "no conclusion"} with ${Array.isArray(job.steps) ? job.steps.length : "unknown"} steps; it must not have started`);
       continue;
     }
     if (neverStarted(job)) continue;
     if (job.status !== "completed" || !Array.isArray(job.steps)) return no(`"${job.name}" is not a completed job with a step list`);
     const stepNames = job.steps.map((step) => step?.name);
-    if (stepNames.length !== BETA_STEPS.size || !stepNames.every((name) => BETA_STEPS.has(name)) || new Set(stepNames).size !== BETA_STEPS.size) {
+    if (stepNames.length !== shape.steps.size || !stepNames.every((name) => shape.steps.has(name)) || new Set(stepNames).size !== shape.steps.size) {
       return no(`"${job.name}" steps are not exactly the known ones (unknown, missing or duplicate step names)`);
     }
     for (const step of job.steps) {
       const skipped = step.status === "completed" && step.conclusion === "skipped";
       const notStarted = (step.status === "pending" || step.status === "queued") && step.conclusion == null && step.started_at == null;
       const finished = step.status === "completed" && ["success", "failure", "cancelled"].includes(step.conclusion);
-      if (BETA_NEVER_RAN.has(step.name) ? !(skipped || notStarted) : !(skipped || finished)) {
+      if (shape.neverRan.has(step.name) ? !(skipped || notStarted) : !(skipped || finished)) {
         return no(`"${job.name}" step "${step.name}" is ${step.status}/${step.conclusion ?? "no conclusion"}${step.started_at ? " (started)" : ""}`);
       }
     }
@@ -286,6 +325,10 @@ export function gitRepo(cwd = process.cwd()) {
       return result.status === 0 ? result.stdout.trim() : undefined;
     },
     subject: (rev) => ok(["log", "-1", "--format=%s", rev]),
+    identity: (rev) => {
+      const [author, committer] = ok(["log", "-1", "--format=%an <%ae>%n%cn <%ce>", rev]).split("\n");
+      return { author, committer };
+    },
     date: (rev) => ok(["log", "-1", "--format=%cI", rev]),
     show(rev, path) {
       const result = run(["show", `${rev}:${path}`]);
@@ -445,6 +488,36 @@ export function unfinishedStableRelease({ repo, view = npmView, packageExists = 
   return { missing, problems, releaseCommit: problems.length ? undefined : commit };
 }
 
+// What a resume (`resume: release`) must check before it publishes a pushed release commit to `latest`. It runs
+// from a dispatch, so nothing about the commit may be taken on trust, and `latest` must never move down:
+//  - the commit is authored and committed by the release bot identity (the subject is only a label anyone can write);
+//  - every missing version is in the commit's own release scope;
+//  - each package's previous version (the commit's parent) is the newest stable version npm has (`baselineProblems`),
+//    so nothing was published from elsewhere in between (the Courier route, a later SDK patch);
+//  - each missing version is strictly above npm's newest stable version.
+// Major sign-off for the commit is a separate step (`check-major-release-signoff.mjs pr <parent> <commit>`).
+export const RELEASE_BOT = "github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>";
+
+export function resumeProblems({ repo, commit, missing, versionsOf = npmVersions }) {
+  const problems = [];
+  const who = repo.identity(commit);
+  for (const role of ["author", "committer"]) {
+    if (who[role] !== RELEASE_BOT) problems.push(`${commit} has ${role} ${who[role]}, not ${RELEASE_BOT}`);
+  }
+  const parent = repo.parent(commit);
+  const scoped = parseJson(repo.show(commit, ".github/release-scope.json"))?.packages;
+  for (const pkg of missing) {
+    const id = `${pkg.name}@${pkg.version}`;
+    if (!Array.isArray(scoped) || !scoped.includes(pkg.name)) problems.push(`${id} is not in the release scope of ${commit}`);
+    const from = parent && parseJson(repo.show(parent, `${pkg.dir}/package.json`))?.version;
+    if (!from || isPrerelease(from)) problems.push(`${id}: the version before ${commit} is ${from ?? "unknown"}, not a stable baseline`);
+    else problems.push(...baselineProblems({ packages: [pkg.name], baselines: { [pkg.name]: from } }, versionsOf));
+    const newest = newestStable(versionsOf(pkg.name));
+    if (newest && !isAbove(pkg.version, newest)) problems.push(`${id} is not above npm's newest stable ${newest}; publishing it to \`latest\` would move \`latest\` down`);
+  }
+  return problems;
+}
+
 // The beta version commit to finish publishing from, if any (the `resume: beta` Release run). A beta run versions and pushes
 // before it publishes, so a publish that stopped partway (npm slow to show a version, a failed layer) leaves a pushed
 // version commit whose versions npm lacks, and no pending changesets for a plain re-run to publish. Resume only from the
@@ -480,6 +553,8 @@ export async function check({
   // post-publish: dist-tags recorded before publishing ({ name: { tag: version } }) and npm's current ones.
   previousTags = {},
   tagsOf = npmDistTags,
+  // Which packages this run is about: every public package by default; a scoped release passes the ones it versioned.
+  inScope = () => true,
   // npm's index can lag a successful publish by many minutes (web-sdk 3.2.5 showed up after ~17 min, TC-1155).
   // Poll with backoff (10 s doubling, capped at 2 min) within one 30-minute budget shared by every package.
   waitMs = 30 * 60_000,
@@ -498,7 +573,7 @@ export async function check({
   const failures = [];
   const fail = (pkg, fields) =>
     failures.push({ name: pkg.name, version: pkg.version, dir: pkg.dir, head, ...fields });
-  const packages = publicPackages(repo, head);
+  const packages = publicPackages(repo, head).filter(inScope);
   const registry = new Map();
   const lookup = (name, version) => {
     const id = `${name}@${version}`;
@@ -609,11 +684,13 @@ const ADVICE = {
     "Master carries stable versions npm does not have: a stable release pushed its release commit but did not finish\n" +
     "publishing. A beta run would tag them `beta` and leave `latest` behind, so nothing was versioned or published.\n" +
     "Dispatch the Stable Release: it publishes exactly these versions from their release commit and graduates nothing\n" +
-    "else in that run. The next push to master then resumes betas.",
+    "else in that run. The next push to master then resumes betas.\n" +
+    "In the stable-only workflow (no pre mode) the same recovery is the Release workflow dispatched with `resume: release`;\n" +
+    "if the missing version is a baseline staged from another commit, it must be published from that commit first (never from master's source).",
   "unfinished-stable":
     "These stable versions are missing from npm, but cannot be finished automatically. A maintainer must check out\n" +
     "the commit that set each version, build it, and run `changeset publish` there (no .changeset/pre.json, so the\n" +
-    "versions go to `latest`). Then dispatch the Stable Release again.",
+    "versions go to `latest`). Then dispatch the Stable Release again (the Release workflow with `resume: release`).",
   "pre-publish":
     "npm already has these versions, published before the commit that set them, so `changeset publish` would skip them.\n" +
     "Nothing was published. Add a changeset for each package so the next run bumps it past the stale version.",
@@ -671,6 +748,18 @@ function report(failures, mode, problems) {
   process.exitCode = 1;
 }
 
+// With RELEASE_SCOPE_FILE (.github/release-scope.json), pre-publish and post-publish judge only the packages that
+// file lists AND whose version HEAD's version commit changed. Versions staged earlier from another commit (the
+// Courier 0.8.0 set) and packages that are held back are not this release's business.
+export function releaseScope(repo) {
+  const path = process.env.RELEASE_SCOPE_FILE;
+  if (!path) return undefined;
+  const names = parseJson(readFileSync(path, "utf8"))?.packages;
+  if (!Array.isArray(names) || names.length === 0) throw new Error(`${path} lists no packages`);
+  const parent = repo.parent(repo.revParse("HEAD"));
+  return (pkg) => names.includes(pkg.name) && parseJson(parent && repo.show(parent, `${pkg.dir}/package.json`))?.version !== pkg.version;
+}
+
 const readLog = (path) => (existsSync(path) ? readFileSync(path, "utf8") : "");
 
 // Record every public package's dist-tags before publishing, for post-publish's
@@ -698,6 +787,15 @@ async function main([mode, output, ...rest]) {
     if (!releaseCommit) {
       const reason = "stable version not on npm";
       return report(missing.map((pkg) => ({ ...pkg, reason })), mode, problems);
+    }
+    // `resume: release` publishes a pushed commit to `latest`: check what that is before selecting it.
+    const untrusted = resumeProblems({ repo, commit: releaseCommit, missing });
+    if (untrusted.length) {
+      const message = `Refusing to resume the release ${releaseCommit}:\n  ${untrusted.join("\n  ")}`;
+      if (process.env.GITHUB_ACTIONS === "true") console.log(`::error title=Cannot resume the release::${untrusted.join("; ")}`);
+      console.error(message);
+      process.exitCode = 1;
+      return;
     }
     for (const pkg of missing) console.log(`${pkg.name}@${pkg.version} is missing from npm; set by ${releaseCommit}.`);
     console.log(`Finishing the stable release ${releaseCommit}; nothing new is versioned in this run.`);
@@ -730,13 +828,13 @@ async function main([mode, output, ...rest]) {
     };
     const accepted = output ? acceptedFromPublishLog(readLog(output)) : new Set();
     const previousTags = readDistTags(process.env.RELEASE_DIST_TAGS_FILE);
-    return report(await check({ mode, repo, accepted, onPending, previousTags }), mode);
+    return report(await check({ mode, repo, accepted, onPending, previousTags, inScope: releaseScope(repo) }), mode);
   }
   if (mode === "pre-publish" && output === undefined) {
     if (process.env.RELEASE_DIST_TAGS_FILE) recordDistTags(repo, process.env.RELEASE_DIST_TAGS_FILE);
     let failures;
     try {
-      failures = await check({ mode, repo });
+      failures = await check({ mode, repo, inScope: releaseScope(repo) });
     } catch (error) {
       // Fail closed, with a readable reason instead of a stack trace.
       const message = `Could not tell whether an earlier Release run already got npm to accept a version that npm does not show: ${error.message}`;

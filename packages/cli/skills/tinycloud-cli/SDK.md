@@ -3,10 +3,10 @@
 ## Setup
 
 ```typescript
-import { TinyCloudNode } from "@tinycloud/node-sdk";
+import { TinyCloudNode, ownerFullAccess } from "@tinycloud/node-sdk";
 
-const tc = new TinyCloudNode({ host: "https://node.tinycloud.xyz" });
-await tc.connectWallet(signer);
+const tc = new TinyCloudNode({ host: "https://node.tinycloud.xyz", privateKey, ...ownerFullAccess("default") });
+await tc.signIn();
 ```
 
 ## Key-Value

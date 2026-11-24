@@ -40,7 +40,7 @@ function memoryKv(name, count) {
     failPut: undefined,
     async list({ prefix }) {
       count(`${name} list ${category(name, 'list', prefix)}`);
-      if (kv.refuse) return { ok: false, error: { status: kv.refuse, message: 'refused' } };
+      if (kv.refuse) return { ok: false, error: { status: kv.refuse, message: 'refused', meta: { invocationProofCid: kv.refusedCid } } };
       if (kv.failLists > 0) { kv.failLists--; return { ok: false, error: { status: 400, message: 'bad request' } }; }
       return { ok: true, data: { keys: [...rows.keys()].filter((key) => key.startsWith(prefix)) } };
     },
@@ -295,6 +295,7 @@ test('a sync that did not finish leaves its peer dirty: the next minute lists on
 test('a refusal re-reads the renewal marker and checks authority at once; it retries only under a different grant', async () => {
   const revoked = world({ handles: ['bob'] });
   revoked.peerKvs.get('bob').refuse = 403;
+  revoked.peerKvs.get('bob').refusedCid = revoked.peers[0].inbound.cid;
   revoked.write('bob');
   await revoked.watcher.sync(revoked.peers[0], 'hook');
   assert.deepEqual(revoked.refusals, ['peer:bob']);
@@ -306,6 +307,7 @@ test('a refusal re-reads the renewal marker and checks authority at once; it ret
   // peerKv adopts a newer delegation from the marker; the retry runs under it.
   const renewed = world({ handles: ['bob'], renew: (peer, kv) => { kv.refuse = undefined; peer.inbound = { ...peer.inbound, cid: 'cid-bob-2' }; } });
   renewed.peerKvs.get('bob').refuse = 403;
+  renewed.peerKvs.get('bob').refusedCid = renewed.peers[0].inbound.cid;
   const sent = renewed.write('bob');
   await renewed.watcher.sync(renewed.peers[0], 'hook');
   assert.deepEqual(renewed.refusals, []);

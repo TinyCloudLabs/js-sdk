@@ -28,6 +28,8 @@ export function namedKeysNetworkId(ownerDid: string): string {
 /**
  * Validate a `--keys` prefix before anything is signed. Accepts `qa` or `qa/`.
  * App keys (`apps/…`) are host-bound and are not available from the CLI.
+ * Secret keys (`secrets/…`) belong to TinyCloud Secrets: only its owner
+ * tools and exact per-secret grants use them.
  */
 export function parseKeysPrefix(input: string, ownerDid: string): ProfileNamedKeys {
   const prefix = input.endsWith("/") ? input.slice(0, -1) : input;
@@ -36,6 +38,9 @@ export function parseKeysPrefix(input: string, ownerDid: string): ProfileNamedKe
   if (prefix.length === 0) throw invalid("the folder can't be empty.");
   if (prefix === "apps" || prefix.startsWith("apps/")) {
     throw invalid("folders under `apps/` belong to apps and can't be used from the CLI.");
+  }
+  if (prefix === "secrets" || prefix.startsWith("secrets/")) {
+    throw invalid("folders under `secrets/` belong to TinyCloud Secrets and can't be used with `--keys`.");
   }
   try {
     return { prefix, resource: formatPrefixResource(namedKeysNetworkId(ownerDid), prefix) };

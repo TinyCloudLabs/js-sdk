@@ -42,6 +42,21 @@ describe("replica-owned paths", () => {
     expect(mixed.filter(replicaOwnedPath)).toEqual(["packages/replica/src/engine.ts"]);
   });
 
+  it("does not treat the replica test pages as replica code, since the package ships only dist", () => {
+    const testPages = [
+      "packages/replica/test/browser/acceptance/main.ts",
+      "packages/replica/test/browser/acceptance/baseline.ts",
+      "packages/replica/test/browser/purge/main.ts",
+      "packages/replica/test/fixtures.ts",
+    ];
+    expect(testPages.filter(replicaOwnedPath)).toEqual([]);
+    const manifest = JSON.parse(readFileSync(resolve(import.meta.dir, "../../replica/package.json"), "utf8")) as {
+      files: string[];
+    };
+    expect(manifest.files).toEqual(["dist"]);
+    expect(replicaTouching([...testPages, "packages/replica/src/engine.ts"])).toBe(true);
+  });
+
   it("keeps every script the replica build runs replica-owned", () => {
     const manifest = JSON.parse(readFileSync(resolve(import.meta.dir, "../../replica/package.json"), "utf8")) as {
       scripts: Record<string, string>;

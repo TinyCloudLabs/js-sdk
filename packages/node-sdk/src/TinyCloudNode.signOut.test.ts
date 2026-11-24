@@ -75,8 +75,13 @@ afterEach(() => {
   globalThis.fetch = originalFetch;
 });
 
+// Data calls only: sign-out's session-retire request and its /info lookup run after it resolves.
+function dataCalls(): number {
+  return requests.filter((url) => !["/session/retire", "/info"].includes(new URL(url).pathname)).length;
+}
+
 async function expectNoAuthorizedCall(call: () => Promise<unknown>): Promise<void> {
-  const before = requests.length;
+  const before = dataCalls();
   let failed = false;
   try {
     const result = await call();
@@ -85,7 +90,7 @@ async function expectNoAuthorizedCall(call: () => Promise<unknown>): Promise<voi
     failed = true;
   }
   expect(failed).toBe(true);
-  expect(requests.length).toBe(before);
+  expect(dataCalls()).toBe(before);
 }
 
 describe.each([
@@ -196,7 +201,7 @@ test("signOut retires authority even when replacement session-key creation fails
   expect(node.restorableSession).toBeUndefined();
   expect(() => node.kv).toThrow("Not signed in");
   await expectNoAuthorizedCall(() => retainedKv.get("notes/a"));
-  expect(requests.length).toBe(before);
+  expect(requests.slice(before).filter((url) => !/\/(session\/retire|info)$/.test(url))).toEqual([]);
   expect(sessionStorage.exists(proof.address)).toBe(false);
 });
 
@@ -524,7 +529,7 @@ describe("TinyCloudNode.signOut during an in-flight sign-in or restore", () => {
     gated.release();
 
     await expect(granting).rejects.toThrow("retired");
-    expect(requests).toEqual([]);
+    expect(requests.filter((url) => !/\/(session\/retire|info)$/.test(url))).toEqual([]);
     expect(node.getRuntimePermissionDelegations()).toEqual([]);
   });
 

@@ -113,7 +113,7 @@ function expectSecretValue(result: RunResult, expected: string): void {
 }
 
 async function main(): Promise<void> {
-  const { TinyCloudNode } = await import("../../node-sdk/src/index.ts");
+  const { TinyCloudNode, ownerFullAccess } = await import("../../node-sdk/src/index.ts");
   const { generateLocalIdentity } = await import("../src/auth/local-key.ts");
   const scriptDir = dirname(fileURLToPath(import.meta.url));
   const cliRoot = resolve(scriptDir, "..");
@@ -135,6 +135,7 @@ async function main(): Promise<void> {
       privateKey: ownerIdentity.privateKey,
       host: SMOKE_HOST,
       autoCreateSpace: true,
+      ...ownerFullAccess(),
     });
     await ownerNode.signIn();
 

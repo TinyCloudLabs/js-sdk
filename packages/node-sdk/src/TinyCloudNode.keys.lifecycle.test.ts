@@ -1,5 +1,5 @@
 import { expect, mock, test } from "bun:test";
-import { makePkhSpaceId, pkhDid } from "@tinycloud/sdk-core";
+import { makePkhSpaceId, ownerFullAccess, pkhDid } from "@tinycloud/sdk-core";
 
 import { TinyCloudNode } from "./TinyCloudNode";
 import { NodeWasmBindings } from "./NodeWasmBindings";
@@ -70,6 +70,7 @@ test("named-key calls use the restored host after sign-in", async () => {
       wasmBindings: new NodeWasmBindings(),
       autoBootstrapAccount: false,
       includeAccountRegistryPermissions: false,
+      ...ownerFullAccess(),
     });
     const auth = (node as any).auth;
     auth.tinycloudHosts = ["https://one.example"];
