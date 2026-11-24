@@ -568,6 +568,7 @@ The CLI installs newer patch and minor releases of your channel in the backgroun
 - **Files:** versions live in `~/.tinycloud/versions/`. The log is `~/.tinycloud/versions/auto-update.log`.
 - **Off switches:** `TC_NO_AUTO_UPDATE=1` or `"autoUpdate": false` in `~/.tinycloud/config.json`. It is off when `CI` is set to anything but `false` or `0`.
 - **`tinycloud upgrade`** updates on request. `--to <version>` switches to an exact version and pauses automatic updates; `--yes` skips the question and is needed outside a terminal. A refusal's `reason` is one of `UNSUPPORTED_INSTALL`, `NEEDS_YES`, `DECLINED`, `LOCKED`, `NPM_NOT_FOUND`, `INVALID_VERSION`, `VERSION_NOT_FOUND`, `TARGET_TOO_OLD`, `REGISTRY_UNAVAILABLE`, `COURIER_RUNNING`, `PROVENANCE_MISSING`, `PROVENANCE_INVALID`, `PROVENANCE_UNAVAILABLE`, `SIGNATURE_INVALID` or `DEPENDENCY_NOT_FROM_REGISTRY`.
+- The CLI runs on Node; running it under Bun older than 1.4 refuses every update (TLOG_INCLUSION_PROMISE_ERROR).
 - The standalone `courier` package isn't updated this way.
 - To uninstall, run `npm uninstall -g @tinycloud/cli` (or `bun remove -g @tinycloud/cli`), then delete `~/.tinycloud/versions`.
 
