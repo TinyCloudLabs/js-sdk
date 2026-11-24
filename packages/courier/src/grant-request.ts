@@ -3,14 +3,14 @@ import { verifyOwnerRenewal } from './owner-renewal.js';
 import { randomUUID } from 'node:crypto';
 import {
   ackApprovalResult, checkApprovalResultBinding, collectApprovalResult, createApprovalRequest, DEFAULT_LINKS_API_ORIGIN, discoverApprovalResult, generateRelayKey,
-  isApprovalClientError, isLinkError, MAX_APPROVAL_LEASE_SECONDS, openRelayResult, signerFromJwk,
+  isApprovalClientError, isLinkError, openRelayResult, signerFromJwk,
   type ApprovalClientError, type ApprovalRequesterState, type CollectedApprovalResult, type CreatedLink, type Ed25519PrivateJwk, type LinkRecord,
   type LinkSigner, type OpenKeyApprovalRequestV1,
 } from '@tinycloud/share-envelope/links';
 import { canonicalJson } from './canonical.js';
 import { cmd } from './program.js';
 import { CourierError } from './errors.js';
-import { AGENT_GRANT, AGENT_GRANT_EXPIRY, COURIER_DEFAULT_LEASE_SECONDS } from './keys.js';
+import { AGENT_GRANT, AGENT_GRANT_EXPIRY, COURIER_DEFAULT_LEASE_SECONDS, COURIER_MAX_LEASE_SECONDS } from './keys.js';
 import { profileDir, loadKey, loadProfile, withProfileLock, withProfileTransaction, type AgentKey, type Profile } from './profile.js';
 import {
   ackRef, clearPending, holdsApproval, knownResult, loadPendingForWrite, markCommitted, recordResultEnvelope, recordResultRef, resultEnvelopeOf,
@@ -81,15 +81,15 @@ interface WantedRequest {
 /**
  * The lease `--renew` asks for beside a grant of `lifetimeSeconds`: `off` asks for none; no flag asks for
  * COURIER_DEFAULT_LEASE_SECONDS when it outlasts the grant, and for none otherwise. A lease counts from the approval,
- * so a named one that ends no later than the grant adds nothing and is refused, as is one over a year.
+ * so a named one that ends no later than the grant adds nothing and is refused, as is one over COURIER_MAX_LEASE_SECONDS.
  */
 export function renewalLeaseFor(renew: string | undefined, lifetimeSeconds: number): number | null {
   if (renew === 'off') return null;
   if (renew === undefined) return COURIER_DEFAULT_LEASE_SECONDS > lifetimeSeconds ? COURIER_DEFAULT_LEASE_SECONDS : null;
   const ms = durationMs(renew);
   const seconds = ms === undefined ? undefined : Math.floor(ms / 1000);
-  if (seconds === undefined || seconds <= 0 || seconds > MAX_APPROVAL_LEASE_SECONDS) {
-    throw new CourierError('usage', '--renew must be off or a duration such as 90d, at most 365d.');
+  if (seconds === undefined || seconds <= 0 || seconds > COURIER_MAX_LEASE_SECONDS) {
+    throw new CourierError('usage', `--renew must be off or a duration such as 60d, at most ${COURIER_MAX_LEASE_SECONDS / 86_400}d.`);
   }
   if (seconds <= lifetimeSeconds) throw new CourierError('usage', '--renew must be longer than the grant\'s --expiry: a renewal counts from the approval, so a shorter one adds no time.');
   return seconds;
