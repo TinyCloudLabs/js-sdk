@@ -3804,6 +3804,32 @@
     },
     "reason": "Both canonical jobs (SQLite and Postgres, run 45220085215, provisional head 3b44e890) measured 1540015/1470863 gzip bytes, 179/110 over #1148's measured 1539836/1470753. The Web SDK root reads signed attenuable and terminal ReCap delegation modes. Details: TC-3810"
   },
+  "tc3975NamedKeyWarningRoot": {
+    "label": "report named-key omissions during sign-in (TC-3975)",
+    "ruling": "Naomi 2026-11-23 22:50:03Z: root-only allowance of up to +167 B ESM and +152 B CJS gzip for js-sdk #1144. Naomi 2026-11-23 23:26:47Z re-grant: exactly +149 B ESM and +193 B CJS over the TC-3810 ceilings, minifier drift after the master merge, source unchanged.",
+    "base": "c70e31715dbc62741625dfe2dfc6f30cece6deed",
+    "sourceCommits": [
+      "e11cfa271a872df5e9fed3f978e0d3f3ecb82b67"
+    ],
+    "canonicalCI": {
+      "run": "45285882988",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45285882988/job/138081954243",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45285882988/job/138081954136"
+      ]
+    },
+    "root": {
+      "delta": {
+        "index.mjs": 149,
+        "index.cjs": 193
+      },
+      "ceiling": {
+        "index.mjs": 1540164,
+        "index.cjs": 1471056
+      }
+    },
+    "reason": "Both canonical jobs (SQLite and Postgres, run 45285882988, head 7a6d21ed8 after the master merge) measured 1540164/1471056 gzip bytes, 149/193 over the TC-3810 ceilings of 1540015/1470863. Run 45177867274 at e11cfa27 before the merge measured 167/152 over the then-newest TC-3802 ceilings; the difference is minifier drift, source unchanged. The bytes are the Web SDK root's sign-in warning for secret key resources omitted when the node lacks encryption-named-keys-v1. Details: TC-3975"
+  },
   "tc3522InvocationRefusalKvWorker": {
     "label": "retain invocation-refusal attribution in the kv-storage worker (TC-3522)",
     "ruling": "Naomi ACBX 2026-11-23: admit only the exact worker gzip bytes reproduced by SQLite and PostgreSQL, with zero headroom. Root, optional and gated ceilings are unchanged.",

@@ -65,6 +65,20 @@ export interface ClientSession {
   ens?: EnsData;
 }
 
+/** Requested resources left out because the node does not advertise named-key support. */
+export interface SignInWarning {
+  readonly code: "NODE_FEATURE_UNAVAILABLE";
+  readonly feature: "encryption-named-keys-v1";
+  readonly resources: readonly string[];
+}
+
+/** Diagnostics from this sign-in attempt, separate from granted authority. */
+export interface SignInResult {
+  readonly warnings?: readonly SignInWarning[];
+}
+
+export type ClientSignInResult = ClientSession & SignInResult;
+
 export const ClientSessionSchema = z.object({
   address: z.string(),
   walletAddress: z.string(),
