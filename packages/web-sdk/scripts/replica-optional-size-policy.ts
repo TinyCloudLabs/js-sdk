@@ -461,6 +461,12 @@ export function validateIntroducedOptionalSources(base: OptionalLedger, current:
   }
 }
 
+/**
+ * TC-4174: the merge-base build is not deterministic (±2 B observed on identical sources); Naomi 00:09Z ruling,
+ * confirmed 00:33Z. The PR's own bytes stay exact against the ledger ceilings (DIRECT/EFFECTIVE checks are unchanged).
+ */
+export const OPTIONAL_MERGE_BASE_TOLERANCE = 2;
+
 /** Only rows already in the PR merge base are immutable; the PR's own last row is measured. */
 export function validateOptionalEntryTransition(
   base: readonly OptionalEntry[],
@@ -475,8 +481,8 @@ export function validateOptionalEntryTransition(
   });
   if (!/^#\d+$/.test(expectedPr) || base.some((entry) => entry.pr === expectedPr) ||
       !prefixMatches || current[base.length].pr !== expectedPr ||
-      optionalFormats.some((format) => current[base.length][format] !== observed[format])) {
-    throw new Error("Merged optional rows must remain unchanged and must not repeat this PR; its one new row must have the requested PR number and exact observed gzip deltas.");
+      optionalFormats.some((format) => Math.abs(current[base.length][format] - observed[format]) > OPTIONAL_MERGE_BASE_TOLERANCE)) {
+    throw new Error("Merged optional rows must remain unchanged and must not repeat this PR; its one new row must have the requested PR number and exact observed gzip deltas (±2 B per file for the merge-base build, TC-4174).");
   }
 }
 
