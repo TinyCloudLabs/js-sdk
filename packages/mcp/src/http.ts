@@ -435,12 +435,9 @@ function createHostedSurface(
           ? json({ ok: true })
           : methodNotAllowed("GET");
       }
-      if (limits !== undefined && request.method !== "OPTIONS" &&
-        (url.pathname === connectPath || url.pathname === callbackPath)) {
+      if (limits !== undefined && url.pathname === connectPath) {
         const blocked = refuseAddress(limits, request, "approval");
-        if (blocked !== undefined) {
-          return url.pathname === callbackPath ? callbackCors(blocked, config.openkeyHost) : blocked;
-        }
+        if (blocked !== undefined) return blocked;
       }
       if (url.pathname === connectPath) {
         if (request.method !== "GET") return methodNotAllowed("GET");
@@ -561,13 +558,13 @@ function createHostedSurface(
         const blocked = refuseAddress(limits, request, "bad-token");
         if (blocked !== undefined) return mcpCors(blocked, request);
       }
-      const auth = await authenticate(request).catch((error: unknown) => {
-        // An unexpected failure is not evidence of a bad token: do not charge the address for it.
-        if (limits !== undefined && presented) refundAddress(limits, request, "bad-token");
-        throw error;
-      });
+      const auth = await authenticate(request);
+      // A valid token is given back its charge, and so is a 5xx: the server failed (OpenKey introspection is
+      // unavailable), which is not evidence of a bad token.
+      if (limits !== undefined && presented && (!(auth instanceof Response) || auth.status >= 500)) {
+        refundAddress(limits, request, "bad-token");
+      }
       if (limits !== undefined && !(auth instanceof Response)) {
-        if (presented) refundAddress(limits, request, "bad-token");
         const blocked = refuseAuthenticated(limits, auth.clientId, auth.extra?.subject);
         if (blocked !== undefined) return mcpCors(blocked, request);
       }

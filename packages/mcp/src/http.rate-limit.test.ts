@@ -8,7 +8,7 @@ import { join } from "node:path";
 
 import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
 
-import { createHostedMcpApp, type HostedMcpApp } from "./http.js";
+import { createHostedMcpApp, type HostedMcpApp, type HostedMcpConfig } from "./http.js";
 import type { RateLimitConfig } from "./rate-limit.js";
 import { registerMcpFixtureServer, resetMcpRegistryFixture } from "./test-support/registry-fixture.mjs";
 
@@ -34,7 +34,7 @@ const LIMITS: RateLimitConfig = {
   trustedProxyHops: 1,
 };
 
-async function start(rateLimit: RateLimitConfig | undefined) {
+async function start(rateLimit: RateLimitConfig | undefined, extra: Partial<HostedMcpConfig> = {}) {
   const { privateKey, publicKey } = await generateKeyPair("EdDSA");
   const jwk = await exportJWK(publicKey);
   jwk.kid = "test-key";
@@ -59,6 +59,7 @@ async function start(rateLimit: RateLimitConfig | undefined) {
       response_types_supported: ["code"],
     },
     ...(rateLimit === undefined ? {} : { rateLimit }),
+    ...extra,
   });
   resources.push(() => app.close());
 
@@ -243,6 +244,36 @@ test("a valid token is not charged to its address, so users behind one shared ad
   expect((await attempt()).status).toBe(401);
   expect((await attempt()).status).toBe(401);
   expect((await attempt()).status).toBe(429);
+});
+
+test("an OpenKey introspection outage is a 500, not a bad token: the address is not charged for it", async () => {
+  const { app, tokenFor } = await start(LIMITS, {
+    introspection: {
+      endpoint: "https://openkey.test/api/auth/oauth2/introspect",
+      clientId: "mcp-client",
+      clientSecret: "secret",
+      authMethod: "basic",
+      fetch: async () => new Response("unavailable", { status: 503 }),
+      log: () => undefined,
+    },
+  });
+  const token = await tokenFor("alice");
+  const attempt = (authorization: string) => hostedFetch(app, "https://mcp.test/mcp", {
+    method: "POST",
+    headers: {
+      authorization,
+      "x-forwarded-for": "203.0.113.62",
+      "content-type": "application/json",
+      accept: "application/json, text/event-stream",
+    },
+    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
+  });
+  // More outage answers than the address burst of 2: each is a server error, never a 429.
+  for (let index = 0; index < 4; index += 1) expect((await attempt(`Bearer ${token}`)).status).toBe(500);
+  // The address still has its whole bad-token budget.
+  expect((await attempt("Bearer not-a-token")).status).toBe(401);
+  expect((await attempt("Bearer not-a-token")).status).toBe(401);
+  expect((await attempt("Bearer not-a-token")).status).toBe(429);
 });
 
 async function hostedFetch(app: HostedMcpApp, input: Parameters<typeof fetch>[0], init?: RequestInit): Promise<Response> {

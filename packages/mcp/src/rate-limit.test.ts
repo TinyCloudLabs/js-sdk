@@ -114,4 +114,13 @@ describe("environment", () => {
     expect(tuned.trustedProxyHops).toBe(2);
     expect(tuned.tools.connect).toEqual(DEFAULT_RATE_LIMITS.tools.connect);
   });
+
+  test("the address override raises the address burst in proportion above the default, and lowers it as before", () => {
+    const ip = (value: string) => rateLimitFromEnv({ TC_MCP_RATE_LIMIT: "on", TC_MCP_RATE_LIMIT_IP_PER_MINUTE: value })!.ip;
+    expect(ip("120")).toEqual({ perMinute: 120, burst: 40 });
+    expect(ip("61")).toEqual({ perMinute: 61, burst: 20 });
+    expect(ip("60")).toEqual({ perMinute: 60, burst: 20 });
+    expect(ip("30")).toEqual({ perMinute: 30, burst: 20 });
+    expect(ip("5")).toEqual({ perMinute: 5, burst: 5 });
+  });
 });

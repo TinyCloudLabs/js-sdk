@@ -24,7 +24,7 @@ export interface RateLimitConfig {
    * user shares, so this is an aggregate cap for that client, not a fairness limit between its users.
    */
   readonly client: RateRule;
-  /** Per client address: the approval routes, and bearer tokens the server has to reject. */
+  /** Per client address: the `/connect` approval route, and bearer tokens the server has to reject. */
   readonly ip: RateRule;
   /**
    * Trusted reverse proxies in front of the server. The client address is the Nth entry from the right
@@ -204,11 +204,20 @@ export function refuseAuthenticated(limits: RateLimits, clientId: string, subjec
 const ON_VALUES = ["1", "true", "on", "yes"];
 const OFF_VALUES = ["", "0", "false", "off", "no"];
 
-function limitFromEnv(value: string | undefined, name: string, fallback: RateRule): RateRule {
+/**
+ * The burst never exceeds the rate. Otherwise the default burst holds, except for the address limit
+ * (`raisesBurst`): a rate above the default raises its burst in proportion, because the address burst is
+ * also how many presented-token requests one shared egress address may have in flight at once.
+ */
+function limitFromEnv(value: string | undefined, name: string, fallback: RateRule, raisesBurst = false): RateRule {
   if (value === undefined || value.trim() === "") return fallback;
   const perMinute = Number(value);
   if (!Number.isInteger(perMinute) || perMinute <= 0) throw new Error(`${name} must be a positive integer.`);
-  return { perMinute, burst: Math.min(perMinute, fallback.burst ?? perMinute) };
+  const burst = fallback.burst ?? fallback.perMinute;
+  if (raisesBurst && perMinute > fallback.perMinute) {
+    return { perMinute, burst: Math.floor((perMinute * burst) / fallback.perMinute) };
+  }
+  return { perMinute, burst: Math.min(perMinute, burst) };
 }
 
 /**
@@ -224,7 +233,7 @@ export function rateLimitFromEnv(env: Readonly<Record<string, string | undefined
   const hopsText = env.TC_MCP_TRUSTED_PROXY_HOPS;
   const hops = hopsText === undefined || hopsText.trim() === "" ? defaults.trustedProxyHops : Number(hopsText);
   if (!Number.isInteger(hops) || hops < 0) throw new Error("TC_MCP_TRUSTED_PROXY_HOPS must be a non-negative integer.");
-  const rule = (name: string, fallback: RateRule) => limitFromEnv(env[`TC_MCP_RATE_LIMIT_${name}_PER_MINUTE`], `TC_MCP_RATE_LIMIT_${name}_PER_MINUTE`, fallback);
+  const rule = (name: string, fallback: RateRule, raisesBurst = false) => limitFromEnv(env[`TC_MCP_RATE_LIMIT_${name}_PER_MINUTE`], `TC_MCP_RATE_LIMIT_${name}_PER_MINUTE`, fallback, raisesBurst);
   return {
     tools: {
       connect: rule("CONNECT", defaults.tools.connect),
@@ -233,7 +242,7 @@ export function rateLimitFromEnv(env: Readonly<Record<string, string | undefined
     },
     subjectRequests: rule("SUBJECT", defaults.subjectRequests),
     client: rule("CLIENT", defaults.client),
-    ip: rule("IP", defaults.ip),
+    ip: rule("IP", defaults.ip, true),
     trustedProxyHops: hops,
     ...(defaults.maxKeys === undefined ? {} : { maxKeys: defaults.maxKeys }),
   };
