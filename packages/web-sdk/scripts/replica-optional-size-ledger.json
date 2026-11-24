@@ -359,9 +359,9 @@
       "pr": "#1161",
       "ticket": "TC-4010",
       "replica.mjs": 0,
-      "replica.cjs": 0,
-      "activation.mjs": 0,
-      "activation.cjs": 0,
+      "replica.cjs": 2,
+      "activation.mjs": -1,
+      "activation.cjs": -1,
       "note": "Optional first-import and IDB activation gzip deltas against this PR's merge base"
     }
   ],
