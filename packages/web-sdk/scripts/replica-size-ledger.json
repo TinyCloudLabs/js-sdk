@@ -3832,7 +3832,7 @@
   },
   "tc4082HostedOwnerRoot": {
     "label": "sign in a hosted owner with no registry record (TC-4082)",
-    "ruling": "Naomi 2026-11-24 00:37:34Z: re-grant tc4082HostedOwnerRoot to exactly 1542306/1472943 (+2291/+2080 over tc3810ReaderRoot). Earlier grant, 2026-11-23 22:50:03Z: up to +2139/+1916 for the sign-in proof alone. Re-based onto tc3975NamedKeyWarningRoot after #1144 merged (Naomi 01:17Z: may move only by master's movement): the same +2291/+2080 now sits over tc3975NamedKeyWarningRoot's 1540164/1471056, so the ceilings are 1542455/1473136; CI decides.",
+    "ruling": "Naomi 2026-11-24 00:37:34Z: re-grant tc4082HostedOwnerRoot to exactly 1542306/1472943 (+2291/+2080 over tc3810ReaderRoot). Earlier grant, 2026-11-23 22:50:03Z: up to +2139/+1916 for the sign-in proof alone. Re-based onto tc3975NamedKeyWarningRoot after #1144 merged (Naomi 01:17Z: may move only by master's movement): the same +2291/+2080 now sits over tc3975NamedKeyWarningRoot's 1540164/1471056, so the ceilings are 1542455/1473136; CI decides. Naomi R2 2026-11-24 01:45:37Z: set tc4082HostedOwnerRoot to exactly 1542479/1473127 (+2315/+2071 over tc3975NamedKeyWarningRoot), ledger + policy only.",
     "base": "878291c9f6e36812ba5785deb398a4117700c628",
     "sourceCommits": [
       "98f7a2e4932a40c5d56273177f50d5e0443a436a",
@@ -3844,23 +3844,23 @@
       "63dfefb58a1384dc9b66faaf1e772e5edcecf75f"
     ],
     "canonicalCI": {
-      "run": "45296681183",
+      "run": "45305691554",
       "jobs": [
-        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45296681183/job/138118882182",
-        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45296681183/job/138118882211"
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45305691554/job/138148858055",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45305691554/job/138148858149"
       ]
     },
     "root": {
       "delta": {
-        "index.mjs": 2291,
-        "index.cjs": 2080
+        "index.mjs": 2315,
+        "index.cjs": 2071
       },
       "ceiling": {
-        "index.mjs": 1542455,
-        "index.cjs": 1473136
+        "index.mjs": 1542479,
+        "index.cjs": 1473127
       }
     },
-    "reason": "5 reviewed TC-4082 commits + no-read fix 63dfefb58; Naomi 00:38Z. Both canonical jobs (SQLite and Postgres, run 45296681183 at debfa194e) measured 1542306/1472943 gzip bytes, 2291/2080 over tc3810ReaderRoot's 1540015/1470863. The Web SDK root carries the hosted-owner proof: the proof state in NodeUserAuthorization (begin, confirm, fail, restore candidate and adoption, proven-space routing, per-proof landed state), the TinyCloudNode restore, retire-on-failed-proof and sign-in handling around it, and one allowHostedOwnerProof line in TinyCloudWeb. The assess and read helpers load from the lazy space-hosting chunk, not the root. Details: TC-4082 Re-based onto tc3975NamedKeyWarningRoot after #1144 merged (Naomi 01:17Z: may move only by master's movement): the same +2291/+2080 now sits over tc3975NamedKeyWarningRoot's 1540164/1471056, so the ceilings are 1542455/1473136; CI decides."
+    "reason": "5 reviewed TC-4082 commits + no-read fix 63dfefb58; Naomi 00:38Z. Both canonical jobs (SQLite and Postgres, run 45296681183 at debfa194e) measured 1542306/1472943 gzip bytes, 2291/2080 over tc3810ReaderRoot's 1540015/1470863. The Web SDK root carries the hosted-owner proof: the proof state in NodeUserAuthorization (begin, confirm, fail, restore candidate and adoption, proven-space routing, per-proof landed state), the TinyCloudNode restore, retire-on-failed-proof and sign-in handling around it, and one allowHostedOwnerProof line in TinyCloudWeb. The assess and read helpers load from the lazy space-hosting chunk, not the root. Details: TC-4082 Re-based onto tc3975NamedKeyWarningRoot after #1144 merged (Naomi 01:17Z: may move only by master's movement): the same +2291/+2080 now sits over tc3975NamedKeyWarningRoot's 1540164/1471056, so the ceilings are 1542455/1473136; CI decides. Run 45305691554 at 6ad3a0f2f (master 878291c9f merged) measured 1542479/1473127 on both SQLite and Postgres (the SQLite job 138148858055, the Postgres job 138148858149), +2315/+2071 over tc3975NamedKeyWarningRoot's 1540164/1471056: gzip non-additivity after the #1144 merge, source unchanged; Naomi 01:46Z"
   },
   "tc3522InvocationRefusalKvWorker": {
     "label": "retain invocation-refusal attribution in the kv-storage worker (TC-3522)",
