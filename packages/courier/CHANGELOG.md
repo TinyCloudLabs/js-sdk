@@ -1,5 +1,13 @@
 # @tinycloud/courier
 
+## 0.8.2
+
+### Patch Changes
+
+- da6dede: Make private invitation links the default Courier pairing path. Help and link errors show how to send, join, resume, or replace a link. The guide explains how to re-pair after a key rotation. Manual pairing is still available under Advanced.
+
+  Details: TC-1543
+
 ## 0.8.0-beta.20
 
 ### Patch Changes

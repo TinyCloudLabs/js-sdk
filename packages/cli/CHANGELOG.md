@@ -1,5 +1,17 @@
 # @tinycloud/cli
 
+## 1.9.1
+
+### Patch Changes
+
+- b29e5d3: Prepared CLI login is ready to show the secret-key warnings from TC-3975 and add a `warnings` field to its JSON output; they appear once the CLI uses a node-sdk whose sign-in returns them.
+
+  Details: TC-3975
+
+- da6dede: Make private invitation links the default Courier pairing path. Help and link errors show how to send, join, resume, or replace a link. The guide explains how to re-pair after a key rotation. Manual pairing is still available under Advanced.
+
+  Details: TC-1543
+
 ## 1.9.0-beta.21
 
 ### Patch Changes

@@ -6,11 +6,8 @@
     "@tinycloud/courier"
   ],
   "baselines": {
-    "@tinycloud/cli": "1.9.0",
-    "@tinycloud/courier": "0.8.1"
-  },
-  "expect": {
     "@tinycloud/cli": "1.9.1",
     "@tinycloud/courier": "0.8.2"
-  }
+  },
+  "expect": {}
 }
