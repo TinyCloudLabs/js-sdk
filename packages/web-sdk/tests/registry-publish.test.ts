@@ -4,7 +4,7 @@ import { lookupOwnerRegistryVerdict, signLocationRecordV2 } from "@tinycloud/sdk
 import { ed25519 } from "@noble/curves/ed25519";
 import { base58btc } from "multiformats/bases/base58";
 import type { TinyCloudNode } from "@tinycloud/node-sdk";
-import { ensureOwnerRegistryRecord, isRegistryRecordSignRefusal, REGISTRY_PUBLISH_ORIGINS } from "./registry-publish";
+import { ensureOwnerRegistryRecord, isRegistryRecordSignRefusal, REGISTRY_PUBLISH_ORIGINS } from "../src/registry-publish";
 
 // Fresh ed25519 key for the node so `verifyResourceDestination`'s /info and
 // /.well-known/tinycloud/node-keys checks resolve. Mirrors the sdk-core publication
