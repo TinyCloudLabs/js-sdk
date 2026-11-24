@@ -3,9 +3,9 @@ import root from "./replica-size-ledger.json";
 import optionalLedger from "./replica-optional-size-ledger.json";
 import { approvedTc3947Optional, evaluateOptionalBudget, optionalFormats, optionalSourcePins, validateOptionalEntryTransition, validateOptionalLedger, validateTc3947OptionalTransition, type OptionalLedger } from "./replica-optional-size-policy";
 
-// This admission is tested in its own context: the later #1161 row is removed.
+// This admission is tested in its own context: the later #1161 and #1180 rows are removed.
 const optional = structuredClone(optionalLedger) as OptionalLedger;
-optional.entries = optional.entries.filter((entry) => entry.pr !== "#1161");
+optional.entries = optional.entries.filter((entry) => entry.pr !== "#1161" && entry.pr !== "#1180");
 
 const validate = (value: OptionalLedger) => validateOptionalLedger(value, true, true, true, true, true, true, true, true, true, true, true, true, true, root.tc2481OfflineReplicaTransport, root.tc2931BootstrapScope, root.tc3947ReplicaRevokeRoot);
 

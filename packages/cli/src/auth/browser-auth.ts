@@ -82,6 +82,12 @@ export interface AuthFlowOptions {
    * approval-request path only (see `renewalLeaseFor`); a paste link or device login never carries one.
    */
   renewalLeaseSeconds?: number;
+  /**
+   * The signed request's `purpose`, sent only with a renewal lease. OpenKey starts its renewal box ticked only for
+   * `"standing"` access that needs no sensitive confirm; a request without one is a task and starts unticked. Only
+   * `onboard` sets it: onboarding is standing access (TC-4247); `tc auth login` stays a task.
+   */
+  renewalPurpose?: "standing";
 }
 
 /** Default: durable remote approval and automatic result discovery. `--paste` remains explicit. */

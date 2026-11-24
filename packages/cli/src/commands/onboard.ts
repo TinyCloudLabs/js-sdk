@@ -61,6 +61,8 @@ export function registerOnboardCommand(program: Command): void {
           code = undefined;
           const approval = pasted !== undefined ? await delegationFromInput(pasted, did, flow) : await startAuthFlow(did, {
             ...flow, profileName: ctx.profile, noPopup: true,
+            // Onboarding is standing access, so OpenKey starts the renewal box ticked; the owner can untick it (TC-4247).
+            ...(flow.renewalLeaseSeconds === undefined ? {} : { renewalPurpose: "standing" as const }),
             ...(deadlineMs === undefined ? {} : { approvalWait: { deadlineMs, step: currentStep, of: steps.length } }),
             onApprovalRequest: ({ approvalUrl }) => {
               console.error(`Approve in OpenKey (open the complete link):\n${approvalUrl}\n${deadlineMs === undefined ? "\nWaiting for approval. Re-run this command after an interruption; no code is needed." : ""}`);

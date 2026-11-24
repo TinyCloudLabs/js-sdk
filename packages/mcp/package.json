@@ -86,7 +86,12 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/TinyCloudLabs/js-sdk"
+    "url": "https://github.com/TinyCloudLabs/js-sdk.git",
+    "directory": "packages/mcp"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
   },
   "homepage": "https://docs.tinycloud.xyz/cli/mcp"
 }
