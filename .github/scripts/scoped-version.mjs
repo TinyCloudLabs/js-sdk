@@ -217,6 +217,7 @@ export function prereleaseRuntimePins(manifests, scope) {
 // In-scope packages whose runtime dependencies on a workspace package would not install from npm: a pin on an
 // in-scope package must be the version this release gives it, and a pin on a held package must be that package's
 // own version and already on npm (asked once per held pin; when npm cannot be asked, the release is refused).
+// `workspace:` in optionalDependencies is refused outright: the publish step does not rewrite that field.
 export function uninstallablePins(manifests, scope, versionsOf) {
   const byName = new Map(manifests.map((m) => [m.manifest.name, m.manifest]));
   const problems = [];
@@ -225,6 +226,10 @@ export function uninstallablePins(manifests, scope, versionsOf) {
     if (!manifest) continue;
     for (const field of RUNTIME_FIELDS) {
       for (const [dep, spec] of Object.entries(manifest[field] ?? {})) {
+        if (field === "optionalDependencies" && String(spec).startsWith("workspace:")) {
+          problems.push(`${name}@${manifest.version} requires ${dep}@${spec} (${field}), which the publish step would ship unresolved`);
+          continue;
+        }
         const target = byName.get(dep);
         if (!target) continue;
         const pinned = String(spec).startsWith("workspace:") ? target.version : String(spec).replace(/^[=^~v]/, "");
@@ -273,16 +278,22 @@ export function verifyInventory({ inventory, expect, outOfScopeChanges }) {
 
 // ---- npm ---------------------------------------------------------------------------------------------------------
 
-// Every version npm has for `name` ([] when npm has never seen it).
+const NPM_NAME = /^(?:@[a-z0-9~][a-z0-9._~-]*\/)?[a-z0-9~][a-z0-9._~-]*$/;
+const NPM_TIMEOUT_MS = 60_000;
+
+// Every version npm has for `name` ([] when npm has never seen it). A name that is not a package name (it could act
+// as an npm flag) and an npm that does not answer in time are refusals.
 export function npmVersions(name) {
-  const result = spawnSync("npm", ["view", name, "versions", "--json"], { encoding: "utf8" });
+  if (!NPM_NAME.test(name)) fail(`refusing to ask npm about ${JSON.stringify(name)}: not a package name`);
+  const result = spawnSync("npm", ["view", name, "versions", "--json"], { encoding: "utf8", timeout: NPM_TIMEOUT_MS });
+  if (result.error) fail(`npm view ${name} versions failed: ${result.error.code === "ETIMEDOUT" ? `no answer in ${NPM_TIMEOUT_MS / 1000} s` : result.error.message}`);
   let output = null;
   try {
     output = JSON.parse(result.stdout.trim() || "null");
   } catch {}
   if (result.status === 0) return Array.isArray(output) ? output : typeof output === "string" ? [output] : [];
   if (output?.error?.code === "E404") return [];
-  fail(`npm view ${name} versions failed: ${result.stderr.trim() || result.stdout.trim()}`);
+  fail(`npm view ${name} versions failed: ${(result.stderr ?? "").trim() || (result.stdout ?? "").trim() || `signal ${result.signal}`}`);
 }
 
 // The newest stable (non-prerelease) version among `versions`, if any.
@@ -363,9 +374,9 @@ const DEPENDENCY_ITEM = /^\s+- (@?[^@\s]+)@\S+$/;
 
 // An in-scope CHANGELOG after `changeset version` (`after`), its new entry without the "Updated dependencies" items
 // that name a held package, and without the bullet or heading that leaves empty. The rest of the file is untouched.
+// `empty`: the new entry had content and none of its own is left (it only named held versions).
 export function changelogWithoutHeld(before, after, heldNames) {
-  if (before === undefined) return after;
-  const old = before.split("\n");
+  const old = (before ?? "").split("\n");
   const lines = after.split("\n");
   let start = 0;
   while (start < old.length && start < lines.length && old[start] === lines[start]) start += 1;
@@ -387,9 +398,39 @@ export function changelogWithoutHeld(before, after, heldNames) {
     return next < entry.length && !entry[next].startsWith("#");
   });
   entry = entry.filter((line, i) => line.trim() !== "" || i === 0 || entry[i - 1].trim() !== "");
-  if (entry.join("\n") === original) return after;
+  const empty = original.includes("\n- ") && !entry.some((line) => line.startsWith("- "));
+  if (entry.join("\n") === original) return { text: after, empty };
   if (tail > 0 && entry.at(-1)?.trim() === "" && lines[lines.length - tail].trim() === "") entry.pop();
-  return [...lines.slice(0, start), ...entry, ...lines.slice(lines.length - tail)].join("\n");
+  return { text: [...lines.slice(0, start), ...entry, ...lines.slice(lines.length - tail)].join("\n"), empty };
+}
+
+// Held packages that an in-scope package installs at runtime (directly or through other held packages) and that
+// require an in-scope package this release moves: npm's copy keeps requiring the old version, so a consumer gets
+// two copies of it. They have to come into the release scope.
+export function heldRuntimeDrift(manifests, scope, renamed) {
+  const byName = new Map(manifests.map((m) => [m.manifest.name, m.manifest]));
+  const runtimeDeps = (manifest) => RUNTIME_FIELDS.flatMap((field) => Object.keys(manifest[field] ?? {})).filter((dep) => byName.has(dep));
+  const reached = new Map();
+  const queue = scope.filter((name) => byName.has(name)).map((name) => [name, name]);
+  while (queue.length) {
+    const [name, from] = queue.shift();
+    for (const dep of runtimeDeps(byName.get(name))) {
+      if (scope.includes(dep) || reached.has(dep)) continue;
+      reached.set(dep, from);
+      queue.push([dep, from]);
+    }
+  }
+  const problems = [];
+  for (const [name, from] of reached) {
+    const manifest = byName.get(name);
+    for (const field of RUNTIME_FIELDS) {
+      for (const dep of Object.keys(manifest[field] ?? {})) {
+        const move = renamed.get(dep);
+        if (move) problems.push(`${name}@${manifest.version} is outside the release scope but ${from} installs it, and it requires ${dep}@${move.from} (${field}) while this release moves ${dep} to ${move.to}: bring ${name} into the release scope`);
+      }
+    }
+  }
+  return problems;
 }
 
 export function scopedVersion(root, { scope, runChangesetVersion = defaultChangesetVersion, versionsOf = npmVersions, log = console.log } = {}) {
@@ -446,10 +487,14 @@ export function scopedVersion(root, { scope, runChangesetVersion = defaultChange
   for (const entry of setAside) writeFileSync(entry.path, entry.held);
   // ... and every in-scope package keeps its pins on held packages: a dependent bump of a held package is a version
   // that this release does not publish.
+  const heldOnly = [];
   for (const m of releasing) {
     writeFileSync(m.file, pinsStay(readFileSync(m.file, "utf8"), m.manifest, heldNames));
     const changelog = join(m.dir, "CHANGELOG.md");
-    if (existsSync(changelog)) writeFileSync(changelog, changelogWithoutHeld(releasingChangelogs.get(m.dir), readFileSync(changelog, "utf8"), heldNames));
+    if (!existsSync(changelog)) continue;
+    const { text, empty } = changelogWithoutHeld(releasingChangelogs.get(m.dir), readFileSync(changelog, "utf8"), heldNames);
+    writeFileSync(changelog, text);
+    if (empty && afterVersions.get(m.manifest.name) !== m.manifest.version) heldOnly.push(`${m.manifest.name}@${afterVersions.get(m.manifest.name)} has no change of its own: its new CHANGELOG entry only named versions of packages outside the release scope`);
   }
 
   // 4. verify
@@ -463,6 +508,8 @@ export function scopedVersion(root, { scope, runChangesetVersion = defaultChange
     }),
     ...(inventory.length ? prereleaseRuntimePins(final, scope.packages) : []),
     ...(inventory.length ? uninstallablePins(final, scope.packages, cached) : []),
+    ...heldRuntimeDrift(final, scope.packages, renamed),
+    ...heldOnly,
     ...takenVersions(inventory, cached),
   ];
   log(`changeset version moved ${inventory.length} in-scope package(s); put back ${putBack} out-of-scope package(s) that it had bumped as dependents.`);

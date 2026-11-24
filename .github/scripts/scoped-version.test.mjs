@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
 
-import { baselineProblems, changelogWithoutHeld, pinsFollow, pendingCount, readScope, scopedVersion, splitChangeset, takenVersions, uninstallablePins, verifyInventory } from "./scoped-version.mjs";
+import { baselineProblems, changelogWithoutHeld, heldRuntimeDrift, npmVersions, pinsFollow, pendingCount, readScope, scopedVersion, splitChangeset, takenVersions, uninstallablePins, verifyInventory } from "./scoped-version.mjs";
 
 const changeset = (bumps, body = "Change.\n\nDetails: TC-1\n") =>
   `---\n${Object.entries(bumps).map(([name, bump]) => `"${name}": ${bump}`).join("\n")}\n---\n\n${body}`;
@@ -158,9 +158,46 @@ test("an in-scope package keeps its pins on held packages, and its CHANGELOG doe
 test("a dependency entry keeps its in-scope items, and a section left with only held items goes", () => {
   const before = "# a\n\n## 2.0.0\n";
   const mixed = "# a\n\n## 2.0.1\n\n### Patch Changes\n\n- Updated dependencies [def5678]\n  - @x/d@1.0.1\n  - @x/s@3.1.0\n\n## 2.0.0\n";
-  assert.equal(changelogWithoutHeld(before, mixed, new Set(["@x/d"])), "# a\n\n## 2.0.1\n\n### Patch Changes\n\n- Updated dependencies [def5678]\n  - @x/s@3.1.0\n\n## 2.0.0\n");
+  assert.deepEqual(changelogWithoutHeld(before, mixed, new Set(["@x/d"])), { text: "# a\n\n## 2.0.1\n\n### Patch Changes\n\n- Updated dependencies [def5678]\n  - @x/s@3.1.0\n\n## 2.0.0\n", empty: false });
   const heldOnly = "# a\n\n## 2.0.1\n\n### Minor Changes\n\n- abc1234: Change.\n\n### Patch Changes\n\n- Updated dependencies [def5678]\n- Updated dependencies [def5678]\n  - @x/d@1.0.1\n\n## 2.0.0\n";
-  assert.equal(changelogWithoutHeld(before, heldOnly, new Set(["@x/d"])), "# a\n\n## 2.0.1\n\n### Minor Changes\n\n- abc1234: Change.\n\n## 2.0.0\n");
+  assert.deepEqual(changelogWithoutHeld(before, heldOnly, new Set(["@x/d"])), { text: "# a\n\n## 2.0.1\n\n### Minor Changes\n\n- abc1234: Change.\n\n## 2.0.0\n", empty: false });
+  // no CHANGELOG before: the whole file is the new entry, and it is still stripped
+  const first = "# a\n\n## 2.0.1\n\n### Patch Changes\n\n- abc1234: Change.\n\n- Updated dependencies [def5678]\n  - @x/d@1.0.1\n";
+  assert.deepEqual(changelogWithoutHeld(undefined, first, new Set(["@x/d"])), { text: "# a\n\n## 2.0.1\n\n### Patch Changes\n\n- abc1234: Change.\n", empty: false });
+  const nothingLeft = "# a\n\n## 2.0.1\n\n### Patch Changes\n\n- Updated dependencies [def5678]\n  - @x/d@1.0.1\n\n## 2.0.0\n";
+  assert.equal(changelogWithoutHeld(before, nothingLeft, new Set(["@x/d"])).empty, true);
+});
+
+test("refuses a release whose only change in a package is a held package's version", (t) => {
+  const { ws, runChangesetVersion: bumpAll } = heldDependency(t);
+  const runChangesetVersion = (root) => {
+    bumpAll(root);
+    writeFileSync(join(root, "packages/a/CHANGELOG.md"), "# a\n\n## 2.0.1\n\n### Patch Changes\n\n- Updated dependencies [def5678]\n  - d@1.0.1\n\n## 2.0.0\n");
+  };
+  assert.throws(() => scopedVersion(ws.root, { runChangesetVersion, versionsOf: npm({ a: ["2.0.0"], d: ["1.0.0"] }), log: () => {} }), /a@2\.0\.1 has no change of its own/);
+});
+
+test("refuses a held package an in-scope package installs that still requires the old version of a package this release moves", () => {
+  // a (in scope) -> d (held) -> e (held) -> s (in scope, moved); b (held) requires s but nothing in scope installs b
+  const manifests = [
+    { manifest: { name: "a", version: "1.0.1", dependencies: { d: "1.0.0" }, devDependencies: { b: "1.0.0" } } },
+    { manifest: { name: "d", version: "1.0.0", dependencies: { e: "1.0.0" } } },
+    { manifest: { name: "e", version: "1.0.0", peerDependencies: { s: "3.1.0" } } },
+    { manifest: { name: "b", version: "1.0.0", dependencies: { s: "3.1.0" } } },
+    { manifest: { name: "s", version: "3.2.0" } },
+  ];
+  const renamed = new Map([["s", { from: "3.1.0", to: "3.2.0" }]]);
+  assert.deepEqual(heldRuntimeDrift(manifests, ["a", "s"], renamed), [
+    "e@1.0.0 is outside the release scope but a installs it, and it requires s@3.1.0 (peerDependencies) while this release moves s to 3.2.0: bring e into the release scope",
+  ]);
+  assert.deepEqual(heldRuntimeDrift(manifests, ["a", "s", "e"], renamed), []);
+});
+
+test("refuses workspace: in optionalDependencies, and an npm name that is not a package name", () => {
+  const manifests = [{ manifest: { name: "a", version: "2.0.1", optionalDependencies: { s: "workspace:*" } } }, { manifest: { name: "s", version: "3.1.0" } }];
+  assert.match(uninstallablePins(manifests, ["a", "s"], npm())[0], /a@2\.0\.1 requires s@workspace:\* \(optionalDependencies\), which the publish step would ship unresolved/);
+  assert.throws(() => npmVersions("--registry=https://evil.example"), /not a package name/);
+  assert.throws(() => npmVersions("-x"), /not a package name/);
 });
 
 test("refuses an in-scope pin on a held version npm does not have, on another version than the workspace's, or when npm cannot be asked", (t) => {
