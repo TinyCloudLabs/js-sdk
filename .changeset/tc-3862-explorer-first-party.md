@@ -1,5 +1,4 @@
 ---
-"@tinycloud/bootstrap": patch
 "@tinycloud/web-sdk": patch
 ---
 
