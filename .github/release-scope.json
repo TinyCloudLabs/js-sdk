@@ -5,9 +5,7 @@
     "@tinycloud/share-envelope"
   ],
   "baselines": {
-    "@tinycloud/share-envelope": "1.6.0"
-  },
-  "expect": {
     "@tinycloud/share-envelope": "1.7.0"
-  }
+  },
+  "expect": {}
 }

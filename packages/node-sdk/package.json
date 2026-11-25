@@ -140,7 +140,7 @@
   },
   "dependencies": {
     "@tinycloud/share-sdk": "1.6.0",
-    "@tinycloud/share-envelope": "1.6.0",
+    "@tinycloud/share-envelope": "1.7.0",
     "@tinycloud/replica": "0.4.8",
     "@tinycloud/sdk-services": "3.15.0",
     "@tinycloud/sdk-core": "3.15.0",

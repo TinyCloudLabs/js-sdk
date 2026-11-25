@@ -15492,7 +15492,8 @@ function buildShareInvitationApprovalSpec(input) {
   const lifetime = Math.floor((Date.parse(context.acceptanceExpiresAt) - input.now) / 1e3);
   if (!(lifetime > 0) || lifetime > DAY_SECONDS) throw new LinkError("body_validation_failed", "approval must expire within 24 hours");
   return {
-    issuer: input.targetDid,
+    issuer: input.requesterDid ?? input.targetDid,
+    ...input.requesterDid === void 0 ? null : { requesterDid: input.requesterDid },
     requestVersion: 1,
     targetDid: input.targetDid,
     targetPublicJwk: input.targetPublicJwk,
@@ -15508,8 +15509,18 @@ function parseApprovalRequest(value, options = {}) {
   if (!parsed.success) throw new LinkError("body_validation_failed", "invalid approval request");
   const request = parsed.data;
   const publicKey = decodeStrictBase64Url(request.targetPublicJwk.x);
-  if (ed25519KeyProblem(publicKey) !== null || didKeyFromEd25519PublicKey(publicKey) !== request.targetDid || request.issuer !== request.targetDid || options.issuer !== void 0 && request.issuer !== options.issuer) {
+  if (ed25519KeyProblem(publicKey) !== null || didKeyFromEd25519PublicKey(publicKey) !== request.targetDid) {
     throw new LinkError("issuer_binding_mismatch");
+  }
+  if (request.requesterDid === void 0) {
+    if (request.issuer !== request.targetDid || options.issuer !== void 0 && request.issuer !== options.issuer) {
+      throw new LinkError("issuer_binding_mismatch");
+    }
+  } else {
+    const requesterKey = linkIssuerPublicKey(request.requesterDid);
+    if (requesterKey === null || ed25519KeyProblem(requesterKey) !== null || request.requesterDid !== request.issuer || request.requesterDid === request.targetDid || options.issuer !== request.requesterDid) {
+      throw new LinkError("issuer_binding_mismatch");
+    }
   }
   return request;
 }
@@ -16179,6 +16190,7 @@ var init_links = __esm({
       issuer: external_exports2.string(),
       requestVersion: external_exports2.literal(1),
       targetDid: external_exports2.string(),
+      requesterDid: external_exports2.string().optional(),
       targetPublicJwk: ed25519Jwk,
       nodeOrigin: origin,
       permissions: external_exports2.array(permission),

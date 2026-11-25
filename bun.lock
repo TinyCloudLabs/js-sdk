@@ -408,7 +408,7 @@
     },
     "packages/share-envelope": {
       "name": "@tinycloud/share-envelope",
-      "version": "1.6.0",
+      "version": "1.7.0",
       "dependencies": {
         "@noble/curves": "^1.9.2",
         "@noble/hashes": "^1.8.0",
