@@ -1,11 +1,13 @@
 {
   "note": "enabled is the only switch of the Release workflow (changesets.yml); the off-master path is the SHA-bound courier-stable-stage.yml route (raw-publish.yml and manual-release.yml were retired, TC-4123). packages is the release scope. baselines is a go-time input: the newest stable version npm has for each package, equal to its manifest version; re-baseline both together whenever something is published from another commit (the Courier route, a TC-4082 patch). expect optionally locks the exact versions of the next release. A successful release rewrites baselines and clears expect. See docs/versioning.md.",
-  "enabled": false,
+  "enabled": true,
   "packages": [
-    "@tinycloud/courier"
+    "@tinycloud/share-envelope"
   ],
   "baselines": {
-    "@tinycloud/courier": "0.9.0"
+    "@tinycloud/share-envelope": "1.6.0"
   },
-  "expect": {}
+  "expect": {
+    "@tinycloud/share-envelope": "1.7.0"
+  }
 }
