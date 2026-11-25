@@ -3927,6 +3927,34 @@
     },
     "reason": "Both canonical jobs (SQLite and Postgres, run 45397431219 at a31ed78c, base ba48c9aa) measured 1501525/1487567 gzip bytes against tc3891OwnerRegistryRecordRoot's 1542479/1487555. The Web SDK root passes the request's expiry and the app's optional caption to the permission prompt (requestPermissionsCore showModal); the derived line and its escaping render in the prompt. Not taken: hiding the expiry line unless a caption is passed (Naomi 13:06Z). Details: TC-4222"
   },
+  "tc4322ReservedKeyRoot": {
+    "label": "sign-in accepts the reserved bot-history key on the owner's own network (TC-4322)",
+    "ruling": "size-ruling: TC-4322 (Naomi 14:23Z) - size ledger row tc4322ReservedKeyRoot: web-sdk root cjs ceiling 1487567→1487573 (+6, CI f7e8d6eb, both jobs), mjs unchanged; scripts/*size-policy*.test.ts add the row beside every tc4222PermissionLineRoot delete/undefined, and the replica-size-policy.test.ts filter gains it; no assertion value changes.",
+    "base": "88c660988bd9f2c7fe309b1eb5c9d6f7fd087d82",
+    "sourceCommits": [
+      "ef1db0967289004453b23456235754f737501d06",
+      "2c800c9a9ab2d403b94da36021283877ac860c01",
+      "f7e8d6eb74191886ae5a79eec92073c404bdf5d5"
+    ],
+    "canonicalCI": {
+      "run": "45636642055",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45636642055/job/139283766612",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45636642055/job/139283767464"
+      ]
+    },
+    "root": {
+      "delta": {
+        "index.mjs": 0,
+        "index.cjs": 6
+      },
+      "ceiling": {
+        "index.mjs": 1542479,
+        "index.cjs": 1487573
+      }
+    },
+    "reason": "Both canonical jobs (SQLite and Postgres, run 45636642055 at f7e8d6eb, base 88c660988) measured 1501533/1487573 gzip bytes against tc4222PermissionLineRoot's 1542479/1487567, and master 88c660988 measured 1501525/1487567 (+8/+6). The Web SDK root carries node-sdk's sign-in host resolution, which accepts the reserved bot-history key on the owner's own network (NodeUserAuthorization). Details: TC-4322"
+  },
   "tc3522InvocationRefusalKvWorker": {
     "label": "retain invocation-refusal attribution in the kv-storage worker (TC-3522)",
     "ruling": "Naomi ACBX 2026-11-23: admit only the exact worker gzip bytes reproduced by SQLite and PostgreSQL, with zero headroom. Root, optional and gated ceilings are unchanged.",

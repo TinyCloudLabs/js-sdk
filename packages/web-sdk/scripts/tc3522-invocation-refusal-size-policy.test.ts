@@ -12,7 +12,7 @@ test("TC-3522 adds only its approved ESM root ceiling after TC-3862", () => {
   });
   for (const format of ["index.mjs", "index.cjs"] as const) {
     expect(row.root.ceiling[format] - ledger.tc3862ExplorerOriginRoot.root.ceiling[format]).toBe(row.root.delta[format]);
-    expect(rootCeilingFor({ ...ledger, tc3810ReaderRoot: undefined, tc3975NamedKeyWarningRoot: undefined, tc4082HostedOwnerRoot: undefined, tc3891OwnerRegistryRecordRoot: undefined, tc4222PermissionLineRoot: undefined }, format)).toEqual({ row: "tc3522InvocationRefusalRoot", ceiling: row.root.ceiling[format] });
+    expect(rootCeilingFor({ ...ledger, tc3810ReaderRoot: undefined, tc3975NamedKeyWarningRoot: undefined, tc4082HostedOwnerRoot: undefined, tc3891OwnerRegistryRecordRoot: undefined, tc4222PermissionLineRoot: undefined, tc4322ReservedKeyRoot: undefined }, format)).toEqual({ row: "tc3522InvocationRefusalRoot", ceiling: row.root.ceiling[format] });
   }
   expect(ancestryPins(ledger, false)).toContainEqual({ row: "tc3522InvocationRefusalRoot", pin: "45cbb18e7b9c762063a4c23aac199e458df95a1d" });
 });
