@@ -1,5 +1,41 @@
 # @tinycloudlabs/node-sdk
 
+## 3.16.1
+
+### Patch Changes
+
+- 31faaff: `RuntimeDelegationRejectedError` from a delegation activation carries the node's response (HTTP status and body) as its `cause`, so callers can inspect it without parsing the message. Reason codes and messages are the same.
+
+  Details: TC-4329
+
+## 3.16.0
+
+### Patch Changes
+
+- 1955e41: A sign-in request can include the reserved bot-history key (`BOT_HISTORY_KEY_PATH`) on the signer's own default encryption network with decrypt and key.create, as it can include a secret's own key. Sign-in refuses that key with any other action, on another owner's network, on another network or outside the encryption space.
+
+  Details: TC-4322
+
+## 3.15.0
+
+### Patch Changes
+
+- 8727180: Successful sign-in results identify the secret key resources omitted when the node does not advertise `encryption-named-keys-v1`. Node sign-in methods still resolve to `undefined` when there is no warning; their return type is `Promise<SignInResult | void>`, so explicit `Promise<void>` annotations on the result need updating.
+
+  Details: TC-3975
+
+- 8727180: A third-party app can sign in for an owner whose account is hosted on the default node (`https://node.tinycloud.xyz`) but has no registry record, instead of failing with `ACCOUNT_SETUP_REQUIRED`. This applies only when the app asks for nothing beyond its own `applications` space and holds an uncaveated `tinycloud.kv/list` or `tinycloud.space/info` on it, with no other `tinycloud.space` ability and no ability ending in `create`. Data abilities such as `tinycloud.kv/put`, `tinycloud.kv/del` and `tinycloud.sql/write` don't stop it. After the owner's consent the SDK sends one `/delegate` to the default node and one read of that space (`kv/list` with limit 1, or `space/info`). A 2xx proves the space is hosted and sign-in continues. Any other answer returns `ACCOUNT_SETUP_REQUIRED`, clears the saved session and never sends a second `/delegate`; a network error, timeout or 5xx during the check fails with a non-setup error and the same cleanup. When the `/delegate` may have been accepted (it was accepted, or the answer was a 5xx, a network error or a timeout), the SDK also sends one `/session/retire` to the default node so the node does not keep that session; this is best effort, and overlapping sign-ins can misattribute it (TC-4154). A `/delegate` the node refused (4xx) is only discarded locally. No account, space or registry record is created; the node may keep the delegation until it is retired or reaches its signed expiry. The same read runs once when a restored session of such an owner first needs a route; a restored session the read refuses is removed from storage. Configured hosts are never used. Registered, first-party and unavailable-registry sign-ins are unchanged.
+
+  Details: TC-4082
+
+- Updated dependencies [8727180]
+- Updated dependencies [a3ec199]
+- Updated dependencies [8727180]
+- Updated dependencies [03d49fe]
+  - @tinycloud/sdk-core@3.15.0
+  - @tinycloud/sdk-services@3.15.0
+  - @tinycloud/replica@0.4.8
+
 ## 3.14.0-beta.21
 
 ### Patch Changes

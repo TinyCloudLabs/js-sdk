@@ -1,5 +1,4 @@
 ---
-"@tinycloud/sdk-core": minor
 "@tinycloud/share-sdk": minor
 ---
 

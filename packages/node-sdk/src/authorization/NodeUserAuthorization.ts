@@ -91,6 +91,7 @@ import {
   PartialNodeWriteError,
   routingFailure,
   isVaultResourceUri,
+  isReservedSecretSpaceKeyPath,
   parseSecretKeyPath,
   type ResourceAccess,
   type ResourceDestination,
@@ -1618,12 +1619,13 @@ export class NodeUserAuthorization implements IUserAuthorization {
       const sharePrefix = ownDefault && parsed.kind === "prefix" && parsed.prefix === "share" &&
         entry.actions.every((action) => action === DECRYPT_ACTION);
       // The owner's secrets' own keys (TC-3284): an exact key as secretKeyPath
-      // derives it, or the whole `secrets/` prefix from an explicit
-      // capabilityRequest only; decrypt and key.create, nothing else.
+      // derives it, the reserved bot-history key (TC-4322), or the whole
+      // `secrets/` prefix from an explicit capabilityRequest only; decrypt and
+      // key.create, nothing else.
       const ownSecrets = ownDefault && entry.space === "encryption" &&
         entry.actions.every((action) => action === DECRYPT_ACTION || action === KEY_CREATE_ACTION) &&
         (parsed.kind === "key"
-          ? parseSecretKeyPath(parsed.path) !== undefined
+          ? parseSecretKeyPath(parsed.path) !== undefined || isReservedSecretSpaceKeyPath(parsed.path)
           : parsed.prefix === "secrets" && !MANIFEST_COMPOSED.has(request));
       if (parsed.kind !== "network" && !sharePrefix && !ownSecrets) {
         throw new ManifestValidationError("named keys go in manifest.keys");
