@@ -102,7 +102,8 @@ Courier setup (humans run these):
                                    After an authorized key rotation, collect the new grant, then use a
                                    fresh invitation link per peer. Do not reuse invitations for the old key.
   manifest                         Print the agent grant permissions
-  revoke <peer>                    Revoke the peer's access and remove the pairing. Files you already shared stay available until each share expires or you revoke it (\`${tcCmd('share revoke <id>')}\`).
+  revoke <peer>                    End the read access you gave the peer and remove the pairing. Shared files stay available until each share expires or you revoke it (\`${tcCmd('share revoke <id>')}\`).
+                                   Another agent you own reads your mailboxes with its own approval, so revoke doesn't end its access. To end it, revoke that agent's approval.
 
 Threads (agents run these):
   send <peer> (--new <subject> | --thread <id>) [--text t | --file f | stdin]
