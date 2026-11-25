@@ -1,12 +1,13 @@
 /*
  * TC-4294: the permission prompt's chunk (dist/modals.*) carries none of sdk-core. Its derived line (TC-4222) takes
  * sdk-core's permission expansion from the root bundle and two constants as copies, so the chunk stays near its
- * pre-TC-4222 size of 45 KB instead of 939 KB. The size checks run against the BUILT dist (build web-sdk first).
+ * pre-TC-4222 size of 45 KB instead of 939 KB. The size and chunk-loader checks run against the BUILT dist (build
+ * web-sdk first).
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { existsSync, statSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { createRequire } from "node:module";
-import { join, resolve } from "node:path";
+import { basename, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { JSDOM } from "jsdom";
 
@@ -81,17 +82,39 @@ describe("the built prompt chunk", () => {
   });
 });
 
+// A webpack chunk loader in a built file means its import() calls name chunks by a computed path, which a downstream
+// bundler (CRA in apps/openkey-example) turns into a context over dist/ and fails on the .d.ts files there (TC-4222).
+// The markers are those of the loader webpack emitted when the prompt carried sdk-core: the minified `.e` that waits on
+// every `.f` handler, the ESM `import("./"+x.u(id))`, CommonJS's ChunkLoadError, and the unminified name.
+const CHUNK_LOADER = /\.e=\w+=>Promise\.all\(Object\.keys\(\w+\.f\)|import\("\.\/"\+\w+\.u\(|ChunkLoadError|__webpack_require__\.e\s*=/;
+
+describe("the built files load no webpack chunks", () => {
+  test("no built file carries a chunk loader", () => {
+    const files = readdirSync(dist).filter((file) => /\.(mjs|cjs)$/.test(file));
+    expect(files).toContain(basename(built("modals.mjs")));
+    expect(files.filter((file) => CHUNK_LOADER.test(readFileSync(join(dist, file), "utf8")))).toEqual([]);
+  });
+
+  test("there are no numbered chunk files", () => {
+    expect(readdirSync(dist).filter((file) => /^\d+\.(m?js|cjs)$/.test(file))).toEqual([]);
+  });
+});
+
 describe("the prompt's copies of sdk-core constants", () => {
   test("an unasked lifetime is sdk-core's session lifetime", () => {
     const kv: PermissionEntry = { service: "tinycloud.kv", path: "notes/", actions: ["get"] };
     expect(grantLifetimeMs([kv], undefined)).toBe(EXPIRY.SESSION_MS);
   });
 
-  test("every short service name sdk-core knows reads as its long name", () => {
+  // The copy is private to permissionLine.ts, so it is compared through what it decides: an action written as
+  // `<long service>/<action>` loses that prefix only when the short name maps to exactly that long name.
+  test("every short service name sdk-core knows maps to sdk-core's long name", () => {
     for (const [short, long] of Object.entries(SERVICE_SHORT_TO_LONG)) {
       const path = long === "tinycloud.encryption" ? `urn:tinycloud:encryption:${OWNER}:default/notes/a` : "notes/a";
-      const entry: PermissionEntry = { service: long, path, actions: ["read"] };
-      expect(derivePermissionLine({ ...entry, service: short }, 60_000)).toBe(derivePermissionLine(entry, 60_000));
+      const entry: PermissionEntry = { service: long, path, actions: [`${long}/probe`] };
+      const line = derivePermissionLine({ ...entry, service: short }, 60_000);
+      expect({ short, line }).toEqual({ short, line: derivePermissionLine(entry, 60_000) });
+      expect(line).toStartWith("Use “probe” on ");
     }
   });
 });
