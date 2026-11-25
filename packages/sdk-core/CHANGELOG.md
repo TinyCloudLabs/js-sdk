@@ -1,5 +1,32 @@
 # @tinycloudlabs/sdk-core
 
+## 3.15.0
+
+### Minor Changes
+
+- 8727180: `AccountSetupRequiredError`'s default message names TinyCloud One and ends with the error's `setupUrl`, the address where the person finishes setting up their account.
+
+  `setupUrl` is `https://tinycloud.one/?finish-setup=registry`, so TinyCloud One opens its finish-setup step.
+
+  Upgrading: an app that matches the message text or compares `setupUrl` with a fixed address should check `instanceof AccountSetupRequiredError` and send the person to `setupUrl` as given.
+
+  `signLocationRecordV2` accepts a wallet signature whose recovery byte is 0 or 1, as some hardware wallets return, and records it as 27 or 28.
+
+  Details: TC-3547
+
+- 03d49fe: Read the optional signed ReCap delegation mode on SIWE CACAOs. Both `attenuable` and `terminal` are exposed when present. Existing grants and renewal leases without a mode retain their previous parsed shape.
+
+  Details: TC-3810
+
+### Patch Changes
+
+- 8727180: Successful sign-in results identify the secret key resources omitted when the node does not advertise `encryption-named-keys-v1`. Node sign-in methods still resolve to `undefined` when there is no warning; their return type is `Promise<SignInResult | void>`, so explicit `Promise<void>` annotations on the result need updating.
+
+  Details: TC-3975
+
+- Updated dependencies [a3ec199]
+  - @tinycloud/sdk-services@3.15.0
+
 ## 3.14.0-beta.21
 
 ### Minor Changes

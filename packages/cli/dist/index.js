@@ -17328,7 +17328,10 @@ async function acquireApprovalRequest(_did, options) {
     permissions: options.permissions.map(({ skipPrefix: _skipPrefix, ...entry2 }) => entry2),
     ...options.reason ? { reason: options.reason } : {},
     grantLifetimeSeconds: grantLifetimeSeconds(options.expiry),
-    ...options.renewalLeaseSeconds === void 0 ? {} : { renewal: { version: 1, leaseLifetimeSeconds: options.renewalLeaseSeconds } }
+    ...options.renewalLeaseSeconds === void 0 ? {} : {
+      renewal: { version: 1, leaseLifetimeSeconds: options.renewalLeaseSeconds },
+      ...options.renewalPurpose === void 0 ? {} : { purpose: options.renewalPurpose }
+    }
   };
   if (options.commandIntent !== void 0 && !/^auth-grant:[0-9a-f]{64}$/.test(options.commandIntent)) {
     throw invalid("Invalid approval command intent.");
