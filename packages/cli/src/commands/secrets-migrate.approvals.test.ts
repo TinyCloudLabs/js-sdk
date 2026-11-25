@@ -2,12 +2,12 @@ import { beforeEach, expect, mock, test } from "bun:test";
 import { Command } from "commander";
 import type { PermissionEntry } from "@tinycloud/node-sdk";
 
-// TC-3284: an owner `secrets migrate` asks first for the secrets space and the network root (to read the older
-// format), then, once the list is known, for exactly the moved secrets' own keys with Monica's S2g reason. A dry run
-// asks only to list and read. No approval names a `secrets/` prefix.
+// TC-3284/TC-4246: an owner `secrets migrate` lists with read access first, then asks one approval: write, the
+// network root and exactly the moved secrets' own keys. A dry run asks only to list and read. No approval names a
+// `secrets/` prefix.
 
 const NETWORK_ID = "urn:tinycloud:encryption:did:pkh:eip155:1:0x7E5F4552091A69125d5DfCb7b8C2659029395Bdf:default";
-const S2G = "Give each secret being moved its own key. This reaches only those secrets, not the rest of your encrypted data.";
+const COMBINED = "Give each of your older-format secrets its own key. This needs access to all your encrypted data, because only that access can read the older format.";
 
 let approvals: { requested: PermissionEntry[]; reason: string }[] = [];
 let outputs: unknown[] = [];
@@ -75,22 +75,29 @@ beforeEach(() => {
   errors = [];
 });
 
-test("migrate asks for the space and network root, then for exactly the moved secrets' keys with the S2g reason", async () => {
+test("migrate lists with read access, then asks one approval: write, network root and exactly the moved secrets' keys", async () => {
   await migrate();
 
   expect(errors).toEqual([]);
   expect(approvals).toHaveLength(2);
   expect(approvals[0]!.requested.find((entry) => entry.service === "tinycloud.kv")!.actions)
-    .toEqual(["tinycloud.kv/list", "tinycloud.kv/get", "tinycloud.kv/put"]);
-  expect(encryptionPaths(approvals[0]!.requested)).toEqual([NETWORK_ID]);
-  expect(approvals[1]!.reason).toBe(S2G);
+    .toEqual(["tinycloud.kv/list", "tinycloud.kv/get"]);
+  expect(encryptionPaths(approvals[0]!.requested)).toEqual([]);
+  expect(approvals[1]!.reason).toBe(COMBINED);
   expect(approvals[1]!.requested).toEqual([
-    `${NETWORK_ID}/secrets/openai_api_key`,
-    `${NETWORK_ID}/secrets/scoped/my-app/other_key`,
-  ].map((path) => ({
-    service: "tinycloud.encryption", path, skipPrefix: true,
-    actions: ["tinycloud.encryption/decrypt", "tinycloud.encryption/key.create"],
-  })));
+    {
+      service: "tinycloud.kv", space: "secrets", path: "vault/secrets/", skipPrefix: true,
+      actions: ["tinycloud.kv/list", "tinycloud.kv/get", "tinycloud.kv/put"],
+    },
+    { service: "tinycloud.encryption", path: NETWORK_ID, skipPrefix: true, actions: ["tinycloud.encryption/decrypt"] },
+    ...[
+      `${NETWORK_ID}/secrets/openai_api_key`,
+      `${NETWORK_ID}/secrets/scoped/my-app/other_key`,
+    ].map((path) => ({
+      service: "tinycloud.encryption", path, skipPrefix: true,
+      actions: ["tinycloud.encryption/decrypt", "tinycloud.encryption/key.create"],
+    })),
+  ]);
   expect(outputs).toEqual([expect.objectContaining({ moved: 2 })]);
 });
 

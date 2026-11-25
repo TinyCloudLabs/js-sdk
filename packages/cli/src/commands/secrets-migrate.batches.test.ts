@@ -11,13 +11,21 @@ const NETWORK_ID = "urn:tinycloud:encryption:did:pkh:eip155:1:0x7E5F4552091A6912
 const KEYS = Array.from({ length: 140 }, (_, i) => i % 3 === 0
   ? `secrets/scoped/app-${i % 7}/service_api_key_${i}`
   : `secrets/openai_project_api_key_number_${i}`);
-
+const COMBINED = "Give each of your older-format secrets its own key. This needs access to all your encrypted data, because only that access can read the older format.";
+/** Request 1's first two entries: write on every secret and decrypt with the network (TC-4246). */
+const WRITE_AND_NETWORK: PermissionEntry[] = [
+  {
+    service: "tinycloud.kv", space: "secrets", path: "vault/secrets/", skipPrefix: true,
+    actions: ["tinycloud.kv/list", "tinycloud.kv/get", "tinycloud.kv/put"],
+  },
+  { service: "tinycloud.encryption", path: NETWORK_ID, skipPrefix: true, actions: ["tinycloud.encryption/decrypt"] },
+];
 let approvals: { requested: PermissionEntry[]; reason: string }[] = [];
 let outputs: Record<string, unknown>[] = [];
 let errors: unknown[] = [];
 let stderr: string[] = [];
 let ingressLimit = 0;
-/** The 1-based number of the key approval the owner declines (approval 0 is the kv + network one); 0: none. */
+/** The 1-based number of the key approval the owner declines (approval 0 is the read one); 0: none. */
 let declineKeyApproval = 0;
 const HELD_UNTIL = new Date(2026, 10, 24, 14, 41);
 let checkedOrigins: string[] = [];
@@ -125,8 +133,9 @@ test("at a 256k ingress, 140 keys are one key approval with today's reason", asy
 
   expect(errors).toEqual([]);
   expect(keyApprovals()).toHaveLength(1);
-  expect(keyApprovals()[0]!.reason).toBe("Give each secret being moved its own key. This reaches only those secrets, not the rest of your encrypted data.");
-  expect(keyPathsOf(keyApprovals()[0]!.requested)).toEqual([...KEYS].sort());
+  expect(keyApprovals()[0]!.reason).toBe(COMBINED);
+  expect(keyApprovals()[0]!.requested.slice(0, 2)).toEqual(WRITE_AND_NETWORK);
+  expect(keyPathsOf(keyApprovals()[0]!.requested.slice(2))).toEqual([...KEYS].sort());
   expect(outputs[0]!.keyApprovals).toEqual({ requests: 1, budgetBytes: 183_488, budgetSource: "measured" });
   expect(checkedOrigins).toEqual(["https://enc.tinycloud.test"]);
   expect(stderr).toContain("Key approvals: 1 (each up to 183,488 bytes, measured on this node).\n");
@@ -140,11 +149,14 @@ test("at a 32k ingress, the keys are split into numbered exact-key approvals ask
   expect(errors).toEqual([]);
   const asked = keyApprovals();
   expect(asked.length).toBeGreaterThan(1);
-  expect(asked.map((approval) => approval.reason)).toEqual(asked.map((_, i) =>
-    `Give each secret being moved its own key (key approval ${i + 1} of ${asked.length}). This reaches only those secrets, not the rest of your encrypted data.`));
-  expect(asked.flatMap((approval) => keyPathsOf(approval.requested))).toEqual([...KEYS].sort());
-  for (const approval of asked) {
-    for (const entry of approval.requested) {
+  expect(asked.map((approval) => approval.reason)).toEqual(asked.map((_, i) => i === 0
+    ? `Give each of your older-format secrets its own key (approval 1 of ${asked.length}). This needs access to all your encrypted data, because only that access can read the older format.`
+    : `Give each secret being moved its own key (approval ${i + 1} of ${asked.length}). This reaches only those secrets, not the rest of your encrypted data.`));
+  expect(asked[0]!.requested.slice(0, 2)).toEqual(WRITE_AND_NETWORK);
+  const keyEntries = asked.map((approval, i) => (i === 0 ? approval.requested.slice(2) : approval.requested));
+  expect(keyEntries.flatMap((requested) => keyPathsOf(requested))).toEqual([...KEYS].sort());
+  for (const requested of keyEntries) {
+    for (const entry of requested) {
       expect(entry).toEqual({
         service: "tinycloud.encryption", path: `${NETWORK_ID}/${keyPathsOf([entry])[0]}`, skipPrefix: true,
         actions: ["tinycloud.encryption/decrypt", "tinycloud.encryption/key.create"],
@@ -168,8 +180,8 @@ test("a dry run reports the plan and asks for no key", async () => {
 });
 
 for (const [declined, held] of [
-  [2, "Key approval 1 stays valid until 2:41 PM and reaches only those secrets' keys."],
-  [3, "Key approvals 1 to 2 stay valid until 2:41 PM and reach only those secrets' keys."],
+  [2, "Approval 1 stays valid until 2:41 PM."],
+  [3, "Approvals 1 to 2 stay valid until 2:41 PM."],
 ] as const) {
   test(`a split move whose key approval ${declined} is declined moves nothing and says which key approvals stay held`, async () => {
     ingressLimit = 32_751;
@@ -186,7 +198,7 @@ for (const [declined, held] of [
     expect({ code: error!.code, exitCode: error!.exitCode, message: error!.message }).toEqual({
       code: "CANCELLED",
       exitCode: ExitCode.CANCELLED,
-      message: `Key approval ${declined} of ${n} was declined, so no secret was moved. ${held} To move the secrets, run \`tc secrets migrate\`.`,
+      message: `Approval ${declined} of ${n} was declined, so no secret was moved. ${held} To move the secrets, run \`tc secrets migrate\`.`,
     });
   });
 }
