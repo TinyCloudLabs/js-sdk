@@ -103,7 +103,7 @@ Courier setup (humans run these):
                                    fresh invitation link per peer. Do not reuse invitations for the old key.
   manifest                         Print the agent grant permissions
   revoke <peer>                    End the read access you gave the peer and remove the pairing. Shared files stay available until each share expires or you revoke it (\`${tcCmd('share revoke <id>')}\`).
-                                   Another agent you own reads your mailboxes with its own approval, so revoke doesn't end its access. To end it, revoke that agent's approval.
+                                   Another agent you own can read and change your mailboxes with its own approval, so revoke doesn't end its access. To end it, revoke that agent's approval at account.tinycloud.xyz/delegations.
 
 Threads (agents run these):
   send <peer> (--new <subject> | --thread <id>) [--text t | --file f | stdin]
