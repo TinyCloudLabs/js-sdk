@@ -156,7 +156,7 @@ test("with read in the sign-in, a 140-secret move is one owner approval: write, 
   // No wider than the old approval 1 (list, read, write and network decrypt) together with the key approval.
   expect(prompts[0]!.requested).toEqual([kvEntry(WRITE), networkEntry, ...keys.map(keyEntry)]);
   expect(prompts[0]!.expiryOption).toBe(ONE_HOUR_MS);
-  expect(prompts[0]!.reason).toBe("Give each of your older-format secrets its own key. This needs access to all your encrypted data, because only that access can read the older format.");
+  expect(prompts[0]!.reason).toBe("Create a key for each of your older-format secrets and move the secret onto it. This needs access to all your encrypted data, because only that access can read the older format.");
   expect(outputs).toEqual([expect.objectContaining({
     moved: 140, already: 0, skipped: { read_failed: 4 },
     keyApprovals: { requests: 1, budgetBytes: 183_488, budgetSource: "measured" },
@@ -231,8 +231,8 @@ test("at a 32k ingress, the first approval carries write and network decrypt wit
     .toEqual(SECRETS.slice(0, 140).map(keyPathOf).sort().map((keyPath) => `${NETWORK_ID}/${keyPath}`));
   expect(prompts.every((prompt) => prompt.expiryOption === ONE_HOUR_MS)).toBe(true);
   expect(prompts.map((prompt) => prompt.reason)).toEqual(prompts.map((_, i) => i === 0
-    ? `Give each of your older-format secrets its own key (approval 1 of ${prompts.length}). This needs access to all your encrypted data, because only that access can read the older format.`
-    : `Give each secret being moved its own key (approval ${i + 1} of ${prompts.length}). This reaches only those secrets, not the rest of your encrypted data.`));
+    ? `Create a key for each of your older-format secrets and move the secret onto it (approval 1 of ${prompts.length}). This needs access to all your encrypted data, because only that access can read the older format.`
+    : `Create a key for each secret being moved and move the secret onto it (approval ${i + 1} of ${prompts.length}). This reaches only those secrets, not the rest of your encrypted data.`));
   expect(outputs[0]).toMatchObject({ moved: 140, keyApprovals: { requests: prompts.length, budgetBytes: 22_925, budgetSource: "fallback" } });
 });
 

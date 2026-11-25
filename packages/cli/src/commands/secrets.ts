@@ -1295,8 +1295,8 @@ export function secretMigrateApprovalPermissions(
 export function secretMigrateApprovalReason(index: number, count: number): string {
   const numbered = count === 1 ? "" : ` (approval ${index} of ${count})`;
   return index === 1
-    ? `Give each of your older-format secrets its own key${numbered}. This needs access to all your encrypted data, because only that access can read the older format.`
-    : `Give each secret being moved its own key${numbered}. This reaches only those secrets, not the rest of your encrypted data.`;
+    ? `Create a key for each of your older-format secrets and move the secret onto it${numbered}. This needs access to all your encrypted data, because only that access can read the older format.`
+    : `Create a key for each secret being moved and move the secret onto it${numbered}. This reaches only those secrets, not the rest of your encrypted data.`;
 }
 
 /** The earliest expiry among the approvals already granted for these requests; undefined if any is not held. */
