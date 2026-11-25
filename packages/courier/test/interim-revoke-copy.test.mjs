@@ -7,8 +7,8 @@ test('integrated revoke help describes real revocation and separate shared-file 
   const { result, stdout } = await captureStdout(() => main(['--help'], { prog: 'tinycloud courier' }));
   assert.equal(result, 0);
   const line = stdout.split('\n').find(value => value.includes('revoke <peer>'));
-  assert.match(line, /Revoke the peer's access and remove the pairing/);
-  assert.match(line, /Files you already shared stay available/);
+  assert.match(line, /End the read access you gave the peer and remove the pairing/);
+  assert.match(line, /Shared files stay available/);
   assert.match(line, /tinycloud share revoke <id>/);
   assert.doesNotMatch(line, /Stop renewing|lapses at delegation expiry/);
 });
