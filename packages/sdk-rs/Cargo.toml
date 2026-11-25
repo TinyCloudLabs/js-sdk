@@ -43,7 +43,7 @@ js-sys = "0.3.59"
 # release tags, in lockstep with the re-vendor + anchor update (TC-121 covers the
 # codegen source-sha headers those steps rely on).
 tinycloud-sdk-rs = { git = "https://github.com/tinycloudlabs/tinycloud-node.git", tag = "v1.4.10" }
-tinycloud-sdk-wasm = { git = "https://github.com/tinycloudlabs/tinycloud-node.git", tag = "v1.4.10" }
+tinycloud-sdk-wasm = { git = "https://github.com/tinycloudlabs/tinycloud-node.git", tag = "v1.26.20" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0.150"
 sha2 = "0.10"
