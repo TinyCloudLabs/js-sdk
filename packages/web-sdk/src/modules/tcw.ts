@@ -158,10 +158,12 @@ export interface RuntimePermissionSigner {
 
 /**
  * The byte-exact message signing the OpenKey SDK's `OpenKey` class offers beside `authorizeTinyCloud`. The SDK always sends a `keyId`.
- * `signMessagePresentation` is 1 on an OpenKey SDK that accepts a `presentation` on the request.
+ * `signMessagePresentation` is 1 on an OpenKey SDK that accepts a `presentation` on the request. `signMessageShowsApproval` is
+ * false when the connected key signs in an external wallet, so OpenKey shows no approval screen of its own.
  */
 interface OpenKeyMessageSigner extends OpenKeyConnection {
   readonly signMessagePresentation?: number;
+  readonly signMessageShowsApproval?: boolean;
   signMessage?: (
     request: { message: string; keyId: string; presentation?: OpenKeySignPresentation },
     opts?: { mode?: "iframe" | "popup" | "redirect" },
@@ -2100,7 +2102,7 @@ export class TinyCloudWeb {
     const result = await requestPermissionsCore(additional, {
       manifest,
       showModal: this._testHooks?.showModal ?? ((options) => showPermissionRequestModal(options, this.uiClient.promptScope)),
-      skipPrompt: openKeySigns,
+      skipPrompt: openKeySigns && !this.openKeySignsInExternalWallet(),
       isPromptSuppressed: () => isPermissionPromptSuppressed(manifest),
       suppressPromptFor30Days: () =>
         suppressPermissionPromptFor30Days(manifest),
@@ -2162,6 +2164,17 @@ export class TinyCloudWeb {
   private runtimeSignedByOpenKey(): boolean {
     const bound = this.boundRuntimeSigner();
     return bound !== undefined ? bound.openKey : this.config?.openkey !== undefined;
+  }
+
+  /**
+   * Whether the configured OpenKey client reports that the connected key signs in an external wallet
+   * (`signMessageShowsApproval` is false): OpenKey then shows no approval screen, so the SDK prompt is the one screen.
+   * A bound signer declared OpenKey always passes the request on to OpenKey's approval.
+   */
+  private openKeySignsInExternalWallet(): boolean {
+    if (this.boundRuntimeSigner() !== undefined) return false;
+    const client = this.config?.openkey?.client as (OpenKeyAuthorizeTinyCloud & OpenKeyMessageSigner) | undefined;
+    return client?.signMessageShowsApproval === false;
   }
 
   /**

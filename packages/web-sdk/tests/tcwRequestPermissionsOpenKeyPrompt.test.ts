@@ -117,13 +117,24 @@ describe("an OpenKey client that does not accept a presentation", () => {
 });
 
 describe("an OpenKey client whose connected key signs in an external wallet", () => {
-  test("shows no SDK prompt: OpenKey's own screen is the only one", async () => {
+  test("keeps the SDK prompt with its 30-day option, because the wallet shows only the raw message", async () => {
     const { config } = openKeyConfig(1, false);
     const { tcw, showModal } = web(node(), config);
 
     await tcw.requestPermissions([ENTRY]);
 
-    expect(showModal).not.toHaveBeenCalled();
+    expect(showModal).toHaveBeenCalledTimes(1);
+    expect(showModal.mock.calls[0]![0].allowSuppression).toBeUndefined();
+  });
+
+  test("the SDK prompt names the app the request is made for", async () => {
+    const { config } = openKeyConfig(1, false);
+    const { tcw, showModal } = web(node(), config);
+
+    await tcw.requestPermissions([ENTRY], { onBehalfOf: "Account" });
+
+    expect(showModal).toHaveBeenCalledTimes(1);
+    expect(showModal.mock.calls[0]![0].onBehalfOf).toBe("Account");
   });
 
   test("shows no SDK prompt when the client does not say whether its approval shows the request", async () => {
