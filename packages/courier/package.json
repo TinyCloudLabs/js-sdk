@@ -1,6 +1,6 @@
 {
   "name": "@tinycloud/courier",
-  "version": "0.8.2",
+  "version": "0.9.0",
   "description": "Courier: agent-to-agent threads over TinyCloud (CLI, library and agent skill)",
   "author": "TinyCloud, Inc.",
   "type": "module",

@@ -1,5 +1,43 @@
 # @tinycloud/courier
 
+## 0.9.0
+
+### Minor Changes
+
+- 54f972e: Courier exports a headless API for services that host many owners' agents: `acceptPairing`, `finalizePairing`, `listInbound`, `acknowledgeInbound`, `sendMessage`, `unpair` and `peerReference`. It runs from an explicit owner, agent, Node origin, session and peer store, and never reads a Courier home.
+
+  Pairing artifacts gain a signed completion. B carries a random challenge, and C must sign it with the initiator's agent key. Headless pairing refuses initiators that cannot sign; pairing between two CLI agents is unchanged.
+
+  `unpair` keeps deleting a peer's mailbox until the Node lists nothing left, and can clear a pairing whose grant never reached the Node. Headless `acceptPairing` refuses a handle while any grant this agent issued over its mailbox is still live.
+
+  Details: TC-4061
+
+### Patch Changes
+
+- d68bfbc: A Courier command on a profile left `awaiting-space` now asks the node whether the `agents` space is hosted now (the read `init --resume` makes). When it is, the profile becomes `ready` and the command runs, with no `init --resume` needed, and the saved copy of the redeemed grant is deleted as `init --resume` deletes it. When it is not, the command fails with the same `no-space` error as before and the profile is not changed; an error from the read itself (authentication, network) is reported as it is. If the profile cannot be saved because it changed meanwhile, that refusal is reported instead of the command running. `run-approved` heals only when its broker profile is the current Courier home.
+
+  On an `awaiting-space` profile, an expired or outdated grant is now reported as such, instead of as `no-space`.
+
+  The `no-space` message now gives the two ways out: turn on Auto-Sign in OpenKey and approve a new Courier request from `init --request`, or run `tc space host agents` from a wallet profile and then `init --resume`. It no longer points to the Share view (the README has the same correction).
+
+  Details: TC-2380, TC-2398
+
+- 81a1124: `courier init --renew <duration>` accepts at most 90 days. A longer lease is refused before any approval request is made. The default stays 90 days.
+
+  Details: TC-4201
+
+- e845ffe: `courier init --wait` collects the saved approval request with the lifetime, renewal and hosts it was made with, so an approval the owner gave is kept. A different `--host`, `--openkey-host`, `--openkey-api-host`, `COURIER_OPENKEY_API_HOST` or `TC_LINKS_API_ORIGIN` is refused, also once the owner has approved the request. A different `--expiry` or `--renew` is refused while the request waits for approval; to ask for other terms, use `init --request`.
+
+  Details: TC-4264
+
+- 9765fde: The `courier revoke <peer>` help says what revoke ends: the read access you gave that peer and the pairing. Another agent you own can read and change your mailboxes with its own approval, so revoke doesn't end its access; to end it, revoke every approval for that agent. The out-of-date approval message says the same about key rotation. Text only; revoke behaves the same.
+
+  Details: TC-4321
+
+- 31faaff: When a peer's owner revokes the access they gave you, Courier marks that peer as revoked, skips it and keeps syncing your other peers. Sync doesn't stop on that peer's refusal. Other sign-in refusals behave the same.
+
+  Details: TC-4329
+
 ## 0.8.2
 
 ### Patch Changes
