@@ -226,7 +226,7 @@
     },
     "packages/courier": {
       "name": "@tinycloud/courier",
-      "version": "0.8.2",
+      "version": "0.9.0",
       "bin": {
         "courier": "./dist/cli.js",
       },

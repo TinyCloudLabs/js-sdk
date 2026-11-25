@@ -5,9 +5,7 @@
     "@tinycloud/courier"
   ],
   "baselines": {
-    "@tinycloud/courier": "0.8.2"
-  },
-  "expect": {
     "@tinycloud/courier": "0.9.0"
-  }
+  },
+  "expect": {}
 }
