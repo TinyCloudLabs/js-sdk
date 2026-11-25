@@ -8,7 +8,7 @@
  */
 
 import type { PermissionEntry } from "@tinycloud/sdk-core";
-import { EXPIRY, expandPermissionEntries, SERVICE_SHORT_TO_LONG } from "@tinycloud/sdk-core";
+import { expandPermissionEntries } from "./permissionExpansion";
 
 const ENCRYPTION = "tinycloud.encryption";
 
@@ -143,6 +143,22 @@ const SECRET_KEY_GRANT_DEFAULT_MS = 60 * 60_000;
 const SECRET_KEY_GRANT_MAX_MS = 7 * DAY_MS;
 /** node-sdk delegateToHelpers.ts:77 `SECRET_KEY_RESOURCE`, applied as its `isSecretKeyEntry` applies it. */
 const SECRET_KEY_RESOURCE = /^urn:tinycloud:encryption:[^/]+\/secrets(?:\/|$)/;
+// The prompt chunk must not import a value sdk-core's root defines itself (TC-4294): that root is one bundled module,
+// so any such import brings all of it, about 0.9 MB, into the chunk. These two are copies, pinned to sdk-core by a test;
+// expandPermissionEntries comes from the root bundle (see permissionExpansion.ts).
+/** sdk-core expiry.ts `EXPIRY.SESSION_MS`. */
+const SESSION_MS = 7 * DAY_MS;
+/** sdk-core manifest.ts `SERVICE_SHORT_TO_LONG`. */
+const SERVICE_SHORT_TO_LONG: Readonly<Record<string, string>> = {
+  kv: "tinycloud.kv",
+  space: "tinycloud.space",
+  sql: "tinycloud.sql",
+  duckdb: "tinycloud.duckdb",
+  capabilities: "tinycloud.capabilities",
+  hooks: "tinycloud.hooks",
+  encryption: "tinycloud.encryption",
+  delegation: "tinycloud.delegation",
+};
 
 /** Encryption entries' reach: a whole network, keys under a prefix, or one key. Undefined for other services. */
 export type EncryptionReach =
@@ -171,7 +187,7 @@ export function grantLifetimeMs(entries: readonly PermissionEntry[], expiryMs: n
     // The node refuses entries it cannot expand; until then, state the longer lifetime.
     secretKey = false;
   }
-  if (!secretKey) return expiryMs ?? EXPIRY.SESSION_MS;
+  if (!secretKey) return expiryMs ?? SESSION_MS;
   return Math.min(expiryMs ?? SECRET_KEY_GRANT_DEFAULT_MS, SECRET_KEY_GRANT_MAX_MS);
 }
 
