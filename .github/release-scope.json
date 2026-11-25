@@ -1,29 +1,15 @@
 {
   "note": "enabled is the only switch of the Release workflow (changesets.yml); the off-master path is the SHA-bound courier-stable-stage.yml route (raw-publish.yml and manual-release.yml were retired, TC-4123). packages is the release scope. baselines is a go-time input: the newest stable version npm has for each package, equal to its manifest version; re-baseline both together whenever something is published from another commit (the Courier route, a TC-4082 patch). expect optionally locks the exact versions of the next release. A successful release rewrites baselines and clears expect. See docs/versioning.md.",
-  "enabled": false,
+  "enabled": true,
   "packages": [
-    "@tinycloud/bootstrap",
-    "@tinycloud/cli",
-    "@tinycloud/courier",
     "@tinycloud/node-sdk",
-    "@tinycloud/node-sdk-wasm",
-    "@tinycloud/operations",
-    "@tinycloud/replica",
-    "@tinycloud/sdk-core",
-    "@tinycloud/sdk-services",
-    "@tinycloud/share-sdk"
+    "@tinycloud/web-sdk",
+    "@tinycloud/web-sdk-wasm"
   ],
   "baselines": {
-    "@tinycloud/bootstrap": "2.10.0",
-    "@tinycloud/cli": "1.9.3",
-    "@tinycloud/courier": "0.8.2",
-    "@tinycloud/node-sdk": "3.15.0",
-    "@tinycloud/node-sdk-wasm": "1.8.0",
-    "@tinycloud/operations": "0.10.1",
-    "@tinycloud/replica": "0.4.8",
-    "@tinycloud/sdk-core": "3.15.0",
-    "@tinycloud/sdk-services": "3.15.0",
-    "@tinycloud/share-sdk": "1.6.0"
+    "@tinycloud/node-sdk": "3.16.0",
+    "@tinycloud/web-sdk": "3.16.0",
+    "@tinycloud/web-sdk-wasm": "1.8.0"
   },
   "expect": {}
 }
