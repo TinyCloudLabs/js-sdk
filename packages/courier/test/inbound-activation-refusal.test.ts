@@ -93,8 +93,14 @@ async function pairing() {
 
 test('revoked inbound activation latches only that peer, collects other peers and stops watcher sync errors', async () => {
   const { home, profile, state } = await pairing();
+  const cid = profile.peers.bob.inbound!.cid;
+  // Node #760 @b4710710: tinycloud-node-server/src/routes/mod.rs:328–350,394–397;
+  // tinycloud-core/src/models/revocation.rs:39–41 and models/delegation.rs:177–184.
+  // Policy/v3 stays plain text: tinycloud-node-server/src/policy_v3.rs:61–69,301–313.
   for (const refusal of [
-    ...['delegation_revoked', 'parent_revoked', 'ancestor_revoked'].map(code => ({ status: 401, body: JSON.stringify({ code }) })),
+    { status: 401, body: JSON.stringify({ code: 'delegation_revoked', error: `delegation-revoked: ${cid}` }) },
+    { status: 401, body: JSON.stringify({ code: 'parent_revoked', error: `delegation-parent-revoked: ${cid}` }) },
+    { status: 401, body: JSON.stringify({ code: 'ancestor_revoked', error: `delegation-ancestor-revoked: ancestor=${cid} parent=${cid}` }) },
     { status: 403, body: 'policy-session-root-status-invalid' },
   ]) {
     saveProfile(structuredClone(profile));
@@ -126,6 +132,7 @@ test('other activation refusals retain the SDK classification without latching a
   for (const refusal of [
     { status: 401, body: JSON.stringify({ code: 'invalid_signature', error: 'delegation_revoked' }) },
     { status: 401, body: 'delegation_revoked' },
+    { status: 401, body: `delegation-revoked: ${profile.peers.bob.inbound!.cid}` },
     { status: 403, body: 'unrelated refusal: policy-session-root-status-invalid' },
   ]) {
     state.refusal = refusal;
