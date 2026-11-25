@@ -213,11 +213,8 @@ export class RuntimeDelegationRejectedError extends Error {
   readonly reason: RuntimeDelegationRejection;
   declare readonly cause?: unknown;
 
-  constructor(reason: RuntimeDelegationRejection, message: string, options?: { cause?: unknown }) {
+  constructor(reason: RuntimeDelegationRejection, message: string) {
     super(message);
-    if (options && "cause" in options) {
-      Object.defineProperty(this, "cause", { value: options.cause, writable: true, configurable: true });
-    }
     this.name = "RuntimeDelegationRejectedError";
     this.reason = reason;
   }
@@ -810,10 +807,13 @@ export async function activateValidatedRuntimeDelegation(
     }
   } catch (error) {
     if (routingFailure(error)) throw error;
-    throw new RuntimeDelegationRejectedError(
-      activationRejectionReason(error),
-      error instanceof Error ? error.message : String(error),
-      { cause: error instanceof Error && "cause" in error ? error.cause : error },
+    throw Object.defineProperty(
+      new RuntimeDelegationRejectedError(
+        activationRejectionReason(error),
+        error instanceof Error ? error.message : String(error),
+      ),
+      "cause",
+      { value: error instanceof Error && "cause" in error ? error.cause : error, writable: true, configurable: true },
     );
   }
   const installed = node
