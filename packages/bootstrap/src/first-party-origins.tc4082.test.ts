@@ -1,8 +1,8 @@
 import { expect, test } from "bun:test";
 import { FIRST_PARTY_ORIGINS, isFirstPartyOrigin } from "./first-party-origins";
 
-test("feed.tinycloud.xyz is first-party, exactly", () => {
-  expect(isFirstPartyOrigin("https://feed.tinycloud.xyz")).toBe(true);
+test("feed.tinycloud.xyz is not first-party until feed serves a strict CSP (TC-4299)", () => {
+  expect(isFirstPartyOrigin("https://feed.tinycloud.xyz")).toBe(false);
   for (const origin of [
     "http://feed.tinycloud.xyz", "https://feed.tinycloud.xyz:8443", "https://feed.tinycloud.xyz/", "https://FEED.tinycloud.xyz",
     "https://feed.tinycloud.xyz.evil.example", "https://evil-feed.tinycloud.xyz", "https://www.feed.tinycloud.xyz", "https://feed.tinycloud.one",
