@@ -7,7 +7,7 @@ import type { PermissionEntry } from "@tinycloud/node-sdk";
 // `secrets/` prefix.
 
 const NETWORK_ID = "urn:tinycloud:encryption:did:pkh:eip155:1:0x7E5F4552091A69125d5DfCb7b8C2659029395Bdf:default";
-const COMBINED = "Create a key for each of your older-format secrets and move the secret onto it. This needs access to all your encrypted data, because only that access can read the older format.";
+const COMBINED = "Create a key for each of your older-format secrets and encrypt the secret with it. This needs access to all your encrypted data, because only that access can read the older format.";
 
 let approvals: { requested: PermissionEntry[]; reason: string }[] = [];
 let outputs: unknown[] = [];

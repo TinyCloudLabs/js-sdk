@@ -11,7 +11,7 @@ const NETWORK_ID = "urn:tinycloud:encryption:did:pkh:eip155:1:0x7E5F4552091A6912
 const KEYS = Array.from({ length: 140 }, (_, i) => i % 3 === 0
   ? `secrets/scoped/app-${i % 7}/service_api_key_${i}`
   : `secrets/openai_project_api_key_number_${i}`);
-const COMBINED = "Create a key for each of your older-format secrets and move the secret onto it. This needs access to all your encrypted data, because only that access can read the older format.";
+const COMBINED = "Create a key for each of your older-format secrets and encrypt the secret with it. This needs access to all your encrypted data, because only that access can read the older format.";
 /** Request 1's first two entries: write on every secret and decrypt with the network (TC-4246). */
 const WRITE_AND_NETWORK: PermissionEntry[] = [
   {
@@ -150,8 +150,8 @@ test("at a 32k ingress, the keys are split into numbered exact-key approvals ask
   const asked = keyApprovals();
   expect(asked.length).toBeGreaterThan(1);
   expect(asked.map((approval) => approval.reason)).toEqual(asked.map((_, i) => i === 0
-    ? `Create a key for each of your older-format secrets and move the secret onto it (approval 1 of ${asked.length}). This needs access to all your encrypted data, because only that access can read the older format.`
-    : `Create a key for each secret being moved and move the secret onto it (approval ${i + 1} of ${asked.length}). This reaches only those secrets, not the rest of your encrypted data.`));
+    ? `Create a key for each of your older-format secrets and encrypt the secret with it (approval 1 of ${asked.length}). This needs access to all your encrypted data, because only that access can read the older format.`
+    : `Create a key for each secret being moved and encrypt the secret with it (approval ${i + 1} of ${asked.length}). This reaches only those secrets, not the rest of your encrypted data.`));
   expect(asked[0]!.requested.slice(0, 2)).toEqual(WRITE_AND_NETWORK);
   const keyEntries = asked.map((approval, i) => (i === 0 ? approval.requested.slice(2) : approval.requested));
   expect(keyEntries.flatMap((requested) => keyPathsOf(requested))).toEqual([...KEYS].sort());
