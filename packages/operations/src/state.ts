@@ -620,11 +620,69 @@ async function writeFileDurably(path: string, contents: string): Promise<void> {
   }
 }
 
+function isTransientProfileEntryError(error: unknown): boolean {
+  const code = (error as NodeJS.ErrnoException).code;
+  return code === "ENOENT" || code === "ENOTDIR" || code === "ELOOP" || code === "EISDIR";
+}
+
+/**
+ * Tightens a profile directory to 0700 and the regular files directly inside it to 0600. Every file is opened through
+ * the pinned directory descriptor without following links, so a link planted in the directory is skipped and nothing
+ * outside it is touched. Call it with the path `withPinnedProfileDirectory` hands out, before reading profile state.
+ */
+export async function securePinnedProfileDirectory(directory: string): Promise<void> {
+  const rootFlags = fsConstants.O_RDONLY | fsConstants.O_DIRECTORY |
+    (process.platform === "linux" ? 0 : fsConstants.O_NOFOLLOW);
+  let root: FileHandle;
+  try {
+    root = await open(directory, rootFlags);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+    throw error;
+  }
+
+  try {
+    if (((await root.stat()).mode & 0o777) !== PRIVATE_DIR_MODE) await root.chmod(PRIVATE_DIR_MODE);
+    const pinnedDirectory = process.platform === "linux" ? `/proc/self/fd/${root.fd}` : directory;
+    let entries;
+    try {
+      entries = await readdir(pinnedDirectory, { withFileTypes: true });
+    } catch (error) {
+      if (isTransientProfileEntryError(error)) return;
+      throw error;
+    }
+    for (const entry of entries) {
+      if (!entry.isFile()) continue;
+      let file: FileHandle;
+      try {
+        file = await open(
+          join(pinnedDirectory, entry.name),
+          fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW | fsConstants.O_NONBLOCK,
+        );
+      } catch (error) {
+        if (isTransientProfileEntryError(error)) continue;
+        throw error;
+      }
+      try {
+        const info = await file.stat();
+        if (info.isFile() && (info.mode & 0o777) !== 0o600) await file.chmod(0o600);
+      } finally {
+        await file.close();
+      }
+    }
+  } finally {
+    await root.close();
+  }
+}
+
 export async function readProfile<T extends object = Record<string, unknown>>(
   profile: string,
 ): Promise<T | null> {
-  return withPinnedProfileDirectory(profile, (directory) =>
-    directory ? readProfileJson<T>(profile, join(directory, "profile.json")) : Promise.resolve(null));
+  return withPinnedProfileDirectory(profile, async (directory) => {
+    if (!directory) return null;
+    await securePinnedProfileDirectory(directory);
+    return readProfileJson<T>(profile, join(directory, "profile.json"));
+  });
 }
 
 export async function readSession<T extends object = Record<string, unknown>>(
@@ -632,6 +690,7 @@ export async function readSession<T extends object = Record<string, unknown>>(
 ): Promise<T | null> {
   return withPinnedProfileDirectory(profile, async (directory) => {
     if (!directory) return null;
+    await securePinnedProfileDirectory(directory);
     await readStoreMetadata(profile, "session");
     return readProfileJson<T>(profile, sessionPath(profile));
   });
