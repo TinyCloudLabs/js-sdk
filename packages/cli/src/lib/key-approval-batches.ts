@@ -17,6 +17,11 @@ export const MAX_CHECK_BYTES = 256 * 1024;
 const HEADER_LINE_OVERHEAD_BYTES = 17;
 /** The signed request around the keys: SIWE text, session key, signature, capabilities read. OpenKey's is ~1.5 KB. */
 const BASE_RESERVE_BYTES = 3_000;
+/**
+ * What a secrets move's combined approval adds to its first request besides the keys (TC-4246): list, read and write
+ * on every secret and decrypt on the network. Measured 1,312 B with the local signer; +50% for OpenKey's encoding.
+ */
+export const MOVE_APPROVAL_LEAD_BYTES = 2_000;
 const MAX_HALVINGS = 3;
 const CHECK_TIMEOUT_MS = 10_000;
 const CHECK_HEADER = "X-TinyCloud-Header-Check";
@@ -40,16 +45,18 @@ export function estimateBatchBytes(resources: readonly string[]): number {
 
 /**
  * Packs key paths into batches whose estimated header stays within `budgetBytes`: sorted, then filled in order, so
- * the same keys always give the same batches. A key that alone exceeds the budget still gets a batch of its own.
+ * the same keys always give the same batches. The first batch also carries `leadBytes` of other entries (the move's
+ * combined approval, TC-4246). A key that alone exceeds the budget still gets a batch of its own.
  */
 export function batchKeyPaths(
   keyPaths: readonly string[],
   resourceOf: (keyPath: string) => string,
   budgetBytes: number,
+  leadBytes = 0,
 ): string[][] {
   const batches: string[][] = [];
   let current: string[] = [];
-  let bytes = BASE_RESERVE_BYTES;
+  let bytes = BASE_RESERVE_BYTES + leadBytes;
   for (const keyPath of [...new Set(keyPaths)].sort()) {
     const cost = estimateKeyBytes(resourceOf(keyPath));
     if (current.length > 0 && bytes + cost > budgetBytes) {
@@ -133,20 +140,21 @@ export interface KeyApprovalPlan {
 }
 
 /**
- * Plans the key approvals for `keyPaths`. The budget is 70% of an assumed header limit: 256 KiB first, halved on each
- * clear "too large", at most 3 times (at most 4 checks), with the 32k fallback as the floor. Each check sends the
- * planned largest request +5%, which stays under the limit assumed. A plan whose requests all fit the fallback needs
- * no check. Anything but a clear "fits" or a clear "too large" (network error, timeout, redirect, 5xx, no origin)
- * falls back.
+ * Plans the key approvals for `keyPaths`, the first of which also carries `leadBytes` of other entries. The budget is
+ * 70% of an assumed header limit: 256 KiB first, halved on each clear "too large", at most 3 times (at most 4
+ * checks), with the 32k fallback as the floor. Each check sends the planned largest request +5%, which stays under
+ * the limit assumed. A plan whose requests all fit the fallback needs no check. Anything but a clear "fits" or a clear
+ * "too large" (network error, timeout, redirect, 5xx, no origin) falls back.
  */
 export async function planKeyApprovals(
   keyPaths: readonly string[],
   resourceOf: (keyPath: string) => string,
   origin: string | undefined,
   fetchImpl: typeof fetch = globalThis.fetch,
+  leadBytes = 0,
 ): Promise<KeyApprovalPlan> {
   const fallback: KeyApprovalPlan = {
-    batches: batchKeyPaths(keyPaths, resourceOf, FALLBACK_BATCH_BUDGET_BYTES),
+    batches: batchKeyPaths(keyPaths, resourceOf, FALLBACK_BATCH_BUDGET_BYTES, leadBytes),
     budgetBytes: FALLBACK_BATCH_BUDGET_BYTES,
     budgetSource: "fallback",
   };
@@ -154,8 +162,9 @@ export async function planKeyApprovals(
   for (let halvings = 0; halvings <= MAX_HALVINGS; halvings++) {
     const budgetBytes = Math.floor(limitBytes * 0.7);
     if (budgetBytes <= FALLBACK_BATCH_BUDGET_BYTES) break;
-    const batches = batchKeyPaths(keyPaths, resourceOf, budgetBytes);
-    const bytes = Math.max(0, ...batches.map((batch) => estimateBatchBytes(batch.map(resourceOf))));
+    const batches = batchKeyPaths(keyPaths, resourceOf, budgetBytes, leadBytes);
+    const bytes = Math.max(0, ...batches.map((batch, index) =>
+      estimateBatchBytes(batch.map(resourceOf)) + (index === 0 ? leadBytes : 0)));
     // A plan the 32k fallback holds needs no check; neither can one with no origin to check.
     if (bytes <= FALLBACK_BATCH_BUDGET_BYTES || origin === undefined) break;
     const verdict = await checkHeaderFits(origin, Math.ceil(bytes * 1.05), fetchImpl);

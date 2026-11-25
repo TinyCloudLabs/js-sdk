@@ -7,7 +7,7 @@ import type { TinyCloudWeb as Web } from "../src/modules/tcw";
 const { TinyCloudWeb } = require("../dist/index.cjs") as { TinyCloudWeb: typeof Web };
 const address = "0x7E5F4552091A69125d5DfCb7b8C2659029395Bdf";
 
-test("OpenKey base sign-in refuses the reserved bot-history key before asking for a signature", async () => {
+test("OpenKey base sign-in accepts the reserved bot-history key on the owner's own network", async () => {
   const registry = startUnregisteredLocationRegistry();
   const node = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch(request) {
     if (new URL(request.url).pathname === "/info") {
@@ -42,7 +42,7 @@ test("OpenKey base sign-in refuses the reserved bot-history key before asking fo
       tinycloudHosts: [node.url.origin], tinycloudRegistryUrl: registry.url.origin,
       autoDiscoverLocalNode: false, persistSession: false, autoCreateSpace: false, autoBootstrapAccount: false, ui: false,
     });
-    await expect(web.prepareSignIn()).rejects.toThrow("named keys go in manifest.keys");
+    await expect(web.prepareSignIn()).rejects.toHaveProperty("message", "Finish setting up your TinyCloud account in TinyCloud One, then sign in to this app again: https://tinycloud.one/?finish-setup=registry");
     expect(signRequests).toBe(0);
   } finally {
     if (previousWindow === undefined) Reflect.deleteProperty(globalThis, "window");

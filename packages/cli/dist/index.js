@@ -7709,6 +7709,39 @@ var init_logout_pending = __esm({
   }
 });
 
+// src/lib/registry-verdict-cache.ts
+import { setTimeout as setTimeout2 } from "timers/promises";
+import { createRegistryVerdictCache } from "@tinycloud/sdk-core/registry-verdict-cache";
+function createCliRegistryVerdictCache(sleep = setTimeout2) {
+  const cache5 = createRegistryVerdictCache();
+  return {
+    get(scope, lookup) {
+      return cache5.get(scope, async () => {
+        for (let attempt = 0; ; attempt++) {
+          try {
+            const verdict = await lookup();
+            if (attempt === 2 || verdict.status !== "unregistered" || !verdict.offline) return verdict;
+          } catch (error) {
+            const failure = error;
+            if (attempt === 2 || failure?.code !== "registry_unavailable" || failure.meta?.reason !== "no-saved-settings") throw error;
+          }
+          await sleep(attempt === 0 ? 250 : 750);
+        }
+      });
+    },
+    invalidate(registryUrl, subject) {
+      cache5.invalidate(registryUrl, subject);
+    }
+  };
+}
+var cliRegistryVerdictCache;
+var init_registry_verdict_cache = __esm({
+  "src/lib/registry-verdict-cache.ts"() {
+    "use strict";
+    cliRegistryVerdictCache = createCliRegistryVerdictCache();
+  }
+});
+
 // src/lib/sdk.ts
 var sdk_exports = {};
 __export(sdk_exports, {
@@ -7811,6 +7844,7 @@ async function restoreProfileSessionNode(ctx) {
     const node = new TinyCloudNode({
       registryCacheStore: createProfileRegistryCacheStore(ctx.profile),
       registrySequenceStore: createProfileRegistrySequenceStore(ctx.profile),
+      registryVerdictCache: cliRegistryVerdictCache,
       onRegistryFallback: recordRegistryFallbackWarning,
       ...tinycloudRegistryUrl === void 0 ? {} : { tinycloudRegistryUrl },
       host: ctx.host,
@@ -7839,6 +7873,7 @@ async function storedSessionVerifiesLocally(profileName) {
     const node = new TinyCloudNode({
       registryCacheStore: createProfileRegistryCacheStore(profileName),
       registrySequenceStore: createProfileRegistrySequenceStore(profileName),
+      registryVerdictCache: cliRegistryVerdictCache,
       onRegistryFallback: recordRegistryFallbackWarning,
       ...cliRetryPolicy(),
       ...tinycloudRegistryUrl === void 0 ? {} : { tinycloudRegistryUrl },
@@ -7891,6 +7926,7 @@ async function createSDKInstance(ctx, options) {
     const node2 = new TinyCloudNode({
       registryCacheStore: createProfileRegistryCacheStore(ctx.profile),
       registrySequenceStore: createProfileRegistrySequenceStore(ctx.profile),
+      registryVerdictCache: cliRegistryVerdictCache,
       onRegistryFallback: recordRegistryFallbackWarning,
       ...cliRetryPolicy(),
       ...tinycloudRegistryUrl === void 0 ? {} : { tinycloudRegistryUrl },
@@ -7939,6 +7975,7 @@ async function createSDKInstance(ctx, options) {
   const node = new TinyCloudNode({
     registryCacheStore: createProfileRegistryCacheStore(ctx.profile),
     registrySequenceStore: createProfileRegistrySequenceStore(ctx.profile),
+    registryVerdictCache: cliRegistryVerdictCache,
     onRegistryFallback: recordRegistryFallbackWarning,
     ...cliRetryPolicy(),
     ...tinycloudRegistryUrl === void 0 ? {} : { tinycloudRegistryUrl },
@@ -8128,6 +8165,7 @@ var init_sdk = __esm({
     init_replication_config();
     init_replication_registry();
     init_logout_pending();
+    init_registry_verdict_cache();
     init_replication_registry();
     BOOTSTRAP_PROFILE_FIELDS = ["sessionDid", "spaceId", "authSignedOut", "authKeyRetained"];
   }
@@ -16654,6 +16692,7 @@ var init_local_key = __esm({
     init_replication_config();
     init_warnings();
     init_constants();
+    init_registry_verdict_cache();
   }
 });
 
@@ -17328,7 +17367,10 @@ async function acquireApprovalRequest(_did, options) {
     permissions: options.permissions.map(({ skipPrefix: _skipPrefix, ...entry2 }) => entry2),
     ...options.reason ? { reason: options.reason } : {},
     grantLifetimeSeconds: grantLifetimeSeconds(options.expiry),
-    ...options.renewalLeaseSeconds === void 0 ? {} : { renewal: { version: 1, leaseLifetimeSeconds: options.renewalLeaseSeconds } }
+    ...options.renewalLeaseSeconds === void 0 ? {} : {
+      renewal: { version: 1, leaseLifetimeSeconds: options.renewalLeaseSeconds },
+      ...options.renewalPurpose === void 0 ? {} : { purpose: options.renewalPurpose }
+    }
   };
   if (options.commandIntent !== void 0 && !/^auth-grant:[0-9a-f]{64}$/.test(options.commandIntent)) {
     throw invalid("Invalid approval command intent.");

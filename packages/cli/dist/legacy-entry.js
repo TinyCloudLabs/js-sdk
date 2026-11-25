@@ -9982,6 +9982,39 @@ var init_logout_pending = __esm({
   }
 });
 
+// src/lib/registry-verdict-cache.ts
+import { setTimeout as setTimeout2 } from "timers/promises";
+import { createRegistryVerdictCache } from "@tinycloud/sdk-core/registry-verdict-cache";
+function createCliRegistryVerdictCache(sleep = setTimeout2) {
+  const cache6 = createRegistryVerdictCache();
+  return {
+    get(scope, lookup) {
+      return cache6.get(scope, async () => {
+        for (let attempt = 0; ; attempt++) {
+          try {
+            const verdict = await lookup();
+            if (attempt === 2 || verdict.status !== "unregistered" || !verdict.offline) return verdict;
+          } catch (error) {
+            const failure = error;
+            if (attempt === 2 || failure?.code !== "registry_unavailable" || failure.meta?.reason !== "no-saved-settings") throw error;
+          }
+          await sleep(attempt === 0 ? 250 : 750);
+        }
+      });
+    },
+    invalidate(registryUrl, subject) {
+      cache6.invalidate(registryUrl, subject);
+    }
+  };
+}
+var cliRegistryVerdictCache;
+var init_registry_verdict_cache = __esm({
+  "src/lib/registry-verdict-cache.ts"() {
+    "use strict";
+    cliRegistryVerdictCache = createCliRegistryVerdictCache();
+  }
+});
+
 // src/lib/sdk.ts
 var sdk_exports = {};
 __export(sdk_exports, {
@@ -10084,6 +10117,7 @@ async function restoreProfileSessionNode(ctx) {
     const node = new TinyCloudNode({
       registryCacheStore: createProfileRegistryCacheStore(ctx.profile),
       registrySequenceStore: createProfileRegistrySequenceStore(ctx.profile),
+      registryVerdictCache: cliRegistryVerdictCache,
       onRegistryFallback: recordRegistryFallbackWarning,
       ...tinycloudRegistryUrl === void 0 ? {} : { tinycloudRegistryUrl },
       host: ctx.host,
@@ -10112,6 +10146,7 @@ async function storedSessionVerifiesLocally(profileName2) {
     const node = new TinyCloudNode({
       registryCacheStore: createProfileRegistryCacheStore(profileName2),
       registrySequenceStore: createProfileRegistrySequenceStore(profileName2),
+      registryVerdictCache: cliRegistryVerdictCache,
       onRegistryFallback: recordRegistryFallbackWarning,
       ...cliRetryPolicy(),
       ...tinycloudRegistryUrl === void 0 ? {} : { tinycloudRegistryUrl },
@@ -10164,6 +10199,7 @@ async function createSDKInstance(ctx, options) {
     const node2 = new TinyCloudNode({
       registryCacheStore: createProfileRegistryCacheStore(ctx.profile),
       registrySequenceStore: createProfileRegistrySequenceStore(ctx.profile),
+      registryVerdictCache: cliRegistryVerdictCache,
       onRegistryFallback: recordRegistryFallbackWarning,
       ...cliRetryPolicy(),
       ...tinycloudRegistryUrl === void 0 ? {} : { tinycloudRegistryUrl },
@@ -10212,6 +10248,7 @@ async function createSDKInstance(ctx, options) {
   const node = new TinyCloudNode({
     registryCacheStore: createProfileRegistryCacheStore(ctx.profile),
     registrySequenceStore: createProfileRegistrySequenceStore(ctx.profile),
+    registryVerdictCache: cliRegistryVerdictCache,
     onRegistryFallback: recordRegistryFallbackWarning,
     ...cliRetryPolicy(),
     ...tinycloudRegistryUrl === void 0 ? {} : { tinycloudRegistryUrl },
@@ -10401,6 +10438,7 @@ var init_sdk = __esm({
     init_replication_config();
     init_replication_registry();
     init_logout_pending();
+    init_registry_verdict_cache();
     init_replication_registry();
     BOOTSTRAP_PROFILE_FIELDS = ["sessionDid", "spaceId", "authSignedOut", "authKeyRetained"];
   }
@@ -19520,6 +19558,7 @@ async function localKeySignIn(options) {
   const node = new TinyCloudNode4({
     registryCacheStore: createProfileRegistryCacheStore3(profile),
     registrySequenceStore: createProfileRegistrySequenceStore3(profile),
+    registryVerdictCache: cliRegistryVerdictCache,
     onRegistryFallback: recordRegistryFallbackWarning,
     tinycloudRegistryUrl: process.env.TC_REGISTRY_URL || options.tinycloudRegistryUrl,
     privateKey: options.privateKey,
@@ -19564,6 +19603,7 @@ var init_local_key = __esm({
     init_replication_config();
     init_warnings();
     init_constants();
+    init_registry_verdict_cache();
     wasmInitialized = false;
   }
 });
@@ -20992,7 +21032,10 @@ async function acquireApprovalRequest(_did, options) {
     permissions: options.permissions.map(({ skipPrefix: _skipPrefix, ...entry2 }) => entry2),
     ...options.reason ? { reason: options.reason } : {},
     grantLifetimeSeconds: grantLifetimeSeconds(options.expiry),
-    ...options.renewalLeaseSeconds === void 0 ? {} : { renewal: { version: 1, leaseLifetimeSeconds: options.renewalLeaseSeconds } }
+    ...options.renewalLeaseSeconds === void 0 ? {} : {
+      renewal: { version: 1, leaseLifetimeSeconds: options.renewalLeaseSeconds },
+      ...options.renewalPurpose === void 0 ? {} : { purpose: options.renewalPurpose }
+    }
   };
   if (options.commandIntent !== void 0 && !/^auth-grant:[0-9a-f]{64}$/.test(options.commandIntent)) {
     throw invalid2("Invalid approval command intent.");
@@ -22067,9 +22110,6 @@ function registerBugReportCommand(program, dependencies = {}) {
 }
 
 // src/commands/auth.ts
-init_profile_gate();
-init_dist();
-init_profiles();
 import { CLI_NAME as CLI_NAME21 } from "@tinycloud/operations/cli-name";
 import { get as httpGet } from "http";
 import { get as httpsGet } from "https";
@@ -22079,7 +22119,22 @@ import { dirname as dirname6, join as join17 } from "path";
 import { createInterface as createInterface5 } from "readline";
 import { TinyCloudNode as TinyCloudNode3, grantAuthRequest, principalDidEquals as principalDidEquals3, REPLICA_LOGOUT_PENDING_FILE as REPLICA_LOGOUT_PENDING_FILE4, signedCompactUcanExpiry as signedCompactUcanExpiry3 } from "@tinycloud/node-sdk";
 import { composeManifestRequest, ownerFullAccess as ownerFullAccess4 } from "@tinycloud/sdk-core";
-import { invokeOperation } from "@tinycloud/operations";
+
+// src/lib/operations.ts
+init_registry_verdict_cache();
+import { invokeOperation as invokeCoreOperation } from "@tinycloud/operations";
+import { invokeSecretsGetWithLocalAuthorityRetry as invokeCoreSecretsGetWithLocalAuthorityRetry } from "@tinycloud/operations/cli-runtime";
+function invokeOperation(operationId, operationVersion, target, input) {
+  return invokeCoreOperation(operationId, operationVersion, target, input, void 0, cliRegistryVerdictCache);
+}
+function invokeSecretsGetWithLocalAuthorityRetry(target, input) {
+  return invokeCoreSecretsGetWithLocalAuthorityRetry(target, input, cliRegistryVerdictCache);
+}
+
+// src/commands/auth.ts
+init_profile_gate();
+init_dist();
+init_profiles();
 import { createProfileRegistryCacheStore as createProfileRegistryCacheStore5, createProfileRegistrySequenceStore as createProfileRegistrySequenceStore5, namedProfilePath as namedProfilePath3, profilePath as profilePath12 } from "@tinycloud/operations/state";
 import { REPLICA_GATE_FILE as REPLICA_GATE_FILE3 } from "@tinycloud/sdk-services/kv/replication/contractConstants";
 
@@ -36852,6 +36907,7 @@ init_logout_pending();
 init_formatter();
 init_errors();
 init_warnings();
+init_registry_verdict_cache();
 init_safe_text();
 init_constants();
 init_types();
@@ -39991,6 +40047,7 @@ async function nodeFromOpenKeyApproval(ctx, session) {
     host,
     registryCacheStore: createProfileRegistryCacheStore5(ctx.profile),
     registrySequenceStore: createProfileRegistrySequenceStore5(ctx.profile),
+    registryVerdictCache: cliRegistryVerdictCache,
     onRegistryFallback: recordRegistryFallbackWarning,
     tinycloudRegistryUrl: process.env.TC_REGISTRY_URL || ctx.tinycloudRegistryUrl
   });
@@ -40530,6 +40587,7 @@ async function refreshPreparedOpenKeySession(params) {
   const node = new TinyCloudNode3({
     registryCacheStore: createProfileRegistryCacheStore5(profileName2),
     registrySequenceStore: createProfileRegistrySequenceStore5(profileName2),
+    registryVerdictCache: cliRegistryVerdictCache,
     onRegistryFallback: recordRegistryFallbackWarning,
     tinycloudRegistryUrl: process.env.TC_REGISTRY_URL || profile.tinycloudRegistryUrl,
     host,
@@ -40667,6 +40725,7 @@ async function refreshPreparedKeysSession(params) {
   const node = new TinyCloudNode3({
     registryCacheStore: createProfileRegistryCacheStore5(profileName2),
     registrySequenceStore: createProfileRegistrySequenceStore5(profileName2),
+    registryVerdictCache: cliRegistryVerdictCache,
     onRegistryFallback: recordRegistryFallbackWarning,
     tinycloudRegistryUrl: process.env.TC_REGISTRY_URL || profile.tinycloudRegistryUrl,
     host,
@@ -43137,7 +43196,6 @@ init_session_expired();
 init_constants();
 init_profiles();
 init_apps_agent_preset();
-import { invokeOperation as invokeOperation2 } from "@tinycloud/operations";
 import { CLI_NAME as CLI_NAME27 } from "@tinycloud/operations/cli-name";
 init_permissions();
 init_errors();
@@ -43171,7 +43229,7 @@ function registerKnowledgeCommand(program) {
     try {
       const appId = options.app === void 0 ? void 0 : assertKnowledgeAppId(options.app);
       const ctx = await ProfileManager.resolveContext(cmd.optsWithGlobals());
-      const result = await withSpinner("Listing installed apps...", () => invokeOperation2(
+      const result = await withSpinner("Listing installed apps...", () => invokeOperation(
         "tinycloud.knowledge.list",
         1,
         { profile: ctx.profile, host: ctx.host, allowOwnerProfile: true },
@@ -43202,7 +43260,7 @@ function registerKnowledgeCommand(program) {
       const appId = assertKnowledgeAppId(appIdArgument);
       const concept = conceptArgument === void 0 ? void 0 : assertKnowledgeConcept(conceptArgument);
       const ctx = await ProfileManager.resolveContext(cmd.optsWithGlobals());
-      const result = await withSpinner("Reading knowledge...", () => invokeOperation2(
+      const result = await withSpinner("Reading knowledge...", () => invokeOperation(
         "tinycloud.knowledge.read",
         1,
         { profile: ctx.profile, host: ctx.host, allowOwnerProfile: true },
@@ -50476,9 +50534,11 @@ function onboardingPlan(selector = "apps", expiryOption) {
   }
   const what = feedOnly ? "use your Feed" : tasks.includes("feed") ? "use your apps and your Feed, and see your spaces" : "use your apps and see your spaces";
   const line = (words) => `Set up TinyCloud on this computer: ${what}, for ${words}`;
+  const renewalDays = renewalLeaseSeconds === void 0 ? void 0 : renewalLeaseSeconds / 86400;
   return {
     permissions: entries.sort((a, b) => `${a.space}\0${a.service}\0${a.path}`.localeCompare(`${b.space}\0${b.service}\0${b.path}`)),
-    asks: `${line(lifetime)}${renewalLeaseSeconds === void 0 ? "" : `, renewing for up to ${renewalLeaseSeconds / 86400} days`}.`,
+    // Onboarding asks with renewal on; the owner can turn it off in OpenKey, so the reason says so (TC-4247).
+    asks: `${line(lifetime)}.${renewalDays === void 0 ? "" : ` It renews for up to ${renewalDays} ${renewalDays === 1 ? "day" : "days"} unless you turn renewal off.`}`,
     finiteAsks: `${line(lifetime)}.`,
     expiry,
     ...renewalLeaseSeconds === void 0 ? {} : { renewalLeaseSeconds },
@@ -50530,6 +50590,8 @@ function registerOnboardCommand(program) {
           ...flow,
           profileName: ctx.profile,
           noPopup: true,
+          // Onboarding is standing access, so OpenKey starts the renewal box ticked; the owner can untick it (TC-4247).
+          ...flow.renewalLeaseSeconds === void 0 ? {} : { renewalPurpose: "standing" },
           ...deadlineMs === void 0 ? {} : { approvalWait: { deadlineMs, step: currentStep, of: steps.length } },
           onApprovalRequest: ({ approvalUrl }) => {
             console.error(`Approve in OpenKey (open the complete link):
@@ -51779,7 +51841,6 @@ ${describeStatus(status)}
 // src/commands/registry.ts
 init_errors();
 init_formatter();
-import { invokeOperation as invokeOperation3 } from "@tinycloud/operations";
 
 // src/commands/registry-publish.ts
 init_profiles();
@@ -51930,7 +51991,7 @@ function registerRegistryCommand(program) {
   registry.command("show [account-id]").description("Check and show the saved storage settings: account, version, age, spaces, servers and decryption service. Works offline, no sign-in.").action(async (did2, _options, command) => {
     try {
       const options = command.optsWithGlobals();
-      const result = await invokeOperation3("tinycloud.registry.show", 1, {
+      const result = await invokeOperation("tinycloud.registry.show", 1, {
         ...options.profile ? { profile: options.profile } : {},
         allowOwnerProfile: true
       }, did2 === void 0 ? {} : { did: did2 });
@@ -51967,19 +52028,18 @@ Saved: ${ageCount} ${ageUnit}${ageCount === 1 ? "" : "s"} ago
 }
 
 // src/commands/secrets.ts
-init_profiles();
-init_formatter();
-init_theme();
-init_errors();
-init_warnings();
-init_constants();
 import { CLI_NAME as CLI_NAME34 } from "@tinycloud/operations/cli-name";
 import { readFile as readFile18 } from "fs/promises";
 import { join as join24 } from "path";
 import { constants as osConstants, homedir, hostname, userInfo } from "os";
 import * as nodeSdk from "@tinycloud/node-sdk";
 import { appSecretScope, MAX_SECRET_NAME_LENGTH, SECRET_TYPES as SECRET_TYPES2, secretNameTooLongRefusal } from "@tinycloud/sdk-core";
-import { invokeOperation as invokeOperation4 } from "@tinycloud/operations";
+init_profiles();
+init_formatter();
+init_theme();
+init_errors();
+init_warnings();
+init_constants();
 import { isLocalOwnerProfile as isLocalOwnerProfile4, liveStoredLease as liveStoredLease3, ownerSessionLacksProof as ownerSessionLacksProof5 } from "@tinycloud/operations/profile";
 import {
   buildSecretManagerUrl,
@@ -51996,7 +52056,6 @@ import {
   SECRET_DECRYPT_CAPABILITY,
   secretCapabilityAction
 } from "@tinycloud/operations/secret-capabilities";
-import { invokeSecretsGetWithLocalAuthorityRetry } from "@tinycloud/operations/cli-runtime";
 init_sdk();
 init_replication_registry();
 init_session_expired();
@@ -52472,8 +52531,111 @@ function statusError(error, profile, warnings) {
 // src/commands/secrets.ts
 init_secret_keys();
 init_owner_did();
-init_types();
 import { migrateSecrets } from "@tinycloud/sdk-services/secrets/migrate";
+
+// src/lib/key-approval-batches.ts
+var MEASURED_HEADER_LIMIT_BYTES = 32751;
+var FALLBACK_BATCH_BUDGET_BYTES = Math.floor(MEASURED_HEADER_LIMIT_BYTES * 0.7);
+var MAX_CHECK_BYTES = 256 * 1024;
+var HEADER_LINE_OVERHEAD_BYTES = 17;
+var BASE_RESERVE_BYTES = 3e3;
+var MOVE_APPROVAL_LEAD_BYTES = 2e3;
+var MAX_HALVINGS = 3;
+var CHECK_TIMEOUT_MS = 1e4;
+var CHECK_HEADER = "X-TinyCloud-Header-Check";
+var MAX_ERROR_BODY_BYTES = 4096;
+function estimateKeyBytes(resource) {
+  const length6 = new TextEncoder().encode(resource).length;
+  return Math.ceil(1.05 * (4 / 3) * (4 / 3 * (length6 + 80) + length6 + 59));
+}
+function estimateBatchBytes(resources) {
+  return resources.reduce((sum, resource) => sum + estimateKeyBytes(resource), BASE_RESERVE_BYTES);
+}
+function batchKeyPaths(keyPaths, resourceOf, budgetBytes, leadBytes = 0) {
+  const batches = [];
+  let current = [];
+  let bytes = BASE_RESERVE_BYTES + leadBytes;
+  for (const keyPath of [...new Set(keyPaths)].sort()) {
+    const cost = estimateKeyBytes(resourceOf(keyPath));
+    if (current.length > 0 && bytes + cost > budgetBytes) {
+      batches.push(current);
+      current = [];
+      bytes = BASE_RESERVE_BYTES;
+    }
+    current.push(keyPath);
+    bytes += cost;
+  }
+  if (current.length > 0) batches.push(current);
+  return batches;
+}
+async function checkHeaderFits(origin2, bytes, fetchImpl = globalThis.fetch) {
+  let response;
+  try {
+    response = await fetchImpl(new URL("/version", origin2), {
+      method: "GET",
+      headers: { [CHECK_HEADER]: "a".repeat(Math.min(bytes, MAX_CHECK_BYTES)) },
+      redirect: "manual",
+      signal: AbortSignal.timeout(CHECK_TIMEOUT_MS)
+    });
+  } catch {
+    return "unknown";
+  }
+  if (response.ok) {
+    await response.body?.cancel().catch(() => void 0);
+    return "fits";
+  }
+  if (response.status === 431) {
+    await response.body?.cancel().catch(() => void 0);
+    return "too_large";
+  }
+  const body = await readHead(response, MAX_ERROR_BODY_BYTES);
+  return response.status === 400 && /Request Header Or Cookie Too Large/i.test(body) ? "too_large" : "unknown";
+}
+async function readHead(response, limit) {
+  const reader = response.body?.getReader();
+  if (reader === void 0) return "";
+  const chunks = [];
+  let size = 0;
+  try {
+    while (size < limit) {
+      const { done, value: value4 } = await reader.read();
+      if (done) break;
+      chunks.push(value4.subarray(0, limit - size));
+      size += Math.min(value4.length, limit - size);
+    }
+  } catch {
+  } finally {
+    await reader.cancel().catch(() => void 0);
+  }
+  return new TextDecoder().decode(Buffer.concat(chunks));
+}
+async function planKeyApprovals(keyPaths, resourceOf, origin2, fetchImpl = globalThis.fetch, leadBytes = 0) {
+  const fallback = {
+    batches: batchKeyPaths(keyPaths, resourceOf, FALLBACK_BATCH_BUDGET_BYTES, leadBytes),
+    budgetBytes: FALLBACK_BATCH_BUDGET_BYTES,
+    budgetSource: "fallback"
+  };
+  let limitBytes = MAX_CHECK_BYTES - HEADER_LINE_OVERHEAD_BYTES;
+  for (let halvings = 0; halvings <= MAX_HALVINGS; halvings++) {
+    const budgetBytes = Math.floor(limitBytes * 0.7);
+    if (budgetBytes <= FALLBACK_BATCH_BUDGET_BYTES) break;
+    const batches = batchKeyPaths(keyPaths, resourceOf, budgetBytes, leadBytes);
+    const bytes = Math.max(0, ...batches.map((batch, index) => estimateBatchBytes(batch.map(resourceOf)) + (index === 0 ? leadBytes : 0)));
+    if (bytes <= FALLBACK_BATCH_BUDGET_BYTES || origin2 === void 0) break;
+    const verdict = await checkHeaderFits(origin2, Math.ceil(bytes * 1.05), fetchImpl);
+    if (verdict === "fits") return { batches, budgetBytes, budgetSource: "measured" };
+    if (verdict === "unknown") break;
+    limitBytes = Math.floor(limitBytes / 2);
+  }
+  return fallback;
+}
+function keyApprovalsLine(plan) {
+  const bytes = plan.budgetBytes.toLocaleString("en-US");
+  return plan.budgetSource === "measured" ? `Key approvals: ${plan.requests} (each up to ${bytes} bytes, measured on this node).` : `Key approvals: ${plan.requests} (each up to ${bytes} bytes, safe default; this node's limit was not measured).`;
+}
+
+// src/commands/secrets.ts
+init_types();
 var SECRETS_SPACE2 = "secrets";
 var SECRET_KV_ABILITIES = {
   get: secretCapabilityAction("get"),
@@ -52739,7 +52901,7 @@ async function canonicalSecretGet(params, collect) {
   };
   const invoke = async () => collect(await withSpinner(
     params.label,
-    () => auth?.privateKey ? invokeSecretsGetWithLocalAuthorityRetry(target, input) : invokeOperation4("tinycloud.secrets.get", 1, target, input)
+    () => auth?.privateKey ? invokeSecretsGetWithLocalAuthorityRetry(target, input) : invokeOperation("tinycloud.secrets.get", 1, target, input)
   ));
   let first = await invoke();
   if (first.status === "error" && first.error.code === "SESSION_NOT_FOUND" && auth?.privateKey === void 0) {
@@ -53272,6 +53434,45 @@ function secretMigrateKeyPermissions(networkId, keyPaths) {
     actions: [SECRET_DECRYPT_CAPABILITY, SECRET_KEY_CREATE_CAPABILITY],
     skipPrefix: true
   }));
+}
+var SECRET_MIGRATE_APPROVAL_EXPIRY_MS = 60 * 60 * 1e3;
+function secretMigrateApprovalPermissions(space, networkId, batches) {
+  return batches.map((batch, index) => [
+    ...index === 0 ? secretMigratePermissions(space, networkId, false) : [],
+    ...secretMigrateKeyPermissions(networkId, batch)
+  ]);
+}
+function secretMigrateApprovalReason(index, count) {
+  const numbered = count === 1 ? "" : ` (approval ${index} of ${count})`;
+  return index === 1 ? `Create a key for each of your older-format secrets and encrypt the secret with it${numbered}. This needs access to all your encrypted data, because only that access can read the older format.` : `Create a key for each secret being moved and encrypt the secret with it${numbered}. This reaches only those secrets, not the rest of your encrypted data.`;
+}
+function heldApprovalExpiry(node, requests) {
+  let earliest;
+  for (const permissions of requests) {
+    const expiries = node.getRuntimePermissionDelegations(permissions).map((delegation) => delegation.expiry.getTime());
+    if (expiries.length === 0) return void 0;
+    const expiry = new Date(Math.min(...expiries));
+    if (earliest === void 0 || expiry < earliest) earliest = expiry;
+  }
+  return earliest;
+}
+function secretMigrateApprovalDeclined(error, index, count, heldUntil) {
+  if (!(error instanceof CLIError) || error.exitCode === ExitCode.NETWORK_ERROR) return error;
+  if (index > 1 && heldUntil === void 0) return error;
+  const until = heldUntil?.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+  const held = index === 1 ? "" : index === 2 ? ` Approval 1 stays valid until ${until}.` : ` Approvals 1 to ${index - 1} stay valid until ${until}.`;
+  return Object.assign(
+    new CLIError(error.code, `Approval ${index} of ${count} was declined, so no secret was moved.${held} To move the secrets, run \`${CLI_NAME34} secrets migrate\`.`, error.exitCode, error.metadata),
+    { cause: error }
+  );
+}
+async function secretMigrateActivationOrigin(node, networkId, keyPaths, host) {
+  if (keyPaths.length === 0) return void 0;
+  try {
+    return await node.resolveRegisteredDelegationHost(secretMigrateKeyPermissions(networkId, keyPaths.slice(0, 1)), host) ?? host;
+  } catch {
+    return void 0;
+  }
 }
 function formatSecretScopeFlag(options) {
   return options?.scope ? ` --scope ${JSON.stringify(options.scope)}` : "";
@@ -53820,6 +54021,8 @@ function registerSecretsCommand(program, openKeyAcquisition) {
       const networkId = secretMigrateNetworkId(node, spaceUri);
       const dryRun = options.dryRun === true;
       let authorizeKeys;
+      let previewKeys;
+      let keyApprovals;
       if (!authOptions(options)?.privateKey) {
         const profile = await ProfileManager.getProfile(ctx.profile);
         if (!canRequestOwnerPermissions(profile)) {
@@ -53829,33 +54032,54 @@ function registerSecretsCommand(program, openKeyAcquisition) {
             ExitCode.PERMISSION_DENIED
           );
         }
-        const approve = (requested, reason) => withSpinner("Requesting secret permissions...", () => ensureDelegationAuthority({
+        const approve = (requested, reason, expiryOption) => withSpinner("Requesting secret permissions...", () => ensureDelegationAuthority({
           ctx,
           profile,
           node,
           requested,
-          expiryOption: void 0,
+          expiryOption,
           reason,
           anchorSpace: spaceUri ?? SECRETS_SPACE2
         }));
-        await approve(
-          secretMigratePermissions(spaceUri, networkId, dryRun),
-          dryRun ? secretCommandReason("list") : "Give each of your older-format secrets its own key. This needs access to all your encrypted data, because only that access can read the older format."
-        );
+        await approve(secretMigratePermissions(spaceUri, networkId, true), secretCommandReason("list"));
+        const plan = async (keyPaths) => {
+          const planned = await planKeyApprovals(
+            keyPaths,
+            (keyPath) => secretKeyResource(networkId, keyPath),
+            await secretMigrateActivationOrigin(node, networkId, keyPaths, ctx.host),
+            void 0,
+            MOVE_APPROVAL_LEAD_BYTES
+          );
+          keyApprovals = { requests: planned.batches.length, budgetBytes: planned.budgetBytes, budgetSource: planned.budgetSource };
+          process.stderr.write(keyApprovalsLine(keyApprovals) + "\n");
+          return planned.batches;
+        };
+        previewKeys = async (keyPaths) => {
+          await plan(keyPaths);
+        };
         authorizeKeys = async (keyPaths) => {
-          await approve(secretMigrateKeyPermissions(networkId, keyPaths), "Give each secret being moved its own key. This reaches only those secrets, not the rest of your encrypted data.");
+          const requests = secretMigrateApprovalPermissions(spaceUri, networkId, await plan(keyPaths));
+          for (const [index, requested] of requests.entries()) {
+            try {
+              await approve(requested, secretMigrateApprovalReason(index + 1, requests.length), SECRET_MIGRATE_APPROVAL_EXPIRY_MS);
+            } catch (error) {
+              if (requests.length === 1) throw error;
+              throw secretMigrateApprovalDeclined(error, index + 1, requests.length, heldApprovalExpiry(node, requests.slice(0, index)));
+            }
+          }
         };
       }
       const result = await migrateSecrets(secretsServiceForSpace(node, spaceUri), {
         ...names.length > 0 ? { names } : {},
         ...options.scope ? { scope: options.scope } : {},
         dryRun,
-        ...authorizeKeys === void 0 ? {} : { authorizeKeys }
+        ...authorizeKeys === void 0 ? {} : { authorizeKeys },
+        ...previewKeys === void 0 ? {} : { previewKeys }
       });
       if (!result.ok) {
         throw cliErrorFromService(result.error);
       }
-      outputJson({ ...result.data, ...spaceUri ? { space: spaceUri } : {} });
+      outputJson({ ...result.data, ...spaceUri ? { space: spaceUri } : {}, ...keyApprovals ? { keyApprovals } : {} });
     } catch (error) {
       return handleError(error);
     }
@@ -53972,7 +54196,7 @@ function registerSecretsCommand(program, openKeyAcquisition) {
     try {
       const ctx = await ProfileManager.resolveContext(cmd.optsWithGlobals());
       const privateKey = process.env.TC_PRIVATE_KEY;
-      const result = await invokeOperation4("tinycloud.secrets.status", 1, {
+      const result = await invokeOperation("tinycloud.secrets.status", 1, {
         profile: ctx.profile,
         host: ctx.host,
         allowOwnerProfile: true,
