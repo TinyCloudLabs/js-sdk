@@ -110,22 +110,24 @@ export const PERMISSION_LINE_COPY = {
 /** Longest caption shown, in characters; a longer one is cut and ends with "…". */
 export const CAPTION_MAX_LENGTH = 120;
 
+/** Longest description shown as an entry's first line, in characters; a longer one is cut and ends with "…". */
+export const DESCRIPTION_MAX_LENGTH = 140;
+
 /**
  * C0 and C1 controls, zero-width characters (U+180E, U+200B-200D, U+FEFF), line and paragraph separators
- * (U+2028-2029) and direction marks, embeddings, overrides and isolates (U+061C, U+200E-200F, U+202A-202E,
- * U+2066-2069): characters that hide or reorder text.
+ * (U+2028-2029), direction marks, embeddings, overrides and isolates (U+061C, U+200E-200F, U+202A-202E,
+ * U+2066-2069), invisible operators (U+2060-2064) and tag characters (U+E0000-E007F): characters that hide or
+ * reorder text.
  */
-const HIDDEN_CHARACTERS = /[\u0000-\u001f\u007f-\u009f\u061c\u180e\u200b-\u200f\u2028-\u202e\u2066-\u2069\ufeff]/g;
+const HIDDEN_CHARACTERS =
+  /[\u0000-\u001f\u007f-\u009f\u061c\u180e\u200b-\u200f\u2028-\u202e\u2060-\u2064\u2066-\u2069\ufeff\u{e0000}-\u{e007f}]/gu;
 
 /** `text` with every hidden character shown as a visible escape such as `\u{202E}`, so it never reads cleaner than it is. */
 export function showHiddenCharacters(text: string): string {
-  return text.replace(HIDDEN_CHARACTERS, (char) => `\\u{${char.charCodeAt(0).toString(16).toUpperCase().padStart(4, "0")}}`);
+  return text.replace(HIDDEN_CHARACTERS, (char) => `\\u{${char.codePointAt(0)!.toString(16).toUpperCase().padStart(4, "0")}}`);
 }
 
-/**
- * `entry` with its service, space, path, actions and description passed through {@link showHiddenCharacters}, for
- * display only. The description is first folded to one trimmed line, so its line breaks and tabs show as spaces.
- */
+/** `entry` with its service, space, path and actions passed through {@link showHiddenCharacters}, for display only. */
 export function visibleEntry(entry: PermissionEntry): PermissionEntry {
   return {
     ...entry,
@@ -133,10 +135,22 @@ export function visibleEntry(entry: PermissionEntry): PermissionEntry {
     ...(entry.space === undefined ? {} : { space: showHiddenCharacters(entry.space) }),
     path: showHiddenCharacters(entry.path),
     actions: entry.actions.map(showHiddenCharacters),
-    ...(typeof entry.description === "string"
-      ? { description: showHiddenCharacters(entry.description.replace(/\s+/g, " ").trim()) }
-      : {}),
   };
+}
+
+/**
+ * An entry's description as shown: whitespace folded to single spaces and trimmed, then hidden characters shown
+ * escaped (see {@link showHiddenCharacters}). `line` is cut to {@link DESCRIPTION_MAX_LENGTH} characters, never
+ * inside a character, and `full` is the whole text, set only when `line` is cut. Undefined when nothing is left.
+ */
+export function visibleDescription(description: unknown): { line: string; full?: string } | undefined {
+  if (typeof description !== "string") return undefined;
+  const folded = description.replace(/\s+/g, " ").trim();
+  const chars = Array.from(folded);
+  if (chars.length === 0) return undefined;
+  if (chars.length <= DESCRIPTION_MAX_LENGTH) return { line: showHiddenCharacters(folded) };
+  const cut = chars.slice(0, DESCRIPTION_MAX_LENGTH - 1).join("").trimEnd();
+  return { line: showHiddenCharacters(`${cut}…`), full: showHiddenCharacters(folded) };
 }
 
 const DAY_MS = 24 * 60 * 60 * 1000;

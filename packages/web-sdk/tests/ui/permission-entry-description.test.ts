@@ -1,6 +1,7 @@
 /*
  * TC-4323: an entry's description, set by the app, is the first line of that entry in the permission prompt, shown as
- * text. An entry without one renders with nothing in its place.
+ * text and cut to 140 characters, with a cut one shown whole in the technical details. An entry without one renders
+ * with nothing in its place.
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { JSDOM } from "jsdom";
@@ -92,11 +93,64 @@ describe("an entry with a description", () => {
     expect(shown("  Read\n\n your\tnotes  ")).toBe("Read your notes");
   });
 
+  test("shows invisible operators and tag characters escaped, whole, and leaves other astral characters alone", () => {
+    const shown = (text: string) =>
+      entry({ ...kv, description: text }).querySelector('[data-role="entry-description"]')!.textContent!;
+
+    expect(shown("a\u2060b\u2064c")).toBe("a\\u{2060}b\\u{2064}c");
+    expect(shown("Notes\u{E0041}\u{E007F}")).toBe("Notes\\u{E0041}\\u{E007F}");
+    expect(shown("Chat 😀 \u{E0001}")).toBe("Chat 😀 \\u{E0001}");
+    expect(shown("Chat 😀 \u{E0001}").isWellFormed()).toBe(true);
+  });
+
+  test("a tag character in the resource is shown escaped in the technical details", () => {
+    const shown = entry({ ...kv, path: "notes\u{E0041}/" });
+
+    expect(shown.querySelector(".permission-dictionary")!.textContent).toContain("notes\\u{E0041}/");
+  });
+
   test("each entry shows its own description", () => {
     const shown = entries([{ ...kv, description: "Your notes" }, kv, { ...botHistory, description: HISTORY_DESCRIPTION }]);
 
     expect(shown.map((item) => item.querySelector('[data-role="entry-description"]')?.textContent ?? null))
       .toEqual(["Your notes", null, HISTORY_DESCRIPTION]);
+  });
+});
+
+describe("a long description", () => {
+  const full = (shown: Element) => shown.querySelector('[data-role="entry-description-full"]');
+  const line = (shown: Element) => shown.querySelector('[data-role="entry-description"]')!.textContent!;
+
+  test("is cut to 140 characters ending with an ellipsis, and shown whole in the technical details", () => {
+    const words = "Read the encrypted notes you saved so the assistant can quote them back to you. ".repeat(3);
+    const shown = entry({ ...kv, description: `${words}\n\tEnd.` });
+    const folded = `${words.trim()} End.`;
+
+    expect(Array.from(line(shown))).toHaveLength(140);
+    expect(line(shown)).toBe(`${folded.slice(0, 139)}…`);
+    expect(full(shown)!.textContent).toBe(folded);
+    expect(full(shown)!.closest(".technical-details")).not.toBeNull();
+  });
+
+  test("of exactly 140 characters is not cut and has no second copy", () => {
+    const shown = entry({ ...kv, description: "x".repeat(140) });
+
+    expect(line(shown)).toBe("x".repeat(140));
+    expect(full(shown)).toBeNull();
+  });
+
+  test("is cut between characters, never inside a surrogate pair", () => {
+    const shown = entry({ ...kv, description: `${"a".repeat(138)}😀${"b".repeat(10)}` });
+
+    expect(line(shown)).toBe(`${"a".repeat(138)}😀…`);
+    expect(line(shown).isWellFormed()).toBe(true);
+  });
+
+  test("shows its hidden characters escaped in both the cut line and the whole text", () => {
+    const shown = entry({ ...kv, description: `\u202E${"y".repeat(200)}` });
+
+    expect(line(shown)).toBe(`\\u{202E}${"y".repeat(138)}…`);
+    expect(full(shown)!.textContent).toBe(`\\u{202E}${"y".repeat(200)}`);
   });
 });
 

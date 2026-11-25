@@ -31,6 +31,7 @@ import {
   normalizeCaption,
   PERMISSION_LINE_COPY,
   showHiddenCharacters,
+  visibleDescription,
   visibleEntry,
 } from "./permissionLine";
 
@@ -227,18 +228,22 @@ export class TinyCloudPermissionRequestModal extends HTMLElement {
         </div>
       `)
       .join("");
-    // The app's own description of the entry leads it, ahead of the built-in text and rows.
-    const description = typeof entry.description === "string" ? entry.description : "";
-    const descriptionMarkup = description === ""
+    // The app's own description of the entry leads it, ahead of the built-in text and rows; a cut description is
+    // shown whole in the technical details.
+    const description = visibleDescription(entry.description);
+    const descriptionMarkup = description === undefined
       ? ""
-      : `<p class="entry-description" data-role="entry-description">${escapeHtml(description)}</p>`;
+      : `<p class="entry-description" data-role="entry-description">${escapeHtml(description.line)}</p>`;
+    const fullDescriptionMarkup = description?.full === undefined
+      ? ""
+      : `<p class="entry-summary" data-role="entry-description-full">${escapeHtml(description.full)}</p>`;
 
     return `
       <li class="permission-entry">
         ${descriptionMarkup}${capabilities === "" ? "" : `<ul class="permission-summary-list">${capabilities}</ul>`}
         <details class="technical-details">
           <summary>Show technical details</summary>
-          <p class="entry-summary">${escapeHtml(narrow?.summary ?? permissionScopeSummary(entry))}</p>
+          ${fullDescriptionMarkup}<p class="entry-summary">${escapeHtml(narrow?.summary ?? permissionScopeSummary(entry))}</p>
           <dl class="permission-dictionary">${dictionaryRows}</dl>
         </details>
       </li>
@@ -352,7 +357,7 @@ export class TinyCloudPermissionRequestModal extends HTMLElement {
         margin: 10px 0;
       }
       .entry-description {
-        font-size: 15px; line-height: 1.4; color: var(--modal-foreground);
+        font-size: 13px; line-height: 1.45; color: var(--modal-muted);
         margin: 0 0 12px 0;
       }
       .permission-summary-list {
