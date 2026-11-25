@@ -513,6 +513,7 @@ export type Ledger = {
   tc3891OwnerRegistryRecordRoot?: LogoutRatchet;
   tc4222PermissionLineRoot?: LogoutRatchet;
   tc4322ReservedKeyRoot?: LogoutRatchet;
+  tc4329ActivationCauseRoot?: LogoutRatchet;
   tc3522InvocationRefusalKvWorker?: WorkerRatchet;
   tc3522InvocationRefusalReplicaWorker?: Omit<WorkerRatchet, "worker"> & { replicaWorker: { delta: number; ceiling: number } };
   tc2773LazyRestoreReplicaWorker?: Omit<WorkerRatchet, "worker"> & { replicaWorker: { delta: number; ceiling: number } };
@@ -1182,6 +1183,7 @@ export function ancestryPins(root: Ledger, hasGatedOnly: boolean): Array<{ row: 
   if (root.tc3891OwnerRegistryRecordRoot !== undefined) pins.push({ row: "tc3891OwnerRegistryRecordRoot", pin: root.tc3891OwnerRegistryRecordRoot.sourceCommits.at(-1)! });
   if (root.tc4222PermissionLineRoot !== undefined) pins.push({ row: "tc4222PermissionLineRoot", pin: root.tc4222PermissionLineRoot.sourceCommits.at(-1)! });
   if (root.tc4322ReservedKeyRoot !== undefined) pins.push({ row: "tc4322ReservedKeyRoot", pin: root.tc4322ReservedKeyRoot.sourceCommits.at(-1)! });
+  if (root.tc4329ActivationCauseRoot !== undefined) pins.push({ row: "tc4329ActivationCauseRoot", pin: root.tc4329ActivationCauseRoot.sourceCommits.at(-1)! });
   if (root.tc3522InvocationRefusalKvWorker !== undefined) pins.push({ row: "tc3522InvocationRefusalKvWorker", pin: root.tc3522InvocationRefusalKvWorker.sourceCommits.at(-1)! });
   if (root.tc3522InvocationRefusalReplicaWorker !== undefined) pins.push({ row: "tc3522InvocationRefusalReplicaWorker", pin: root.tc3522InvocationRefusalReplicaWorker.sourceCommits.at(-1)! });
   if (hasGatedOnly) pins.push({ row: "gatedOnlyRatchet", pin: approvedGatedOnlyRatchet.sourceCommit });
@@ -1321,6 +1323,7 @@ export function rootCeilings(root: Ledger): Array<{ row: string; ceiling: GzipSi
     ["tc3891OwnerRegistryRecordRoot", root.tc3891OwnerRegistryRecordRoot?.root.ceiling],
     ["tc4222PermissionLineRoot", root.tc4222PermissionLineRoot?.root.ceiling],
     ["tc4322ReservedKeyRoot", root.tc4322ReservedKeyRoot?.root.ceiling],
+    ["tc4329ActivationCauseRoot", root.tc4329ActivationCauseRoot?.root.ceiling],
   ];
   return rows.flatMap(([row, ceiling]) => ceiling === undefined ? [] : [{ row, ceiling }]);
 }
@@ -4358,6 +4361,35 @@ export const approvedTc4322ReservedKeyRoot: LogoutRatchet = {
   "reason": "Both canonical jobs (SQLite and Postgres, run 45636642055 at f7e8d6eb, base 88c660988) measured 1501533/1487573 gzip bytes against tc4222PermissionLineRoot's 1542479/1487567, and master 88c660988 measured 1501525/1487567 (+8/+6). The Web SDK root carries node-sdk's sign-in host resolution, which accepts the reserved bot-history key on the owner's own network (NodeUserAuthorization). Details: TC-4322"
 };
 
+export const approvedTc4329ActivationCauseRoot: LogoutRatchet = {
+  "label": "a revoked peer's activation refusal skips that peer (TC-4329)",
+  "ruling": "test-ruling: TC-4329 (Naomi 16:59Z). New ledger row tc4329ActivationCauseRoot in replica-size-ledger.json after tc4322ReservedKeyRoot (:3930), web-sdk root cjs ceiling 1487573 → 1487585 (+12), mjs unchanged 1542479, base f4c3a74d, CI run 45657409735. Mirror it at replica-size-policy.ts :515, :1184, :1323, :4334, :4494 and :5121-5123. Add tc4329ActivationCauseRoot beside every tc4322ReservedKeyRoot delete/undefined in scripts/*size-policy*.test.ts (the 46 sites listed, including the :80 filter). No assertion value changes. Anything else stops and comes to me.",
+  "base": "f4c3a74dbd161396a981cc9ef1e0f509e23af604",
+  "sourceCommits": [
+    "430c71d3015229453cb91cbabb9f96ec6bed1f19",
+    "8996f1bf2c08b70e4a436ffd323f23c5667646ba",
+    "9c1ff6564560dd34726a46145ef29ae20fd467eb"
+  ],
+  "canonicalCI": {
+    "run": "45657409735",
+    "jobs": [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45657409735/job/139357697474",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/45657409735/job/139357696942"
+    ]
+  },
+  "root": {
+    "delta": {
+      "index.mjs": 0,
+      "index.cjs": 12
+    },
+    "ceiling": {
+      "index.mjs": 1542479,
+      "index.cjs": 1487585
+    }
+  },
+  "reason": "Both canonical jobs (SQLite and Postgres, run 45657409735 at 9c1ff656, base f4c3a74d) measured 1501551/1487585 gzip bytes against tc4322ReservedKeyRoot's 1542479/1487573. The node-sdk activation refusal carries the host response as cause, compiled into the Web SDK root. Details: TC-4329"
+};
+
 export const approvedLedgerRows: Record<string, unknown> = {
   phase2Ratchet: approvedPhase2,
   fixRequiredRatchet: approvedFixRequiredRatchet,
@@ -4492,6 +4524,7 @@ export const approvedLedgerRows: Record<string, unknown> = {
   tc3891OwnerRegistryRecordRoot: approvedTc3891OwnerRegistryRecordRoot,
   tc4222PermissionLineRoot: approvedTc4222PermissionLineRoot,
   tc4322ReservedKeyRoot: approvedTc4322ReservedKeyRoot,
+  tc4329ActivationCauseRoot: approvedTc4329ActivationCauseRoot,
   tc3522InvocationRefusalKvWorker: approvedTc3522InvocationRefusalKvWorker,
   tc3522InvocationRefusalReplicaWorker: approvedTc3522InvocationRefusalReplicaWorker,
 };
@@ -5122,6 +5155,11 @@ export function validateLedger(value: Ledger, historicalBase = false): void {
       (!value.tc4222PermissionLineRoot ||
         JSON.stringify(value.tc4322ReservedKeyRoot) !== JSON.stringify(approvedTc4322ReservedKeyRoot))) {
     throw new Error("Only the exact TC-4322 reserved key root admission is approved.");
+  }
+  if (value.tc4329ActivationCauseRoot !== undefined &&
+      (!value.tc4322ReservedKeyRoot ||
+        JSON.stringify(value.tc4329ActivationCauseRoot) !== JSON.stringify(approvedTc4329ActivationCauseRoot))) {
+    throw new Error("Only the exact TC-4329 activation cause root admission is approved.");
   }
   if (value.tc3522InvocationRefusalKvWorker !== undefined || value.tc3522InvocationRefusalReplicaWorker !== undefined) {
     if (!value.tc3947ReplicaRevokeRoot ||
