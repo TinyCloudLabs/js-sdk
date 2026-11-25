@@ -42,10 +42,10 @@ jobs:
     outputs:
       enabled: ${{ steps.gate.outputs.enabled }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: '20'
       - name: Read the release switch
@@ -96,6 +96,8 @@ jobs:
 
       - name: Install wasm-pack
         uses: ./.github/actions/install-wasm-pack
+        with:
+          rust-version: '1.100.0'
 
       # The checkout's lockfile is used as committed; only the versioning step below may change it (TC-1155).
       - run: bun install --frozen-lockfile
@@ -144,7 +146,7 @@ jobs:
         if: steps.check.outputs.pending != '0'
         run: |
           node .github/scripts/scoped-version.mjs version
-          # After a version bump bun 1.4 can need a second install to settle workspace dependency
+          # After a version bump Bun can need a second install to settle workspace dependency
           # specs; commit a lockfile that a later install leaves unchanged (TC-1155).
           for pass in 1 2 3; do
             cp bun.lock "$RUNNER_TEMP/bun.lock.before"
@@ -375,6 +377,8 @@ jobs:
 
       - name: Install wasm-pack
         uses: ./.github/actions/install-wasm-pack
+        with:
+          rust-version: '1.100.0'
 
       # Keep the checkout clean before selecting a previously pushed release.
       - run: bun install --frozen-lockfile
@@ -528,16 +532,16 @@ jobs:
       # Checked out at the version commit the release job published, so the
       # CHANGELOG sections match the published versions. That commit's copy of
       # the script is the one the release job ran.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           ref: ${{ needs.release.outputs.release-sha || needs.release-resume.outputs.release-sha }}
           persist-credentials: false
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: '20'
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: release-publish-log
           path: ${{ runner.temp }}/release-publish

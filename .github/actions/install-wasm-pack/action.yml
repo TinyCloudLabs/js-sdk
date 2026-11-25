@@ -8,10 +8,27 @@ inputs:
     description: wasm-pack version to install
     required: false
     default: 0.13.1
+  rust-version:
+    description: Require this active rustc version before using or building wasm-pack
+    required: false
+    default: ''
 
 runs:
   using: composite
   steps:
+    - name: Verify active Rust version
+      if: inputs.rust-version != ''
+      shell: bash
+      env:
+        EXPECTED_RUST_VERSION: ${{ inputs.rust-version }}
+      run: |
+        actual="$(rustc --version)"
+        echo "$actual"
+        case "$actual" in
+          "rustc $EXPECTED_RUST_VERSION"|"rustc $EXPECTED_RUST_VERSION "*) ;;
+          *) echo "::error::Expected rustc $EXPECTED_RUST_VERSION; got $actual"; exit 1 ;;
+        esac
+
     - name: Restore wasm-pack binary
       id: cache
       uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
