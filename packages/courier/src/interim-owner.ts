@@ -177,14 +177,14 @@ export function assertEpisodeGrant(pending: PendingGrantRequest, payload: GrantP
   const current = loadGrant();
   if (!current) return;
   if (episode.courierDid !== loadProfile().courierDid || episode.requestHash !== requestHash(pending.request)) {
-    throw new CourierError('stale-approval', `This approval is out of date. To fix it, run \`${cmd('init --rotate-key --request')}\`. This makes a new Courier key, removes all your pairings and deletes the saved approval on this device. Approve the new request, then pair with your peers again. The old approval stays valid until it expires or you revoke it. Your peers keep their current access until it expires. To end it sooner, run \`${cmd('revoke <peer>')}\` before you rotate.`);
+    throw new CourierError('stale-approval', `This approval is out of date. To fix it, run \`${cmd('init --rotate-key --request')}\`. This makes a new Courier key, removes all your pairings and deletes the saved approval on this device. Approve the new request, then pair with your peers again. The old approval stays valid until it expires or you revoke it. Agents of other owners keep their current access until it expires. To end it sooner, run \`${cmd('revoke <peer>')}\` before you rotate. Your other agents keep access through their own approvals.`);
   }
   if (current.delegationCid !== episode.ownerGrantCid) {
     const nextEnd = siweTimes(payload.siwe).expiresAt?.getTime();
     const currentEnd = siweTimes(current.siwe).expiresAt?.getTime();
     const savedEnd = Date.parse(current.expiresAt);
     if (!nextEnd || !currentEnd || !Number.isFinite(savedEnd) || nextEnd <= Math.max(currentEnd, savedEnd)) {
-      throw new CourierError('stale-approval', `This approval is out of date. To fix it, run \`${cmd('init --rotate-key --request')}\`. This makes a new Courier key, removes all your pairings and deletes the saved approval on this device. Approve the new request, then pair with your peers again. The old approval stays valid until it expires or you revoke it. Your peers keep their current access until it expires. To end it sooner, run \`${cmd('revoke <peer>')}\` before you rotate.`);
+      throw new CourierError('stale-approval', `This approval is out of date. To fix it, run \`${cmd('init --rotate-key --request')}\`. This makes a new Courier key, removes all your pairings and deletes the saved approval on this device. Approve the new request, then pair with your peers again. The old approval stays valid until it expires or you revoke it. Agents of other owners keep their current access until it expires. To end it sooner, run \`${cmd('revoke <peer>')}\` before you rotate. Your other agents keep access through their own approvals.`);
     }
   }
 }
