@@ -24,7 +24,7 @@ delete root.tc3522InvocationRefusalKvWorker;
 delete root.tc3522InvocationRefusalReplicaWorker;
 const optional = structuredClone(optionalLedger) as OptionalLedger;
 delete optional.tc3947;
-optional.entries = optional.entries.filter((entry) => entry.pr !== "#1138" && entry.pr !== "#1161" && entry.pr !== "#1180");
+optional.entries = optional.entries.filter((entry) => entry.pr !== "#1138" && entry.pr !== "#1161" && entry.pr !== "#1180" && entry.pr !== "#1190");
 optional.allowance = { ...tc2931OptionalAllowance };
 
 const validate = (value: OptionalLedger) => validateOptionalLedger(value, true, true, true, true, true, true, true, true, true, true, true, true, true, root.tc2481OfflineReplicaTransport, root.tc2931BootstrapScope);

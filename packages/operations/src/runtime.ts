@@ -4,6 +4,7 @@ import type {
   TinyCloudNode,
 } from "@tinycloud/node-sdk";
 import type { RegistryFallbackReason } from "@tinycloud/sdk-core";
+import type { RegistryVerdictCache } from "@tinycloud/sdk-core/registry-verdict-cache";
 import { CLI_NAME } from "./cli-name.js";
 import * as nodeSdk from "@tinycloud/node-sdk";
 
@@ -78,26 +79,33 @@ function registryUrlForProfile(
 
 export function createInvocationRuntime(
   target: InvocationTarget,
+  requirement?: "authenticated",
+  registryVerdictCache?: RegistryVerdictCache,
 ): Promise<AuthenticatedRuntimeResolution>;
 export function createInvocationRuntime(
   target: InvocationTarget,
   requirement: "authenticated",
+  registryVerdictCache?: RegistryVerdictCache,
 ): Promise<AuthenticatedRuntimeResolution>;
 export function createInvocationRuntime(
   target: InvocationTarget,
   requirement: "restored",
+  registryVerdictCache?: RegistryVerdictCache,
 ): Promise<AuthenticatedRuntimeResolution>;
 export function createInvocationRuntime(
   target: InvocationTarget,
   requirement: "inspection",
+  registryVerdictCache?: RegistryVerdictCache,
 ): Promise<InvocationRuntimeResolution>;
 export function createInvocationRuntime(
   target: InvocationTarget,
   requirement: OperationRuntimeRequirement,
+  registryVerdictCache?: RegistryVerdictCache,
 ): Promise<InvocationRuntimeResolution>;
 export async function createInvocationRuntime(
   target: InvocationTarget,
   requirement: OperationRuntimeRequirement = "authenticated",
+  registryVerdictCache?: RegistryVerdictCache,
 ): Promise<InvocationRuntimeResolution> {
   const resolved = await resolveInvocationProfile(target);
   if (!resolved.ok) {
@@ -113,7 +121,7 @@ export async function createInvocationRuntime(
     return { ok: true, context: { summary } };
   }
   if (requirement === "restored") {
-    return createRestoredRuntime(target, resolved);
+    return createRestoredRuntime(target, resolved, registryVerdictCache);
   }
 
   const profileName = summary.profile;
@@ -170,6 +178,7 @@ export async function createInvocationRuntime(
       host: summary.host,
       registryCacheStore: createProfileRegistryCacheStore(profileName),
       registrySequenceStore: createProfileRegistrySequenceStore(profileName),
+      registryVerdictCache,
       onRegistryFallback: (_message, reason) => collectRegistryFallbackWarning(warnings, reason),
       ...(tinycloudRegistryUrl === undefined ? {} : { tinycloudRegistryUrl }),
       ...(privateKey === undefined ? {} : { privateKey, ...nodeSdk.ownerFullAccess() }),
@@ -286,6 +295,7 @@ export async function createInvocationRuntime(
 async function createRestoredRuntime(
   target: InvocationTarget,
   resolved: Extract<InvocationProfileResolution, { ok: true }>,
+  registryVerdictCache?: RegistryVerdictCache,
 ): Promise<InvocationRuntimeResolution> {
   const summary = resolved.context;
   const profileName = summary.profile;
@@ -358,6 +368,7 @@ async function createRestoredRuntime(
       host: summary.host,
       registryCacheStore: createProfileRegistryCacheStore(profileName),
       registrySequenceStore: createProfileRegistrySequenceStore(profileName),
+      registryVerdictCache,
       onRegistryFallback: (_message, reason) => collectRegistryFallbackWarning(warnings, reason),
       ...(tinycloudRegistryUrl === undefined ? {} : { tinycloudRegistryUrl }),
       ...(typeof profile.privateKey === "string" ? { privateKey: profile.privateKey } : {}),

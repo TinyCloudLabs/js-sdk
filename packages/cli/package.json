@@ -35,7 +35,7 @@
   "dependencies": {
     "@tinycloud/share-sdk": "1.6.0",
     "@tinycloud/share-envelope": "1.6.0",
-    "@tinycloud/node-sdk": "3.15.0",
+    "@tinycloud/node-sdk": "3.16.0",
     "@tinycloud/node-sdk-wasm": "1.8.0",
     "@tinycloud/sdk-core": "3.15.0",
     "@tinycloud/sdk-services": "3.15.0",
