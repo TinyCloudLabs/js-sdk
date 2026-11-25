@@ -1,5 +1,16 @@
 # @tinycloud/operations
 
+## 0.10.2
+
+### Patch Changes
+
+- d44a3f4: `invokeOperation` and the authenticated and restored runtime constructors take an optional last parameter, `registryVerdictCache`, to share registry lookups. Callers that leave it out look up the registry on each call.
+
+  Details: TC-4373
+
+- Updated dependencies [31faaff]
+  - @tinycloud/node-sdk@3.16.1
+
 ## 0.10.1
 
 ### Patch Changes

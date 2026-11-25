@@ -196,7 +196,7 @@
     },
     "packages/cli": {
       "name": "@tinycloud/cli",
-      "version": "1.9.3",
+      "version": "1.10.0",
       "bin": {
         "tc": "./bin/tinycloud",
         "tinycloud": "./bin/tinycloud",
@@ -268,7 +268,7 @@
     },
     "packages/node-sdk": {
       "name": "@tinycloud/node-sdk",
-      "version": "3.16.0",
+      "version": "3.16.1",
       "dependencies": {
         "@tinycloud/node-sdk-wasm": "1.8.0",
         "@tinycloud/replica": "0.4.8",
@@ -287,7 +287,7 @@
     },
     "packages/operations": {
       "name": "@tinycloud/operations",
-      "version": "0.10.1",
+      "version": "0.10.2",
       "dependencies": {
         "@tinycloud/node-sdk": "3.15.0",
         "@tinycloud/sdk-core": "3.15.0",

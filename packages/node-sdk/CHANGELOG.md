@@ -1,5 +1,13 @@
 # @tinycloudlabs/node-sdk
 
+## 3.16.1
+
+### Patch Changes
+
+- 31faaff: `RuntimeDelegationRejectedError` from a delegation activation carries the node's response (HTTP status and body) as its `cause`, so callers can inspect it without parsing the message. Reason codes and messages are the same.
+
+  Details: TC-4329
+
 ## 3.16.0
 
 ### Patch Changes

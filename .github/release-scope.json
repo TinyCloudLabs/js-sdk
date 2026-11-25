@@ -7,13 +7,9 @@
     "@tinycloud/operations"
   ],
   "baselines": {
-    "@tinycloud/cli": "1.9.3",
-    "@tinycloud/node-sdk": "3.16.0",
-    "@tinycloud/operations": "0.10.1"
-  },
-  "expect": {
     "@tinycloud/cli": "1.10.0",
     "@tinycloud/node-sdk": "3.16.1",
     "@tinycloud/operations": "0.10.2"
-  }
+  },
+  "expect": {}
 }
