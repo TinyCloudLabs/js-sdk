@@ -10,19 +10,12 @@
     "@tinycloud/sdk-services"
   ],
   "baselines": {
-    "@tinycloud/cli": "1.9.2",
-    "@tinycloud/node-sdk": "3.14.0",
-    "@tinycloud/operations": "0.10.0",
-    "@tinycloud/replica": "0.4.7",
-    "@tinycloud/sdk-core": "3.14.0",
-    "@tinycloud/sdk-services": "3.14.0"
-  },
-  "expect": {
     "@tinycloud/cli": "1.9.3",
     "@tinycloud/node-sdk": "3.15.0",
     "@tinycloud/operations": "0.10.1",
     "@tinycloud/replica": "0.4.8",
     "@tinycloud/sdk-core": "3.15.0",
     "@tinycloud/sdk-services": "3.15.0"
-  }
+  },
+  "expect": {}
 }

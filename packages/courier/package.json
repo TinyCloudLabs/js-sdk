@@ -30,8 +30,8 @@
     "test:live": "tsc -p tsconfig.json && node scripts/happy-path.mjs"
   },
   "dependencies": {
-    "@tinycloud/node-sdk": "3.14.0",
-    "@tinycloud/sdk-core": "3.14.0",
+    "@tinycloud/node-sdk": "3.15.0",
+    "@tinycloud/sdk-core": "3.15.0",
     "@tinycloud/share-envelope": "1.6.0",
     "@tinycloud/share-sdk": "1.6.0",
     "ulid": "^3.0.2"

@@ -20992,7 +20992,10 @@ async function acquireApprovalRequest(_did, options) {
     permissions: options.permissions.map(({ skipPrefix: _skipPrefix, ...entry2 }) => entry2),
     ...options.reason ? { reason: options.reason } : {},
     grantLifetimeSeconds: grantLifetimeSeconds(options.expiry),
-    ...options.renewalLeaseSeconds === void 0 ? {} : { renewal: { version: 1, leaseLifetimeSeconds: options.renewalLeaseSeconds } }
+    ...options.renewalLeaseSeconds === void 0 ? {} : {
+      renewal: { version: 1, leaseLifetimeSeconds: options.renewalLeaseSeconds },
+      ...options.renewalPurpose === void 0 ? {} : { purpose: options.renewalPurpose }
+    }
   };
   if (options.commandIntent !== void 0 && !/^auth-grant:[0-9a-f]{64}$/.test(options.commandIntent)) {
     throw invalid2("Invalid approval command intent.");
@@ -50476,9 +50479,11 @@ function onboardingPlan(selector = "apps", expiryOption) {
   }
   const what = feedOnly ? "use your Feed" : tasks.includes("feed") ? "use your apps and your Feed, and see your spaces" : "use your apps and see your spaces";
   const line = (words) => `Set up TinyCloud on this computer: ${what}, for ${words}`;
+  const renewalDays = renewalLeaseSeconds === void 0 ? void 0 : renewalLeaseSeconds / 86400;
   return {
     permissions: entries.sort((a, b) => `${a.space}\0${a.service}\0${a.path}`.localeCompare(`${b.space}\0${b.service}\0${b.path}`)),
-    asks: `${line(lifetime)}${renewalLeaseSeconds === void 0 ? "" : `, renewing for up to ${renewalLeaseSeconds / 86400} days`}.`,
+    // Onboarding asks with renewal on; the owner can turn it off in OpenKey, so the reason says so (TC-4247).
+    asks: `${line(lifetime)}.${renewalDays === void 0 ? "" : ` It renews for up to ${renewalDays} ${renewalDays === 1 ? "day" : "days"} unless you turn renewal off.`}`,
     finiteAsks: `${line(lifetime)}.`,
     expiry,
     ...renewalLeaseSeconds === void 0 ? {} : { renewalLeaseSeconds },
@@ -50530,6 +50535,8 @@ function registerOnboardCommand(program) {
           ...flow,
           profileName: ctx.profile,
           noPopup: true,
+          // Onboarding is standing access, so OpenKey starts the renewal box ticked; the owner can untick it (TC-4247).
+          ...flow.renewalLeaseSeconds === void 0 ? {} : { renewalPurpose: "standing" },
           ...deadlineMs === void 0 ? {} : { approvalWait: { deadlineMs, step: currentStep, of: steps.length } },
           onApprovalRequest: ({ approvalUrl }) => {
             console.error(`Approve in OpenKey (open the complete link):
@@ -52472,8 +52479,110 @@ function statusError(error, profile, warnings) {
 // src/commands/secrets.ts
 init_secret_keys();
 init_owner_did();
-init_types();
 import { migrateSecrets } from "@tinycloud/sdk-services/secrets/migrate";
+
+// src/lib/key-approval-batches.ts
+var MEASURED_HEADER_LIMIT_BYTES = 32751;
+var FALLBACK_BATCH_BUDGET_BYTES = Math.floor(MEASURED_HEADER_LIMIT_BYTES * 0.7);
+var MAX_CHECK_BYTES = 256 * 1024;
+var HEADER_LINE_OVERHEAD_BYTES = 17;
+var BASE_RESERVE_BYTES = 3e3;
+var MAX_HALVINGS = 3;
+var CHECK_TIMEOUT_MS = 1e4;
+var CHECK_HEADER = "X-TinyCloud-Header-Check";
+var MAX_ERROR_BODY_BYTES = 4096;
+function estimateKeyBytes(resource) {
+  const length6 = new TextEncoder().encode(resource).length;
+  return Math.ceil(1.05 * (4 / 3) * (4 / 3 * (length6 + 80) + length6 + 59));
+}
+function estimateBatchBytes(resources) {
+  return resources.reduce((sum, resource) => sum + estimateKeyBytes(resource), BASE_RESERVE_BYTES);
+}
+function batchKeyPaths(keyPaths, resourceOf, budgetBytes) {
+  const batches = [];
+  let current = [];
+  let bytes = BASE_RESERVE_BYTES;
+  for (const keyPath of [...new Set(keyPaths)].sort()) {
+    const cost = estimateKeyBytes(resourceOf(keyPath));
+    if (current.length > 0 && bytes + cost > budgetBytes) {
+      batches.push(current);
+      current = [];
+      bytes = BASE_RESERVE_BYTES;
+    }
+    current.push(keyPath);
+    bytes += cost;
+  }
+  if (current.length > 0) batches.push(current);
+  return batches;
+}
+async function checkHeaderFits(origin2, bytes, fetchImpl = globalThis.fetch) {
+  let response;
+  try {
+    response = await fetchImpl(new URL("/version", origin2), {
+      method: "GET",
+      headers: { [CHECK_HEADER]: "a".repeat(Math.min(bytes, MAX_CHECK_BYTES)) },
+      redirect: "manual",
+      signal: AbortSignal.timeout(CHECK_TIMEOUT_MS)
+    });
+  } catch {
+    return "unknown";
+  }
+  if (response.ok) {
+    await response.body?.cancel().catch(() => void 0);
+    return "fits";
+  }
+  if (response.status === 431) {
+    await response.body?.cancel().catch(() => void 0);
+    return "too_large";
+  }
+  const body = await readHead(response, MAX_ERROR_BODY_BYTES);
+  return response.status === 400 && /Request Header Or Cookie Too Large/i.test(body) ? "too_large" : "unknown";
+}
+async function readHead(response, limit) {
+  const reader = response.body?.getReader();
+  if (reader === void 0) return "";
+  const chunks = [];
+  let size = 0;
+  try {
+    while (size < limit) {
+      const { done, value: value4 } = await reader.read();
+      if (done) break;
+      chunks.push(value4.subarray(0, limit - size));
+      size += Math.min(value4.length, limit - size);
+    }
+  } catch {
+  } finally {
+    await reader.cancel().catch(() => void 0);
+  }
+  return new TextDecoder().decode(Buffer.concat(chunks));
+}
+async function planKeyApprovals(keyPaths, resourceOf, origin2, fetchImpl = globalThis.fetch) {
+  const fallback = {
+    batches: batchKeyPaths(keyPaths, resourceOf, FALLBACK_BATCH_BUDGET_BYTES),
+    budgetBytes: FALLBACK_BATCH_BUDGET_BYTES,
+    budgetSource: "fallback"
+  };
+  let limitBytes = MAX_CHECK_BYTES - HEADER_LINE_OVERHEAD_BYTES;
+  for (let halvings = 0; halvings <= MAX_HALVINGS; halvings++) {
+    const budgetBytes = Math.floor(limitBytes * 0.7);
+    if (budgetBytes <= FALLBACK_BATCH_BUDGET_BYTES) break;
+    const batches = batchKeyPaths(keyPaths, resourceOf, budgetBytes);
+    const bytes = Math.max(0, ...batches.map((batch) => estimateBatchBytes(batch.map(resourceOf))));
+    if (bytes <= FALLBACK_BATCH_BUDGET_BYTES || origin2 === void 0) break;
+    const verdict = await checkHeaderFits(origin2, Math.ceil(bytes * 1.05), fetchImpl);
+    if (verdict === "fits") return { batches, budgetBytes, budgetSource: "measured" };
+    if (verdict === "unknown") break;
+    limitBytes = Math.floor(limitBytes / 2);
+  }
+  return fallback;
+}
+function keyApprovalsLine(plan) {
+  const bytes = plan.budgetBytes.toLocaleString("en-US");
+  return plan.budgetSource === "measured" ? `Key approvals: ${plan.requests} (each up to ${bytes} bytes, measured on this node).` : `Key approvals: ${plan.requests} (each up to ${bytes} bytes, safe default; this node's limit was not measured).`;
+}
+
+// src/commands/secrets.ts
+init_types();
 var SECRETS_SPACE2 = "secrets";
 var SECRET_KV_ABILITIES = {
   get: secretCapabilityAction("get"),
@@ -53273,6 +53382,37 @@ function secretMigrateKeyPermissions(networkId, keyPaths) {
     skipPrefix: true
   }));
 }
+function secretMigrateKeyReason(index, count) {
+  return count === 1 ? "Give each secret being moved its own key. This reaches only those secrets, not the rest of your encrypted data." : `Give each secret being moved its own key (key approval ${index} of ${count}). This reaches only those secrets, not the rest of your encrypted data.`;
+}
+function heldKeyExpiry(node, batches) {
+  let earliest;
+  for (const permissions of batches) {
+    const expiries = node.getRuntimePermissionDelegations(permissions).map((delegation) => delegation.expiry.getTime());
+    if (expiries.length === 0) return void 0;
+    const expiry = new Date(Math.min(...expiries));
+    if (earliest === void 0 || expiry < earliest) earliest = expiry;
+  }
+  return earliest;
+}
+function secretMigrateKeyDeclined(error, index, count, heldUntil) {
+  if (!(error instanceof CLIError) || error.exitCode === ExitCode.NETWORK_ERROR) return error;
+  if (index > 1 && heldUntil === void 0) return error;
+  const until = heldUntil?.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+  const held = index === 1 ? "" : index === 2 ? ` Key approval 1 stays valid until ${until} and reaches only those secrets' keys.` : ` Key approvals 1 to ${index - 1} stay valid until ${until} and reach only those secrets' keys.`;
+  return Object.assign(
+    new CLIError(error.code, `Key approval ${index} of ${count} was declined, so no secret was moved.${held} To move the secrets, run \`${CLI_NAME34} secrets migrate\`.`, error.exitCode, error.metadata),
+    { cause: error }
+  );
+}
+async function secretMigrateActivationOrigin(node, networkId, keyPaths, host) {
+  if (keyPaths.length === 0) return void 0;
+  try {
+    return await node.resolveRegisteredDelegationHost(secretMigrateKeyPermissions(networkId, keyPaths.slice(0, 1)), host) ?? host;
+  } catch {
+    return void 0;
+  }
+}
 function formatSecretScopeFlag(options) {
   return options?.scope ? ` --scope ${JSON.stringify(options.scope)}` : "";
 }
@@ -53820,6 +53960,8 @@ function registerSecretsCommand(program, openKeyAcquisition) {
       const networkId = secretMigrateNetworkId(node, spaceUri);
       const dryRun = options.dryRun === true;
       let authorizeKeys;
+      let previewKeys;
+      let keyApprovals;
       if (!authOptions(options)?.privateKey) {
         const profile = await ProfileManager.getProfile(ctx.profile);
         if (!canRequestOwnerPermissions(profile)) {
@@ -53842,20 +53984,43 @@ function registerSecretsCommand(program, openKeyAcquisition) {
           secretMigratePermissions(spaceUri, networkId, dryRun),
           dryRun ? secretCommandReason("list") : "Give each of your older-format secrets its own key. This needs access to all your encrypted data, because only that access can read the older format."
         );
+        const plan = async (keyPaths) => {
+          const planned = await planKeyApprovals(
+            keyPaths,
+            (keyPath) => secretKeyResource(networkId, keyPath),
+            await secretMigrateActivationOrigin(node, networkId, keyPaths, ctx.host)
+          );
+          keyApprovals = { requests: planned.batches.length, budgetBytes: planned.budgetBytes, budgetSource: planned.budgetSource };
+          process.stderr.write(keyApprovalsLine(keyApprovals) + "\n");
+          return planned.batches;
+        };
+        previewKeys = async (keyPaths) => {
+          await plan(keyPaths);
+        };
         authorizeKeys = async (keyPaths) => {
-          await approve(secretMigrateKeyPermissions(networkId, keyPaths), "Give each secret being moved its own key. This reaches only those secrets, not the rest of your encrypted data.");
+          const batches = await plan(keyPaths);
+          for (const [index, batch] of batches.entries()) {
+            try {
+              await approve(secretMigrateKeyPermissions(networkId, batch), secretMigrateKeyReason(index + 1, batches.length));
+            } catch (error) {
+              if (batches.length === 1) throw error;
+              const held = batches.slice(0, index).map((earlier) => secretMigrateKeyPermissions(networkId, earlier));
+              throw secretMigrateKeyDeclined(error, index + 1, batches.length, heldKeyExpiry(node, held));
+            }
+          }
         };
       }
       const result = await migrateSecrets(secretsServiceForSpace(node, spaceUri), {
         ...names.length > 0 ? { names } : {},
         ...options.scope ? { scope: options.scope } : {},
         dryRun,
-        ...authorizeKeys === void 0 ? {} : { authorizeKeys }
+        ...authorizeKeys === void 0 ? {} : { authorizeKeys },
+        ...previewKeys === void 0 ? {} : { previewKeys }
       });
       if (!result.ok) {
         throw cliErrorFromService(result.error);
       }
-      outputJson({ ...result.data, ...spaceUri ? { space: spaceUri } : {} });
+      outputJson({ ...result.data, ...spaceUri ? { space: spaceUri } : {}, ...keyApprovals ? { keyApprovals } : {} });
     } catch (error) {
       return handleError(error);
     }

@@ -1,5 +1,31 @@
 # @tinycloud/cli
 
+## 1.9.3
+
+### Patch Changes
+
+- e845ffe: `tc courier init --wait` collects the saved approval request with the lifetime, renewal and hosts it was made with. A different host setting on `--wait` is refused, also once the owner has approved the request. A different `--expiry` or `--renew` is refused while the request waits for approval.
+
+  Details: TC-4264
+
+- d635dc8: `tc onboard` asks for a 7-day sign-in that renews for up to 30 days. In OpenKey the renewal box starts ticked and the owner can untick it. The reason it sends reads "Set up TinyCloud on this computer: use your apps and see your spaces, for 7 days. It renews for up to 30 days unless you turn renewal off." For `tc auth login` the box starts unticked. A 30-day sign-in that does not renew keeps its reason.
+
+  Details: TC-4247
+
+- a3ec199: `tc secrets migrate` splits the per-secret key approval so each signed request fits the node's header limit. Before asking, it sends one `GET /version` with a padding header to the node that will activate the keys. If that is refused as too large, it halves the size up to three times, then falls back to a size that fits a 32 KiB header. On a node with large header buffers, 140 keys are still one approval. The JSON output and a stderr line report how many key approvals the run needs and how large each may be.
+
+  Details: TC-4248
+
+- Updated dependencies [8727180]
+- Updated dependencies [a3ec199]
+- Updated dependencies [8727180]
+- Updated dependencies [03d49fe]
+- Updated dependencies [8727180]
+  - @tinycloud/sdk-core@3.15.0
+  - @tinycloud/node-sdk@3.15.0
+  - @tinycloud/sdk-services@3.15.0
+  - @tinycloud/operations@0.10.1
+
 ## 1.9.2
 
 ### Patch Changes
