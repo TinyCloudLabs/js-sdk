@@ -16,7 +16,6 @@ import { CLIError } from "../output/errors.js";
 import { isSessionExpiredError } from "../auth/session-expired.js";
 import { recordRegistryFallbackWarning } from "../output/warnings.js";
 import { createProfileRegistryCacheStore, createProfileRegistrySequenceStore, writeJsonAtomic } from "@tinycloud/operations/state";
-import { cliRegistryVerdictCache } from "../lib/registry-verdict-cache.js";
 import { withoutBearer } from "@tinycloud/operations/delegation-binding";
 import {
   ArtifactError,
@@ -1210,7 +1209,6 @@ export function createShareAuthorityAdapters(input: {
       sharing = () => new TinyCloudNode({
         ...registry, newUserHost: DEFAULT_TINYCLOUD_FALLBACK_HOST, autoDiscoverLocalNode: false,
         onRegistryFallback: recordRegistryFallbackWarning,
-        registryVerdictCache: cliRegistryVerdictCache,
       }).sharing;
     }
     const token = parseNativeShareUrl(link);
