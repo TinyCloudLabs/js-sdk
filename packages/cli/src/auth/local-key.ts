@@ -6,6 +6,7 @@ import { randomBytes } from "node:crypto";
 import { createCliReplicationConfig, type ProfileReplicationSettings } from "../lib/replication-config.js";
 import { recordRegistryFallbackWarning } from "../output/warnings.js";
 import { CLI_DEFAULT_SESSION_EXPIRY_MS } from "../config/constants.js";
+import { cliRegistryVerdictCache } from "../lib/registry-verdict-cache.js";
 
 let wasmInitialized = false;
 
@@ -118,6 +119,7 @@ export async function localKeySignIn(options: {
   const node = new TinyCloudNode({
     registryCacheStore: createProfileRegistryCacheStore(profile),
     registrySequenceStore: createProfileRegistrySequenceStore(profile),
+    registryVerdictCache: cliRegistryVerdictCache,
     onRegistryFallback: recordRegistryFallbackWarning,
     tinycloudRegistryUrl: process.env.TC_REGISTRY_URL || options.tinycloudRegistryUrl,
     privateKey: options.privateKey,

@@ -11,7 +11,7 @@ import {
 // Namespace-shaped so tests that mock @tinycloud/node-sdk partially still load this module.
 import * as nodeSdk from "@tinycloud/node-sdk";
 import { appSecretScope, MAX_SECRET_NAME_LENGTH, SECRET_TYPES, secretNameTooLongRefusal } from "@tinycloud/sdk-core";
-import { invokeOperation } from "@tinycloud/operations";
+import { invokeOperation, invokeSecretsGetWithLocalAuthorityRetry } from "../lib/operations.js";
 import { isLocalOwnerProfile, liveStoredLease, ownerSessionLacksProof } from "@tinycloud/operations/profile";
 import {
   buildSecretManagerUrl,
@@ -29,7 +29,6 @@ import {
   SECRET_DECRYPT_CAPABILITY,
   secretCapabilityAction,
 } from "@tinycloud/operations/secret-capabilities";
-import { invokeSecretsGetWithLocalAuthorityRetry } from "@tinycloud/operations/cli-runtime";
 import { ProfileManager } from "../config/profiles.js";
 import {
   formatCheck,

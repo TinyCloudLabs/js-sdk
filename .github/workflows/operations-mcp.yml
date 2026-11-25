@@ -202,6 +202,7 @@ jobs:
             [packages/cli/src/commands/secrets-per-secret-keys.e2e.test.ts]="needs a node with per-secret keys (1.26.21); run by node-replication-e2e.yml named-keys-node-e2e; TC-3852"
             [packages/cli/src/commands/secrets-scoped-get.e2e.test.ts]="needs a node with per-secret keys (1.26.21); run by node-replication-e2e.yml named-keys-node-e2e; TC-3802"
             [packages/cli/src/commands/secrets-scoped-put.e2e.test.ts]="needs a node with per-secret keys (1.26.21); run by node-replication-e2e.yml named-keys-node-e2e; TC-3802"
+            [packages/cli/src/commands/secrets-migrate.registry.e2e.test.ts]="needs a node with per-secret keys (1.26.21); run by node-replication-e2e.yml named-keys-node-e2e; TC-4373"
             # Run in their own step in conformance-core:
             [packages/cli/src/commands/secrets-private-key-production.test.ts]="run in isolation by its own step"
             # Known failures, tracked:
