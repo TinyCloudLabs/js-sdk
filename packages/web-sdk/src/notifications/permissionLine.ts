@@ -122,7 +122,10 @@ export function showHiddenCharacters(text: string): string {
   return text.replace(HIDDEN_CHARACTERS, (char) => `\\u{${char.charCodeAt(0).toString(16).toUpperCase().padStart(4, "0")}}`);
 }
 
-/** `entry` with its service, space, path and actions passed through {@link showHiddenCharacters}, for display only. */
+/**
+ * `entry` with its service, space, path, actions and description passed through {@link showHiddenCharacters}, for
+ * display only. The description is first folded to one trimmed line, so its line breaks and tabs show as spaces.
+ */
 export function visibleEntry(entry: PermissionEntry): PermissionEntry {
   return {
     ...entry,
@@ -130,6 +133,9 @@ export function visibleEntry(entry: PermissionEntry): PermissionEntry {
     ...(entry.space === undefined ? {} : { space: showHiddenCharacters(entry.space) }),
     path: showHiddenCharacters(entry.path),
     actions: entry.actions.map(showHiddenCharacters),
+    ...(typeof entry.description === "string"
+      ? { description: showHiddenCharacters(entry.description.replace(/\s+/g, " ").trim()) }
+      : {}),
   };
 }
 

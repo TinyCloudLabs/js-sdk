@@ -227,10 +227,15 @@ export class TinyCloudPermissionRequestModal extends HTMLElement {
         </div>
       `)
       .join("");
+    // The app's own description of the entry leads it, ahead of the built-in text and rows.
+    const description = typeof entry.description === "string" ? entry.description : "";
+    const descriptionMarkup = description === ""
+      ? ""
+      : `<p class="entry-description" data-role="entry-description">${escapeHtml(description)}</p>`;
 
     return `
       <li class="permission-entry">
-        ${capabilities === "" ? "" : `<ul class="permission-summary-list">${capabilities}</ul>`}
+        ${descriptionMarkup}${capabilities === "" ? "" : `<ul class="permission-summary-list">${capabilities}</ul>`}
         <details class="technical-details">
           <summary>Show technical details</summary>
           <p class="entry-summary">${escapeHtml(narrow?.summary ?? permissionScopeSummary(entry))}</p>
@@ -345,6 +350,10 @@ export class TinyCloudPermissionRequestModal extends HTMLElement {
       .entry-summary {
         font-size: 13px; line-height: 1.45; color: var(--modal-muted);
         margin: 10px 0;
+      }
+      .entry-description {
+        font-size: 15px; line-height: 1.4; color: var(--modal-foreground);
+        margin: 0 0 12px 0;
       }
       .permission-summary-list {
         list-style: none; padding: 0; margin: 0;
