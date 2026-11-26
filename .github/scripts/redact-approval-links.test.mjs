@@ -11,9 +11,11 @@ const KEY = "LaEsCG8UdojERGSJsaM16arolfEaf1PIjNRlK-UDtjY";
 const CID = "bafkreice67qbvd2aiktiubg7mtm7zzj7fq45vsuux453uo7mvmbc7bsxrq";
 const LINK = `https://openkey.example/a/${ID}#v=4&k=${KEY}&c=${CID}`;
 
-const leaks = (text) => [ID, KEY, "#v=4"].filter((secret) => text.includes(secret));
+// Whole values and their halves: a value cut in two by an escape sequence must not leak either half.
+const leaks = (text) => [ID, ID.slice(0, 13), ID.slice(13), KEY, KEY.slice(0, 16), KEY.slice(-16), "#v=4"]
+  .filter((secret) => text.includes(secret));
 
-test("a Bun diff line, a JSON dump and a bare id keep no link, fragment, key or id", () => {
+test("a Bun diff line, a JSON dump, a labelled key, an escaped or encoded link and a bare id keep no link, fragment, key or id", () => {
   for (const line of [
     `-   "${LINK}",`,
     `error: {"requestId":"${ID}","approvalUrl":"${LINK}","bodyCid":"${CID}"}`,
@@ -24,13 +26,31 @@ test("a Bun diff line, a JSON dump and a bare id keep no link, fragment, key or 
     `fragment #v=4&k=${KEY}&c=${CID}`,
     `key k=${KEY}`,
     `https://openkey.example/a/${ID}`,
-  ]) assert.deepEqual(leaks(redactApprovalLinks(line)), [], line);
+    // A labelled key, as Bun prints an object that holds one.
+    `k: "${KEY}"`,
+    `{"k":"${KEY}","r":"${KEY}"}`,
+    `+   "key": "${KEY}",`,
+    `key: '${KEY}'`,
+    // Colour or a hyperlink escape in the middle of a link.
+    `${LINK.slice(0, 65)}\u001b[31m${LINK.slice(65)}\u001b[0m`,
+    `\u001b]8;;file:///tmp/x.ts\u0007${LINK}\u001b]8;;\u0007`,
+    // JSON-escaped separators.
+    `"approvalUrl":"https:\\/\\/openkey.example\\/a\\/${ID}#v=4\\u0026k=${KEY}\\u0026c=${CID}"`,
+    `"fragment":"#v=4\\u0026k=${KEY}"`,
+    `"https://openkey.example/a/${ID}\\u0023v\\u003d4\\u0026k\\u003d${KEY}"`,
+    // A link percent-encoded inside another URL.
+    `https://example.test/continue?next=${encodeURIComponent(LINK)}`,
+    `next=${encodeURIComponent(LINK)}`,
+  ]) assert.deepEqual(leaks(redactApprovalLinks(line)), [], JSON.stringify(line));
 });
 
 test("equal values get equal tokens and different values different ones", () => {
   assert.equal(redactApprovalLinks(LINK), redactApprovalLinks(LINK));
   assert.notEqual(redactApprovalLinks(LINK), redactApprovalLinks(LINK.replace(ID, "a".repeat(26))));
   assert.notEqual(redactApprovalLinks(ID), redactApprovalLinks("a".repeat(26)));
+  const keyToken = (line) => redactApprovalLinks(line).match(/\[link-key [0-9a-f]{12}\]/)?.[0];
+  assert.ok(keyToken(`k=${KEY}`));
+  assert.equal(keyToken(`k: "${KEY}"`), keyToken(`k=${KEY}`));
 });
 
 test("other output is unchanged", () => {

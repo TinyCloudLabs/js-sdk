@@ -172,6 +172,7 @@ jobs:
           BUN_JSC_useConcurrentJIT: "0"
           SHARD_INDEX: ${{ matrix.shard }}
           SHARD_TOTAL: ${{ strategy.job-total }}
+          NO_COLOR: "1"
         run: |
           set -o pipefail
           if [ "$SHARD_INDEX" -lt 0 ] || [ "$SHARD_INDEX" -ge "$SHARD_TOTAL" ]; then
