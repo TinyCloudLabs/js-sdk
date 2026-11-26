@@ -18,6 +18,7 @@ import { createProfileRegistryCacheStore, createProfileRegistrySequenceStore, pr
 import { ExitCode } from "../config/constants.js";
 import { writeJsonDurable } from "../config/storage.js";
 import { assertNodeSupportsNamedKeys } from "../lib/named-keys.js";
+import { cliRegistryVerdictCache } from "../lib/registry-verdict-cache.js";
 import { CLIError } from "../output/errors.js";
 import { recordRegistryFallbackWarning } from "../output/warnings.js";
 import { ownerIdentitySigner, startPreparedOpenKeyHandoff, type HandoffPrepared } from "./prepared-openkey.js";
@@ -80,6 +81,7 @@ function appKeyNode(profileName: string, host: string, ownerDid: string, registr
   return new TinyCloudNode({
     registryCacheStore: createProfileRegistryCacheStore(profileName),
     registrySequenceStore: createProfileRegistrySequenceStore(profileName),
+    registryVerdictCache: cliRegistryVerdictCache,
     onRegistryFallback: recordRegistryFallbackWarning,
     ...(registryUrl === undefined ? {} : { tinycloudRegistryUrl: registryUrl }),
     host,
