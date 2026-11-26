@@ -40,6 +40,8 @@ jobs:
             node .github/scripts/test-mcp-deploy-env.mjs
       - name: Run MCP image :latest tag regression
         run: node .github/scripts/test-mcp-image-latest.mjs
+      - name: Run approval-link log redaction regression
+        run: node --test .github/scripts/redact-approval-links.test.mjs
       - name: Generate and scan authored coverage
         run: |
           bun run check:operations-mcp
@@ -170,6 +172,7 @@ jobs:
           BUN_JSC_useConcurrentJIT: "0"
           SHARD_INDEX: ${{ matrix.shard }}
           SHARD_TOTAL: ${{ strategy.job-total }}
+          NO_COLOR: "1"
         run: |
           set -o pipefail
           if [ "$SHARD_INDEX" -lt 0 ] || [ "$SHARD_INDEX" -ge "$SHARD_TOTAL" ]; then
@@ -253,7 +256,8 @@ jobs:
             fi
             ran=$((ran + 1))
             echo "::group::$file"
-            if ! timeout 300 bash "$GITHUB_WORKSPACE/.github/scripts/run-private-tests.sh" bun test "./$file" 2>&1 | tee "$log"; then
+            # Approval links, fragments and request ids are redacted before the log (TC-4415).
+            if ! timeout 300 bash "$GITHUB_WORKSPACE/.github/scripts/run-private-tests.sh" bun test "./$file" 2>&1 | node "$GITHUB_WORKSPACE/.github/scripts/redact-approval-links.mjs" | tee "$log"; then
               failed+=("$file (failed, or ran past 300s)")
               echo "::error title=unit test failed::$file"
             elif ! grep -Eq '^ *[1-9][0-9]* pass' "$log"; then
