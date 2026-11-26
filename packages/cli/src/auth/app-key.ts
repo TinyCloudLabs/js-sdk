@@ -230,7 +230,7 @@ export async function loginWithAppKey(options: AppKeyLoginOptions): Promise<AppK
       try {
         const info = await staged.stat();
         if (!info.isFile() || info.uid !== process.getuid?.() || (info.mode & 0o777) !== 0o600) {
-          throw unusable(options.profileName, "changed before publication");
+          throw unusable(options.profileName, "changed before it could be saved for use");
         }
         await staged.chmod(0);
         await staged.sync();
