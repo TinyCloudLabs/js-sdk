@@ -3047,7 +3047,7 @@ async function handleAppKeyLogin(ctx: CLIContext, globalOpts: Record<string, unk
     ensureProfile: async () => {
       const created = await ProfileManager.withLock(ctx.profile, async () => {
         if (await ProfileManager.profileExists(ctx.profile) && await ProfileManager.getStoredKey(ctx.profile) !== null) return undefined;
-        return createKeyOnlyProfile(ctx.profile, typeof globalOpts.host === "string" ? globalOpts.host : DEFAULT_HOST);
+        return createKeyOnlyProfile(ctx.profile, typeof globalOpts.host === "string" ? globalOpts.host : DEFAULT_HOST, undefined, { signedOut: true });
       });
       if (created) process.stderr.write(`Created profile "${ctx.profile}"\n`);
     },

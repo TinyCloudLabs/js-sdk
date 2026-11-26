@@ -11,6 +11,8 @@ import * as preparedOpenKey from "./prepared-openkey.js";
 import { ProfileManager } from "../config/profiles.js";
 import { clearProfileCredentials } from "../lib/logout-pending.js";
 import { loginWithAppKey, openVerifiedAppKey } from "./app-key.js";
+import * as fsPromises from "node:fs/promises";
+import { createKeyOnlyProfile } from "../commands/init.js";
 
 // Published disposable key; never holds funds or data.
 const PRIVATE_KEY = "11".repeat(32);
@@ -145,10 +147,14 @@ describe("saved app-key approval", () => {
 
 
 describe("app-key approval lifecycle", () => {
-  async function pendingLogin(delay: "approval" | "delegate", signedOut = false) {
+  async function pendingLogin(delay: "approval" | "delegate", signedOut = false, ensureProfile?: () => Promise<void>) {
     await save(permit());
     await removeAppKeyPermit(PROFILE);
-    if (signedOut) await clearProfileCredentials(PROFILE, true);
+    if (signedOut) {
+      await clearProfileCredentials(PROFILE, true);
+      // A previous usable permit may survive a failed logout cleanup.
+      await writeJsonDurable(join(profilePath(PROFILE), "app-key-permit.json"), permit());
+    }
     const reached = Promise.withResolvers<void>();
     const release = Promise.withResolvers<void>();
     globalThis.fetch = (async () => Response.json({ features: ["encryption-named-keys-v1"] })) as typeof fetch;
@@ -170,11 +176,11 @@ describe("app-key approval lifecycle", () => {
     const login = loginWithAppKey({
       profileName: PROFILE, host: HOST, openKeyHost: "https://openkey.test",
       ownerDid: OWNER, fullKey: KEY, lifetimeMs: undefined, registryUrl: undefined,
-      paste: true, noPopup: true, ensureProfile: async () => {
+      paste: true, noPopup: true, ensureProfile: ensureProfile ?? (async () => {
         if (await ProfileManager.getStoredKey(PROFILE) === null) {
           await ProfileManager.setKey(PROFILE, { kty: "OKP", fixture: true });
         }
-      },
+      }),
     });
     const settled = login.then(() => ({ ok: true as const }), (error: unknown) => ({ ok: false as const, error }));
     await reached.promise;
@@ -227,5 +233,58 @@ describe("app-key approval lifecycle", () => {
     pending.release.resolve();
     expect((await pending.settled).ok).toBe(false);
     expect(await loadAppKeyPermit(PROFILE)).toBeUndefined();
+  });
+
+  test("key regeneration followed by config failure cannot reopen a retained permit", async () => {
+    const pending = await pendingLogin("delegate", true, async () => {
+      await createKeyOnlyProfile(PROFILE, HOST, undefined, { signedOut: true });
+    });
+    spies.push(spyOn(ProfileManager, "getConfig").mockRejectedValue(new Error("injected config read failure")));
+    pending.release.resolve();
+    expect((await pending.settled).ok).toBe(false);
+    await expect(verifiedSavedAppKey(PROFILE, HOST, KEY)).rejects.toBeDefined();
+  });
+
+  test("fence-clear rename followed by directory fsync failure cannot publish a permit", async () => {
+    const pending = await pendingLogin("delegate");
+    const realSetProfileDurable = ProfileManager.setProfileDurable;
+    const realOpen = fsPromises.open;
+    let clearing = false;
+    let failedAfterRename = false;
+    spies.push(spyOn(ProfileManager, "setProfileDurable").mockImplementation(async (name, profile) => {
+      clearing = profile.authSignedOut === false;
+      return realSetProfileDurable.call(ProfileManager, name, profile);
+    }));
+    spies.push(spyOn(fsPromises, "open").mockImplementation(async (...args) => {
+      const handle = await realOpen(...args);
+      if (clearing && args[1] === "r" &&
+          JSON.parse(await fsPromises.readFile(join(profilePath(PROFILE), "profile.json"), "utf8")).authSignedOut === false) {
+        clearing = false;
+        spies.push(spyOn(handle, "sync").mockImplementation(async () => {
+          failedAfterRename = JSON.parse(await fsPromises.readFile(join(profilePath(PROFILE), "profile.json"), "utf8")).authSignedOut === false;
+          throw new Error("injected directory fsync failure after rename");
+        }));
+      }
+      return handle;
+    }));
+    pending.release.resolve();
+    expect(await pending.settled).toMatchObject({ ok: false, error: { message: "injected directory fsync failure after rename" } });
+    expect(failedAfterRename).toBe(true);
+    await expect(verifiedSavedAppKey(PROFILE, HOST, KEY)).rejects.toBeDefined();
+    expect((await fsPromises.stat(join(profilePath(PROFILE), "app-key-permit.json"))).mode & 0o777).toBe(0);
+    expect(await loadAppKeyPermit(PROFILE)).toBeUndefined();
+  });
+
+  test("ordinary profile reads never re-enable a staged app-key permit", async () => {
+    const file = await save(permit());
+    await chmod(file, 0);
+    const unrelated = join(profilePath(PROFILE), "unrelated.json");
+    await writeFile(unrelated, "{}");
+    await chmod(unrelated, 0o644);
+    await ProfileManager.getProfile(PROFILE);
+    expect((await fsPromises.stat(file)).mode & 0o777).toBe(0);
+    expect((await fsPromises.stat(unrelated)).mode & 0o777).toBe(0o600);
+    expect(await loadAppKeyPermit(PROFILE)).toBeUndefined();
+    await expect(verifiedSavedAppKey(PROFILE, HOST, KEY)).rejects.toBeDefined();
   });
 });

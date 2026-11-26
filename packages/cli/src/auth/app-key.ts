@@ -1,5 +1,5 @@
 import { constants as fsConstants } from "node:fs";
-import { lstat, open, rm, stat, type FileHandle } from "node:fs/promises";
+import { chmod, lstat, open, rm, stat, type FileHandle } from "node:fs/promises";
 import { join } from "node:path";
 import { REPLICA_LOGOUT_PENDING_FILE, TinyCloudNode } from "@tinycloud/node-sdk";
 import {
@@ -58,7 +58,8 @@ export async function loadAppKeyPermit(profile: string): Promise<AppKeyPermit | 
     // O_NOFOLLOW: a symlink is never followed; O_NONBLOCK: a FIFO cannot hang the open.
     handle = await open(permitFile(profile), fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW | fsConstants.O_NONBLOCK);
     const info = await handle.stat();
-    if (!info.isFile() || info.uid !== process.getuid?.() || (info.mode & 0o077) !== 0) throw unusable(profile, "has loose file permissions");
+    if (info.isFile() && info.uid === process.getuid?.() && (info.mode & 0o777) === 0) return undefined;
+    if (!info.isFile() || info.uid !== process.getuid?.() || (info.mode & 0o777) !== 0o600) throw unusable(profile, "has invalid file permissions");
     const stored = JSON.parse(await handle.readFile("utf8")) as Partial<AppKeyPermit> | null;
     if (stored?.version !== 1 || typeof stored.host !== "string" || typeof stored.request?.path !== "string" ||
       typeof stored.request.ownerDid !== "string" || typeof stored.request.requestedSiwe !== "string" ||
@@ -70,6 +71,10 @@ export async function loadAppKeyPermit(profile: string): Promise<AppKeyPermit | 
   } catch (error) {
     if (error instanceof CLIError) throw error;
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    if ((error as NodeJS.ErrnoException).code === "EACCES") {
+      const info = await lstat(permitFile(profile));
+      if (info.isFile() && info.uid === process.getuid?.() && (info.mode & 0o777) === 0) return undefined;
+    }
     throw unusable(profile, "can't be read");
   } finally {
     await handle?.close();
@@ -211,14 +216,33 @@ export async function loginWithAppKey(options: AppKeyLoginOptions): Promise<AppK
         throw new CLIError("PROFILE_CHANGED_DURING_LOGIN", "The profile changed while approval was pending. Nothing was saved. Start a new login if you need access.", ExitCode.AUTH_REQUIRED);
       }
       await assertProfileAvailable(options.profileName, false);
+      const previous = (await readProfileSnapshot(options.profileName)).profile;
+      if (previous) await ProfileManager.setProfileDurable(options.profileName, { ...previous, authSignedOut: true });
       await options.ensureProfile();
       const profile = await ProfileManager.getProfile(options.profileName);
       // Fence first: a failed replacement cannot leave a new permit eligible.
       await ProfileManager.setProfileDurable(options.profileName, { ...profile, authSignedOut: true });
       const { optIn: _optIn, ...request } = built.request;
       await writeJsonDurable(permitFile(options.profileName), { version: 1, host: options.host, request, proof } satisfies AppKeyPermit);
+      // Persist independent denial before clearing the profile fence. Readers
+      // reject mode000 even if run with privileges that can still open it.
+      const staged = await open(permitFile(options.profileName), fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
+      try {
+        const info = await staged.stat();
+        if (!info.isFile() || info.uid !== process.getuid?.() || (info.mode & 0o777) !== 0o600) {
+          throw unusable(options.profileName, "changed before publication");
+        }
+        await staged.chmod(0);
+        await staged.sync();
+      } finally {
+        await staged.close();
+      }
       const { authKeyRetained: _retained, ...signedIn } = profile;
       await ProfileManager.setProfileDurable(options.profileName, { ...signedIn, authSignedOut: false });
+      // Last storage operation: publication can lose availability after a crash
+      // (durable mode000), never make a failed pre-publication clear eligible.
+      // The pinned private profile directory and cooperative lock exclude replacement.
+      await chmod(permitFile(options.profileName), 0o600);
     });
     await handoff.complete(true);
     return {
