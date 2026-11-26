@@ -7709,6 +7709,39 @@ var init_logout_pending = __esm({
   }
 });
 
+// src/lib/registry-verdict-cache.ts
+import { setTimeout as setTimeout2 } from "timers/promises";
+import { createRegistryVerdictCache } from "@tinycloud/sdk-core/registry-verdict-cache";
+function createCliRegistryVerdictCache(sleep = setTimeout2) {
+  const cache5 = createRegistryVerdictCache();
+  return {
+    get(scope, lookup) {
+      return cache5.get(scope, async () => {
+        for (let attempt = 0; ; attempt++) {
+          try {
+            const verdict = await lookup();
+            if (attempt === 2 || verdict.status !== "unregistered" || !verdict.offline) return verdict;
+          } catch (error) {
+            const failure = error;
+            if (attempt === 2 || failure?.code !== "registry_unavailable" || failure.meta?.reason !== "no-saved-settings") throw error;
+          }
+          await sleep(attempt === 0 ? 250 : 750);
+        }
+      });
+    },
+    invalidate(registryUrl, subject) {
+      cache5.invalidate(registryUrl, subject);
+    }
+  };
+}
+var cliRegistryVerdictCache;
+var init_registry_verdict_cache = __esm({
+  "src/lib/registry-verdict-cache.ts"() {
+    "use strict";
+    cliRegistryVerdictCache = createCliRegistryVerdictCache();
+  }
+});
+
 // src/lib/sdk.ts
 var sdk_exports = {};
 __export(sdk_exports, {
@@ -7811,6 +7844,7 @@ async function restoreProfileSessionNode(ctx) {
     const node = new TinyCloudNode({
       registryCacheStore: createProfileRegistryCacheStore(ctx.profile),
       registrySequenceStore: createProfileRegistrySequenceStore(ctx.profile),
+      registryVerdictCache: cliRegistryVerdictCache,
       onRegistryFallback: recordRegistryFallbackWarning,
       ...tinycloudRegistryUrl === void 0 ? {} : { tinycloudRegistryUrl },
       host: ctx.host,
@@ -7839,6 +7873,7 @@ async function storedSessionVerifiesLocally(profileName) {
     const node = new TinyCloudNode({
       registryCacheStore: createProfileRegistryCacheStore(profileName),
       registrySequenceStore: createProfileRegistrySequenceStore(profileName),
+      registryVerdictCache: cliRegistryVerdictCache,
       onRegistryFallback: recordRegistryFallbackWarning,
       ...cliRetryPolicy(),
       ...tinycloudRegistryUrl === void 0 ? {} : { tinycloudRegistryUrl },
@@ -7891,6 +7926,7 @@ async function createSDKInstance(ctx, options) {
     const node2 = new TinyCloudNode({
       registryCacheStore: createProfileRegistryCacheStore(ctx.profile),
       registrySequenceStore: createProfileRegistrySequenceStore(ctx.profile),
+      registryVerdictCache: cliRegistryVerdictCache,
       onRegistryFallback: recordRegistryFallbackWarning,
       ...cliRetryPolicy(),
       ...tinycloudRegistryUrl === void 0 ? {} : { tinycloudRegistryUrl },
@@ -7939,6 +7975,7 @@ async function createSDKInstance(ctx, options) {
   const node = new TinyCloudNode({
     registryCacheStore: createProfileRegistryCacheStore(ctx.profile),
     registrySequenceStore: createProfileRegistrySequenceStore(ctx.profile),
+    registryVerdictCache: cliRegistryVerdictCache,
     onRegistryFallback: recordRegistryFallbackWarning,
     ...cliRetryPolicy(),
     ...tinycloudRegistryUrl === void 0 ? {} : { tinycloudRegistryUrl },
@@ -8128,6 +8165,7 @@ var init_sdk = __esm({
     init_replication_config();
     init_replication_registry();
     init_logout_pending();
+    init_registry_verdict_cache();
     init_replication_registry();
     BOOTSTRAP_PROFILE_FIELDS = ["sessionDid", "spaceId", "authSignedOut", "authKeyRetained"];
   }
@@ -15454,7 +15492,8 @@ function buildShareInvitationApprovalSpec(input) {
   const lifetime = Math.floor((Date.parse(context.acceptanceExpiresAt) - input.now) / 1e3);
   if (!(lifetime > 0) || lifetime > DAY_SECONDS) throw new LinkError("body_validation_failed", "approval must expire within 24 hours");
   return {
-    issuer: input.targetDid,
+    issuer: input.requesterDid ?? input.targetDid,
+    ...input.requesterDid === void 0 ? null : { requesterDid: input.requesterDid },
     requestVersion: 1,
     targetDid: input.targetDid,
     targetPublicJwk: input.targetPublicJwk,
@@ -15470,8 +15509,18 @@ function parseApprovalRequest(value, options = {}) {
   if (!parsed.success) throw new LinkError("body_validation_failed", "invalid approval request");
   const request = parsed.data;
   const publicKey = decodeStrictBase64Url(request.targetPublicJwk.x);
-  if (ed25519KeyProblem(publicKey) !== null || didKeyFromEd25519PublicKey(publicKey) !== request.targetDid || request.issuer !== request.targetDid || options.issuer !== void 0 && request.issuer !== options.issuer) {
+  if (ed25519KeyProblem(publicKey) !== null || didKeyFromEd25519PublicKey(publicKey) !== request.targetDid) {
     throw new LinkError("issuer_binding_mismatch");
+  }
+  if (request.requesterDid === void 0) {
+    if (request.issuer !== request.targetDid || options.issuer !== void 0 && request.issuer !== options.issuer) {
+      throw new LinkError("issuer_binding_mismatch");
+    }
+  } else {
+    const requesterKey = linkIssuerPublicKey(request.requesterDid);
+    if (requesterKey === null || ed25519KeyProblem(requesterKey) !== null || request.requesterDid !== request.issuer || request.requesterDid === request.targetDid || options.issuer !== request.requesterDid) {
+      throw new LinkError("issuer_binding_mismatch");
+    }
   }
   return request;
 }
@@ -16141,6 +16190,7 @@ var init_links = __esm({
       issuer: external_exports2.string(),
       requestVersion: external_exports2.literal(1),
       targetDid: external_exports2.string(),
+      requesterDid: external_exports2.string().optional(),
       targetPublicJwk: ed25519Jwk,
       nodeOrigin: origin,
       permissions: external_exports2.array(permission),
@@ -16654,6 +16704,7 @@ var init_local_key = __esm({
     init_replication_config();
     init_warnings();
     init_constants();
+    init_registry_verdict_cache();
   }
 });
 
@@ -17328,7 +17379,10 @@ async function acquireApprovalRequest(_did, options) {
     permissions: options.permissions.map(({ skipPrefix: _skipPrefix, ...entry2 }) => entry2),
     ...options.reason ? { reason: options.reason } : {},
     grantLifetimeSeconds: grantLifetimeSeconds(options.expiry),
-    ...options.renewalLeaseSeconds === void 0 ? {} : { renewal: { version: 1, leaseLifetimeSeconds: options.renewalLeaseSeconds } }
+    ...options.renewalLeaseSeconds === void 0 ? {} : {
+      renewal: { version: 1, leaseLifetimeSeconds: options.renewalLeaseSeconds },
+      ...options.renewalPurpose === void 0 ? {} : { purpose: options.renewalPurpose }
+    }
   };
   if (options.commandIntent !== void 0 && !/^auth-grant:[0-9a-f]{64}$/.test(options.commandIntent)) {
     throw invalid("Invalid approval command intent.");

@@ -18,6 +18,7 @@ import { cliRetryPolicy } from "./retry-policy.js";
 import { createCliReplicationConfig } from "./replication-config.js";
 import { registerReplication } from "./replication-registry.js";
 import { assertPendingRemoteLogoutSession, recoverPendingLogout } from "./logout-pending.js";
+import { cliRegistryVerdictCache } from "./registry-verdict-cache.js";
 export { closeReplication, registerReplication, registeredReplications, replicationForProfile } from "./replication-registry.js";
 
 function configuredRegistryUrl(
@@ -171,6 +172,7 @@ export async function restoreProfileSessionNode(
     const node = new TinyCloudNode({
       registryCacheStore: createProfileRegistryCacheStore(ctx.profile),
       registrySequenceStore: createProfileRegistrySequenceStore(ctx.profile),
+      registryVerdictCache: cliRegistryVerdictCache,
       onRegistryFallback: recordRegistryFallbackWarning,
       ...(tinycloudRegistryUrl === undefined ? {} : { tinycloudRegistryUrl }),
       host: ctx.host,
@@ -210,6 +212,7 @@ export async function storedSessionVerifiesLocally(profileName: string): Promise
     const node = new TinyCloudNode({
       registryCacheStore: createProfileRegistryCacheStore(profileName),
       registrySequenceStore: createProfileRegistrySequenceStore(profileName),
+      registryVerdictCache: cliRegistryVerdictCache,
       onRegistryFallback: recordRegistryFallbackWarning,
       ...cliRetryPolicy(),
       ...(tinycloudRegistryUrl === undefined ? {} : { tinycloudRegistryUrl }),
@@ -286,6 +289,7 @@ export async function createSDKInstance(
     const node = new TinyCloudNode({
       registryCacheStore: createProfileRegistryCacheStore(ctx.profile),
       registrySequenceStore: createProfileRegistrySequenceStore(ctx.profile),
+      registryVerdictCache: cliRegistryVerdictCache,
       onRegistryFallback: recordRegistryFallbackWarning,
       ...cliRetryPolicy(),
       ...(tinycloudRegistryUrl === undefined ? {} : { tinycloudRegistryUrl }),
@@ -337,6 +341,7 @@ export async function createSDKInstance(
   const node = new TinyCloudNode({
     registryCacheStore: createProfileRegistryCacheStore(ctx.profile),
     registrySequenceStore: createProfileRegistrySequenceStore(ctx.profile),
+    registryVerdictCache: cliRegistryVerdictCache,
     onRegistryFallback: recordRegistryFallbackWarning,
     ...cliRetryPolicy(),
     ...(tinycloudRegistryUrl === undefined ? {} : { tinycloudRegistryUrl }),

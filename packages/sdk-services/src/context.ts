@@ -494,6 +494,7 @@ export class ServiceContext implements IServiceContext {
     // Node its composites stay reachable while the long-lived signal lives (about 65 B per request on Node 20, 180 B
     // on Node 22; a listener that is never removed retains about 1 KB). Where it is missing (older browsers) the
     // listeners below are unchanged.
+    // node-floor-ok: the typeof check on the next line guards it
     if (typeof AbortSignal.any === "function") return AbortSignal.any([signal, this._abortController.signal]);
     const combined = new AbortController();
     const abort = (source: AbortSignal) => combined.abort(source.reason);

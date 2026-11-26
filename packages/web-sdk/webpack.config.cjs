@@ -307,7 +307,8 @@ const lazyLoaderExternals = (type, ext) => ({ context, request }, callback) => {
 
 // The panel code keeps @tinycloud/* external, like the replica entries. The dialogs do not: they import runtime
 // constants from @tinycloud/sdk-core, and a bare import in a chunk loaded at the first prompt would not resolve for a
-// page that loads the SDK without a bundler. So only imports made from src/ui are external.
+// page that loads the SDK without a bundler. So only imports made from src/ui are external. Those constants are
+// @tinycloud/bootstrap's, re-exported; a value sdk-core's root defines itself would bring all of that root along.
 const lazyExternals = (moduleType, ext) => ({ context, request }, callback) => {
   const uiDir = path.resolve(__dirname, "src/ui");
   if (request && /^@tinycloud\//.test(request) && context && context.startsWith(uiDir)) {
@@ -319,16 +320,9 @@ const lazyExternals = (moduleType, ext) => ({ context, request }, callback) => {
     callback(null, `${moduleType} ./panel-data.${ext}`);
     return;
   }
-  // sdk-core loads its issued-delegation code and the share links by dynamic import. The prompt carries sdk-core's
-  // permission helpers (TC-4222), so it loads those the way the root does: by name, never as a webpack chunk, whose
-  // computed import would make a downstream bundler (CRA in apps/openkey-example) parse the .d.ts files in dist/.
-  const dynamicType = ext === "mjs" ? "import" : "commonjs";
-  if (request === LINKS_REQUEST) {
-    callback(null, `${dynamicType} ${request}`);
-    return;
-  }
-  if (isIssuedDelegationsRequest({ context, request })) {
-    callback(null, `${dynamicType} ./delegations-issued.${ext}`);
+  // The prompt's permission expansion is the root bundle's (TC-4294), loaded by relative sibling path.
+  if (request === "../index" && context === path.resolve(__dirname, "src/notifications")) {
+    callback(null, `${moduleType} ./index.${ext}`);
     return;
   }
   callback();
@@ -357,6 +351,10 @@ const lazyEntries = {
   "delegations-renewal": "./src/delegations-renewal-entry.ts",
 };
 const notChunkLimit = (plugin) => !(plugin instanceof webpack.optimize.LimitChunkCountPlugin);
+const promptExpansionBridge = new webpack.NormalModuleReplacementPlugin(
+  /^\.\/permissionExpansion$/,
+  path.resolve(__dirname, "src/notifications/permissionExpansionBridge.ts")
+);
 
 // CACAO verification uses viem's deferred secp256k1 import. Keep that primitive
 // inside the already-lazy entry: a second webpack chunk creates a computed import
@@ -374,7 +372,7 @@ const lazyEsmConfig = {
   module: lazyModule,
   entry: lazyEntries,
   externals: lazyExternals("module", "mjs"),
-  plugins: esmConfig.plugins.filter(notChunkLimit),
+  plugins: [...esmConfig.plugins.filter(notChunkLimit), promptExpansionBridge],
   output: { ...esmConfig.output, filename: "[name].mjs" },
 };
 
@@ -383,7 +381,7 @@ const lazyCjsConfig = {
   module: lazyModule,
   entry: lazyEntries,
   externals: lazyExternals("commonjs", "cjs"),
-  plugins: cjsConfig.plugins.filter(notChunkLimit),
+  plugins: [...cjsConfig.plugins.filter(notChunkLimit), promptExpansionBridge],
   output: { ...cjsConfig.output, filename: "[name].cjs" },
 };
 

@@ -3,7 +3,7 @@ import { p256 } from "@noble/curves/p256";
 import { z } from "zod";
 import { didKeyFromEd25519PublicKey } from "../didkey.js";
 import { ed25519KeyProblem } from "./ed25519-strict.js";
-import { decodeStrictBase64Url } from "./header.js";
+import { decodeStrictBase64Url, linkIssuerPublicKey } from "./header.js";
 import { LinkError } from "./errors.js";
 
 const bytes32 = z.string().refine((value) => decodeStrictBase64Url(value)?.length === 32);
@@ -45,6 +45,7 @@ const invitationContext = z.object({
  }).strict();
 const requestSchema = z.object({
   issuer: z.string(), requestVersion: z.literal(1), targetDid: z.string(),
+  requesterDid: z.string().optional(),
   targetPublicJwk: ed25519Jwk, nodeOrigin: origin,
   permissions: z.array(permission), reason: z.string().optional(),
   grantLifetimeSeconds: z.number().int().positive(), resultEncryptionPublicJwk: p256Jwk,
@@ -72,25 +73,38 @@ const DAY_SECONDS = 86_400;
 export function buildShareInvitationApprovalSpec(input: {
   readonly targetDid: string; readonly targetPublicJwk: OpenKeyApprovalRequestV1["targetPublicJwk"];
   readonly nodeOrigin: string; readonly context: ShareInvitationApprovalContext; readonly now: number;
+  readonly requesterDid?: string;
 }): Omit<OpenKeyApprovalRequestV1, "resultEncryptionPublicJwk"> {
   const { context } = input;
   const lifetime = Math.floor((Date.parse(context.acceptanceExpiresAt) - input.now) / 1000);
   if (!(lifetime > 0) || lifetime > DAY_SECONDS) throw new LinkError("body_validation_failed", "approval must expire within 24 hours");
   return {
-    issuer: input.targetDid, requestVersion: 1, targetDid: input.targetDid, targetPublicJwk: input.targetPublicJwk, nodeOrigin: input.nodeOrigin,
+    issuer: input.requesterDid ?? input.targetDid, ...(input.requesterDid === undefined ? null : { requesterDid: input.requesterDid }),
+    requestVersion: 1, targetDid: input.targetDid, targetPublicJwk: input.targetPublicJwk, nodeOrigin: input.nodeOrigin,
     permissions: [], grantLifetimeSeconds: lifetime, suggestedLifetimeSeconds: lifetime, context,
   };
 }
 
-/** The signed request names exactly its issuer's public session key; no private JWK fields are accepted. */
+/** The target key is the grant audience; an optional distinct requester must match the signed header issuer. No private JWK fields are accepted. */
 export function parseApprovalRequest(value: unknown, options: { readonly issuer?: string } = {}): OpenKeyApprovalRequestV1 {
   const parsed = requestSchema.safeParse(value);
   if (!parsed.success) throw new LinkError("body_validation_failed", "invalid approval request");
   const request = parsed.data;
   const publicKey = decodeStrictBase64Url(request.targetPublicJwk.x)!;
-  if (ed25519KeyProblem(publicKey) !== null || didKeyFromEd25519PublicKey(publicKey) !== request.targetDid ||
-      request.issuer !== request.targetDid || (options.issuer !== undefined && request.issuer !== options.issuer)) {
+  if (ed25519KeyProblem(publicKey) !== null || didKeyFromEd25519PublicKey(publicKey) !== request.targetDid) {
     throw new LinkError("issuer_binding_mismatch");
+  }
+  if (request.requesterDid === undefined) {
+    if (request.issuer !== request.targetDid || (options.issuer !== undefined && request.issuer !== options.issuer)) {
+      throw new LinkError("issuer_binding_mismatch");
+    }
+  } else {
+    const requesterKey = linkIssuerPublicKey(request.requesterDid);
+    if (requesterKey === null || ed25519KeyProblem(requesterKey) !== null ||
+        request.requesterDid !== request.issuer || request.requesterDid === request.targetDid ||
+        options.issuer !== request.requesterDid) {
+      throw new LinkError("issuer_binding_mismatch");
+    }
   }
   return request;
 }

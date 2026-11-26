@@ -1,5 +1,4 @@
 ---
-"@tinycloud/web-sdk": minor
 "@tinycloud/server": minor
 ---
 

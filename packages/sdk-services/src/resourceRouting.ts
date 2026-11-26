@@ -347,6 +347,7 @@ export function createResourceRoutingFetch(fetchFn: FetchFunction, routing: Reso
       const headers = (Array.isArray(init?.headers) ? init.headers : Object.entries(init?.headers ?? {})).filter(([name]) => name.toLowerCase() !== "authorization");
       headers.push(["Authorization", signed]);
       const timeout = AbortSignal.timeout(5_000);
+      // node-floor-ok: Node 20.3+; floor raise tracked in TC-4280
       const signal = init?.signal ? AbortSignal.any([init.signal, timeout]) : timeout;
       try {
         const response = await fetchFn(`${target.url}${parsed.pathname}${parsed.search}`, { ...init, headers, signal, redirect: "error" });

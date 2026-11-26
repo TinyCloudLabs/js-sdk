@@ -138,6 +138,7 @@ async function post(
         "OpenKey-Session-Proof": approvalSessionProof(state, action, resultRef, ackId),
       },
       body: JSON.stringify(body),
+      // node-floor-ok: Node 20.3+; floor raise tracked in TC-4280
       signal: options.signal ? AbortSignal.any([timeout, options.signal]) : timeout,
     });
   } catch (error) {

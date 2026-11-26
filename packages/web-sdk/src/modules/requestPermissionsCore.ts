@@ -34,7 +34,7 @@ export interface RequestPermissionsCoreDeps {
     approved: boolean;
     suppressPromptFor30Days?: boolean;
   }>;
-  /** True when the signer shows the request itself (OpenKey): the SDK prompt is skipped and no opt-out is read or stored. */
+  /** True when OpenKey signs and shows its own approval: the SDK prompt is skipped and no opt-out is read or stored. */
   skipPrompt?: boolean;
   /** Whether this page/app has opted out of the SDK explainer prompt. */
   isPromptSuppressed?: () => boolean;
