@@ -22,6 +22,12 @@ CONTRACT_TESTS = [
     "packages/cli/src/commands/courier.test.ts",
     "packages/cli/src/lib/permissions.test.ts",
     "packages/cli/src/output/errors.test.ts",
+    "packages/cli/scripts/release-shrinkwrap.test.ts",
+    "packages/cli/src/lib/self-update.test.ts",
+    "packages/cli/src/lib/provenance.test.ts",
+    "packages/cli/src/lib/provenance-identity.test.ts",
+    "packages/cli/src/lib/npm-command.test.ts",
+    "packages/cli/src/commands/upgrade.test.ts",
     "tests/mcp-sdk-contract/contract.test.ts",
     "tests/mcp-sdk-contract/prerequisites.test.ts",
 ]

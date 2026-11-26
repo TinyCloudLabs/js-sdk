@@ -14,7 +14,8 @@
   "files": [
     "dist",
     "bin",
-    "skills"
+    "skills",
+    "npm-shrinkwrap.json"
   ],
   "engines": {
     "node": ">=20"
@@ -30,7 +31,9 @@
     "check:node-release": "bun scripts/generate-node-release.ts --check",
     "smoke:delegated-secrets": "bun scripts/live-delegated-secrets-smoke.ts",
     "check:skill-pack": "node scripts/check-skill-pack.mjs",
-    "sync:courier-skill": "rm -rf skills/courier && cp -R ../courier/skills/courier skills/courier"
+    "sync:courier-skill": "rm -rf skills/courier && cp -R ../courier/skills/courier skills/courier",
+    "prepack": "node scripts/release-shrinkwrap.mjs prepack",
+    "postpack": "node scripts/release-shrinkwrap.mjs postpack"
   },
   "dependencies": {
     "@tinycloud/share-sdk": "1.6.0",
@@ -45,6 +48,7 @@
     "jsdom": "26.1.0",
     "open": "^11.0.0",
     "ora": "^9.3.0",
+    "sigstore": "4.1.1",
     "siwe": "^3.0.0"
   },
   "devDependencies": {

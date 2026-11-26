@@ -2,6 +2,19 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { detectInstallKind, isAutoUpdateEnabled, readUpdateCheck, startUpdateCheck, updateNotice } from "./lib/auto-update.js";
+import {
+  autoUpdateCovers,
+  autoUpdateOffReason,
+  baseInstall,
+  pendingSwitch,
+  readGlobalConfig,
+  startAutoUpdateIfDue,
+  startBackgroundUpdate,
+  takeAutoUpdateNotices,
+} from "./lib/self-update.js";
+import { recordedInstallKind } from "./lib/install-kind.js";
+import { resolveNpm } from "./lib/npm-command.js";
+import { readPointer, writeLease } from "./lib/versions.js";
 import { TC_OPTIONS_BEFORE_COURIER } from "./commands/courier.js";
 import { readFileSync } from "node:fs";
 import { CLI_NAME } from "@tinycloud/operations/cli-name";
@@ -13,6 +26,13 @@ import { closeReplication } from "./lib/replication-registry.js";
 const { version } = JSON.parse(
   readFileSync(new URL("../package.json", import.meta.url), "utf-8")
 );
+// TC-4276: this process's global install, and whether it may update itself (npm or bun global installs only).
+// `detectInstallKind` is a path guess; `verifiedKind` is what the background pass or `upgrade` verified (with npm and
+// bun themselves) for this exact global install, null until one of them has run.
+const base = baseInstall();
+const installKind = detectInstallKind(base.packageDir, process.cwd(), homedir());
+const verifiedKind = recordedInstallKind(base.root, base.packageDir, base.version);
+const selfUpdating = installKind === "npm-global" || installKind === "bun-global" || verifiedKind !== null;
 import { theme } from "./output/theme.js";
 import { setJsonOutputRequested, shouldOutputJson, outputWarnings } from "./output/formatter.js";
 import { ProfileManager } from "./config/profiles.js";
@@ -197,22 +217,72 @@ setDiagnosticCommandContext({
   cliVersion: version,
 });
 
+/**
+ * TC-4276: after a command, start the background auto-update pass when one is due, quiet or not and with or without
+ * a terminal. It runs in #1054's detached update-check child, which also refreshes the notice cache, so a run starts
+ * at most one child. Returns whether it started.
+ */
+function startSelfUpdate(cachePath: string): boolean {
+  if (!selfUpdating || commandToken === "upgrade") return false;
+  if (autoUpdateOffReason(process.env, readGlobalConfig()) !== null) return false;
+  const entry = join(base.packageDir, "dist", "update-check-entry.js");
+  return startAutoUpdateIfDue(base.root, Date.now(), () => startBackgroundUpdate(entry, version, cachePath));
+}
+
 // After a command succeeds in a terminal, name a newer release that an earlier background check found. A missing or
 // day-old result starts a detached check, so the command itself never uses the network or waits (TC-2769).
 function showUpdateNotice(): void {
+  const cachePath = join(CONFIG_DIR, "update-check.json");
+  let backgroundStarted = false;
+  try {
+    backgroundStarted = startSelfUpdate(cachePath);
+  } catch (error) {
+    if (process.env.TC_DEBUG === "1") process.stderr.write(`auto-update start failed: ${error instanceof Error ? error.stack : String(error)}\n`);
+  }
   if (!isAutoUpdateEnabled(process.env) || Number(process.exitCode ?? 0) !== 0) return;
   if (program.opts().quiet === true || shouldOutputJson() || !process.stderr.isTTY) return;
   try {
-    const cachePath = join(CONFIG_DIR, "update-check.json");
     const check = readUpdateCheck(version, cachePath);
-    if (check.due) startUpdateCheck(fileURLToPath(new URL("./update-check-entry.js", import.meta.url)), version, cachePath);
-    if (!check.version) return;
-    const installKind = detectInstallKind(fileURLToPath(new URL("../", import.meta.url)), process.cwd(), homedir());
-    process.stderr.write(`${updateNotice(installKind, version, check.version)}\n`);
+    if (check.due && !backgroundStarted) startUpdateCheck(fileURLToPath(new URL("./update-check-entry.js", import.meta.url)), version, cachePath);
+    const offReason = autoUpdateOffReason(process.env, readGlobalConfig());
+    const npmFound = resolveNpm(process.env) !== null;
+    const pinned = pinnedHere();
+    // TC-4276 consent: once per versions root, where automatic updates are on for a verified install; and once after
+    // each automatic switch. User-facing copy: Monica.
+    if (verifiedKind !== null) {
+      for (const line of takeAutoUpdateNotices(base.root, version, offReason === null && npmFound && !pinned)) process.stderr.write(`${line}\n`);
+    }
+    // A release the background updater installs itself gets no notice (TC-4276). Only an install the updater has
+    // verified counts; `detectInstallKind` is a path guess.
+    const offered = check.version && autoUpdateCovers({
+      installKind: verifiedKind ?? "unknown",
+      current: version,
+      available: check.version,
+      offReason,
+      npmOnPath: npmFound,
+      pinned,
+    }) ? null : check.version;
+    if (offered) process.stderr.write(`${updateNotice(installKind, version, offered)}\n`);
+    // User-facing copy: TC-4276, approved by Monica.
+    const pending = selfUpdating ? pendingSwitch(base.root, version) : null;
+    if (pending) process.stderr.write(`TinyCloud CLI ${pending} is ready. Restart Courier to finish the update.\n`);
   } catch (error) {
     // The notice never fails a command; TC_DEBUG=1 shows why it did not appear.
     if (process.env.TC_DEBUG === "1") process.stderr.write(`update notice failed: ${error instanceof Error ? error.stack : String(error)}\n`);
   }
+}
+
+function pinnedHere(): boolean {
+  const pointer = readPointer(base.root);
+  return pointer?.base === base.version && pointer.pinned === true;
+}
+
+// A Courier process, and any process started from a versioned install, leases its version: the updater neither
+// prunes it nor switches away from the version a running Courier uses (TC-4276). The verified kind counts even where
+// the path guess misses the install, and a guessed one counts before the first verification, so no Courier the
+// updater could act on runs unleased.
+if (selfUpdating && (argv[0] === "courier" || version !== base.version)) {
+  writeLease(base.root, { version, courier: argv[0] === "courier" });
 }
 
 if (argv[0] === "courier") {
