@@ -91,6 +91,7 @@ function checkApiOrigin(origin: string): string {
 
 function requestSignal(options: LinkTransportOptions): AbortSignal {
   const timeout = AbortSignal.timeout(options.timeoutMs ?? DEFAULT_TIMEOUT_MS);
+  // node-floor-ok: Node 20.3+; floor raise tracked in TC-4280
   return options.signal === undefined ? timeout : AbortSignal.any([options.signal, timeout]);
 }
 

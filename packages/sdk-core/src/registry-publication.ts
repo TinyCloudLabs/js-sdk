@@ -110,6 +110,7 @@ export async function publishLocationRecordV2(options: PublishLocationRecordV2Op
     parentSignal?.throwIfAborted();
     const timeout = AbortSignal.timeout(OWNER_NODE_BINDING_TIMEOUT_MS);
     const signals = [timeout, ...(parentSignal ? [parentSignal] : []), ...(init?.signal ? [init.signal] : [])];
+    // node-floor-ok: Node 20.3+; floor raise tracked in TC-4280
     const response = await fetchFn(input, { ...init, signal: AbortSignal.any(signals), redirect: "error" });
     parentSignal?.throwIfAborted();
     if (response.redirected) throw new LocationRecordValidationError("publication cannot follow a redirect");

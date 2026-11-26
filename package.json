@@ -31,6 +31,8 @@
     "dev": "turbo dev",
     "test": "turbo test",
     "typecheck:operations": "bun run --cwd packages/operations typecheck",
+    "check:node-floor": "node .github/scripts/check-node-floor.mjs",
+    "smoke:cli-node20": "node .github/scripts/cli-node20-smoke.mjs",
     "generate:operations-mcp": "bun scripts/generate-operations-mcp.ts",
     "check:operations-mcp": "bun scripts/generate-operations-mcp.ts --check",
     "check:operations-mcp-boundaries": "bun scripts/check-operations-mcp.ts",
