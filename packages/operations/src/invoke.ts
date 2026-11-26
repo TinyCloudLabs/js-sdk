@@ -10,6 +10,7 @@ import {
 } from "@tinycloud/node-sdk";
 import { jcsCanonicalize } from "@tinycloud/sdk-core/policy";
 import type { ZodError } from "zod";
+import type { RegistryVerdictCache } from "@tinycloud/sdk-core/registry-verdict-cache";
 
 import {
   type ApprovalAction,
@@ -64,6 +65,7 @@ export async function invokeOperation(
   invocationTarget: InvocationTarget,
   unknownInput: unknown,
   metrics?: OperationMetrics,
+  registryVerdictCache?: RegistryVerdictCache,
 ): Promise<OperationResult<unknown>> {
   if (metrics !== undefined) metrics.replayedGrants = 0;
   const target = normalizeInvocationTarget(invocationTarget);
@@ -80,6 +82,7 @@ export async function invokeOperation(
       operationVersion,
       target,
       unknownInput,
+      registryVerdictCache,
     );
     if (isPreparedError(prepared)) return prepared.result;
     if (metrics !== undefined) {
@@ -138,6 +141,7 @@ export async function invokeOperationWithLocalAuthorityRetry(
   operationVersion: number,
   invocationTarget: InvocationTarget,
   unknownInput: unknown,
+  registryVerdictCache?: RegistryVerdictCache,
 ): Promise<OperationResult<unknown>> {
   const target = normalizeInvocationTarget(invocationTarget);
   if (target === undefined) {
@@ -164,6 +168,7 @@ export async function invokeOperationWithLocalAuthorityRetry(
       operationVersion,
       target,
       unknownInput,
+      registryVerdictCache,
     )
   );
 }
@@ -173,12 +178,14 @@ async function invokeLocalAuthorityRetry(
   operationVersion: number,
   target: InvocationTarget,
   unknownInput: unknown,
+  registryVerdictCache?: RegistryVerdictCache,
 ): Promise<OperationResult<unknown>> {
   const prepared = await prepareInvocation(
     operationId,
     operationVersion,
     target,
     unknownInput,
+    registryVerdictCache,
   );
   if (isPreparedError(prepared)) return prepared.result;
   return withRuntimeWarnings(await retryWithLocalAuthority(prepared), prepared);
@@ -349,6 +356,7 @@ async function prepareInvocation(
   operationVersion: number,
   invocationTarget: InvocationTarget,
   unknownInput: unknown,
+  registryVerdictCache?: RegistryVerdictCache,
 ): Promise<PreparedInvocation> {
   const operation: OperationRef = { operationId, operationVersion };
   const target = normalizeInvocationTarget(invocationTarget);
@@ -450,7 +458,7 @@ async function prepareInvocation(
   const runtimeResolution =
     definition.runtime === "inspection"
       ? inspectionResolution
-      : await resolveRuntime(target, definition.runtime);
+      : await resolveRuntime(target, definition.runtime, registryVerdictCache);
   if (!runtimeResolution.ok) {
     // Runtime-preparation errors share the execution errors' detail allowlist.
     const result = errorResult(
@@ -788,13 +796,14 @@ function normalizeInvocationTarget(
 async function resolveRuntime(
   target: InvocationTarget,
   requirement: OperationRuntimeRequirement,
+  registryVerdictCache?: RegistryVerdictCache,
 ): Promise<InvocationRuntimeResolution> {
   try {
     // Keep the root package loadable for projections that only inspect its
     // public invocation export. The SDK runtime is needed only once a valid
     // operation reaches runtime construction.
     const { createInvocationRuntime } = await import("./runtime.js");
-    return await createInvocationRuntime(target, requirement);
+    return await createInvocationRuntime(target, requirement, registryVerdictCache);
   } catch (error) {
     return {
       ok: false,

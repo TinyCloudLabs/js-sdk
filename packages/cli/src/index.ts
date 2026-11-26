@@ -1,7 +1,11 @@
+import { homedir } from "node:os";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { detectInstallKind, isAutoUpdateEnabled, readUpdateCheck, startUpdateCheck, updateNotice } from "./lib/auto-update.js";
 import { TC_OPTIONS_BEFORE_COURIER } from "./commands/courier.js";
 import { readFileSync } from "node:fs";
 import { CLI_NAME } from "@tinycloud/operations/cli-name";
-import { Command } from "commander";
+import { Command, CommanderError } from "commander";
 import { handleError } from "./output/errors.js";
 import { emitBanner } from "./output/banner.js";
 import { closeReplication } from "./lib/replication-registry.js";
@@ -22,6 +26,7 @@ import { appendDiagnosticLog, setDiagnosticCommandContext } from "./lib/diagnost
 
 
 const program = new Command();
+program.exitOverride();
 let commandStartedAt = Date.now();
 
 function fullCommandName(command: Command): string {
@@ -191,6 +196,25 @@ setDiagnosticCommandContext({
   disabled: process.env.TINYCLOUD_CLI_LOGS === "0" || argv.includes("--no-diagnostic-logs"),
   cliVersion: version,
 });
+
+// After a command succeeds in a terminal, name a newer release that an earlier background check found. A missing or
+// day-old result starts a detached check, so the command itself never uses the network or waits (TC-2769).
+function showUpdateNotice(): void {
+  if (!isAutoUpdateEnabled(process.env) || Number(process.exitCode ?? 0) !== 0) return;
+  if (program.opts().quiet === true || shouldOutputJson() || !process.stderr.isTTY) return;
+  try {
+    const cachePath = join(CONFIG_DIR, "update-check.json");
+    const check = readUpdateCheck(version, cachePath);
+    if (check.due) startUpdateCheck(fileURLToPath(new URL("./update-check-entry.js", import.meta.url)), version, cachePath);
+    if (!check.version) return;
+    const installKind = detectInstallKind(fileURLToPath(new URL("../", import.meta.url)), process.cwd(), homedir());
+    process.stderr.write(`${updateNotice(installKind, version, check.version)}\n`);
+  } catch (error) {
+    // The notice never fails a command; TC_DEBUG=1 shows why it did not appear.
+    if (process.env.TC_DEBUG === "1") process.stderr.write(`update notice failed: ${error instanceof Error ? error.stack : String(error)}\n`);
+  }
+}
+
 if (argv[0] === "courier") {
   // Courier owns its argv (including --host and --json) and its own profile,
   // so Commander, the banner and the tc profile guard never see it.
@@ -219,12 +243,22 @@ if (argv[0] === "courier") {
     process.stdin.unref?.();
     if (await closeReplication()) {
       process.exitCode = 0;
+      showUpdateNotice();
       // Executor form: the CLI supports Node 20, which lacks Promise.withResolvers (TC-4279).
       await new Promise<void>((resolve) => process.stdout.write("", () => resolve()));
       await new Promise<void>((resolve) => process.stderr.write("", () => resolve()));
       process.exit();
     }
+    showUpdateNotice();
   } catch (error) {
-    await handleError(error);
+    if (error instanceof CommanderError) {
+      // Commander exits as soon as it has printed help, the version or a usage error; that stays, after the notice.
+      process.exitCode = error.exitCode;
+      showUpdateNotice();
+      await new Promise<void>((resolve) => process.stderr.write("", () => resolve()));
+      process.exit(error.exitCode);
+    } else {
+      await handleError(error);
+    }
   }
 }

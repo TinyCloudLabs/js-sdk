@@ -1,6 +1,7 @@
 import type { PermissionEntry } from "@tinycloud/node-sdk";
 import { Command } from "commander";
-import { invokeOperation, type OperationResult } from "@tinycloud/operations";
+import type { OperationResult } from "@tinycloud/operations";
+import { invokeOperation } from "../lib/operations.js";
 import { CLI_NAME } from "@tinycloud/operations/cli-name";
 
 import { withSignInHint } from "../auth/session-expired.js";

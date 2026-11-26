@@ -10,7 +10,7 @@ import type { IncomingMessage } from "node:http";
 import { TinyCloudNode, grantAuthRequest, principalDidEquals, REPLICA_LOGOUT_PENDING_FILE, signedCompactUcanExpiry, type AuthDelegationArtifact, type PermissionEntry, type PortableDelegation, type RuntimeDelegationActivator, type TinyCloudSession } from "@tinycloud/node-sdk";
 import type { ProfileReplicaApprovalEntry, ProfileReplicaDeferredToken, ProfileReplicaLogoutPending, ProfileReplicaPreflight, ProfileReplicaPurge } from "@tinycloud/sdk-services/kv/replication";
 import { composeManifestRequest, ownerFullAccess, type SignInResult } from "@tinycloud/sdk-core";
-import { invokeOperation } from "@tinycloud/operations";
+import { invokeOperation } from "../lib/operations.js";
 import { createProfileRegistryCacheStore, createProfileRegistrySequenceStore, namedProfilePath, profilePath } from "@tinycloud/operations/state";
 import { principalHashOf, readGateSnapshot, REPLICA_DENY_FLOOR_FILE } from "@tinycloud/replica/profile-gate";
 import { isReplicaError, ReplicaErrorCode } from "@tinycloud/replica";
@@ -34,6 +34,7 @@ import {
 } from "../output/formatter.js";
 import { handleError, CLIError, cliErrorFromService } from "../output/errors.js";
 import { recordRegistryFallbackWarning } from "../output/warnings.js";
+import { cliRegistryVerdictCache } from "../lib/registry-verdict-cache.js";
 import { safeInline } from "../output/safe-text.js";
 import { ExitCode, CLI_DEFAULT_SESSION_EXPIRY_MS, DEFAULT_CHAIN_ID, DEFAULT_HOST, DEFAULT_OPENKEY_HOST, DEFAULT_SHARE_ORIGIN } from "../config/constants.js";
 import {
@@ -2123,6 +2124,7 @@ async function nodeFromOpenKeyApproval(ctx: CLIContext, session: VerifiedScopedS
   const node = new TinyCloudNode({
     host, registryCacheStore: createProfileRegistryCacheStore(ctx.profile),
     registrySequenceStore: createProfileRegistrySequenceStore(ctx.profile),
+    registryVerdictCache: cliRegistryVerdictCache,
     onRegistryFallback: recordRegistryFallbackWarning,
     tinycloudRegistryUrl: process.env.TC_REGISTRY_URL || ctx.tinycloudRegistryUrl,
   });
@@ -2879,6 +2881,7 @@ async function refreshPreparedOpenKeySession(params: {
   const node = new TinyCloudNode({
     registryCacheStore: createProfileRegistryCacheStore(profileName),
     registrySequenceStore: createProfileRegistrySequenceStore(profileName),
+    registryVerdictCache: cliRegistryVerdictCache,
     onRegistryFallback: recordRegistryFallbackWarning,
     tinycloudRegistryUrl: process.env.TC_REGISTRY_URL || profile.tinycloudRegistryUrl,
     host, signer: ownerIdentitySigner(owner), capabilityRequest,
@@ -3038,6 +3041,7 @@ async function refreshPreparedKeysSession(params: {
   const node = new TinyCloudNode({
     registryCacheStore: createProfileRegistryCacheStore(profileName),
     registrySequenceStore: createProfileRegistrySequenceStore(profileName),
+    registryVerdictCache: cliRegistryVerdictCache,
     onRegistryFallback: recordRegistryFallbackWarning,
     tinycloudRegistryUrl: process.env.TC_REGISTRY_URL || profile.tinycloudRegistryUrl,
     host, signer: ownerIdentitySigner(owner),

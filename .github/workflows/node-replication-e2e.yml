@@ -21,6 +21,7 @@ on:
       - "packages/sdk-services/src/encryption/**"
       - "packages/sdk-services/src/vault/**"
       - "packages/cli/src/commands/secrets*"
+      - "packages/cli/test-support/secrets-migrate-registry-smoke.ts"
       - "tests/cli/secrets/secrets-legacy-node.e2e.test.ts"
       - "packages/mcp/src/**"
       - "packages/cli/src/lib/**"
@@ -457,6 +458,18 @@ jobs:
           bash "$GITHUB_WORKSPACE/.github/scripts/run-private-tests.sh" bun test --max-concurrency=1 packages/mcp/src/stdio.namedKeys.e2e.test.ts 2>&1 | tee "$RUNNER_TEMP/named-keys-mcp.log"
           if grep -Eq '^ *[1-9][0-9]* skip' "$RUNNER_TEMP/named-keys-mcp.log" || ! grep -Eq '^ *1 pass' "$RUNNER_TEMP/named-keys-mcp.log" || grep -Eq '^ *[1-9][0-9]* fail' "$RUNNER_TEMP/named-keys-mcp.log"; then
             echo "::error title=named-keys MCP e2e::the test was skipped, failed, or did not pass"
+            exit 1
+          fi
+
+      - name: Run the CLI full migrate e2e (140 secrets for an owner with no registry record, one registry lookup pair per TTL)
+        timeout-minutes: 10
+        env:
+          TC_NAMED_KEYS_E2E_NODE_BIN: ${{ runner.temp }}/tinycloud-named-keys
+        run: |
+          set -o pipefail
+          bash "$GITHUB_WORKSPACE/.github/scripts/run-private-tests.sh" bun test --max-concurrency=1 packages/cli/src/commands/secrets-migrate.registry.e2e.test.ts 2>&1 | tee "$RUNNER_TEMP/full-migrate-cli.log"
+          if grep -Eq '^ *[1-9][0-9]* skip' "$RUNNER_TEMP/full-migrate-cli.log" || ! grep -Eq '^ *1 pass' "$RUNNER_TEMP/full-migrate-cli.log" || grep -Eq '^ *[1-9][0-9]* fail' "$RUNNER_TEMP/full-migrate-cli.log"; then
+            echo "::error title=full migrate CLI e2e::the test was skipped, failed, or did not pass"
             exit 1
           fi
 

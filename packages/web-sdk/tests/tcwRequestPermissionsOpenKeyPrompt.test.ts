@@ -1,8 +1,8 @@
 /*
  * TinyCloudWeb.requestPermissions when OpenKey signs the grant: OpenKey's own approval replaces the SDK's "additional
- * permissions" prompt, and the app's name reaches it as a display-only presentation on the sign request. A signer that
- * OpenKey does not stand behind (an older OpenKey client, a wallet, a custom signer that did not declare itself OpenKey)
- * keeps the SDK prompt, with its 30-day option as for any other signer.
+ * permissions" prompt, and the app's name reaches it as a display-only presentation on the sign request. A signer that is
+ * not OpenKey (a wallet, including OpenKey injected as a wallet without `openkey` configured, or a custom signer that did
+ * not declare itself OpenKey) keeps the SDK prompt, with its 30-day option as for any other signer.
  */
 import "./support/browserGlobalsShim";
 import { describe, expect, mock, test } from "bun:test";
@@ -96,24 +96,23 @@ describe("an OpenKey client that accepts a presentation", () => {
 });
 
 describe("an OpenKey client that does not accept a presentation", () => {
-  test("keeps the SDK prompt with its 30-day option and sends the sign request as before", async () => {
+  test("shows no SDK prompt and sends the sign request without a presentation", async () => {
     const { signMessage, config } = openKeyConfig(undefined);
     const { tcw, showModal } = web(node(), config);
 
     await tcw.requestPermissions([ENTRY]);
 
-    expect(showModal).toHaveBeenCalledTimes(1);
-    expect(showModal.mock.calls[0]![0].allowSuppression).toBeUndefined();
+    expect(showModal).not.toHaveBeenCalled();
     expect(signMessage).toHaveBeenCalledWith({ message: SIWE, keyId: "key-1" }, { mode: "popup" });
   });
 
-  test("a caller's allowPromptSuppression: false still hides the 30-day option", async () => {
+  test("a caller's allowPromptSuppression: false shows no SDK prompt either", async () => {
     const { config } = openKeyConfig(undefined);
     const { tcw, showModal } = web(node(), config);
 
     await tcw.requestPermissions([ENTRY], { allowPromptSuppression: false });
 
-    expect(showModal.mock.calls[0]![0].allowSuppression).toBe(false);
+    expect(showModal).not.toHaveBeenCalled();
   });
 });
 
@@ -128,13 +127,23 @@ describe("an OpenKey client whose connected key signs in an external wallet", ()
     expect(showModal.mock.calls[0]![0].allowSuppression).toBeUndefined();
   });
 
-  test("keeps the SDK prompt when the client does not say whether its approval shows the request", async () => {
+  test("the SDK prompt names the app the request is made for", async () => {
+    const { config } = openKeyConfig(1, false);
+    const { tcw, showModal } = web(node(), config);
+
+    await tcw.requestPermissions([ENTRY], { onBehalfOf: "Account" });
+
+    expect(showModal).toHaveBeenCalledTimes(1);
+    expect(showModal.mock.calls[0]![0].onBehalfOf).toBe("Account");
+  });
+
+  test("shows no SDK prompt when the client does not say whether its approval shows the request", async () => {
     const { config } = openKeyConfig(1, "unreported");
     const { tcw, showModal } = web(node(), config);
 
     await tcw.requestPermissions([ENTRY]);
 
-    expect(showModal).toHaveBeenCalledTimes(1);
+    expect(showModal).not.toHaveBeenCalled();
   });
 });
 
@@ -147,6 +156,18 @@ describe("a wallet session", () => {
 
     expect(showModal).toHaveBeenCalledTimes(1);
     expect(showModal.mock.calls[0]![0].allowSuppression).toBeUndefined();
+    expect(stub.personalSign).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("OpenKey injected as an EIP-1193 wallet, without `openkey` configured", () => {
+  test("keeps the SDK prompt, because the SDK cannot tell the wallet is OpenKey (known gap, TC-4343)", async () => {
+    const stub = node();
+    const { tcw, showModal } = web(stub, {});
+
+    await tcw.requestPermissions([ENTRY]);
+
+    expect(showModal).toHaveBeenCalledTimes(1);
     expect(stub.personalSign).toHaveBeenCalledTimes(1);
   });
 });

@@ -30,7 +30,7 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha }}
 
       - name: Test the release guards
-        run: node --test .github/scripts/check-major-release-signoff.test.mjs .github/scripts/check-npm-release-provenance.test.mjs .github/scripts/github-releases.test.mjs .github/scripts/publish-in-dependency-order.test.mjs .github/scripts/courier-stable-stage.test.mjs .github/scripts/scoped-version.test.mjs .github/scripts/release-cutover.test.mjs
+        run: node --test .github/scripts/check-major-release-signoff.test.mjs .github/scripts/check-npm-release-provenance.test.mjs .github/scripts/github-releases.test.mjs .github/scripts/publish-in-dependency-order.test.mjs .github/scripts/courier-stable-stage.test.mjs .github/scripts/scoped-version.test.mjs .github/scripts/release-cutover.test.mjs .github/scripts/release-workflow-pins.test.mjs
 
       - name: Check the release scope
         run: node .github/scripts/scoped-version.mjs check
