@@ -1,11 +1,16 @@
-import { afterEach, beforeEach, describe, expect, setSystemTime, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, setSystemTime, spyOn, test } from "bun:test";
 import { chmod, mkdir, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { makeSpaceId, signEthereumMessage } from "@tinycloud/node-sdk-wasm";
-import { buildExactAppKeyProof, prepareExactAppKeyRequest } from "@tinycloud/node-sdk/encryption-keys";
+import { buildExactAppKeyProof, prepareExactAppKeyRequest, type ExactAppKeyClient } from "@tinycloud/node-sdk/encryption-keys";
 import { profilePath } from "@tinycloud/operations/state";
 import { writeJsonDurable } from "../config/storage.js";
 import { loadAppKeyPermit, removeAppKeyPermit, verifiedSavedAppKey, type AppKeyPermit } from "./app-key.js";
+import * as encryptionKeys from "@tinycloud/node-sdk/encryption-keys";
+import * as preparedOpenKey from "./prepared-openkey.js";
+import { ProfileManager } from "../config/profiles.js";
+import { clearProfileCredentials } from "../lib/logout-pending.js";
+import { loginWithAppKey, openVerifiedAppKey } from "./app-key.js";
 
 // Published disposable key; never holds funds or data.
 const PRIVATE_KEY = "11".repeat(32);
@@ -28,6 +33,11 @@ function permit(lifetimeMs = 3_600_000): AppKeyPermit {
 
 async function save(value: unknown): Promise<string> {
   await mkdir(profilePath(PROFILE), { recursive: true, mode: 0o700 });
+  await ProfileManager.setProfile(PROFILE, {
+    name: PROFILE, host: HOST, chainId: 1, spaceName: "default",
+    did: OWNER, createdAt: new Date().toISOString(),
+  });
+  await ProfileManager.setKey(PROFILE, { kty: "OKP", fixture: true });
   const file = join(profilePath(PROFILE), "app-key-permit.json");
   await writeJsonDurable(file, value);
   return file;
@@ -35,6 +45,7 @@ async function save(value: unknown): Promise<string> {
 
 const realFetch = globalThis.fetch;
 let fetches: string[];
+const spies: { mockRestore(): void }[] = [];
 beforeEach(() => {
   fetches = [];
   globalThis.fetch = ((input: unknown) => {
@@ -44,7 +55,11 @@ beforeEach(() => {
 });
 afterEach(async () => {
   globalThis.fetch = realFetch;
+  for (const spy of spies.splice(0)) spy.mockRestore();
   await removeAppKeyPermit(PROFILE);
+  await ProfileManager.removeKey(PROFILE);
+  await ProfileManager.clearSession(PROFILE);
+  await ProfileManager.removeProfileConfig(PROFILE);
 });
 
 describe("saved app-key approval", () => {
@@ -125,5 +140,92 @@ describe("saved app-key approval", () => {
     await removeAppKeyPermit(PROFILE);
     expect(await loadAppKeyPermit(PROFILE)).toBeUndefined();
     await removeAppKeyPermit(PROFILE);
+  });
+});
+
+
+describe("app-key approval lifecycle", () => {
+  async function pendingLogin(delay: "approval" | "delegate", signedOut = false) {
+    await save(permit());
+    await removeAppKeyPermit(PROFILE);
+    if (signedOut) await clearProfileCredentials(PROFILE, true);
+    const reached = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    globalThis.fetch = (async () => Response.json({ features: ["encryption-named-keys-v1"] })) as typeof fetch;
+    spies.push(spyOn(preparedOpenKey, "startPreparedOpenKeyHandoff").mockImplementation(async ({ prepared }) => ({
+      result: (async () => {
+        if (delay === "approval") { reached.resolve(); await release.promise; }
+        return {
+          signedMessage: prepared.siwe,
+          signature: `0x${signEthereumMessage(prepared.siwe, PRIVATE_KEY).replace(/^0x/, "")}`,
+          address: ADDRESS,
+        };
+      })(),
+      complete: async () => {},
+    })));
+    spies.push(spyOn(encryptionKeys, "openExactAppKeyClient").mockImplementation(async () => {
+      if (delay === "delegate") { reached.resolve(); await release.promise; }
+      return {} as ExactAppKeyClient;
+    }));
+    const login = loginWithAppKey({
+      profileName: PROFILE, host: HOST, openKeyHost: "https://openkey.test",
+      ownerDid: OWNER, fullKey: KEY, lifetimeMs: undefined, registryUrl: undefined,
+      paste: true, noPopup: true, ensureProfile: async () => {
+        if (await ProfileManager.getStoredKey(PROFILE) === null) {
+          await ProfileManager.setKey(PROFILE, { kty: "OKP", fixture: true });
+        }
+      },
+    });
+    const settled = login.then(() => ({ ok: true as const }), (error: unknown) => ({ ok: false as const, error }));
+    await reached.promise;
+    return { settled, release };
+  }
+
+  for (const delay of ["approval", "delegate"] as const) {
+    test(`a delayed ${delay} cannot restore a permit after logout and key shred`, async () => {
+      const pending = await pendingLogin(delay);
+      await clearProfileCredentials(PROFILE, true);
+      pending.release.resolve();
+      expect((await pending.settled).ok).toBe(false);
+      expect(await loadAppKeyPermit(PROFILE)).toBeUndefined();
+      await expect(verifiedSavedAppKey(PROFILE, HOST, KEY)).rejects.toBeDefined();
+      expect(await ProfileManager.getStoredKey(PROFILE)).toBeNull();
+    });
+  }
+
+  test("a concurrent ordinary login invalidates the dedicated-profile approval", async () => {
+    const pending = await pendingLogin("delegate");
+    await ProfileManager.updateProfile(PROFILE, (profile) => ({ ...profile, authMethod: "local-key", ownerDid: OWNER }));
+    pending.release.resolve();
+    expect((await pending.settled).ok).toBe(false);
+    expect(await loadAppKeyPermit(PROFILE)).toBeUndefined();
+  });
+
+  test("logout fences both a saved permit and an already verified reopen", async () => {
+    await save(permit());
+    const verified = await verifiedSavedAppKey(PROFILE, HOST, KEY);
+    await clearProfileCredentials(PROFILE, true);
+    await expect(verifiedSavedAppKey(PROFILE, HOST, KEY)).rejects.toBeDefined();
+    await expect(openVerifiedAppKey(verified, undefined)).rejects.toBeDefined();
+    expect(fetches).toEqual([]);
+  });
+
+  test("a fresh explicit approval can durably replace the signed-out fence", async () => {
+    const pending = await pendingLogin("delegate", true);
+    expect((await ProfileManager.getProfile(PROFILE)).authSignedOut).toBe(true);
+    pending.release.resolve();
+    expect((await pending.settled).ok).toBe(true);
+    expect((await ProfileManager.getProfile(PROFILE)).authSignedOut).toBe(false);
+    expect((await verifiedSavedAppKey(PROFILE, HOST, KEY)).ownerDid).toBe(OWNER);
+  });
+
+  test("profile deletion and recreation cannot adopt an old approval", async () => {
+    const pending = await pendingLogin("delegate");
+    await ProfileManager.deleteProfile(PROFILE);
+    await save(permit());
+    await removeAppKeyPermit(PROFILE);
+    pending.release.resolve();
+    expect((await pending.settled).ok).toBe(false);
+    expect(await loadAppKeyPermit(PROFILE)).toBeUndefined();
   });
 });

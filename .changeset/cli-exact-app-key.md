@@ -7,6 +7,8 @@
 
 `tc keys encrypt <full-app-key> --record-key <full-record-key>` encrypts one JSON value for one record and prints the envelope. `tc keys decrypt --record-key <full-record-key>` opens an envelope only for the owner, space and record key it was encrypted for. Both refuse any other key, record key, host or expired approval before contacting the node. A folder under `apps/` stays unavailable to `--keys` without `--app-key`.
 
+Signing out removes the saved app-key approval. An approval that returns after logout or key removal cannot save it again; start a new app-key login if it is still needed.
+
 This works only when the owner's OpenKey supports app-key approvals; a build or deployment without that support refuses the request. `@tinycloud/node-sdk` adds `prepareExactAppKeyRequest`, `verifyExactAppKeyProof`, `buildExactAppKeyProof` and `openExactAppKeyClient`; ordinary session restore does not accept this approval.
 
 Details: TC-4035

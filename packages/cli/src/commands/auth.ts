@@ -639,6 +639,7 @@ export async function finishProfileLogout(
           await clearProfileCredentials(ctx.profile, true, false, logoutKeepsKey(profile));
         }
       }
+      await removeAppKeyPermit(ctx.profile);
     } catch (error) {
       cleanupError = error instanceof Error && "code" in error && error.code === "REPLICA_GATED"
         ? new CLIError("REPLICA_GATED", error.message, ExitCode.ERROR)
@@ -862,7 +863,6 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
         if (!options.revoke && !options.force && (options.keepReplicas || !await logoutWillKeepKey(ctx.profile))) {
           await assertShareHistoryAllowsKeyDrop(ctx.profile, "logout");
         }
-        await removeAppKeyPermit(ctx.profile);
         const online = options.revoke ? await revokeForLogout(ctx, options.discardLocalChanges === true) : undefined;
         const replicasRemoved = await finishProfileLogout(ctx, {
           keepReplicas: options.keepReplicas,
@@ -3044,19 +3044,9 @@ async function handleAppKeyLogin(ctx: CLIContext, globalOpts: Record<string, unk
     registryUrl: process.env.TC_REGISTRY_URL || ctx.tinycloudRegistryUrl || profile?.tinycloudRegistryUrl || undefined,
     paste,
     noPopup,
-    assertDedicatedProfile: async () => {
-      if (profile !== undefined && (profile.authMethod !== undefined || profile.ownerDid !== undefined || profile.sessionDid !== undefined ||
-        await ProfileManager.getSession(ctx.profile) !== null)) {
-        throw new CLIError(
-          "APP_KEY_PROFILE",
-          `Profile "${ctx.profile}" already has a sign-in. Use a profile with no other sign-in for an app key, for example \`--profile app-keys\`. Nothing was started.`,
-          ExitCode.USAGE_ERROR,
-        );
-      }
-    },
     ensureProfile: async () => {
       const created = await ProfileManager.withLock(ctx.profile, async () => {
-        if (await ProfileManager.profileExists(ctx.profile)) return undefined;
+        if (await ProfileManager.profileExists(ctx.profile) && await ProfileManager.getStoredKey(ctx.profile) !== null) return undefined;
         return createKeyOnlyProfile(ctx.profile, typeof globalOpts.host === "string" ? globalOpts.host : DEFAULT_HOST);
       });
       if (created) process.stderr.write(`Created profile "${ctx.profile}"\n`);
