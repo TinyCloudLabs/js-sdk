@@ -8,10 +8,9 @@ const OPENKEY_ONLY_ORIGINS = ["https://lightning-node-1.gecko-snares.ts.net:8451
 // - https://tinycloud.one: added to OpenKey by TinyCloudLabs/openkey#502. When the pin moves to a commit
 //   that includes it, the SDK-only test below fails until this entry is removed (TC-3042); the SDK list
 //   keeps it, in the same position.
-// - https://feed.tinycloud.xyz: first-party app (TC-4082); SDK-only, never on OpenKey's server list.
 //   The TinyChat native webview origins (app.tinycloud.one, tinycloudone://app.tinycloud.one) were removed in TC-4082.
 // - https://explorer.tinycloud.xyz: SDK bootstrap origin added after this historical OpenKey snapshot.
-const SDK_ONLY_ORIGINS = ["https://tinycloud.one", "https://explorer.tinycloud.xyz", "https://feed.tinycloud.xyz"];
+const SDK_ONLY_ORIGINS = ["https://tinycloud.one", "https://explorer.tinycloud.xyz"];
 const publicOrigins = openkey.origins.filter((origin) => !OPENKEY_ONLY_ORIGINS.includes(origin));
 
 test("the SDK exports match OpenKey's pinned first-party origin contract, less its OpenKey-only entries and plus its SDK-only entries", () => {

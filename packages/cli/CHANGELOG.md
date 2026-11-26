@@ -1,5 +1,58 @@
 # @tinycloud/cli
 
+## 1.10.0
+
+### Minor Changes
+
+- ac08ab8: `tc secrets migrate` asks the owner for one approval to move secrets. It first lists and checks the secrets with read access only, which needs no prompt when the sign-in already includes it. Then one request covers writing the secrets, decrypting the older format with the network key and creating a key for each secret left to move. The approval lasts one hour and is not renewed. The request is split only when it would not fit the node's header limit; the first part then carries the write and network access with its keys, and the others carry keys only.
+
+  Details: TC-4246
+
+### Patch Changes
+
+- 9765fde: The `tc courier revoke <peer>` help says what revoke ends: the read access you gave that peer and the pairing. Another agent you own can read and change your mailboxes with its own approval, so revoke doesn't end its access; to end it, revoke every approval for that agent. The out-of-date approval message says the same about key rotation. Text only; revoke behaves the same.
+
+  Details: TC-4321
+
+- 31faaff: When a peer's owner revokes the access they gave you, Courier marks that peer as revoked, skips it and keeps syncing your other peers. Sync doesn't stop on that peer's refusal. Other sign-in refusals behave the same.
+
+  Details: TC-4329
+
+- d44a3f4: The CLI reuses an owner's registry location for up to 60 seconds within one process. For an owner with no saved settings, a lookup that fails with a network error, timeout or server error is tried up to three times; if all fail, the command stops with `REGISTRY_UNAVAILABLE`. A 404 means the owner is unregistered and is not retried.
+
+  Details: TC-4373
+
+- Updated dependencies [31faaff]
+- Updated dependencies [d44a3f4]
+  - @tinycloud/node-sdk@3.16.1
+  - @tinycloud/operations@0.10.2
+
+## 1.9.3
+
+### Patch Changes
+
+- e845ffe: `tc courier init --wait` collects the saved approval request with the lifetime, renewal and hosts it was made with. A different host setting on `--wait` is refused, also once the owner has approved the request. A different `--expiry` or `--renew` is refused while the request waits for approval.
+
+  Details: TC-4264
+
+- d635dc8: `tc onboard` asks for a 7-day sign-in that renews for up to 30 days. In OpenKey the renewal box starts ticked and the owner can untick it. The reason it sends reads "Set up TinyCloud on this computer: use your apps and see your spaces, for 7 days. It renews for up to 30 days unless you turn renewal off." For `tc auth login` the box starts unticked. A 30-day sign-in that does not renew keeps its reason.
+
+  Details: TC-4247
+
+- a3ec199: `tc secrets migrate` splits the per-secret key approval so each signed request fits the node's header limit. Before asking, it sends one `GET /version` with a padding header to the node that will activate the keys. If that is refused as too large, it halves the size up to three times, then falls back to a size that fits a 32 KiB header. On a node with large header buffers, 140 keys are still one approval. The JSON output and a stderr line report how many key approvals the run needs and how large each may be.
+
+  Details: TC-4248
+
+- Updated dependencies [8727180]
+- Updated dependencies [a3ec199]
+- Updated dependencies [8727180]
+- Updated dependencies [03d49fe]
+- Updated dependencies [8727180]
+  - @tinycloud/sdk-core@3.15.0
+  - @tinycloud/node-sdk@3.15.0
+  - @tinycloud/sdk-services@3.15.0
+  - @tinycloud/operations@0.10.1
+
 ## 1.9.2
 
 ### Patch Changes

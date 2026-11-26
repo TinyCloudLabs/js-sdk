@@ -1,7 +1,7 @@
 import { defineConfig } from "tsup";
 
 export default defineConfig({
-  entry: ["src/index.ts", "src/legacy-entry.ts", "src/courier-entry.ts"],
+  entry: ["src/index.ts", "src/legacy-entry.ts", "src/courier-entry.ts", "src/update-check-entry.ts"],
   format: ["esm"],
   target: "node20",
   dts: true,

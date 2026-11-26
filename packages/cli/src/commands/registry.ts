@@ -1,5 +1,5 @@
 import { Command } from "commander";
-import { invokeOperation } from "@tinycloud/operations";
+import { invokeOperation } from "../lib/operations.js";
 import { CLIError, handleError } from "../output/errors.js";
 import { outputJson, shouldOutputJson } from "../output/formatter.js";
 import { registerRegistryPublishCommand } from "./registry-publish.js";

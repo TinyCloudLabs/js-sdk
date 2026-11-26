@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import { assertOwnerRenewalIdentity, verifyOwnerRenewal } from './owner-renewal.js';
 import { RenewalAuthorityInactiveError, RenewalLeaseExpiredError } from '@tinycloud/sdk-core/delegations/renewal';
-import { TinyCloudNode, DelegatedAccess, NodeWasmBindings, activateValidatedRuntimeDelegation, deserializeDelegation, serializeDelegation } from '@tinycloud/node-sdk';
+import { TinyCloudNode, DelegatedAccess, NodeWasmBindings, RuntimeDelegationRejectedError, activateValidatedRuntimeDelegation, deserializeDelegation, serializeDelegation } from '@tinycloud/node-sdk';
 import { createRegistryVerdictCache } from '@tinycloud/sdk-core/registry-verdict-cache';
 import { createInMemoryRegistryCacheStore, createInMemoryRegistrySequenceStore, type RegistryCacheStore, type RegistrySequenceStore } from '@tinycloud/sdk-core';
 import type { IHooksService, PortableDelegation, TinyCloudSession, ValidatedRuntimeDelegation } from '@tinycloud/node-sdk';
@@ -153,6 +153,22 @@ async function restoreCourierNode(profile: Profile, key: AgentKey, grant: OwnerG
   return node;
 }
 
+/** Match the host response, never the SDK's human-readable error message. */
+function isRevokedInboundActivation(error: unknown): error is RuntimeDelegationRejectedError {
+  if (!(error instanceof RuntimeDelegationRejectedError)) return false;
+  const response = error.cause;
+  if (!response || typeof response !== 'object' || !('status' in response) || !('error' in response) || typeof response.error !== 'string') return false;
+  if (response.status === 403) return response.error === 'policy-session-root-status-invalid';
+  if (response.status !== 401) return false;
+  try {
+    const body: unknown = JSON.parse(response.error);
+    return !!body && typeof body === 'object' && 'code' in body && typeof body.code === 'string'
+      && ['delegation_revoked', 'parent_revoked', 'ancestor_revoked'].includes(body.code);
+  } catch {
+    return false;
+  }
+}
+
 export async function currentInbound(node: TinyCloudNode, profile: Profile, peer: StoredPeer): Promise<ValidatedRuntimeDelegation> {
   if (!peer.inbound) {
     throw new CourierError('not-paired', `No delegation from ${peer.handle} yet (status ${peer.status}). Finish pairing first.`);
@@ -168,7 +184,15 @@ export async function currentInbound(node: TinyCloudNode, profile: Profile, peer
     const delegation: PortableDelegation = deserializeDelegation(peer.inbound.delegation);
     // A peer whose earlier grant is installed on the main node gets a reader of its own for the new one.
     const reader = known ? await courierNode(profile) : node;
-    const activated = await activateValidatedRuntimeDelegation(reader, delegation, { host: profile.host });
+    let activated: ValidatedRuntimeDelegation;
+    try {
+      activated = await activateValidatedRuntimeDelegation(reader, delegation, { host: profile.host });
+    } catch (error) {
+      if (!isRevokedInboundActivation(error)) throw error;
+      throw new CourierError('AUTH_FORBIDDEN', error.message, {
+        cause: { cause: error, meta: { invocationProofCid: delegation.cid } },
+      });
+    }
     assertPeerDelegation(activated, {
       issuer: peer.courierDid,
       audience: profile.courierDid,
