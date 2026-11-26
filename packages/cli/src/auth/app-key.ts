@@ -89,7 +89,7 @@ async function assertProfileAvailable(profileName: string, requireSignedIn: bool
   }
   const { profile, key, session } = await readProfileSnapshot(profileName);
   if (profile && (profile.authMethod !== undefined || profile.ownerDid !== undefined || profile.sessionDid !== undefined || session !== null)) {
-    throw new CLIError("APP_KEY_PROFILE", `Profile "${profileName}" already has a sign-in. Use a profile with no other sign-in for an app key.`, ExitCode.USAGE_ERROR);
+    throw new CLIError("APP_KEY_PROFILE", `Profile "${profileName}" has a sign-in. Use a profile with no other sign-in for an app key.`, ExitCode.USAGE_ERROR);
   }
   if (requireSignedIn && (!profile || !key || profile.authSignedOut === true)) {
     throw unusable(profileName, "was signed out or its local key was removed");
@@ -208,7 +208,7 @@ export async function loginWithAppKey(options: AppKeyLoginOptions): Promise<AppK
     await openExactAppKeyClient(appKeyNode(options.profileName, options.host, options.ownerDid, options.registryUrl), built.request, proof);
     await ProfileManager.withLock(options.profileName, async () => {
       if (await appKeyProfileSnapshot(options.profileName) !== snapshot) {
-        throw new CLIError("PROFILE_CHANGED_DURING_LOGIN", "The profile changed while approval was pending. Nothing was saved; start a fresh login if it is still needed.", ExitCode.AUTH_REQUIRED);
+        throw new CLIError("PROFILE_CHANGED_DURING_LOGIN", "The profile changed while approval was pending. Nothing was saved. Start a new login if you need access.", ExitCode.AUTH_REQUIRED);
       }
       await assertProfileAvailable(options.profileName, false);
       await options.ensureProfile();
