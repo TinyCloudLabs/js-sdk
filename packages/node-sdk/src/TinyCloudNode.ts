@@ -1701,6 +1701,15 @@ export class TinyCloudNode {
     return this._bootstrapStatus;
   }
 
+  /**
+   * True while the session stands on the hosted-owner proof (TC-4082): the registry had no record for the owner and
+   * the default node showed it hosts their own space. The owner may use this app, but has no account record yet;
+   * an app may offer them setup. A registered owner's session, or no session, is false.
+   */
+  get accountSetupPending(): boolean {
+    return this.auth?.activeHostedOwnerProof()?.status === "proven";
+  }
+
   private _freshEncryptionNetworkCreated = false;
 
   /** Whether the last sign-in's fresh account bootstrap created its encryption network. */

@@ -515,6 +515,7 @@ export type Ledger = {
   tc4322ReservedKeyRoot?: LogoutRatchet;
   tc4329ActivationCauseRoot?: LogoutRatchet;
   tc4344OpenKeyAccountSetupRoot?: LogoutRatchet;
+  tc4344HostedOwnerSetupOfferRoot?: LogoutRatchet;
   tc3522InvocationRefusalKvWorker?: WorkerRatchet;
   tc3522InvocationRefusalReplicaWorker?: Omit<WorkerRatchet, "worker"> & { replicaWorker: { delta: number; ceiling: number } };
   tc2773LazyRestoreReplicaWorker?: Omit<WorkerRatchet, "worker"> & { replicaWorker: { delta: number; ceiling: number } };
@@ -1186,6 +1187,7 @@ export function ancestryPins(root: Ledger, hasGatedOnly: boolean): Array<{ row: 
   if (root.tc4322ReservedKeyRoot !== undefined) pins.push({ row: "tc4322ReservedKeyRoot", pin: root.tc4322ReservedKeyRoot.sourceCommits.at(-1)! });
   if (root.tc4329ActivationCauseRoot !== undefined) pins.push({ row: "tc4329ActivationCauseRoot", pin: root.tc4329ActivationCauseRoot.sourceCommits.at(-1)! });
   if (root.tc4344OpenKeyAccountSetupRoot !== undefined) pins.push({ row: "tc4344OpenKeyAccountSetupRoot", pin: root.tc4344OpenKeyAccountSetupRoot.sourceCommits.at(-1)! });
+  if (root.tc4344HostedOwnerSetupOfferRoot !== undefined) pins.push({ row: "tc4344HostedOwnerSetupOfferRoot", pin: root.tc4344HostedOwnerSetupOfferRoot.sourceCommits.at(-1)! });
   if (root.tc3522InvocationRefusalKvWorker !== undefined) pins.push({ row: "tc3522InvocationRefusalKvWorker", pin: root.tc3522InvocationRefusalKvWorker.sourceCommits.at(-1)! });
   if (root.tc3522InvocationRefusalReplicaWorker !== undefined) pins.push({ row: "tc3522InvocationRefusalReplicaWorker", pin: root.tc3522InvocationRefusalReplicaWorker.sourceCommits.at(-1)! });
   if (hasGatedOnly) pins.push({ row: "gatedOnlyRatchet", pin: approvedGatedOnlyRatchet.sourceCommit });
@@ -1327,6 +1329,7 @@ export function rootCeilings(root: Ledger): Array<{ row: string; ceiling: GzipSi
     ["tc4322ReservedKeyRoot", root.tc4322ReservedKeyRoot?.root.ceiling],
     ["tc4329ActivationCauseRoot", root.tc4329ActivationCauseRoot?.root.ceiling],
     ["tc4344OpenKeyAccountSetupRoot", root.tc4344OpenKeyAccountSetupRoot?.root.ceiling],
+    ["tc4344HostedOwnerSetupOfferRoot", root.tc4344HostedOwnerSetupOfferRoot?.root.ceiling],
   ];
   return rows.flatMap(([row, ceiling]) => ceiling === undefined ? [] : [{ row, ceiling }]);
 }
@@ -4421,6 +4424,34 @@ export const approvedTc4344OpenKeyAccountSetupRoot: LogoutRatchet = {
   "reason": "Both canonical jobs (SQLite and Postgres, run 46047647106 at 6335d4cc, base 09760efe6) measured 1502085/1489180 gzip bytes against tc4329ActivationCauseRoot's 1542479/1487585, and master 09760efe6 measured 1501551/1487585. The Web SDK root carries the OpenKey account setup flow (setupAccount, one retry, the iframe fallback) and node-sdk's hosted-owner proof refusal brand. Details: TC-4344"
 };
 
+export const approvedTc4344HostedOwnerSetupOfferRoot: LogoutRatchet = {
+  "label": "account setup offer after a hosted-owner sign-in (TC-4344)",
+  "ruling": "test-ruling: TC-4344 (release captain 21:55Z). New ledger row tc4344HostedOwnerSetupOfferRoot in replica-size-ledger.json after tc4344OpenKeyAccountSetupRoot, same shape, the exact canonical Replica numbers: web-sdk root cjs ceiling 1489180 → 1489567 (+387), mjs unchanged 1542479, base c493f6f55, canonicalCI both Replica jobs at 42ebf735 (run 46073817482). Mirror it in replica-size-policy.ts beside each tc4344OpenKeyAccountSetupRoot site. Add tc4344HostedOwnerSetupOfferRoot beside every tc4344OpenKeyAccountSetupRoot delete/undefined/filter site in scripts/*size-policy*.test.ts. No existing values change.",
+  "base": "c493f6f55e5f7685720246c14450cb6767fd6aca",
+  "sourceCommits": [
+    "2e311e46548489f40d3bd012a90e730167b3fa7b",
+    "42ebf735fee3288b212ceda0f72379144a5f9cad"
+  ],
+  "canonicalCI": {
+    "run": "46073817482",
+    "jobs": [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/46073817482/job/140758513399",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/46073817482/job/140758513804"
+    ]
+  },
+  "root": {
+    "delta": {
+      "index.mjs": 0,
+      "index.cjs": 387
+    },
+    "ceiling": {
+      "index.mjs": 1542479,
+      "index.cjs": 1489567
+    }
+  },
+  "reason": "Both canonical jobs (SQLite and Postgres, run 46073817482 at 42ebf735, base c493f6f55) measured 1502475/1489567 gzip bytes against tc4344OpenKeyAccountSetupRoot's 1542479/1489180, and master c493f6f55 measured 1502085/1489180. The Web SDK root carries the hosted-owner account setup offer (the action toast, on(\"account.setup.pending\"), finishSetup's guards) and node-sdk's accountSetupPending. Details: TC-4344"
+};
+
 export const approvedLedgerRows: Record<string, unknown> = {
   phase2Ratchet: approvedPhase2,
   fixRequiredRatchet: approvedFixRequiredRatchet,
@@ -4557,6 +4588,7 @@ export const approvedLedgerRows: Record<string, unknown> = {
   tc4322ReservedKeyRoot: approvedTc4322ReservedKeyRoot,
   tc4329ActivationCauseRoot: approvedTc4329ActivationCauseRoot,
   tc4344OpenKeyAccountSetupRoot: approvedTc4344OpenKeyAccountSetupRoot,
+  tc4344HostedOwnerSetupOfferRoot: approvedTc4344HostedOwnerSetupOfferRoot,
   tc3522InvocationRefusalKvWorker: approvedTc3522InvocationRefusalKvWorker,
   tc3522InvocationRefusalReplicaWorker: approvedTc3522InvocationRefusalReplicaWorker,
 };
@@ -5197,6 +5229,11 @@ export function validateLedger(value: Ledger, historicalBase = false): void {
       (!value.tc4329ActivationCauseRoot ||
         JSON.stringify(value.tc4344OpenKeyAccountSetupRoot) !== JSON.stringify(approvedTc4344OpenKeyAccountSetupRoot))) {
     throw new Error("Only the exact TC-4344 OpenKey account setup root admission is approved.");
+  }
+  if (value.tc4344HostedOwnerSetupOfferRoot !== undefined &&
+      (!value.tc4344OpenKeyAccountSetupRoot ||
+        JSON.stringify(value.tc4344HostedOwnerSetupOfferRoot) !== JSON.stringify(approvedTc4344HostedOwnerSetupOfferRoot))) {
+    throw new Error("Only the exact TC-4344 hosted-owner setup offer root admission is approved.");
   }
   if (value.tc3522InvocationRefusalKvWorker !== undefined || value.tc3522InvocationRefusalReplicaWorker !== undefined) {
     if (!value.tc3947ReplicaRevokeRoot ||

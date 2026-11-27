@@ -4017,6 +4017,33 @@
     },
     "reason": "Both canonical jobs (SQLite and Postgres, run 46047647106 at 6335d4cc, base 09760efe6) measured 1502085/1489180 gzip bytes against tc4329ActivationCauseRoot's 1542479/1487585, and master 09760efe6 measured 1501551/1487585. The Web SDK root carries the OpenKey account setup flow (setupAccount, one retry, the iframe fallback) and node-sdk's hosted-owner proof refusal brand. Details: TC-4344"
   },
+  "tc4344HostedOwnerSetupOfferRoot": {
+    "label": "account setup offer after a hosted-owner sign-in (TC-4344)",
+    "ruling": "test-ruling: TC-4344 (release captain 21:55Z). New ledger row tc4344HostedOwnerSetupOfferRoot in replica-size-ledger.json after tc4344OpenKeyAccountSetupRoot, same shape, the exact canonical Replica numbers: web-sdk root cjs ceiling 1489180 → 1489567 (+387), mjs unchanged 1542479, base c493f6f55, canonicalCI both Replica jobs at 42ebf735 (run 46073817482). Mirror it in replica-size-policy.ts beside each tc4344OpenKeyAccountSetupRoot site. Add tc4344HostedOwnerSetupOfferRoot beside every tc4344OpenKeyAccountSetupRoot delete/undefined/filter site in scripts/*size-policy*.test.ts. No existing values change.",
+    "base": "c493f6f55e5f7685720246c14450cb6767fd6aca",
+    "sourceCommits": [
+      "2e311e46548489f40d3bd012a90e730167b3fa7b",
+      "42ebf735fee3288b212ceda0f72379144a5f9cad"
+    ],
+    "canonicalCI": {
+      "run": "46073817482",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/46073817482/job/140758513399",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/46073817482/job/140758513804"
+      ]
+    },
+    "root": {
+      "delta": {
+        "index.mjs": 0,
+        "index.cjs": 387
+      },
+      "ceiling": {
+        "index.mjs": 1542479,
+        "index.cjs": 1489567
+      }
+    },
+    "reason": "Both canonical jobs (SQLite and Postgres, run 46073817482 at 42ebf735, base c493f6f55) measured 1502475/1489567 gzip bytes against tc4344OpenKeyAccountSetupRoot's 1542479/1489180, and master c493f6f55 measured 1502085/1489180. The Web SDK root carries the hosted-owner account setup offer (the action toast, on(\"account.setup.pending\"), finishSetup's guards) and node-sdk's accountSetupPending. Details: TC-4344"
+  },
   "tc3522InvocationRefusalKvWorker": {
     "label": "retain invocation-refusal attribution in the kv-storage worker (TC-3522)",
     "ruling": "Naomi ACBX 2026-11-23: admit only the exact worker gzip bytes reproduced by SQLite and PostgreSQL, with zero headroom. Root, optional and gated ceilings are unchanged.",

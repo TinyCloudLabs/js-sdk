@@ -369,6 +369,21 @@ export interface RequestPermissionsResult {
   delegations?: readonly PortableDelegation[];
 }
 
+/**
+ * `account.setup.pending`: the owner signed in, but has no account record yet (TC-4344). Their own space is hosted, so
+ * nothing is blocked; OpenKey can set the account up in one step.
+ */
+export interface AccountSetupPendingEvent {
+  /** The signed-in owner's address. */
+  readonly address: string;
+  /**
+   * Opens OpenKey's account setup for the signing key. Call it from a click: it opens a window. Resolves true once
+   * OpenKey reports the account set up; false when the owner closed it, or the owner signed out or changed since.
+   * Never rejects. The current session keeps working either way.
+   */
+  finishSetup(): Promise<boolean>;
+}
+
 export type SessionRestoreStatus =
   | "idle"
   | "disabled"
@@ -497,6 +512,9 @@ export class TinyCloudWeb {
   private _shareReceiverService?: ShareReceiverService;
   private readonly storageFullHandlers = new Set<(event: StorageFullEvent) => void>();
   private readonly purgeFailedHandlers = new Set<(event: LocalCopyPurgeFailedEvent) => void>();
+  private readonly accountSetupHandlers = new Set<(event: AccountSetupPendingEvent) => void>();
+  /** The setup the account-setup toast's button runs: the latest sign-in's offer, which refuses once that session ends. */
+  private latestAccountSetupOffer?: () => Promise<boolean>;
 
   /** Promise that resolves when WASM + node are ready */
   private _initPromise: Promise<void>;
@@ -821,15 +839,32 @@ export class TinyCloudWeb {
    * retries now. Safe to call before initialization finishes. Returns the unsubscribe function.
    */
   on(event: "replica.purge.failed", handler: (event: LocalCopyPurgeFailedEvent) => void): () => void;
+  /**
+   * Subscribe to `account.setup.pending`. It fires at the end of a `signIn()` that succeeded for an owner with no
+   * account record whose OpenKey key can be set up from here, so the app can offer "finish setup" in its own UI; call
+   * the event's `finishSetup` from the owner's click. While any handler is subscribed, the SDK shows no setup toast
+   * of its own. Safe to call before initialization finishes. Returns the unsubscribe function.
+   */
+  on(event: "account.setup.pending", handler: (event: AccountSetupPendingEvent) => void): () => void;
   on(
-    event: "storage.full" | "replica.purge.failed",
-    handler: ((event: StorageFullEvent) => void) | ((event: LocalCopyPurgeFailedEvent) => void),
+    event: "storage.full" | "replica.purge.failed" | "account.setup.pending",
+    handler:
+      | ((event: StorageFullEvent) => void)
+      | ((event: LocalCopyPurgeFailedEvent) => void)
+      | ((event: AccountSetupPendingEvent) => void),
   ): () => void {
     if (event === "replica.purge.failed") {
       const listener = handler as (event: LocalCopyPurgeFailedEvent) => void;
       this.purgeFailedHandlers.add(listener);
       return () => {
         this.purgeFailedHandlers.delete(listener);
+      };
+    }
+    if (event === "account.setup.pending") {
+      const listener = handler as (event: AccountSetupPendingEvent) => void;
+      this.accountSetupHandlers.add(listener);
+      return () => {
+        this.accountSetupHandlers.delete(listener);
       };
     }
     if (event !== "storage.full") {
@@ -1440,6 +1475,44 @@ export class TinyCloudWeb {
   }
 
   /**
+   * After a sign-in that succeeded for an owner with no account record (the hosted-owner proof, TC-4344): the
+   * `account.setup.pending` event, or with no handler subscribed, a toast whose button opens OpenKey's setup. It never
+   * opens anything by itself and never blocks the sign-in. Only a managed OpenKey key of the signed-in owner is offered.
+   */
+  private offerAccountSetup(node: TinyCloudNode, address: string, key: OpenKeyKeyLike | null | undefined): void {
+    if (!node.accountSetupPending) return;
+    const keyId = this.openKeyAccountSetupKey(key, address);
+    if (keyId === undefined) return;
+    const signOuts = this.signOutCount;
+    let flight: Promise<boolean> | undefined;
+    const finishSetup = (): Promise<boolean> => {
+      if (this.signOutCount !== signOuts || this.signOutInFlight > 0 || this._node?.session?.address !== address) {
+        return Promise.resolve(false);
+      }
+      flight ??= this.setUpOpenKeyAccount(keyId).finally(() => { flight = undefined; });
+      return flight;
+    };
+    if (this.accountSetupHandlers.size === 0) {
+      // The toast store keeps one visible copy of this toast across sign-ins, so its button runs the latest offer.
+      this.latestAccountSetupOffer = finishSetup;
+      this.showToast({
+        kind: "info",
+        textCode: "toast.account_setup_pending",
+        action: { labelCode: "toast.account_setup_action", run: () => { void this.latestAccountSetupOffer?.(); } },
+      });
+      return;
+    }
+    const event: AccountSetupPendingEvent = { address, finishSetup };
+    for (const handler of [...this.accountSetupHandlers]) {
+      try {
+        handler(event);
+      } catch (error) {
+        console.error('Error in "account.setup.pending" handler:', error);
+      }
+    }
+  }
+
+  /**
    * The sign-in again once OpenKey set the account up; its preparation reads the registry afresh. The owner's clicks
    * went to OpenKey's window, so this one may no longer open a popup: a blocked popup asks in OpenKey's frame instead.
    */
@@ -1636,6 +1709,10 @@ export class TinyCloudWeb {
     if (!session) throw new Error("Sign-in completed but no session available");
     // Explicit logout never permits an older tab's persisted proof to satisfy the next sign-in.
     if (!this.signOutCleanupFailed && this.signOutInFlight === 0) this.persistedRestoreBlocked = false;
+    if (this.config.openkey) {
+      this.offerAccountSetup(node, session.address,
+        (continuation?.pending ?? pending?.request)?.identity ?? readOpenKeyAuth(this.config.openkey.client));
+    }
     const warnings = result ? result.warnings : undefined;
     return {
       address: session.address,
