@@ -31,6 +31,54 @@ var __toESM = (mod2, isNodeMode, target) => (target = mod2 != null ? __create(__
   mod2
 ));
 
+// src/config/constants.ts
+import {
+  profilesPath,
+  tinycloudConfigPath,
+  tinycloudHomePath
+} from "@tinycloud/operations/state";
+var CONFIG_DIR, PROFILES_DIR, CONFIG_FILE, DEFAULT_HOST, DEFAULT_OPENKEY_HOST, DEFAULT_OPENKEY_DEVICE_API_HOST, DEFAULT_PROFILE, CLI_DEFAULT_SESSION_EXPIRY_DAYS, CLI_DEFAULT_SESSION_EXPIRY_MS, PROFILE_COMMIT_LOCK_TIMEOUT_MS, ExitCode, OPENKEY_SPACE_SETUP_RETRY_HINT;
+var init_constants = __esm({
+  "src/config/constants.ts"() {
+    "use strict";
+    CONFIG_DIR = tinycloudHomePath();
+    PROFILES_DIR = profilesPath();
+    CONFIG_FILE = tinycloudConfigPath();
+    DEFAULT_HOST = "https://node.tinycloud.xyz";
+    DEFAULT_OPENKEY_HOST = "https://openkey.so";
+    DEFAULT_OPENKEY_DEVICE_API_HOST = "https://api.openkey.so";
+    DEFAULT_PROFILE = "default";
+    CLI_DEFAULT_SESSION_EXPIRY_DAYS = 30;
+    CLI_DEFAULT_SESSION_EXPIRY_MS = CLI_DEFAULT_SESSION_EXPIRY_DAYS * 24 * 60 * 60 * 1e3;
+    PROFILE_COMMIT_LOCK_TIMEOUT_MS = 45e3;
+    ExitCode = {
+      SUCCESS: 0,
+      ERROR: 1,
+      USAGE_ERROR: 2,
+      AUTH_REQUIRED: 3,
+      NOT_FOUND: 4,
+      PERMISSION_DENIED: 5,
+      NETWORK_ERROR: 6,
+      NODE_ERROR: 7,
+      /** `tc secrets wait` only: the deadline passed while a secret was still missing. */
+      PENDING: 8,
+      /** A write was refused because the owner's TinyCloud storage is full. */
+      STORAGE_FULL: 10,
+      /** A secrets write was refused because the node has no per-secret keys (`NAMED_KEYS_UNSUPPORTED`); nothing was saved. */
+      NAMED_KEYS_UNSUPPORTED: 11,
+      /** `tc upgrade` refused before switching anything (`status: "refused"`, with a `reason`). */
+      UPGRADE_REFUSED: 12,
+      /** `tc upgrade` failed and the previous version is still the one that runs. */
+      UPGRADE_FAILED_ROLLED_BACK: 13,
+      /** `tc upgrade` failed and the previous version could not be restored; the output names the recovery command. */
+      UPGRADE_FAILED_NOT_ROLLED_BACK: 14,
+      /** Interrupted by SIGINT/SIGTERM (`CANCELLED`). */
+      CANCELLED: 130
+    };
+    OPENKEY_SPACE_SETUP_RETRY_HINT = "Wait a minute and retry; approving again in OpenKey re-runs the setup.";
+  }
+});
+
 // src/lib/replication-registry.ts
 function stopForSignal(signal) {
   void closeReplication().finally(() => {
@@ -70,15 +118,15 @@ function closeReplication(schedule = scheduleTimeout) {
   removeSignalHandlers();
   let resolveClosing;
   let rejectClosing;
-  const closing = new Promise((resolve6, reject) => {
-    resolveClosing = resolve6;
+  const closing = new Promise((resolve8, reject) => {
+    resolveClosing = resolve8;
     rejectClosing = reject;
   });
   state.closing = closing;
   void (async () => {
     let timeout;
-    const deadline = new Promise((resolve6) => {
-      timeout = schedule(() => resolve6(true), CLOSE_TIMEOUT_MS);
+    const deadline = new Promise((resolve8) => {
+      timeout = schedule(() => resolve8(true), CLOSE_TIMEOUT_MS);
     });
     let timedOut = false;
     const abandonQueuedControls = () => {
@@ -104,7 +152,7 @@ function closeReplication(schedule = scheduleTimeout) {
           if (state.generation === generation && state.allControls.size === 0) break;
         }
         if (timedOut) break;
-        const turn = new Promise((resolve6) => setImmediate(() => resolve6(false)));
+        const turn = new Promise((resolve8) => setImmediate(() => resolve8(false)));
         timedOut ||= await Promise.race([turn, deadline]);
         if (timedOut) abandonQueuedControls();
         else if (state.allControls.size === 0) break;
@@ -139,52 +187,10 @@ var init_replication_registry = __esm({
   }
 });
 
-// src/config/constants.ts
-import {
-  profilesPath,
-  tinycloudConfigPath,
-  tinycloudHomePath
-} from "@tinycloud/operations/state";
-var CONFIG_DIR, PROFILES_DIR, CONFIG_FILE, DEFAULT_HOST, DEFAULT_OPENKEY_HOST, DEFAULT_OPENKEY_DEVICE_API_HOST, DEFAULT_PROFILE, CLI_DEFAULT_SESSION_EXPIRY_DAYS, CLI_DEFAULT_SESSION_EXPIRY_MS, PROFILE_COMMIT_LOCK_TIMEOUT_MS, ExitCode, OPENKEY_SPACE_SETUP_RETRY_HINT;
-var init_constants = __esm({
-  "src/config/constants.ts"() {
-    "use strict";
-    CONFIG_DIR = tinycloudHomePath();
-    PROFILES_DIR = profilesPath();
-    CONFIG_FILE = tinycloudConfigPath();
-    DEFAULT_HOST = "https://node.tinycloud.xyz";
-    DEFAULT_OPENKEY_HOST = "https://openkey.so";
-    DEFAULT_OPENKEY_DEVICE_API_HOST = "https://api.openkey.so";
-    DEFAULT_PROFILE = "default";
-    CLI_DEFAULT_SESSION_EXPIRY_DAYS = 30;
-    CLI_DEFAULT_SESSION_EXPIRY_MS = CLI_DEFAULT_SESSION_EXPIRY_DAYS * 24 * 60 * 60 * 1e3;
-    PROFILE_COMMIT_LOCK_TIMEOUT_MS = 45e3;
-    ExitCode = {
-      SUCCESS: 0,
-      ERROR: 1,
-      USAGE_ERROR: 2,
-      AUTH_REQUIRED: 3,
-      NOT_FOUND: 4,
-      PERMISSION_DENIED: 5,
-      NETWORK_ERROR: 6,
-      NODE_ERROR: 7,
-      /** `tc secrets wait` only: the deadline passed while a secret was still missing. */
-      PENDING: 8,
-      /** A write was refused because the owner's TinyCloud storage is full. */
-      STORAGE_FULL: 10,
-      /** A secrets write was refused because the node has no per-secret keys (`NAMED_KEYS_UNSUPPORTED`); nothing was saved. */
-      NAMED_KEYS_UNSUPPORTED: 11,
-      /** Interrupted by SIGINT/SIGTERM (`CANCELLED`). */
-      CANCELLED: 130
-    };
-    OPENKEY_SPACE_SETUP_RETRY_HINT = "Wait a minute and retry; approving again in OpenKey re-runs the setup.";
-  }
-});
-
 // src/lib/diagnostic-logs.ts
 import { constants as fsConstants } from "fs";
-import { mkdir, open, readFile, rm, lstat, writeFile } from "fs/promises";
-import { join } from "path";
+import { mkdir as mkdir2, open as open2, readFile as readFile2, rm as rm2, lstat, writeFile } from "fs/promises";
+import { join as join5 } from "path";
 function setDiagnosticCommandContext(options) {
   activeCommand = options.command;
   activeArgs = [...options.args];
@@ -291,8 +297,8 @@ async function recordDiagnosticFailure(error, root) {
 async function appendDiagnosticLog(options) {
   if (options.disabled) return;
   const maximum = options.maxBytes ?? MAX_BYTES;
-  await mkdir(options.root, { recursive: true, mode: 448 });
-  const path = join(options.root, FILE_NAME);
+  await mkdir2(options.root, { recursive: true, mode: 448 });
+  const path = join5(options.root, FILE_NAME);
   const line = `${JSON.stringify({ timestamp: (/* @__PURE__ */ new Date()).toISOString(), ...redactDiagnosticEntry(options.entry) })}
 `;
   const lineBytes = Buffer.byteLength(line);
@@ -301,7 +307,7 @@ async function appendDiagnosticLog(options) {
     const current = await lstat(path);
     if (current.isSymbolicLink() || !current.isFile()) throw new Error("Diagnostic log path is not a regular file.");
     if (current.size + lineBytes > maximum) {
-      const old = await readFile(path);
+      const old = await readFile2(path);
       const tail = old.subarray(Math.max(0, old.length - Math.floor(maximum / 2)));
       const firstNewline = tail.indexOf(10);
       await writeFile(path, firstNewline < 0 ? Buffer.alloc(0) : tail.subarray(firstNewline + 1), { mode: 384 });
@@ -309,7 +315,7 @@ async function appendDiagnosticLog(options) {
   } catch (error) {
     if (error.code !== "ENOENT") throw error;
   }
-  const file = await open(path, fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_APPEND | fsConstants.O_NOFOLLOW, 384);
+  const file = await open2(path, fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_APPEND | fsConstants.O_NOFOLLOW, 384);
   try {
     await file.chmod(384);
     await file.write(line);
@@ -607,8 +613,8 @@ var init_storage = __esm({
 });
 
 // src/output/errors.ts
-import { readFileSync, readdirSync } from "fs";
-import { join as join2 } from "path";
+import { readFileSync as readFileSync6, readdirSync as readdirSync4 } from "fs";
+import { join as join6 } from "path";
 import { ProfileDeletedError, ProfileLockTimeoutError, ProfileSymlinkError } from "@tinycloud/operations/state";
 import { isSafeRecovery } from "@tinycloud/operations/recovery";
 import { CLI_NAME as CLI_NAME3 } from "@tinycloud/operations/cli-name";
@@ -833,7 +839,7 @@ function capSpecFromAuthMeta(resource, action) {
 function buildNetworkHint() {
   const readHost = (name) => {
     try {
-      const raw = readFileSync(join2(PROFILES_DIR, name, "profile.json"), "utf8");
+      const raw = readFileSync6(join6(PROFILES_DIR, name, "profile.json"), "utf8");
       return JSON.parse(raw).host;
     } catch {
       return void 0;
@@ -842,14 +848,14 @@ function buildNetworkHint() {
   let activeName = activeProfileName ?? process.env.TC_PROFILE ?? DEFAULT_PROFILE;
   if (!activeProfileName) {
     try {
-      const cfg = JSON.parse(readFileSync(CONFIG_FILE, "utf8"));
+      const cfg = JSON.parse(readFileSync6(CONFIG_FILE, "utf8"));
       activeName = process.env.TC_PROFILE ?? cfg.defaultProfile ?? DEFAULT_PROFILE;
     } catch {
     }
   }
   let names;
   try {
-    names = readdirSync(PROFILES_DIR);
+    names = readdirSync4(PROFILES_DIR);
   } catch {
     return void 0;
   }
@@ -898,12 +904,12 @@ var init_errors = __esm({
 
 // src/config/storage.ts
 import { constants as fsConstants2 } from "fs";
-import { randomUUID } from "crypto";
-import { readFile as readFile2, writeFile as writeFile2, stat, mkdir as mkdir2, rm as rm2, readdir, rename, open as open2 } from "fs/promises";
-import { basename, dirname, join as join3 } from "path";
-async function readJson(filePath) {
+import { randomUUID as randomUUID2 } from "crypto";
+import { readFile as readFile3, writeFile as writeFile2, stat as stat2, mkdir as mkdir3, rm as rm3, readdir, rename as rename2, open as open3 } from "fs/promises";
+import { basename, dirname as dirname4, join as join7 } from "path";
+async function readJson2(filePath) {
   try {
-    const data = await readFile2(filePath, "utf-8");
+    const data = await readFile3(filePath, "utf-8");
     return JSON.parse(data);
   } catch (err) {
     if (err.code === "ENOENT") {
@@ -913,44 +919,44 @@ async function readJson(filePath) {
   }
 }
 async function writeJson(filePath, data) {
-  const directory = dirname(filePath);
-  const tempPath = join3(directory, `.${basename(filePath)}.${process.pid}.${randomUUID()}.tmp`);
-  await mkdir2(directory, { recursive: true, mode: PRIVATE_DIR_MODE });
+  const directory = dirname4(filePath);
+  const tempPath = join7(directory, `.${basename(filePath)}.${process.pid}.${randomUUID2()}.tmp`);
+  await mkdir3(directory, { recursive: true, mode: PRIVATE_DIR_MODE });
   try {
     await writeFile2(tempPath, JSON.stringify(data, null, 2) + "\n", { encoding: "utf-8", mode: PRIVATE_FILE_MODE });
-    await rename(tempPath, filePath);
+    await rename2(tempPath, filePath);
   } catch (err) {
-    await rm2(tempPath, { force: true }).catch(() => void 0);
+    await rm3(tempPath, { force: true }).catch(() => void 0);
     throw err;
   }
 }
 async function writeJsonDurable(filePath, data) {
-  const directory = dirname(filePath);
-  const tempPath = join3(directory, `.${basename(filePath)}.${process.pid}.${randomUUID()}.tmp`);
-  await mkdir2(directory, { recursive: true, mode: PRIVATE_DIR_MODE });
+  const directory = dirname4(filePath);
+  const tempPath = join7(directory, `.${basename(filePath)}.${process.pid}.${randomUUID2()}.tmp`);
+  await mkdir3(directory, { recursive: true, mode: PRIVATE_DIR_MODE });
   try {
-    const file = await open2(tempPath, "wx", PRIVATE_FILE_MODE);
+    const file = await open3(tempPath, "wx", PRIVATE_FILE_MODE);
     try {
       await file.writeFile(JSON.stringify(data, null, 2) + "\n", "utf8");
       await file.sync();
     } finally {
       await file.close();
     }
-    await rename(tempPath, filePath);
-    const parent = await open2(directory, "r");
+    await rename2(tempPath, filePath);
+    const parent = await open3(directory, "r");
     try {
       await parent.sync();
     } finally {
       await parent.close();
     }
   } catch (error) {
-    await rm2(tempPath, { force: true }).catch(() => void 0);
+    await rm3(tempPath, { force: true }).catch(() => void 0);
     throw error;
   }
 }
 async function syncAuthCredentialFiles(directory) {
   for (const name of ["key.json", "session.json"]) {
-    const handle = await open2(join3(directory, name), fsConstants2.O_RDONLY | fsConstants2.O_NOFOLLOW);
+    const handle = await open3(join7(directory, name), fsConstants2.O_RDONLY | fsConstants2.O_NOFOLLOW);
     try {
       if (!(await handle.stat()).isFile()) throw new Error(`${name} is not a regular credential file.`);
       await handle.sync();
@@ -958,7 +964,7 @@ async function syncAuthCredentialFiles(directory) {
       await handle.close();
     }
   }
-  const parent = await open2(directory, "r");
+  const parent = await open3(directory, "r");
   try {
     await parent.sync();
   } finally {
@@ -967,7 +973,7 @@ async function syncAuthCredentialFiles(directory) {
 }
 async function fileExists(filePath) {
   try {
-    await stat(filePath);
+    await stat2(filePath);
     return true;
   } catch (err) {
     if (err.code === "ENOENT") {
@@ -977,7 +983,7 @@ async function fileExists(filePath) {
   }
 }
 async function ensureDir(dirPath) {
-  await mkdir2(dirPath, { recursive: true, mode: PRIVATE_DIR_MODE });
+  await mkdir3(dirPath, { recursive: true, mode: PRIVATE_DIR_MODE });
 }
 async function listDirs(dirPath) {
   try {
@@ -2379,8 +2385,8 @@ var init_publishing_manifest = __esm({
 });
 
 // src/lib/permissions.ts
-import { appendFile, chmod, readFile as readFile3 } from "fs/promises";
-import { join as join4 } from "path";
+import { appendFile, chmod, readFile as readFile4 } from "fs/promises";
+import { join as join8 } from "path";
 import {
   buildPermissionRequestArtifact,
   isPermissionRequestArtifact
@@ -2488,35 +2494,35 @@ var init_retry_policy = __esm({
 
 // src/lib/replication-log.ts
 import { CLI_NAME as CLI_NAME7 } from "@tinycloud/operations/cli-name";
-import { appendFileSync, chmodSync, mkdirSync, renameSync, statSync, writeFileSync } from "fs";
-import { dirname as dirname2, join as join5 } from "path";
+import { appendFileSync as appendFileSync2, chmodSync, mkdirSync as mkdirSync4, renameSync as renameSync3, statSync as statSync5, writeFileSync as writeFileSync2 } from "fs";
+import { dirname as dirname5, join as join9 } from "path";
 function appendReplicationEvent(root, event) {
-  mkdirSync(root, { recursive: true, mode: DIR_MODE });
+  mkdirSync4(root, { recursive: true, mode: DIR_MODE });
   chmodSync(root, DIR_MODE);
-  const path = join5(root, LOG_FILE);
+  const path = join9(root, LOG_FILE);
   let size = 0;
   try {
-    size = statSync(path).size;
+    size = statSync5(path).size;
   } catch (error) {
     if (error.code !== "ENOENT") throw error;
   }
   const line = `${JSON.stringify(event)}
 `;
   if (size + Buffer.byteLength(line) > MAX_LOG_BYTES) {
-    const rotated = join5(root, ROTATED_LOG_FILE);
+    const rotated = join9(root, ROTATED_LOG_FILE);
     try {
-      renameSync(path, rotated);
+      renameSync3(path, rotated);
     } catch (error) {
       if (error.code !== "ENOENT") throw error;
     }
-    writeFileSync(path, line, { mode: LOG_MODE });
+    writeFileSync2(path, line, { mode: LOG_MODE });
   } else {
-    appendFileSync(path, line, { mode: LOG_MODE });
+    appendFileSync2(path, line, { mode: LOG_MODE });
   }
   chmodSync(path, LOG_MODE);
 }
 function replicationLogPath(profileRoot) {
-  return join5(profileRoot, "replication", LOG_FILE);
+  return join9(profileRoot, "replication", LOG_FILE);
 }
 function createReplicationEventSink(profileRoot, options) {
   const pinnedNotices = /* @__PURE__ */ new Set();
@@ -2563,7 +2569,7 @@ function createReplicationEventSink(profileRoot, options) {
   };
 }
 function appendProfileReplicationEvent(profileRoot, event) {
-  appendReplicationEvent(dirname2(replicationLogPath(profileRoot)), event);
+  appendReplicationEvent(dirname5(replicationLogPath(profileRoot)), event);
 }
 var MAX_LOG_BYTES, LOG_MODE, DIR_MODE, LOG_FILE, ROTATED_LOG_FILE, REPLICATION_DIAGNOSTIC_FILES;
 var init_replication_log = __esm({
@@ -3649,15 +3655,15 @@ var init_curve = __esm({
         const { windows, windowSize } = calcWOpts(W, this.bits);
         const points = [];
         let p = point;
-        let base5 = p;
+        let base6 = p;
         for (let window = 0; window < windows; window++) {
-          base5 = p;
-          points.push(base5);
+          base6 = p;
+          points.push(base6);
           for (let i = 1; i < windowSize; i++) {
-            base5 = base5.add(p);
-            points.push(base5);
+            base6 = base6.add(p);
+            points.push(base6);
           }
-          p = base5.double();
+          p = base6.double();
         }
         return points;
       }
@@ -4649,7 +4655,7 @@ var init_dist = __esm({
 });
 
 // src/lib/replication-config.ts
-import { join as join6 } from "path";
+import { join as join10 } from "path";
 import { CLI_NAME as CLI_NAME8 } from "@tinycloud/operations/cli-name";
 import { profilePath as profilePath2, withProfileLock as withProfileLock2 } from "@tinycloud/operations/state";
 import { REPLICA_LOGOUT_PENDING_FILE, sqliteReplicaStorage } from "@tinycloud/node-sdk";
@@ -4695,8 +4701,8 @@ function createCliReplicationConfig(profile, settings, output, enabled) {
     grantTtlMs: readPositiveIntegerEnv("TC_REPLICATION_GRANT_TTL_MS", MAX_GRANT_TTL_MS) ?? DEFAULT_GRANT_TTL_MS,
     maxBytes: readPositiveIntegerEnv("TC_REPLICATION_MAX_BYTES", Number.MAX_SAFE_INTEGER),
     storage: sqliteReplicaStorage({
-      dir: join6(root, "replication"),
-      logoutPendingFile: join6(root, REPLICA_LOGOUT_PENDING_FILE),
+      dir: join10(root, "replication"),
+      logoutPendingFile: join10(root, REPLICA_LOGOUT_PENDING_FILE),
       diagnosticFiles: REPLICATION_DIAGNOSTIC_FILES,
       guard: (section) => withProfileLock2(profile, section, { requireProfile: true, timeoutMs: 35e3 })
     }),
@@ -4714,8 +4720,8 @@ var init_replication_config = __esm({
 });
 
 // ../replica/dist/profile-gate.js
-import { mkdir as mkdir3, open as open3, readFile as readFile4, rename as rename2, rm as rm3 } from "fs/promises";
-import { join as join7 } from "path";
+import { mkdir as mkdir4, open as open4, readFile as readFile5, rename as rename3, rm as rm4 } from "fs/promises";
+import { join as join11 } from "path";
 function gatedError(gate, message) {
   return Object.assign(new ReplicaError2(ReplicaErrorCode2.GATED, message, { gate }), { gate });
 }
@@ -4805,7 +4811,7 @@ function isNotFound(error) {
 async function readStoredState(profileDir) {
   let text;
   try {
-    text = await readFile4(join7(profileDir, REPLICA_GATE_FILE), "utf8");
+    text = await readFile5(join11(profileDir, REPLICA_GATE_FILE), "utf8");
   } catch (error) {
     if (isNotFound(error)) return void 0;
     throw gateRefusal("gate_unavailable", "The replica gate file cannot be read.");
@@ -4815,7 +4821,7 @@ async function readStoredState(profileDir) {
 async function readDenyFloor(profileDir) {
   let record2;
   try {
-    record2 = JSON.parse(await readFile4(join7(profileDir, DENY_FLOOR_FILE), "utf8"));
+    record2 = JSON.parse(await readFile5(join11(profileDir, DENY_FLOOR_FILE), "utf8"));
   } catch (error) {
     if (isNotFound(error)) return void 0;
     throw gateRefusal("gate_unavailable", "The replica deny floor cannot be read.");
@@ -4828,7 +4834,7 @@ async function readDenyFloor(profileDir) {
 function behindFloor(state2, floor) {
   return state2.lifecycleEpoch < floor.epoch || state2.deniedAt === null || state2.deniedAt < floor.deniedAt;
 }
-async function readState(profileDir) {
+async function readState2(profileDir) {
   const state2 = await readStoredState(profileDir);
   const floor = await readDenyFloor(profileDir);
   if (floor === void 0) return state2;
@@ -4841,16 +4847,16 @@ async function readState(profileDir) {
   return state2;
 }
 function readGateSnapshot(profileDir) {
-  return readState(profileDir);
+  return readState2(profileDir);
 }
-var HOUR_MS, DAY_MS, MAX_GRANT_TTL_MS2, CONSENT_WINDOW_MS, DEFAULT_MIN_FREE_BYTES, REPLICA_GATE_FILE, ReplicaErrorCode2, REPLICA_ERROR2, ReplicaError2, GATE_FILE_VERSION, REPLICA_DENY_FLOOR_FILE, DENY_FLOOR_FILE, LOST_GATE_RECOVERY, INTERRUPTED_SIGN_OUT;
+var HOUR_MS2, DAY_MS3, MAX_GRANT_TTL_MS2, CONSENT_WINDOW_MS, DEFAULT_MIN_FREE_BYTES, REPLICA_GATE_FILE, ReplicaErrorCode2, REPLICA_ERROR2, ReplicaError2, GATE_FILE_VERSION, REPLICA_DENY_FLOOR_FILE, DENY_FLOOR_FILE, LOST_GATE_RECOVERY, INTERRUPTED_SIGN_OUT;
 var init_profile_gate = __esm({
   "../replica/dist/profile-gate.js"() {
     "use strict";
-    HOUR_MS = 60 * 60 * 1e3;
-    DAY_MS = 24 * HOUR_MS;
-    MAX_GRANT_TTL_MS2 = 7 * DAY_MS;
-    CONSENT_WINDOW_MS = 7 * DAY_MS;
+    HOUR_MS2 = 60 * 60 * 1e3;
+    DAY_MS3 = 24 * HOUR_MS2;
+    MAX_GRANT_TTL_MS2 = 7 * DAY_MS3;
+    CONSENT_WINDOW_MS = 7 * DAY_MS3;
     DEFAULT_MIN_FREE_BYTES = 64 * 1024 * 1024;
     REPLICA_GATE_FILE = "replica-gate.json";
     ReplicaErrorCode2 = {
@@ -4939,12 +4945,12 @@ var init_profile_gate = __esm({
 // ../replica/dist/sqlite.js
 import { AsyncLocalStorage } from "async_hooks";
 import { randomBytes as randomBytes2 } from "crypto";
-import { closeSync, constants as fsConstants22, fstatSync, lstatSync, openSync, readdirSync as readdirSync2, readlinkSync } from "fs";
-import { chmod as chmod2, link, lstat as lstat2, mkdir as mkdir4, open as open22, readFile as readFile5, readdir as readdir2, rm as rm4, rmdir as rmdir2, stat as stat2, unlink as unlink2 } from "fs/promises";
-import { dirname as dirname3, join as join22, resolve as resolve2 } from "path";
+import { closeSync as closeSync2, constants as fsConstants22, fstatSync, lstatSync, openSync as openSync2, readdirSync as readdirSync5, readlinkSync } from "fs";
+import { chmod as chmod2, link, lstat as lstat2, mkdir as mkdir5, open as open22, readFile as readFile6, readdir as readdir2, rm as rm5, rmdir as rmdir2, stat as stat3, unlink as unlink2 } from "fs/promises";
+import { dirname as dirname6, join as join22, resolve as resolve22 } from "path";
 import { constants as fsConstants3 } from "fs";
-import { lstat as lstat3, open as open4, readdir as readdir3, rmdir, unlink } from "fs/promises";
-import { join as join8, parse, resolve, sep } from "path";
+import { lstat as lstat3, open as open5, readdir as readdir3, rmdir, unlink } from "fs/promises";
+import { join as join12, parse, resolve as resolve4, sep as sep3 } from "path";
 function isReplicaError(error, code5) {
   return typeof error === "object" && error !== null && error[REPLICA_ERROR3] === true && (code5 === void 0 || error.code === code5);
 }
@@ -5113,12 +5119,12 @@ function fileKind(details) {
   throw new Error("Unsupported replica entry type.");
 }
 async function pathComponents(path) {
-  const absolute = resolve(path);
-  const parts = absolute.slice(parse(absolute).root.length).split(sep).filter(Boolean);
+  const absolute = resolve4(path);
+  const parts = absolute.slice(parse(absolute).root.length).split(sep3).filter(Boolean);
   let current = parse(absolute).root;
   const components = [];
   for (const part of ["", ...parts]) {
-    if (part) current = join8(current, part);
+    if (part) current = join12(current, part);
     const details = await lstat3(current, { bigint: true });
     if (details.isSymbolicLink()) throw new Error(`Symlink in replica path: ${current}`);
     if (!details.isDirectory()) throw new Error(`Replica path component is not a directory: ${current}`);
@@ -5126,12 +5132,12 @@ async function pathComponents(path) {
   }
   return components;
 }
-async function pinnedDirectory(path, parent, relative = "") {
+async function pinnedDirectory(path, parent, relative2 = "") {
   const components = process.platform === "linux" ? void 0 : parent?.components ?? await pathComponents(path);
   const before = await lstat3(path, { bigint: true });
   if (before.isSymbolicLink()) throw new Error(`Symlink in replica path: ${path}`);
   if (!before.isDirectory()) throw new Error("Replica directory is not a real directory.");
-  const handle = await open4(path, fsConstants3.O_RDONLY | fsConstants3.O_DIRECTORY | fsConstants3.O_NOFOLLOW);
+  const handle = await open5(path, fsConstants3.O_RDONLY | fsConstants3.O_DIRECTORY | fsConstants3.O_NOFOLLOW);
   try {
     if (!sameFile(before, await handle.stat({ bigint: true }))) {
       throw new Error("Replica directory changed during inspection.");
@@ -5142,7 +5148,7 @@ async function pinnedDirectory(path, parent, relative = "") {
       parent,
       components,
       children: [],
-      relative,
+      relative: relative2,
       name: path,
       path: process.platform === "linux" ? `/proc/self/fd/${handle.fd}` : path
     };
@@ -5178,27 +5184,27 @@ async function inspect(dir, allowAdapterFence) {
       await checkDirectory(parent);
       for (const name of (await readdir3(parent.path)).sort()) {
         await checkDirectory(parent);
-        const relative = parent.relative ? `${parent.relative}/${name}` : name;
-        const path = join8(parent.path, name);
+        const relative2 = parent.relative ? `${parent.relative}/${name}` : name;
+        const path = join12(parent.path, name);
         const details = await lstat3(path, { bigint: true });
         if (process.platform !== "linux" && details.isSymbolicLink()) {
-          throw new Error(`Symlink in replica path: ${relative}`);
+          throw new Error(`Symlink in replica path: ${relative2}`);
         }
         const kind = fileKind(details);
-        const child = { path, relative, kind, identity: details, parent };
+        const child = { path, relative: relative2, kind, identity: details, parent };
         parent.children.push(child);
         if (parent.relative === "" && name === "replica.db" && kind === "file") hasDatabase = true;
         if (sourceKind(parent.relative, name, allowAdapterFence) !== kind) {
-          unknownPaths.push(relative);
-          unknownEntries.push(identityOf(relative, kind, details));
+          unknownPaths.push(relative2);
+          unknownEntries.push(identityOf(relative2, kind, details));
         } else {
-          knownEntries.push(identityOf(relative, kind, details));
+          knownEntries.push(identityOf(relative2, kind, details));
         }
         if (kind === "directory") {
-          const directory = await pinnedDirectory(path, parent, relative);
+          const directory = await pinnedDirectory(path, parent, relative2);
           if (!sameFile(details, directory.identity)) {
             await directory.handle.close();
-            throw new Error(`Replica directory changed during inspection: ${relative}`);
+            throw new Error(`Replica directory changed during inspection: ${relative2}`);
           }
           child.directory = directory;
           directories.push(directory);
@@ -5209,7 +5215,7 @@ async function inspect(dir, allowAdapterFence) {
     await walk(root);
     if (!hasDatabase) {
       unknownPaths.push("replica.db");
-    } else if (!await sourceMirrorSchema(join8(root.path, "replica.db"))) {
+    } else if (!await sourceMirrorSchema(join12(root.path, "replica.db"))) {
       const index = knownEntries.findIndex((entry) => entry.path === "replica.db");
       if (index >= 0) unknownEntries.push(knownEntries.splice(index, 1)[0]);
       unknownPaths.push("replica.db");
@@ -5236,7 +5242,7 @@ async function inspect(dir, allowAdapterFence) {
     }
     for (const name of names) {
       if (root.children.some((child) => child.relative === name)) continue;
-      const path = join8(root.path, name);
+      const path = join12(root.path, name);
       const details = await lstat3(path, { bigint: true });
       if (!/^replica\.db-(?:wal|shm|journal)$/.test(name) || !details.isFile()) {
         throw new Error(`Unexpected replica child during schema inspection: ${name}`);
@@ -5340,9 +5346,9 @@ async function acquireSqliteOpen() {
 }
 async function captureNamedPath(path) {
   const names = [];
-  for (let current = resolve2(path); ; current = dirname3(current)) {
+  for (let current = resolve22(path); ; current = dirname6(current)) {
     names.push(current);
-    if (dirname3(current) === current) break;
+    if (dirname6(current) === current) break;
   }
   const identities = [];
   for (const name of names.reverse()) {
@@ -5360,7 +5366,7 @@ async function openVerifiedDatabase(path, opener, options = {}) {
     if (!identity.isFile() || !named.isFile() || named.dev !== identity.dev || named.ino !== identity.ino || options.expected !== void 0 && (options.expected.dev !== identity.dev || options.expected.ino !== identity.ino)) {
       throw new Error("The replica database changed before SQLite opened it.");
     }
-    const previousFds = process.platform === "linux" && options.discoverDescriptors !== false ? new Map(readdirSync2("/proc/self/fd").map((fd) => {
+    const previousFds = process.platform === "linux" && options.discoverDescriptors !== false ? new Map(readdirSync5("/proc/self/fd").map((fd) => {
       try {
         return [fd, readlinkSync(`/proc/self/fd/${fd}`)];
       } catch {
@@ -5374,7 +5380,7 @@ async function openVerifiedDatabase(path, opener, options = {}) {
     }
     if (previousFds) db.get("SELECT count(*) FROM sqlite_master");
     if (previousFds) {
-      const databases = readdirSync2("/proc/self/fd").filter((fd) => {
+      const databases = readdirSync5("/proc/self/fd").filter((fd) => {
         try {
           const target = readlinkSync(`/proc/self/fd/${fd}`);
           return target.endsWith("/replica.db") && previousFds.get(fd) !== target;
@@ -5481,8 +5487,8 @@ async function unlinkWriterOrphans(root, keep) {
   const touched = /* @__PURE__ */ new Set();
   for (const file of await writerBlobFiles(root)) {
     if (file.hash !== null && keep.has(file.hash)) continue;
-    await rm4(file.path, { force: true });
-    touched.add(dirname3(file.path));
+    await rm5(file.path, { force: true });
+    touched.add(dirname6(file.path));
     removed += 1;
   }
   for (const dir of touched) if (!dir.endsWith(".tmp")) await rmdir2(dir).catch(() => void 0);
@@ -5494,7 +5500,7 @@ async function unlinkBlobsIn(root, keep) {
     const shardPath = join22(root, shard);
     if (shard === ".tmp") {
       for (const name of await entriesOf(shardPath)) {
-        await rm4(join22(shardPath, name), { force: true });
+        await rm5(join22(shardPath, name), { force: true });
         removed += 1;
       }
       continue;
@@ -5505,7 +5511,7 @@ async function unlinkBlobsIn(root, keep) {
         kept += 1;
         continue;
       }
-      await rm4(join22(shardPath, name), { force: true });
+      await rm5(join22(shardPath, name), { force: true });
       removed += 1;
     }
     if (kept === 0) await rmdir2(shardPath).catch(() => void 0);
@@ -5526,7 +5532,7 @@ function releaseWritable(shared) {
   try {
     shared.db.close();
   } finally {
-    if (shared.directoryFd !== void 0) closeSync(shared.directoryFd);
+    if (shared.directoryFd !== void 0) closeSync2(shared.directoryFd);
   }
 }
 async function acquireWritableMutation(shared) {
@@ -5720,7 +5726,7 @@ CREATE TABLE IF NOT EXISTS grant_install (
     FAULTS = /* @__PURE__ */ Symbol("tinycloud.replica.faults");
     pinnedDirectories = new FinalizationRegistry((fd) => {
       try {
-        closeSync(fd);
+        closeSync2(fd);
       } catch {
       }
     });
@@ -5912,9 +5918,9 @@ CREATE TABLE IF NOT EXISTS grant_install (
         let store;
         let directoryFd;
         try {
-          if (options.create) await mkdir4(dir, { recursive: true, mode: 448 });
+          if (options.create) await mkdir5(dir, { recursive: true, mode: 448 });
           if (process.platform === "linux") {
-            directoryFd = openSync(dir, fsConstants22.O_RDONLY | fsConstants22.O_DIRECTORY | fsConstants22.O_NOFOLLOW);
+            directoryFd = openSync2(dir, fsConstants22.O_RDONLY | fsConstants22.O_DIRECTORY | fsConstants22.O_NOFOLLOW);
           }
           const opened = directoryFd === void 0 ? lstatSync(dir, { bigint: true }) : fstatSync(directoryFd, { bigint: true });
           if (!opened.isDirectory() || opened.isSymbolicLink() || options.expectedDirectory && (opened.dev !== BigInt(options.expectedDirectory.dev) || opened.ino !== BigInt(options.expectedDirectory.ino))) {
@@ -5927,7 +5933,7 @@ CREATE TABLE IF NOT EXISTS grant_install (
           const pinnedDir = directoryFd === void 0 ? dir : `/proc/self/fd/${directoryFd}`;
           const dbPath = join22(pinnedDir, "replica.db");
           if (options.create) {
-            await mkdir4(join22(pinnedDir, "blobs", ".tmp"), { recursive: true, mode: 448 });
+            await mkdir5(join22(pinnedDir, "blobs", ".tmp"), { recursive: true, mode: 448 });
             await Promise.all([chmod2(pinnedDir, 448), chmod2(join22(pinnedDir, "blobs"), 448), chmod2(join22(pinnedDir, "blobs", ".tmp"), 448)]);
             const handle = await open22(dbPath, fsConstants22.O_CREAT | fsConstants22.O_EXCL | fsConstants22.O_RDWR | fsConstants22.O_NOFOLLOW, 384).catch((error) => {
               if (errnoOf(error) === "EEXIST") return null;
@@ -5965,14 +5971,14 @@ CREATE TABLE IF NOT EXISTS grant_install (
                 throw new Error("The live replica changed before its checked SQLite handle could be shared.");
               }
               if (directoryFd !== void 0) {
-                closeSync(directoryFd);
+                closeSync2(directoryFd);
                 directoryFd = void 0;
               }
               store = new _SqliteReplicaStore(dir, active.db, identity, options, active.directoryFd, namedAncestors, active);
             }
             if (!store) {
               const opener = options.sqlite ?? await loadSqlite();
-              const previousFds = process.platform === "linux" && !options.sqlite ? new Map(readdirSync2("/proc/self/fd").map((fd) => {
+              const previousFds = process.platform === "linux" && !options.sqlite ? new Map(readdirSync5("/proc/self/fd").map((fd) => {
                 try {
                   return [fd, readlinkSync(`/proc/self/fd/${fd}`)];
                 } catch {
@@ -5986,7 +5992,7 @@ CREATE TABLE IF NOT EXISTS grant_install (
               }
               if (previousFds) db.get("SELECT count(*) FROM sqlite_master");
               if (previousFds) {
-                const databases = readdirSync2("/proc/self/fd").filter((fd) => {
+                const databases = readdirSync5("/proc/self/fd").filter((fd) => {
                   try {
                     const target = readlinkSync(`/proc/self/fd/${fd}`);
                     return target.endsWith("/replica.db") && previousFds.get(fd) !== target;
@@ -6051,7 +6057,7 @@ CREATE TABLE IF NOT EXISTS grant_install (
           }
         } catch (error) {
           if (store) await store.close().catch(() => void 0);
-          else if (directoryFd !== void 0) closeSync(directoryFd);
+          else if (directoryFd !== void 0) closeSync2(directoryFd);
           throw storageError(error, `Opening the replica at ${dir}`);
         } finally {
           releaseOpen();
@@ -6552,13 +6558,13 @@ CREATE TABLE IF NOT EXISTS grant_install (
         const dirs = /* @__PURE__ */ new Set();
         for (const [hash, bytes] of blobs) {
           const final = this.#blobPath(hash);
-          const exists = await stat2(final).then(
+          const exists = await stat3(final).then(
             () => true,
             () => false
           );
           if (exists) continue;
           const shard = join22(this.#pinnedDir, "blobs", hash.slice(0, 2));
-          await mkdir4(shard, { mode: 448 }).catch((error) => {
+          await mkdir5(shard, { mode: 448 }).catch((error) => {
             if (errnoOf(error) !== "EEXIST") throw error;
           });
           const temp = join22(this.#pinnedDir, "blobs", ".tmp", `${hash}.${randomBytes2(6).toString("hex")}`);
@@ -6941,7 +6947,7 @@ CREATE TABLE IF NOT EXISTS grant_install (
       async readContent(hash) {
         if (!isHash(hash)) return void 0;
         try {
-          return new Uint8Array(await readFile5(this.#blobPath(hash)));
+          return new Uint8Array(await readFile6(this.#blobPath(hash)));
         } catch (error) {
           if (errnoOf(error) === "ENOENT") return void 0;
           throw storageError(error, "Reading replica content");
@@ -7017,7 +7023,7 @@ CREATE TABLE IF NOT EXISTS grant_install (
             try {
               this.#database.close();
             } finally {
-              if (fd !== void 0) closeSync(fd);
+              if (fd !== void 0) closeSync2(fd);
             }
           }
         })();
@@ -7028,9 +7034,9 @@ CREATE TABLE IF NOT EXISTS grant_install (
 });
 
 // src/lib/profile-replicas.ts
-import { lstat as lstat4, open as open5, readdir as readdir4, realpath, rmdir as rmdir3, stat as stat3, unlink as unlink3 } from "fs/promises";
+import { lstat as lstat4, open as open6, readdir as readdir4, realpath, rmdir as rmdir3, stat as stat4, unlink as unlink3 } from "fs/promises";
 import { constants as fsConstants4 } from "fs";
-import { dirname as dirname4, join as join9, resolve as resolve3, sep as sep2 } from "path";
+import { dirname as dirname7, join as join13, resolve as resolve5, sep as sep4 } from "path";
 import { ProfileDeletedError as ProfileDeletedError2, profilePath as profilePath3, withProfileLock as withProfileLock3 } from "@tinycloud/operations/state";
 function refuseUnsafeReplicaPath(profile, detail, operation = "logout") {
   return new CLIError(
@@ -7042,7 +7048,7 @@ function refuseUnsafeReplicaPath(profile, detail, operation = "logout") {
 async function safeReplicaRoot(profile, root, operation = "logout") {
   let rootStats;
   try {
-    rootStats = root.startsWith("/proc/self/fd/") ? await stat3(root) : await lstat4(root);
+    rootStats = root.startsWith("/proc/self/fd/") ? await stat4(root) : await lstat4(root);
   } catch (error) {
     if (error?.code === "ENOENT") return null;
     throw error;
@@ -7054,13 +7060,13 @@ async function safeReplicaRoot(profile, root, operation = "logout") {
     throw refuseUnsafeReplicaPath(profile, `the replicas path "${root}" is not a real directory`, operation);
   }
   const [profileRealPath, rootRealPath] = await Promise.all([realpath(profilePath3(profile)), realpath(root)]);
-  if (!rootRealPath.startsWith(profileRealPath + sep2)) {
+  if (!rootRealPath.startsWith(profileRealPath + sep4)) {
     throw refuseUnsafeReplicaPath(profile, `the replicas directory "${root}" resolves outside the selected profile`, operation);
   }
   return rootRealPath;
 }
 async function safeReplicaEntry(profile, root, entry, operation = "logout") {
-  const entryPath = join9(root, entry.name);
+  const entryPath = join13(root, entry.name);
   const rootRealPath = await safeReplicaRoot(profile, root, operation);
   if (rootRealPath === null) {
     throw refuseUnsafeReplicaPath(profile, `the replicas directory "${root}" disappeared`, operation);
@@ -7073,14 +7079,14 @@ async function safeReplicaEntry(profile, root, entry, operation = "logout") {
     throw refuseUnsafeReplicaPath(profile, `replica entry "${entry.name}" is not a real directory`, operation);
   }
   const entryRealPath = await realpath(entryPath);
-  if (!entryRealPath.startsWith(rootRealPath + sep2)) {
+  if (!entryRealPath.startsWith(rootRealPath + sep4)) {
     throw refuseUnsafeReplicaPath(profile, `replica entry "${entry.name}" resolves outside the replicas directory`, operation);
   }
   return { path: entryPath, identity: { dev: entryStats.dev, ino: entryStats.ino } };
 }
 async function inspectLegacyReplica(profile, root, entry, allowUnrecognizedDatabase = false) {
   const { path, identity } = await safeReplicaEntry(profile, root, entry);
-  const handle = await open5(path, fsConstants4.O_RDONLY | fsConstants4.O_DIRECTORY | fsConstants4.O_NOFOLLOW);
+  const handle = await open6(path, fsConstants4.O_RDONLY | fsConstants4.O_DIRECTORY | fsConstants4.O_NOFOLLOW);
   try {
     const pinnedEntry = await handle.stat();
     if (pinnedEntry.dev !== identity.dev || pinnedEntry.ino !== identity.ino) {
@@ -7106,16 +7112,16 @@ async function pinReplicaRoot(profile, named, operation, allowNamedLogout = fals
   }
   const ancestors = [];
   if (process.platform !== "linux") {
-    for (let path = resolve3(named); ; path = dirname4(path)) {
+    for (let path = resolve5(named); ; path = dirname7(path)) {
       const details = await lstat4(path, { bigint: true });
       if (!details.isDirectory() || details.isSymbolicLink()) {
         throw refuseUnsafeReplicaPath(profile, `replica path component "${path}" is not a real directory`, operation);
       }
       ancestors.push({ path, dev: details.dev, ino: details.ino });
-      if (dirname4(path) === path) break;
+      if (dirname7(path) === path) break;
     }
   }
-  const handle = await open5(named, fsConstants4.O_RDONLY | fsConstants4.O_DIRECTORY | fsConstants4.O_NOFOLLOW);
+  const handle = await open6(named, fsConstants4.O_RDONLY | fsConstants4.O_DIRECTORY | fsConstants4.O_NOFOLLOW);
   try {
     const pinned = await handle.stat({ bigint: true });
     const assertNamed = async () => {
@@ -7211,25 +7217,25 @@ function assertRecordedChild(profile, name, layout, inventory, empty5) {
   }
 }
 async function inspectApprovedUnknownRoot(profile, root, entry, inventory) {
-  const relative = `replicas/${entry.name}`;
-  if (inventory.roots.has(relative)) {
+  const relative2 = `replicas/${entry.name}`;
+  if (inventory.roots.has(relative2)) {
     throw refuseUnsafeReplicaPath(profile, `legacy entry "${entry.name}" has conflicting recorded identities`);
   }
-  const path = join9(root, entry.name);
+  const path = join13(root, entry.name);
   const info = await lstat4(path, { bigint: true });
   const kind = info.isDirectory() ? "directory" : info.isSymbolicLink() ? "symlink" : info.isFile() ? "file" : null;
   if (kind === null || process.platform !== "linux" && kind === "symlink") {
     throw refuseUnsafeReplicaPath(profile, `legacy entry "${entry.name}" cannot be removed safely`);
   }
-  const identity = { path: relative, kind, dev: info.dev.toString(), ino: info.ino.toString() };
-  assertApprovedEntry(profile, relative, identity, inventory.approvedUnknown);
+  const identity = { path: relative2, kind, dev: info.dev.toString(), ino: info.ino.toString() };
+  assertApprovedEntry(profile, relative2, identity, inventory.approvedUnknown);
   const layout = kind === "directory" ? await inspectSqliteReplicaLayout(path) : null;
   if (layout) {
     if (layout.rootIdentity.dev !== identity.dev || layout.rootIdentity.ino !== identity.ino) {
       throw refuseUnsafeReplicaPath(profile, `legacy entry "${entry.name}" changed during inspection`);
     }
     for (const child of [...layout.knownEntries, ...layout.unknownEntries]) {
-      assertApprovedEntry(profile, `${relative}/${child.path}`, child, inventory.approvedUnknown);
+      assertApprovedEntry(profile, `${relative2}/${child.path}`, child, inventory.approvedUnknown);
     }
   }
   return { entry, path, identity, layout };
@@ -7237,7 +7243,7 @@ async function inspectApprovedUnknownRoot(profile, root, entry, inventory) {
 async function removeProfileReplicas(profile, options = {}) {
   const inventory = legacyInventory(profile, options);
   return withProfileLock3(profile, async () => {
-    const namedRoot = join9(profilePath3(profile), "replicas");
+    const namedRoot = join13(profilePath3(profile), "replicas");
     const pinned = await pinReplicaRoot(profile, namedRoot, "logout", true);
     if (!pinned) return [];
     const expectedRoot = inventory?.roots.get("replicas");
@@ -7295,7 +7301,7 @@ async function removeProfileReplicas(profile, options = {}) {
           if (current.identity.dev !== identity.dev || current.identity.ino !== identity.ino) {
             throw refuseUnsafeReplicaPath(profile, `empty replica entry "${entry.name}" changed during cleanup`);
           }
-          const handle = await open5(current.path, fsConstants4.O_RDONLY | fsConstants4.O_DIRECTORY | fsConstants4.O_NOFOLLOW);
+          const handle = await open6(current.path, fsConstants4.O_RDONLY | fsConstants4.O_DIRECTORY | fsConstants4.O_NOFOLLOW);
           try {
             const pinnedEntry = await handle.stat();
             if (pinnedEntry.dev !== identity.dev || pinnedEntry.ino !== identity.ino || (await readdir4(process.platform === "linux" ? `/proc/self/fd/${handle.fd}` : current.path)).length !== 0) {
@@ -7375,7 +7381,7 @@ async function removeProfileReplicas(profile, options = {}) {
             }
             removed.push(entry.name);
           } catch (error) {
-            const replicaStillExists = await lstat4(join9(root, entry.name)).then(
+            const replicaStillExists = await lstat4(join13(root, entry.name)).then(
               () => true,
               (statError) => statError.code !== "ENOENT"
             );
@@ -7443,8 +7449,8 @@ var init_profile_replicas = __esm({
 });
 
 // src/lib/logout-pending.ts
-import { lstat as lstat5, open as open6, readFile as readFile6, rm as rm5 } from "fs/promises";
-import { join as join10 } from "path";
+import { lstat as lstat5, open as open7, readFile as readFile7, rm as rm6 } from "fs/promises";
+import { join as join14 } from "path";
 import { createProfileReplicaPurge, logoutPrincipalDigest, REPLICA_LOGOUT_PENDING_FILE as REPLICA_LOGOUT_PENDING_FILE2, RESTORED_GATE_MESSAGE } from "@tinycloud/node-sdk";
 import { namedProfilePath, profilePath as profilePath4 } from "@tinycloud/operations/state";
 import { REPLICA_GATE_FILE as REPLICA_GATE_FILE2 } from "@tinycloud/sdk-services/kv/replication/contractConstants";
@@ -7527,7 +7533,7 @@ async function clearProfileCredentials(name, syncDirectory = false, legacyCleanu
   await ProfileManager.withLock(name, async () => {
     const profile = await ProfileManager.getProfile(name);
     const { namedKeys: _namedKeys, authKeyRetained: _authKeyRetained, ...signedOutProfile } = profile;
-    await rm5(join10(profilePath4(name), "approval-pending.json"), { force: true });
+    await rm6(join14(profilePath4(name), "approval-pending.json"), { force: true });
     await ProfileManager.setProfileDurable(name, {
       ...signedOutProfile,
       authSignedOut: true,
@@ -7552,7 +7558,7 @@ async function clearProfileCredentials(name, syncDirectory = false, legacyCleanu
     }
     if (failed) throw error;
     if (syncDirectory) {
-      const directory = await open6(profilePath4(name), "r");
+      const directory = await open7(profilePath4(name), "r");
       try {
         await directory.sync();
       } finally {
@@ -7569,7 +7575,7 @@ async function finishSignedOutCredentialRemoval(name) {
   if (profile?.authSignedOut !== true) return;
   for (const file of profile.authKeyRetained === true ? ["session.json"] : ["session.json", "key.json"]) {
     try {
-      await lstat5(join10(profilePath4(name), file));
+      await lstat5(join14(profilePath4(name), file));
     } catch (error) {
       if (typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT") continue;
       throw error;
@@ -7585,7 +7591,7 @@ async function finishSignedOutCredentialRemoval(name) {
 }
 async function recoverPendingLogout(name) {
   try {
-    await lstat5(join10(profilePath4(name), REPLICA_LOGOUT_PENDING_FILE2));
+    await lstat5(join14(profilePath4(name), REPLICA_LOGOUT_PENDING_FILE2));
   } catch (error) {
     if (typeof error !== "object" || error === null || !("code" in error) || error.code !== "ENOENT") throw error;
     await finishSignedOutCredentialRemoval(name);
@@ -7602,7 +7608,7 @@ async function recoverPendingLogout(name) {
     if (!profile) {
       for (const child of [REPLICA_GATE_FILE2, "replicas", "replication"]) {
         try {
-          await lstat5(join10(profilePath4(name), child));
+          await lstat5(join14(profilePath4(name), child));
         } catch (childError) {
           if (typeof childError === "object" && childError !== null && "code" in childError && childError.code === "ENOENT") continue;
           throw childError;
@@ -7645,7 +7651,7 @@ async function recoverPendingLogout(name) {
   const report = await ProfileManager.withLock(name, async () => {
     const unreadable = (file) => new CLIError(
       "REPLICA_GATED",
-      `A logout is pending on profile "${name}", but its ${file === "profile.json" ? "profile" : "session"} file ${join10(namedProfilePath(name), file)} is unreadable; credentials, replica files and the logout marker were left unchanged, and local replica reads stay blocked.`,
+      `A logout is pending on profile "${name}", but its ${file === "profile.json" ? "profile" : "session"} file ${join14(namedProfilePath(name), file)} is unreadable; credentials, replica files and the logout marker were left unchanged, and local replica reads stay blocked.`,
       ExitCode.ERROR
     );
     try {
@@ -7660,7 +7666,7 @@ async function recoverPendingLogout(name) {
       throw unreadable("session.json");
     }
     if (session) {
-      const marker = await readFile6(join10(profilePath4(name), REPLICA_LOGOUT_PENDING_FILE2), "utf8").then((text) => {
+      const marker = await readFile7(join14(profilePath4(name), REPLICA_LOGOUT_PENDING_FILE2), "utf8").then((text) => {
         try {
           return JSON.parse(text);
         } catch {
@@ -8316,9 +8322,9 @@ var init_host = __esm({
 
 // src/config/profiles.ts
 import { constants as fsConstants5 } from "fs";
-import { chmod as chmod3, lstat as lstat6, open as open7, readdir as readdir5, rm as rm6 } from "fs/promises";
+import { chmod as chmod3, lstat as lstat6, open as open8, readdir as readdir5, rm as rm7 } from "fs/promises";
 import { CLI_NAME as CLI_NAME11 } from "@tinycloud/operations/cli-name";
-import { join as join11 } from "path";
+import { join as join15 } from "path";
 import {
   assertRealProfileDirectory,
   ProfileSymlinkError as ProfileSymlinkError2,
@@ -8340,7 +8346,7 @@ async function secureProfileDirectory(directory) {
   const rootFlags = fsConstants5.O_RDONLY | fsConstants5.O_DIRECTORY | (process.platform === "linux" ? 0 : fsConstants5.O_NOFOLLOW);
   let root;
   try {
-    root = await open7(directory, rootFlags);
+    root = await open8(directory, rootFlags);
   } catch (error) {
     if (error.code === "ENOENT") return;
     throw error;
@@ -8365,8 +8371,8 @@ async function secureProfileDirectory(directory) {
       if (!entry.isFile()) continue;
       let file;
       try {
-        file = await open7(
-          join11(pinnedDirectory2, entry.name),
+        file = await open8(
+          join15(pinnedDirectory2, entry.name),
           fsConstants5.O_RDONLY | fsConstants5.O_NOFOLLOW | fsConstants5.O_NONBLOCK
         );
       } catch (error) {
@@ -8428,7 +8434,7 @@ var init_profiles = __esm({
       /** Owner-only profile directory (0700), created or tightened before any write into it. */
       static async ensureProfileDir(name) {
         const profileDir = profilePath6(name);
-        if (profileDir !== join11(PROFILES_DIR, name)) {
+        if (profileDir !== join15(PROFILES_DIR, name)) {
           await chmod3(profileDir, PRIVATE_DIR_MODE);
           return profileDir;
         }
@@ -8443,7 +8449,7 @@ var init_profiles = __esm({
        * Reads config.json. Returns a default config if the file is missing.
        */
       static async getConfig() {
-        const config = await readJson(CONFIG_FILE);
+        const config = await readJson2(CONFIG_FILE);
         if (!config) {
           return { defaultProfile: DEFAULT_PROFILE, version: 1 };
         }
@@ -8465,7 +8471,7 @@ var init_profiles = __esm({
         const profile = await withPinnedProfileDirectory2(name, async (directory) => {
           if (!directory) return null;
           await secureProfileDirectory(directory);
-          return readJson(join11(directory, "profile.json"));
+          return readJson2(join15(directory, "profile.json"));
         });
         if (!profile) {
           throw new CLIError(
@@ -8481,25 +8487,25 @@ var init_profiles = __esm({
        */
       static async setProfile(name, data) {
         await _ProfileManager.withLock(name, async () => {
-          await writeJson(join11(await _ProfileManager.ensureProfileDir(name), "profile.json"), data);
+          await writeJson(join15(await _ProfileManager.ensureProfileDir(name), "profile.json"), data);
         });
       }
       /** Publish explicit logout provenance (or its verified-login clear) durably under the profile lock. */
       static async setProfileDurable(name, data) {
         await _ProfileManager.withLock(name, async () => {
           await refuseWriteToDeletedProfile2(name);
-          await writeJsonDurable(join11(await _ProfileManager.ensureProfileDir(name), "profile.json"), data);
+          await writeJsonDurable(join15(await _ProfileManager.ensureProfileDir(name), "profile.json"), data);
         });
       }
       /** Removes profile.json under the profile lock (rollback of a profile a failed login created). */
       static async removeProfileConfig(name) {
-        await _ProfileManager.withLock(name, () => rm6(join11(profilePath6(name), "profile.json"), { force: true }));
+        await _ProfileManager.withLock(name, () => rm7(join15(profilePath6(name), "profile.json"), { force: true }));
       }
       /**
        * Returns true if a profile directory exists.
        */
       static async profileExists(name) {
-        return withPinnedProfileDirectory2(name, (directory) => directory ? fileExists(join11(directory, "profile.json")) : Promise.resolve(false));
+        return withPinnedProfileDirectory2(name, (directory) => directory ? fileExists(join15(directory, "profile.json")) : Promise.resolve(false));
       }
       /**
        * Returns an array of profile directory names.
@@ -8544,16 +8550,16 @@ var init_profiles = __esm({
         });
         if (kind === "missing") return;
         if (kind === "link") {
-          await rm6(profileDir, { force: true });
+          await rm7(profileDir, { force: true });
           return;
         }
         await _ProfileManager.withLock(name, async () => {
           const directory = profilePath6(name);
-          for (const file of ["session.json", "key.json"]) await rm6(join11(directory, file), { force: true });
+          for (const file of ["session.json", "key.json"]) await rm7(join15(directory, file), { force: true });
           for (const entry of await readdir5(directory)) {
-            if (entry !== ".lock" && entry !== "profile.json") await rm6(join11(directory, entry), { recursive: true, force: true });
+            if (entry !== ".lock" && entry !== "profile.json") await rm7(join15(directory, entry), { recursive: true, force: true });
           }
-          await rm6(join11(directory, "profile.json"), { force: true });
+          await rm7(join15(directory, "profile.json"), { force: true });
           await recordProfileDeletion(name);
         });
       }
@@ -8565,10 +8571,10 @@ var init_profiles = __esm({
       static async getKey(name) {
         return withPinnedProfileDirectory2(name, async (directory) => {
           if (!directory) return null;
-          const profileFile = join11(directory, "profile.json");
-          if ((await readJson(profileFile))?.authSignedOut === true) return null;
-          const key = await readJson(join11(directory, "key.json"));
-          return (await readJson(profileFile))?.authSignedOut === true ? null : key;
+          const profileFile = join15(directory, "profile.json");
+          if ((await readJson2(profileFile))?.authSignedOut === true) return null;
+          const key = await readJson2(join15(directory, "key.json"));
+          return (await readJson2(profileFile))?.authSignedOut === true ? null : key;
         });
       }
       /**
@@ -8577,7 +8583,7 @@ var init_profiles = __esm({
        * the next sign-in keeps the key that the profile's grants are bound to.
        */
       static async getStoredKey(name) {
-        return withPinnedProfileDirectory2(name, async (directory) => directory ? readJson(join11(directory, "key.json")) : null);
+        return withPinnedProfileDirectory2(name, async (directory) => directory ? readJson2(join15(directory, "key.json")) : null);
       }
       /**
        * Saves a JWK key under the profile lock (0600, in an owner-only profile
@@ -8587,12 +8593,12 @@ var init_profiles = __esm({
       static async setKey(name, jwk) {
         await _ProfileManager.withLock(name, async () => {
           await refuseWriteToDeletedProfile2(name);
-          await writeJson(join11(await _ProfileManager.ensureProfileDir(name), "key.json"), jwk);
+          await writeJson(join15(await _ProfileManager.ensureProfileDir(name), "key.json"), jwk);
         });
       }
       /** Removes key.json under the profile lock (rollback of a key a failed login created). */
       static async removeKey(name) {
-        await _ProfileManager.withLock(name, () => rm6(join11(profilePath6(name), "key.json"), { force: true }));
+        await _ProfileManager.withLock(name, () => rm7(join15(profilePath6(name), "key.json"), { force: true }));
       }
       // ── Session management ──────────────────────────────────────────────
       /**
@@ -8601,10 +8607,10 @@ var init_profiles = __esm({
       static async getSession(name) {
         return withPinnedProfileDirectory2(name, async (directory) => {
           if (!directory) return null;
-          const profileFile = join11(directory, "profile.json");
-          if ((await readJson(profileFile))?.authSignedOut === true) return null;
+          const profileFile = join15(directory, "profile.json");
+          if ((await readJson2(profileFile))?.authSignedOut === true) return null;
           const session = await readSession(name);
-          return (await readJson(profileFile))?.authSignedOut === true ? null : session;
+          return (await readJson2(profileFile))?.authSignedOut === true ? null : session;
         });
       }
       /**
@@ -8627,10 +8633,10 @@ var init_profiles = __esm({
       static async getCacheDir(name) {
         const alreadyPinned = profilePath6(name) !== namedProfilePath2(name);
         return _ProfileManager.withLock(name, async () => {
-          const cacheDir = join11(await _ProfileManager.ensureProfileDir(name), "cache");
+          const cacheDir = join15(await _ProfileManager.ensureProfileDir(name), "cache");
           await ensureDir(cacheDir);
           await chmod3(cacheDir, PRIVATE_DIR_MODE);
-          return alreadyPinned ? cacheDir : join11(namedProfilePath2(name), "cache");
+          return alreadyPinned ? cacheDir : join15(namedProfilePath2(name), "cache");
         });
       }
       // ── Resolution helpers ──────────────────────────────────────────────
@@ -12318,23 +12324,23 @@ var init_types2 = __esm({
         }
         if (effect.type === "transform") {
           if (ctx.common.async === false) {
-            const base5 = this._def.schema._parseSync({
+            const base6 = this._def.schema._parseSync({
               data: ctx.data,
               path: ctx.path,
               parent: ctx
             });
-            if (!isValid2(base5))
+            if (!isValid2(base6))
               return INVALID2;
-            const result = effect.transform(base5.value, checkCtx);
+            const result = effect.transform(base6.value, checkCtx);
             if (result instanceof Promise) {
               throw new Error(`Asynchronous transform encountered during synchronous parse operation. Use .parseAsync instead.`);
             }
             return { status: status.value, value: result };
           } else {
-            return this._def.schema._parseAsync({ data: ctx.data, path: ctx.path, parent: ctx }).then((base5) => {
-              if (!isValid2(base5))
+            return this._def.schema._parseAsync({ data: ctx.data, path: ctx.path, parent: ctx }).then((base6) => {
+              if (!isValid2(base6))
                 return INVALID2;
-              return Promise.resolve(effect.transform(base5.value, checkCtx)).then((result) => ({
+              return Promise.resolve(effect.transform(base6.value, checkCtx)).then((result) => ({
                 status: status.value,
                 value: result
               }));
@@ -13456,13 +13462,13 @@ var init_interface = __esm({
 });
 
 // ../../node_modules/multiformats/dist/src/cid.js
-function format2(link4, base5) {
+function format2(link4, base6) {
   const { bytes, version: version2 } = link4;
   switch (version2) {
     case 0:
-      return toStringV02(bytes, baseCache2(link4), base5 ?? base58btc2.encoder);
+      return toStringV02(bytes, baseCache2(link4), base6 ?? base58btc2.encoder);
     default:
-      return toStringV12(bytes, baseCache2(link4), base5 ?? base322.encoder);
+      return toStringV12(bytes, baseCache2(link4), base6 ?? base322.encoder);
   }
 }
 function baseCache2(cid) {
@@ -13474,55 +13480,55 @@ function baseCache2(cid) {
   }
   return baseCache5;
 }
-function parseCIDtoBytes2(source, base5) {
+function parseCIDtoBytes2(source, base6) {
   switch (source[0]) {
     // CIDv0 is parsed differently
     case "Q": {
-      const decoder = base5 ?? base58btc2;
+      const decoder = base6 ?? base58btc2;
       return [
         base58btc2.prefix,
         decoder.decode(`${base58btc2.prefix}${source}`)
       ];
     }
     case base58btc2.prefix: {
-      const decoder = base5 ?? base58btc2;
+      const decoder = base6 ?? base58btc2;
       return [base58btc2.prefix, decoder.decode(source)];
     }
     case base322.prefix: {
-      const decoder = base5 ?? base322;
+      const decoder = base6 ?? base322;
       return [base322.prefix, decoder.decode(source)];
     }
     case base362.prefix: {
-      const decoder = base5 ?? base362;
+      const decoder = base6 ?? base362;
       return [base362.prefix, decoder.decode(source)];
     }
     default: {
-      if (base5 == null) {
+      if (base6 == null) {
         throw Error("To parse non base32, base36 or base58btc encoded CID multibase decoder must be provided");
       }
-      return [source[0], base5.decode(source)];
+      return [source[0], base6.decode(source)];
     }
   }
 }
-function toStringV02(bytes, cache5, base5) {
-  const { prefix } = base5;
+function toStringV02(bytes, cache5, base6) {
+  const { prefix } = base6;
   if (prefix !== base58btc2.prefix) {
-    throw Error(`Cannot string encode V0 in ${base5.name} encoding`);
+    throw Error(`Cannot string encode V0 in ${base6.name} encoding`);
   }
   const cid = cache5.get(prefix);
   if (cid == null) {
-    const cid2 = base5.encode(bytes).slice(1);
+    const cid2 = base6.encode(bytes).slice(1);
     cache5.set(prefix, cid2);
     return cid2;
   } else {
     return cid;
   }
 }
-function toStringV12(bytes, cache5, base5) {
-  const { prefix } = base5;
+function toStringV12(bytes, cache5, base6) {
+  const { prefix } = base6;
   const cid = cache5.get(prefix);
   if (cid == null) {
-    const cid2 = base5.encode(bytes);
+    const cid2 = base6.encode(bytes);
     cache5.set(prefix, cid2);
     return cid2;
   } else {
@@ -13627,8 +13633,8 @@ var init_cid = __esm({
         const unknown = other;
         return unknown != null && self.code === unknown.code && self.version === unknown.version && equals4(self.multihash, unknown.multihash);
       }
-      toString(base5) {
-        return format2(this, base5);
+      toString(base6) {
+        return format2(this, base6);
       }
       toJSON() {
         return { "/": format2(this) };
@@ -13788,8 +13794,8 @@ var init_cid = __esm({
        * throw an error if encoding of the CID is not compatible with supplied (or
        * a default decoder).
        */
-      static parse(source, base5) {
-        const [prefix, bytes] = parseCIDtoBytes2(source, base5);
+      static parse(source, base6) {
+        const [prefix, bytes] = parseCIDtoBytes2(source, base6);
         const cid = _CID4.decode(bytes);
         if (cid.version === 0 && source[0] !== "Q") {
           throw Error("Version 0 CID string must not include multibase prefix");
@@ -15033,7 +15039,7 @@ async function seal(plaintextBytes, key32) {
   blob.set(ciphertext, HEADER_LENGTH + nonce.length);
   return { blob, cid: await computeCid(blob) };
 }
-async function open8(blob, key32) {
+async function open9(blob, key32) {
   if (blob.length < HEADER_LENGTH + NONCE_LENGTH + TAG_LENGTH) {
     throw new TypeError(`sealed blob too short: ${blob.length} bytes`);
   }
@@ -15294,10 +15300,10 @@ async function signDigest(signer, domain, object3, issuer) {
     throw new LinkError("signer_failed", "the signer failed", { cause });
   }
   const signature = { algorithm: "Ed25519", value: toBase64Url(raw2) };
-  if (!verifySignature(issuer, domain, object3, signature)) throw new LinkError("signer_failed", "the signer returned a signature that does not verify for its did");
+  if (!verifySignature2(issuer, domain, object3, signature)) throw new LinkError("signer_failed", "the signer returned a signature that does not verify for its did");
   return signature;
 }
-function verifySignature(issuer, domain, object3, signature) {
+function verifySignature2(issuer, domain, object3, signature) {
   if (!isPlainObject(signature) || !hasExactKeys(signature, ["algorithm", "value"]) || signature.algorithm !== "Ed25519") return false;
   const sig = strictBytes(signature.value, 64);
   const key = linkIssuerPublicKey(issuer);
@@ -15309,7 +15315,7 @@ async function signHeader(header, signer) {
   return signDigest(signer, LINK_HEADER_DOMAIN, valid, valid.issuer);
 }
 function verifyHeader(header, signature) {
-  return verifySignature(header.issuer, LINK_HEADER_DOMAIN, header, signature);
+  return verifySignature2(header.issuer, LINK_HEADER_DOMAIN, header, signature);
 }
 function validateLinkDeleteRequest(value, options = {}) {
   if (!isPlainObject(value)) throw new LinkError("request_shape");
@@ -15328,7 +15334,7 @@ async function signDelete(request, signer) {
   return signDigest(signer, LINK_DELETE_DOMAIN, valid, valid.issuer);
 }
 function verifyDelete(request, signature) {
-  return verifySignature(request.issuer, LINK_DELETE_DOMAIN, request, signature);
+  return verifySignature2(request.issuer, LINK_DELETE_DOMAIN, request, signature);
 }
 function randomLinkNonce() {
   return toBase64Url(globalThis.crypto.getRandomValues(new Uint8Array(16)));
@@ -15450,7 +15456,7 @@ async function openRecordChecked(record2, key, nowMs) {
   if (key.length !== 32) throw new LinkError("invalid_argument", "a link key is 32 bytes");
   let plaintext;
   try {
-    plaintext = await open8(body, key);
+    plaintext = await open9(body, key);
   } catch {
     throw new LinkError("body_open_failed");
   }
@@ -15582,7 +15588,7 @@ async function readCapped(response, cap) {
   }
   return bytes;
 }
-async function readJson2(response) {
+async function readJson3(response) {
   const bytes = await readCapped(response, MAX_JSON_RESPONSE_BYTES);
   try {
     return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
@@ -15591,7 +15597,7 @@ async function readJson2(response) {
   }
 }
 async function refusal(response) {
-  const body = errorBodySchema.safeParse(await readJson2(response).catch(() => void 0));
+  const body = errorBodySchema.safeParse(await readJson3(response).catch(() => void 0));
   const serviceError = body.success && /^[a-z_]{1,32}$/.test(body.data.error) ? body.data.error : void 0;
   return new LinkError("service_refused", `the links service refused the request (HTTP ${response.status})`, {
     status: response.status,
@@ -15637,7 +15643,7 @@ async function createLink(input) {
   const { record: record2, key, bodyCid } = await prepareLinkRecord({ ...input, enforceServiceLife: true });
   const response = await send(`${checkApiOrigin(input.apiOrigin)}/v1/links`, { method: "POST", body: JSON.stringify(record2) }, input, "application/json");
   if (response.status !== 201) throw await refusal(response);
-  const created = createdSchema.safeParse(await readJson2(response));
+  const created = createdSchema.safeParse(await readJson3(response));
   if (!created.success || !LINK_ID_PATTERN.test(created.data.id) || created.data.expiresAt !== record2.header.expiresAt) throw new LinkError("invalid_response");
   const { id } = created.data;
   return { link: buildShortLink({ origin: input.linkOrigin, type: input.type, id, key, bodyCid }), id, expiresAt: record2.header.expiresAt, bodyCid };
@@ -15660,7 +15666,7 @@ async function createApprovalRequest(input) {
     "application/json"
   );
   if (response.status !== 201) throw await refusal(response);
-  const created = createdSchema.safeParse(await readJson2(response));
+  const created = createdSchema.safeParse(await readJson3(response));
   if (!created.success || !LINK_ID_PATTERN.test(created.data.id) || created.data.expiresAt !== prepared.record.header.expiresAt) throw new LinkError("invalid_response");
   return {
     id: created.data.id,
@@ -15826,6 +15832,7 @@ async function post(state2, action, resultRef, ackId, options) {
         "OpenKey-Session-Proof": approvalSessionProof(state2, action, resultRef, ackId)
       },
       body: JSON.stringify(body),
+      // node-floor-ok: Node 20.3+; floor raise tracked in TC-4280
       signal: options.signal ? AbortSignal.any([timeout, options.signal]) : timeout
     });
   } catch (error) {
@@ -16232,7 +16239,7 @@ var init_links = __esm({
         this.status = status;
       }
     };
-    defaultSleep = (ms2) => new Promise((resolve6) => setTimeout(resolve6, ms2));
+    defaultSleep = (ms2) => new Promise((resolve8) => setTimeout(resolve8, ms2));
   }
 });
 
@@ -16267,23 +16274,23 @@ var init_duration = __esm({
 });
 
 // src/lib/browser.ts
-import open13 from "open";
+import open14 from "open";
 async function tryOpenBrowser(url) {
   let launcher;
   try {
-    launcher = await open13(url);
+    launcher = await open14(url);
   } catch {
     return false;
   }
-  return new Promise((resolve6) => {
-    const timer = setTimeout(() => resolve6(true), LAUNCH_CHECK_MS);
+  return new Promise((resolve8) => {
+    const timer = setTimeout(() => resolve8(true), LAUNCH_CHECK_MS);
     launcher.once("error", () => {
       clearTimeout(timer);
-      resolve6(false);
+      resolve8(false);
     });
     launcher.once("exit", (code5) => {
       clearTimeout(timer);
-      resolve6(code5 === 0);
+      resolve8(code5 === 0);
     });
   });
 }
@@ -16678,10 +16685,10 @@ var init_scoped_login = __esm({
 });
 
 // src/auth/pending-code.ts
-import { createHash as createHash2 } from "crypto";
+import { createHash as createHash3 } from "crypto";
 import { constants as fsConstants6 } from "fs";
-import { open as open14, rm as rm8 } from "fs/promises";
-import { join as join15 } from "path";
+import { open as open15, rm as rm9 } from "fs/promises";
+import { join as join19 } from "path";
 import { profilePath as profilePath7 } from "@tinycloud/operations/state";
 var init_pending_code = __esm({
   "src/auth/pending-code.ts"() {
@@ -16725,7 +16732,7 @@ var init_browser_auth = __esm({
 
 // src/auth/login-commit.ts
 import { lstat as lstat9 } from "fs/promises";
-import { join as join16 } from "path";
+import { join as join20 } from "path";
 import { REPLICA_LOGOUT_PENDING_FILE as REPLICA_LOGOUT_PENDING_FILE3 } from "@tinycloud/node-sdk";
 import { CLI_NAME as CLI_NAME15 } from "@tinycloud/operations/cli-name";
 import { isLocalOwnerProfile as isLocalOwnerProfile3, ownerSessionLacksProof as ownerSessionLacksProof3 } from "@tinycloud/operations/profile";
@@ -16771,7 +16778,7 @@ var init_refused_approval = __esm({
 import {
   createDecipheriv,
   createECDH,
-  createHash as createHash3,
+  createHash as createHash4,
   createHmac,
   randomBytes as randomBytes5
 } from "crypto";
@@ -16998,7 +17005,7 @@ function invitationKeyFromGrant(permissions, input) {
   if (!Number.isFinite(issued) || !Number.isFinite(expiry)) refuse2("The invitation approval has no signed lifetime; no invitation was sent.");
   if (issued > now + FUTURE_ISSUE_MS) refuse2("The invitation approval was issued in the future; no invitation was sent.");
   if (expiry <= now) refuse2("The invitation approval has expired; no invitation was sent.");
-  if (expiry - issued > DAY_MS2 || expiry > Date.parse(input.acceptanceExpiresAt)) {
+  if (expiry - issued > DAY_MS4 || expiry > Date.parse(input.acceptanceExpiresAt)) {
     refuse2("The approval lasts longer than the invitation it was requested for; no invitation was sent.");
   }
   return [...ids][0];
@@ -17053,7 +17060,7 @@ function verifyInvitationGrant(data, key, expected) {
   const shareId = invitationKeyFromGrant(permissions, { ownerDid, issuedAt, expiresAt: proof.expiresAt, acceptanceExpiresAt: expected.acceptanceExpiresAt, now: expected.now });
   return { shareId, ownerDid, issuedAt, expiresAt: proof.expiresAt, permissions };
 }
-var KEY_ACTIONS, FUTURE_ISSUE_MS, DAY_MS2;
+var KEY_ACTIONS, FUTURE_ISSUE_MS, DAY_MS4;
 var init_invitation_key_grant = __esm({
   "src/auth/invitation-key-grant.ts"() {
     "use strict";
@@ -17062,14 +17069,14 @@ var init_invitation_key_grant = __esm({
     init_errors();
     KEY_ACTIONS = ["tinycloud.encryption/key.create", "tinycloud.encryption/decrypt"];
     FUTURE_ISSUE_MS = 5 * 6e4;
-    DAY_MS2 = 864e5;
+    DAY_MS4 = 864e5;
   }
 });
 
 // src/auth/approval-request.ts
-import { createECDH as createECDH2, createHash as createHash4, createPrivateKey, randomBytes as randomBytes6, randomUUID as randomUUID2, sign } from "crypto";
-import { open as open15 } from "fs/promises";
-import { join as join17 } from "path";
+import { createECDH as createECDH2, createHash as createHash5, createPrivateKey, randomBytes as randomBytes6, randomUUID as randomUUID3, sign } from "crypto";
+import { open as open16 } from "fs/promises";
+import { join as join21 } from "path";
 import { setTimeout as wait } from "timers/promises";
 import { additionalDelegationsPath, profilePath as profilePath10 } from "@tinycloud/operations/state";
 import { principalDidEquals } from "@tinycloud/node-sdk";
@@ -17101,15 +17108,15 @@ function grantLifetimeSeconds(expiry) {
 async function updatePending(profile, update) {
   await ProfileManager.withLock(profile, async () => {
     const directory = await ProfileManager.ensureProfileDir(profile);
-    const path = join17(directory, STATE_FILE);
-    await writeJsonDurable(path, update(await readJson(path) ?? []));
+    const path = join21(directory, STATE_FILE);
+    await writeJsonDurable(path, update(await readJson2(path) ?? []));
   }, { requireProfile: true });
 }
 async function activePending(profile) {
-  const path = join17(profilePath10(profile), STATE_FILE);
-  if (!(await readJson(path))?.length) return [];
+  const path = join21(profilePath10(profile), STATE_FILE);
+  if (!(await readJson2(path))?.length) return [];
   return ProfileManager.withLock(profile, async () => {
-    const entries = await readJson(path) ?? [];
+    const entries = await readJson2(path) ?? [];
     const now = Date.now();
     const active = entries.filter((entry) => {
       const expiry = entry.command ? entry.command.result.expiry : entry.resultExpiresAt;
@@ -17124,12 +17131,12 @@ async function forgetApproval(profile, entry) {
 }
 function approvalSessionProof2(entry, action, resultRef = "", ackId = "") {
   const jwk = entry.signingKey;
-  const jkt = createHash4("sha256").update(JSON.stringify({ crv: "Ed25519", kty: "OKP", x: jwk.x })).digest("base64url");
+  const jkt = createHash5("sha256").update(JSON.stringify({ crv: "Ed25519", kty: "OKP", x: jwk.x })).digest("base64url");
   const path = action === "discover" ? `/api/approval-requests/${entry.requestId}/result` : `/api/approval-results/${resultRef}/${action}`;
   const header = Buffer.from(JSON.stringify({ alg: "EdDSA", kid: jkt, typ: "openkey-session-proof+jwt" })).toString("base64url");
   const payload = Buffer.from(JSON.stringify({
     client_id: "openkey-approval-result-v1",
-    cred_hash: createHash4("sha256").update(JSON.stringify([action, entry.requestId, entry.bodyCid, resultRef, ackId])).digest("base64url"),
+    cred_hash: createHash5("sha256").update(JSON.stringify([action, entry.requestId, entry.bodyCid, resultRef, ackId])).digest("base64url"),
     htm: "POST",
     htu: entry.apiOrigin + path,
     iat: Math.floor(Date.now() / 1e3),
@@ -17450,7 +17457,7 @@ async function acquireApprovalRequest(_did, options) {
       ...profileKey && signerFromJwk(profileKey).did === signer.did ? {} : { signingKey },
       relayPrivateKey: relay.getPrivateKey().toString("base64url"),
       expectedOwner: options.expectedOwner,
-      ackId: randomUUID2(),
+      ackId: randomUUID3(),
       ...options.invitationMeta === void 0 ? {} : { invitationMeta: options.invitationMeta },
       ...options.commandIntent === void 0 ? {} : { commandIntent: options.commandIntent }
     };
@@ -17602,15 +17609,457 @@ var init_approval_request = __esm({
   }
 });
 
+// src/index.ts
+import { homedir as homedir4 } from "os";
+import { join as join23 } from "path";
+import { fileURLToPath as fileURLToPath2 } from "url";
+
+// src/lib/auto-update.ts
+import { spawn } from "child_process";
+import { readFileSync } from "fs";
+import { mkdir, open, readFile, rename, rm, stat } from "fs/promises";
+import { dirname } from "path";
+function selectUpdateVersion(currentVersion, distTags) {
+  const current = parseVersion(currentVersion);
+  if (!current) return null;
+  const channel = current.prerelease[0];
+  const candidateString = distTags[channel ?? "latest"];
+  if (!candidateString) return null;
+  const candidate = parseVersion(candidateString);
+  if (!candidate) return null;
+  if (channel === void 0 ? candidate.prerelease.length > 0 : candidate.prerelease[0] !== channel) return null;
+  return compareVersions(candidate, current) > 0 ? formatVersion(candidate) : null;
+}
+function selectNoticeVersion(currentVersion, distTags) {
+  const current = parseVersion(currentVersion);
+  if (!current) return null;
+  const own = selectUpdateVersion(currentVersion, distTags);
+  const latest = current.prerelease.length > 0 && distTags.latest ? parseVersion(distTags.latest) : null;
+  if (!latest || latest.prerelease.length > 0 || compareVersions(latest, current) <= 0) return own;
+  if (own && compareVersions(parseVersion(own), latest) >= 0) return own;
+  return formatVersion(latest);
+}
+function parseVersion(value) {
+  const match = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$/.exec(value);
+  if (!match) return null;
+  return {
+    major: Number(match[1]),
+    minor: Number(match[2]),
+    patch: Number(match[3]),
+    prerelease: match[4] === void 0 ? [] : match[4].split(".")
+  };
+}
+function formatVersion(version2) {
+  const core = `${version2.major}.${version2.minor}.${version2.patch}`;
+  return version2.prerelease.length === 0 ? core : `${core}-${version2.prerelease.join(".")}`;
+}
+function compareVersions(left, right) {
+  for (const key of ["major", "minor", "patch"]) {
+    if (left[key] !== right[key]) return left[key] > right[key] ? 1 : -1;
+  }
+  if (left.prerelease.length === 0 || right.prerelease.length === 0) {
+    return left.prerelease.length === right.prerelease.length ? 0 : left.prerelease.length === 0 ? 1 : -1;
+  }
+  const length5 = Math.max(left.prerelease.length, right.prerelease.length);
+  for (let index = 0; index < length5; index += 1) {
+    const a = left.prerelease[index];
+    const b = right.prerelease[index];
+    if (a === void 0 || b === void 0) return a === b ? 0 : a === void 0 ? -1 : 1;
+    if (a === b) continue;
+    const aNumeric = /^\d+$/.test(a);
+    const bNumeric = /^\d+$/.test(b);
+    if (aNumeric && bNumeric) return Number(a) > Number(b) ? 1 : -1;
+    if (aNumeric !== bNumeric) return aNumeric ? -1 : 1;
+    return a > b ? 1 : -1;
+  }
+  return 0;
+}
+var DAY_MS = 24 * 60 * 60 * 1e3;
+function channelOf(currentVersion) {
+  const current = parseVersion(currentVersion);
+  return current ? current.prerelease[0] ?? "latest" : null;
+}
+function cachedOffer(currentVersion, version2) {
+  return version2 ? selectNoticeVersion(currentVersion, { [channelOf(currentVersion)]: version2, latest: version2 }) : null;
+}
+function readUpdateCheck(currentVersion, cachePath, now = Date.now()) {
+  const channel = channelOf(currentVersion);
+  if (!channel) return { due: false, version: null };
+  let cached = null;
+  try {
+    cached = parseFreshCache(readFileSync(`${cachePath}.${channel}`, "utf8"), now);
+  } catch {
+  }
+  if (!cached) return { due: true, version: null };
+  return { due: false, version: cachedOffer(currentVersion, cached.version) };
+}
+function startUpdateCheck(entryPath, currentVersion, cachePath) {
+  const child = spawn(process.execPath, [entryPath, currentVersion, cachePath], {
+    detached: true,
+    stdio: "ignore",
+    windowsHide: true
+  });
+  child.on("error", () => void 0);
+  child.unref();
+}
+function isAutoUpdateEnabled(env) {
+  const ci = env.CI?.toLowerCase();
+  const inCi = ci !== void 0 && ci !== "" && ci !== "false" && ci !== "0";
+  return env.TC_NO_AUTO_UPDATE !== "1" && !inCi;
+}
+function detectInstallKind(packagePath, workingDirectory, homeDirectory) {
+  const normalized = packagePath.replaceAll("\\", "/");
+  if (normalized.includes("/Cellar/")) return "homebrew";
+  if (normalized.includes("/_npx/") || normalized.includes("/_bunx/")) return "npx";
+  if (isWithin(`${workingDirectory.replaceAll("\\", "/")}/node_modules`, normalized)) return "project";
+  if (normalized.includes("/.bun/install/global/node_modules/")) return "bun-global";
+  if (normalized.includes("/lib/node_modules/")) return "npm-global";
+  if (normalized.startsWith(`${homeDirectory.replaceAll("\\", "/")}/.nvm/`)) return "npm-global";
+  return "unknown";
+}
+var INSTALL_METHOD = {
+  "npm-global": "npm",
+  "bun-global": "bun",
+  npx: "npx",
+  homebrew: "Homebrew",
+  project: "this project's npm dependencies"
+};
+function updateNotice(kind, currentVersion, availableVersion) {
+  const method = kind === "unknown" ? "" : `, installed with ${INSTALL_METHOD[kind]}`;
+  return `TinyCloud CLI ${availableVersion} is available. This is ${currentVersion}${method}.`;
+}
+function parseFreshCache(text, now) {
+  try {
+    const cached = JSON.parse(text);
+    if (Number.isFinite(cached.checkedAt) && cached.checkedAt <= now && now - cached.checkedAt < DAY_MS && (cached.version === null || typeof cached.version === "string")) return cached;
+  } catch {
+  }
+  return null;
+}
+function isWithin(parent, child) {
+  const normalizedParent = parent.endsWith("/") ? parent : `${parent}/`;
+  return child.startsWith(normalizedParent);
+}
+
+// src/lib/self-update.ts
+init_constants();
+import { spawn as spawn2 } from "child_process";
+import { appendFileSync, existsSync, mkdirSync as mkdirSync3, readdirSync as readdirSync3, readFileSync as readFileSync5, renameSync as renameSync2, rmSync as rmSync3, statSync as statSync4, truncateSync } from "fs";
+import { homedir as homedir3 } from "os";
+import { dirname as dirname3, isAbsolute, join as join4, relative, resolve as resolve3, sep as sep2 } from "path";
+import { fileURLToPath } from "url";
+
+// src/lib/install-lock.ts
+import { randomUUID } from "crypto";
+import { mkdirSync as mkdirSync2, readdirSync as readdirSync2, readFileSync as readFileSync3, rmSync as rmSync2, statSync as statSync2, writeFileSync } from "fs";
+import { hostname } from "os";
+import { join as join2 } from "path";
+
+// src/lib/versions.ts
+import { spawnSync } from "child_process";
+import { closeSync, fsyncSync, mkdirSync, openSync, readFileSync as readFileSync2, readdirSync, realpathSync, renameSync, rmSync, statSync, unlinkSync, writeSync } from "fs";
+import { homedir } from "os";
+import { dirname as dirname2, join, resolve, sep } from "path";
+var CLI_PACKAGE = "@tinycloud/cli";
+var VERSION = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?$/;
+var LAUNCH_CONTEXT = /* @__PURE__ */ Symbol.for("tinycloud.cli.launchContext");
+function isVersion(value) {
+  return typeof value === "string" && VERSION.test(value);
+}
+function versionsRoot(env = process.env, home = homedir()) {
+  return env.TC_VERSIONS_DIR ? resolve(env.TC_VERSIONS_DIR) : join(home, ".tinycloud", "versions");
+}
+function versionPackageDir(root, version2) {
+  return join(root, version2, "node_modules", "@tinycloud", "cli");
+}
+function readPackageVersion(packageDir) {
+  try {
+    const { name, version: version2 } = JSON.parse(readFileSync2(join(packageDir, "package.json"), "utf8"));
+    return name === CLI_PACKAGE && isVersion(version2) ? version2 : null;
+  } catch {
+    return null;
+  }
+}
+function readPointer(root) {
+  try {
+    const value = JSON.parse(readFileSync2(join(root, "current.json"), "utf8"));
+    if (!isVersion(value.version) || !isVersion(value.base) || typeof value.auto !== "boolean" || typeof value.pinned !== "boolean") return null;
+    if (value.previous !== void 0 && !isVersion(value.previous)) return null;
+    if (value.floor !== void 0 && !isVersion(value.floor)) return null;
+    return { version: value.version, base: value.base, auto: value.auto, pinned: value.pinned, ...value.previous ? { previous: value.previous } : {}, ...value.floor ? { floor: value.floor } : {} };
+  } catch {
+    return null;
+  }
+}
+function writeFileAtomic(file, content) {
+  mkdirSync(dirname2(file), { recursive: true, mode: 448 });
+  const temporary = `${file}.${process.pid}.${Math.random().toString(36).slice(2)}.tmp`;
+  try {
+    const fd = openSync(temporary, "wx", 384);
+    try {
+      writeSync(fd, content);
+      fsyncSync(fd);
+    } finally {
+      closeSync(fd);
+    }
+    renameSync(temporary, file);
+  } catch (error) {
+    rmSync(temporary, { force: true });
+    throw error;
+  }
+}
+function isVerified(root, version2) {
+  if (!isVersion(version2) || readPackageVersion(versionPackageDir(root, version2)) !== version2) return false;
+  try {
+    return JSON.parse(readFileSync2(join(root, version2, ".verified"), "utf8")).version === version2;
+  } catch {
+    return false;
+  }
+}
+function launchContext() {
+  return globalThis[LAUNCH_CONTEXT];
+}
+var LEASE_MAX_AGE_MS = 24 * 60 * 60 * 1e3;
+var LEASE_RENEW_MS = 60 * 60 * 1e3;
+function writeLease(root, lease) {
+  const file = join(root, ".leases", `${process.pid}.json`);
+  const content = JSON.stringify({ pid: process.pid, ...lease, start: processStartTime(process.pid) });
+  try {
+    writeFileAtomic(file, content);
+  } catch {
+    return () => void 0;
+  }
+  const renew = setInterval(() => {
+    try {
+      writeFileAtomic(file, content);
+    } catch {
+    }
+  }, LEASE_RENEW_MS);
+  renew.unref();
+  const release = () => {
+    clearInterval(renew);
+    try {
+      unlinkSync(file);
+    } catch {
+    }
+  };
+  process.once("exit", release);
+  return release;
+}
+function processStartTime(pid) {
+  if (process.platform === "win32") return null;
+  if (process.platform === "linux") {
+    try {
+      const stat8 = readFileSync2(`/proc/${pid}/stat`, "utf8");
+      const ticks = stat8.slice(stat8.lastIndexOf(")") + 2).split(" ")[19] ?? "";
+      return /^\d+$/.test(ticks) ? `${readFileSync2("/proc/sys/kernel/random/boot_id", "utf8").trim()}:${ticks}` : null;
+    } catch {
+      return null;
+    }
+  }
+  if (pid === process.pid) return `@${Math.round(performance.timeOrigin)}`;
+  const ps = spawnSync("ps", ["-o", "lstart=", "-p", String(pid)], { encoding: "utf8", timeout: 2e3, env: { ...process.env, LC_ALL: "C", TZ: "UTC" } });
+  const started = ps.status === 0 ? Date.parse(`${ps.stdout.trim()} UTC`) : Number.NaN;
+  return Number.isFinite(started) ? `@${started}` : null;
+}
+
+// src/lib/install-lock.ts
+var LOCK_MAX_AGE_MS = 45 * 60 * 1e3;
+var HOLDER_MARGIN_MS = 5 * 60 * 1e3;
+
+// src/lib/install-kind.ts
+import { readFileSync as readFileSync4, realpathSync as realpathSync2 } from "fs";
+import { homedir as homedir2 } from "os";
+import { join as join3, resolve as resolve2 } from "path";
+function recordedInstallKind(root, packageDir, version2) {
+  try {
+    const record2 = JSON.parse(readFileSync4(join3(root, "install.json"), "utf8"));
+    if (record2.version !== version2 || record2.packageDir !== realpathOrNull(packageDir)) return null;
+    return record2.kind === "npm-global" || record2.kind === "bun-global" ? record2.kind : null;
+  } catch {
+    return null;
+  }
+}
+function realpathOrNull(path) {
+  try {
+    return realpathSync2(resolve2(path));
+  } catch {
+    return null;
+  }
+}
+
+// src/lib/npm-command.ts
+import { accessSync, constants, statSync as statSync3 } from "fs";
+import { posix, win32 } from "path";
+function isExecutableFile(file) {
+  try {
+    accessSync(file, constants.X_OK);
+    return statSync3(file).isFile();
+  } catch {
+    return false;
+  }
+}
+function resolveNpm(env = process.env, platform = process.platform, execPath = process.execPath, exists = isExecutableFile) {
+  const path = platform === "win32" ? win32 : posix;
+  const directories = (env.PATH ?? env.Path ?? "").split(path.delimiter).filter((directory) => directory !== "" && path.isAbsolute(directory));
+  if (platform !== "win32") {
+    const npm = directories.map((directory) => path.join(directory, "npm")).find(exists);
+    return npm ? { command: npm, args: [] } : null;
+  }
+  const npmDirectories = [path.dirname(execPath), ...directories.filter((directory) => exists(path.join(directory, "npm.cmd")))];
+  for (const directory of npmDirectories) {
+    const cli = path.join(directory, "node_modules", "npm", "bin", "npm-cli.js");
+    if (exists(cli)) return { command: execPath, args: [cli] };
+  }
+  return null;
+}
+
+// src/lib/provenance.ts
+import { createHash, createPublicKey, verify as verifySignature } from "crypto";
+
+// src/lib/tarball.ts
+import { gunzipSync } from "zlib";
+
+// src/lib/provenance.ts
+var RELEASE_IDENTITY = {
+  certificateIssuer: "https://token.actions.githubusercontent.com",
+  certificateIdentityURI: "https://github.com/TinyCloudLabs/js-sdk/.github/workflows/changesets.yml@refs/heads/master",
+  /** Fulcio extensions 1.3.6.1.4.1.57264.1.12 / .14 / .15: source repository URI, ref and (rename-proof) id. */
+  sourceRepositoryURI: "https://github.com/TinyCloudLabs/js-sdk",
+  sourceRepositoryRef: "refs/heads/master",
+  sourceRepositoryId: "913991042"
+};
+var FULCIO_SOURCE_OIDS = {
+  "1.3.6.1.4.1.57264.1.12": RELEASE_IDENTITY.sourceRepositoryURI,
+  "1.3.6.1.4.1.57264.1.14": RELEASE_IDENTITY.sourceRepositoryRef,
+  "1.3.6.1.4.1.57264.1.15": RELEASE_IDENTITY.sourceRepositoryId
+};
+
+// src/lib/self-update.ts
+function baseInstall() {
+  const context = launchContext();
+  const packageDir = context?.basePackageDir ?? fileURLToPath(new URL("../", import.meta.url));
+  const version2 = context?.baseVersion ?? readPackageVersion(packageDir) ?? "0.0.0";
+  return { version: version2, packageDir, bin: join4(packageDir, "bin", "tinycloud"), root: context?.root ?? versionsRoot() };
+}
+function readGlobalConfig() {
+  try {
+    return JSON.parse(readFileSync5(CONFIG_FILE, "utf8"));
+  } catch {
+    return void 0;
+  }
+}
+var HOUR_MS = 60 * 60 * 1e3;
+var DAY_MS2 = 24 * HOUR_MS;
+var SOAK_MS = 6 * HOUR_MS;
+var SPAWN_CLAIM_MS = 15 * 60 * 1e3;
+function channelOf2(version2) {
+  return /^[^-+]+-([0-9A-Za-z-]+)/.exec(version2)?.[1] ?? "latest";
+}
+function majorOf(version2) {
+  return Number(version2.split(".")[0]);
+}
+function readJson(file) {
+  try {
+    return JSON.parse(readFileSync5(file, "utf8"));
+  } catch {
+    return void 0;
+  }
+}
+function readState(root) {
+  const value = readJson(join4(root, "auto-update.json"));
+  if (!value || typeof value !== "object") return {};
+  const state2 = {};
+  if ("pending" in value && isVersion(value.pending)) state2.pending = value.pending;
+  if ("soak" in value && value.soak && typeof value.soak === "object") {
+    const soak = value.soak;
+    if ("channel" in soak && typeof soak.channel === "string" && "version" in soak && isVersion(soak.version) && "firstSeen" in soak && typeof soak.firstSeen === "number" && Number.isFinite(soak.firstSeen)) {
+      state2.soak = { channel: soak.channel, version: soak.version, firstSeen: soak.firstSeen };
+    }
+  }
+  return state2;
+}
+function readNextCheck(root) {
+  const value = readJson(join4(root, "next-check.json"));
+  return value && typeof value === "object" && "at" in value && typeof value.at === "number" ? value.at : 0;
+}
+function writeNextCheck(root, at) {
+  writeFileAtomic(join4(root, "next-check.json"), `${JSON.stringify({ at })}
+`);
+}
+function autoUpdateOffReason(env, config, home = homedir3()) {
+  if (!isAutoUpdateEnabled(env)) return env.TC_NO_AUTO_UPDATE === "1" ? "env" : "ci";
+  if (config && typeof config === "object" && "autoUpdate" in config && config.autoUpdate === false) return "config";
+  if (env.TC_HOME && resolve3(env.TC_HOME) !== resolve3(home) && !env.TC_VERSIONS_DIR) return "sandbox";
+  return null;
+}
+function autoUpdateCovers(input) {
+  return (input.installKind === "npm-global" || input.installKind === "bun-global") && input.offReason === null && input.npmOnPath && !input.pinned && // The updater stays on the install's channel; #1054 may offer a beta install the higher `latest`.
+  channelOf2(input.available) === channelOf2(input.current) && majorOf(input.available) === majorOf(input.current);
+}
+function startAutoUpdateIfDue(root, now, startJob) {
+  if (readNextCheck(root) > now) return false;
+  try {
+    writeNextCheck(root, now + SPAWN_CLAIM_MS);
+  } catch {
+    return false;
+  }
+  startJob();
+  return true;
+}
+function startBackgroundUpdate(entryPath, currentVersion, cachePath) {
+  const child = spawn2(process.execPath, [entryPath, currentVersion, cachePath, "--self-update"], {
+    detached: true,
+    stdio: "ignore",
+    windowsHide: true
+  });
+  child.on("error", () => void 0);
+  child.unref();
+}
+function pendingSwitch(root, active) {
+  const pending = readState(root).pending;
+  return pending && pending !== active && isVerified(root, pending) ? pending : null;
+}
+var LAST_SWITCH_FILE = "last-switch.json";
+var FIRST_RUN_FILE = "first-run-notice.json";
+function homeRelative(path, home) {
+  const below = relative(home, path);
+  const outside = below === ".." || below.startsWith(`..${sep2}`) || isAbsolute(below);
+  return below === "" ? "~" : outside ? path : `~/${below}`;
+}
+function firstRunNotice(root, configPath = CONFIG_FILE, home = homedir3()) {
+  return [
+    `TinyCloud CLI updates itself: it installs verified patch and minor releases of your channel in the background, 6 hours after your CLI first sees each one on your channel, and moves back if your channel moves back. Major releases are never installed automatically. Log: ${homeRelative(root, home)}/auto-update.log`,
+    `To turn this off, set "autoUpdate": false in ${homeRelative(configPath, home)}, or set TC_NO_AUTO_UPDATE=1.`
+  ];
+}
+function switchedLine(from5, to, down) {
+  return down ? `TinyCloud CLI moved back to ${to} (was ${from5}) because your channel moved back.` : `TinyCloud CLI updated to ${to} (was ${from5}).`;
+}
+function takeAutoUpdateNotices(root, running, autoUpdating, configPath = CONFIG_FILE, home = homedir3()) {
+  const lines = [];
+  if (autoUpdating && !existsSync(join4(root, FIRST_RUN_FILE))) {
+    writeFileAtomic(join4(root, FIRST_RUN_FILE), `${JSON.stringify({ shown: running })}
+`);
+    lines.push(...firstRunNotice(root, configPath, home));
+  }
+  const last = readJson(join4(root, LAST_SWITCH_FILE));
+  if (last && typeof last === "object" && "to" in last && last.to === running && "from" in last && isVersion(last.from)) {
+    rmSync3(join4(root, LAST_SWITCH_FILE), { force: true });
+    lines.push(switchedLine(last.from, running, "down" in last && last.down === true));
+  }
+  return lines;
+}
+
 // src/commands/courier.ts
 import { CLI_NAME } from "@tinycloud/operations/cli-name";
 var TC_OPTIONS_BEFORE_COURIER = `${CLI_NAME} courier takes no ${CLI_NAME} options and does not use ${CLI_NAME} profiles; Courier keeps its own profile in $COURIER_HOME (default ~/.courier). Put flags after "courier", e.g. ${CLI_NAME} courier init --host <url>.`;
 
 // src/index.ts
 init_errors();
-import { readFileSync as readFileSync2 } from "fs";
+import { readFileSync as readFileSync7 } from "fs";
 import { CLI_NAME as CLI_NAME18 } from "@tinycloud/operations/cli-name";
-import { Command as Command2 } from "commander";
+import { Command as Command2, CommanderError } from "commander";
 
 // src/output/banner.ts
 init_formatter();
@@ -28788,7 +29237,7 @@ async function seal2(plaintextBytes, key32) {
   blob.set(ciphertext, HEADER_LENGTH2 + nonce.length);
   return { blob, cid: await computeCid2(blob) };
 }
-async function open9(blob, key32) {
+async function open10(blob, key32) {
   if (blob.length < HEADER_LENGTH2 + NONCE_LENGTH2 + TAG_LENGTH2) {
     throw new TypeError(`sealed blob too short: ${blob.length} bytes`);
   }
@@ -29364,7 +29813,7 @@ async function resolveLegacyV2(link4, options) {
     if (await computeCid2(sealed) !== parsed.ciphertextCid) throw new ShareReceiveError("cid-mismatch", "legacy envelope CID does not match");
     let plaintext;
     try {
-      plaintext = await open9(sealed, parsed.key32);
+      plaintext = await open10(sealed, parsed.key32);
     } catch {
       throw new ShareReceiveError("decrypt-failed", "legacy envelope could not be opened");
     }
@@ -32912,10 +33361,10 @@ function receiveJson(result, path) {
 }
 
 // src/share/io.ts
-import { constants } from "fs";
-import { lstat as lstat7, mkdir as mkdir5, mkdtemp, open as open10, readFile as readFile7, realpath as realpath2, stat as stat4, link as link2, rename as rename3, rm as rm7, unlink as unlink4 } from "fs/promises";
+import { constants as constants2 } from "fs";
+import { lstat as lstat7, mkdir as mkdir6, mkdtemp, open as open11, readFile as readFile8, realpath as realpath2, stat as stat5, link as link2, rename as rename4, rm as rm8, unlink as unlink4 } from "fs/promises";
 import { randomBytes as randomBytes3 } from "crypto";
-import { basename as basename2, join as join12, resolve as resolve4, sep as sep3 } from "path";
+import { basename as basename2, join as join16, resolve as resolve6, sep as sep5 } from "path";
 init_errors();
 var MAX_SHARE_STDIN_BYTES = 95 * 1024 * 1024;
 var MAX_ADDRESSED_SHARE_BYTES = 71 * 1024 * 1024;
@@ -32953,24 +33402,24 @@ function shareFilename(value) {
   }
 }
 function shareInputFilename(input, name) {
-  return shareFilename(name ?? (input === "-" ? "stdin.md" : basename2(resolve4(input))));
+  return shareFilename(name ?? (input === "-" ? "stdin.md" : basename2(resolve6(input))));
 }
 async function readShareInput(input, name, limit = MAX_SHARE_STDIN_BYTES) {
   const filename = shareInputFilename(input, name);
   if (input === "-") return { bytes: await readBoundedStdin(limit), filename };
-  const path = resolve4(input);
-  const info = await stat4(path);
+  const path = resolve6(input);
+  const info = await stat5(path);
   if (!info.isFile() || info.size > limit) throw new Error("MAX_BYTES_EXCEEDED");
-  const bytes = new Uint8Array(await readFile7(path));
+  const bytes = new Uint8Array(await readFile8(path));
   if (bytes.byteLength > limit) throw new Error("MAX_BYTES_EXCEEDED");
   return { bytes, filename };
 }
 async function assertDirectory(path) {
-  const absolute = resolve4(path);
-  const segments = absolute.split(sep3).filter(Boolean);
-  let current = absolute.startsWith(sep3) ? sep3 : "";
+  const absolute = resolve6(path);
+  const segments = absolute.split(sep5).filter(Boolean);
+  let current = absolute.startsWith(sep5) ? sep5 : "";
   for (const segment of segments) {
-    current = current === sep3 ? join12(current, segment) : join12(current, segment);
+    current = current === sep5 ? join16(current, segment) : join16(current, segment);
     try {
       const info = await lstat7(current);
       if (info.isSymbolicLink()) {
@@ -32980,29 +33429,29 @@ async function assertDirectory(path) {
       } else if (!info.isDirectory()) throw new Error("OUTPUT_EXISTS");
     } catch (error) {
       if (error.code !== "ENOENT") throw error;
-      await mkdir5(current, { mode: 448 });
+      await mkdir6(current, { mode: 448 });
       const created = await lstat7(current);
       if (created.isSymbolicLink() || !created.isDirectory()) throw new Error("OUTPUT_EXISTS");
     }
   }
 }
 async function writeShareOutput(directory, filename, bytes, force) {
-  const outputDirectory = resolve4(directory);
+  const outputDirectory = resolve6(directory);
   await assertDirectory(outputDirectory);
   const safeName = safeFilename(filename);
-  const directoryHandle = await open10(outputDirectory, constants.O_RDONLY | (constants.O_DIRECTORY ?? 0) | (constants.O_NOFOLLOW ?? 0));
+  const directoryHandle = await open11(outputDirectory, constants2.O_RDONLY | (constants2.O_DIRECTORY ?? 0) | (constants2.O_NOFOLLOW ?? 0));
   const stableDirectory = await realpath2(outputDirectory);
-  const outputPath = join12(stableDirectory, safeName);
+  const outputPath = join16(stableDirectory, safeName);
   const directoryIdentity = await directoryHandle.stat();
   const assertStableDirectory = async () => {
-    const current = await stat4(stableDirectory);
+    const current = await stat5(stableDirectory);
     if (current.dev !== directoryIdentity.dev || current.ino !== directoryIdentity.ino) throw new Error("OUTPUT_EXISTS");
   };
   await assertStableDirectory();
-  const stagingDirectory = await mkdtemp(join12(stableDirectory, ".tinycloud-share-stage-"));
+  const stagingDirectory = await mkdtemp(join16(stableDirectory, ".tinycloud-share-stage-"));
   const stagingInfo = await lstat7(stagingDirectory);
   if (!stagingInfo.isDirectory() || (stagingInfo.mode & 511) !== 448) throw new Error("OUTPUT_EXISTS");
-  const stagingPath = join12(stagingDirectory, `.tinycloud-share-${randomBytes3(16).toString("hex")}.tmp`);
+  const stagingPath = join16(stagingDirectory, `.tinycloud-share-${randomBytes3(16).toString("hex")}.tmp`);
   let temporaryPath;
   let handle;
   try {
@@ -33014,13 +33463,13 @@ async function writeShareOutput(directory, filename, bytes, force) {
       if (error.code !== "ENOENT") throw error;
     }
     temporaryPath = stagingPath;
-    handle = await open10(temporaryPath, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | (constants.O_NOFOLLOW ?? 0), 384);
+    handle = await open11(temporaryPath, constants2.O_WRONLY | constants2.O_CREAT | constants2.O_EXCL | (constants2.O_NOFOLLOW ?? 0), 384);
     await handle.writeFile(bytes);
     await handle.close();
     handle = void 0;
     await assertStableDirectory();
     if (force) {
-      await rename3(temporaryPath, outputPath);
+      await rename4(temporaryPath, outputPath);
     } else {
       await link2(temporaryPath, outputPath);
       await unlink4(temporaryPath);
@@ -33036,10 +33485,10 @@ async function writeShareOutput(directory, filename, bytes, force) {
       if (temporaryPath !== void 0) await unlink4(temporaryPath);
     } catch {
     }
-    await rm7(stagingDirectory, { recursive: true, force: true });
+    await rm8(stagingDirectory, { recursive: true, force: true });
     await directoryHandle.close();
   }
-  return join12(outputDirectory, safeName);
+  return join16(outputDirectory, safeName);
 }
 
 // src/share/artifact-store.ts
@@ -33229,9 +33678,9 @@ init_constants();
 init_errors();
 init_session_expired();
 init_warnings();
-import { chmod as chmod4, link as link3, open as open11, readFile as readFile8, stat as stat5, unlink as unlink5 } from "fs/promises";
-import { dirname as dirname5, join as join13 } from "path";
-import { createHash } from "crypto";
+import { chmod as chmod4, link as link3, open as open12, readFile as readFile9, stat as stat6, unlink as unlink5 } from "fs/promises";
+import { dirname as dirname8, join as join17 } from "path";
+import { createHash as createHash2 } from "crypto";
 import { createProfileRegistryCacheStore as createProfileRegistryCacheStore2, createProfileRegistrySequenceStore as createProfileRegistrySequenceStore2, writeJsonAtomic as writeJsonAtomic2 } from "@tinycloud/operations/state";
 import { withoutBearer } from "@tinycloud/operations/delegation-binding";
 import {
@@ -33409,8 +33858,8 @@ function createEncryptedProfileHistory(profileName, sessionSigner) {
   const observedProfiles = /* @__PURE__ */ new Set();
   let preparedKeys;
   let preparedKey;
-  const path = async (profile) => join13(await ProfileManager.getCacheDir(profile), SHARE_HISTORY_FILE);
-  const legacyPath = async (profile) => join13(await ProfileManager.getCacheDir(profile), SHARE_HISTORY_LEGACY_FILE);
+  const path = async (profile) => join17(await ProfileManager.getCacheDir(profile), SHARE_HISTORY_FILE);
+  const legacyPath = async (profile) => join17(await ProfileManager.getCacheDir(profile), SHARE_HISTORY_LEGACY_FILE);
   const b64 = (value) => Buffer.from(value).toString("base64url");
   const unb64 = (value) => {
     if (typeof value !== "string" || !/^[A-Za-z0-9_-]+$/.test(value)) throw new ShareHistoryUnreadableError();
@@ -33426,7 +33875,7 @@ function createEncryptedProfileHistory(profileName, sessionSigner) {
     const sessionJwk = session !== null && "jwk" in session ? session.jwk : void 0;
     const signerJwk = sessionJwk !== null && typeof sessionJwk === "object" && "d" in sessionJwk && typeof sessionJwk.d === "string" && sessionJwk.d.length > 0 ? sessionJwk : key;
     const method = session !== null && "verificationMethod" in session ? session.verificationMethod ?? config.did : config.did;
-    const fingerprint = createHash("sha256").update(JSON.stringify(localKey ? ["local", config.privateKey] : ["openkey", sessionJwk, signerJwk, method])).digest("hex");
+    const fingerprint = createHash2("sha256").update(JSON.stringify(localKey ? ["local", config.privateKey] : ["openkey", sessionJwk, signerJwk, method])).digest("hex");
     return { config, fingerprint };
   };
   const prepareKeys = async (profile, snapshot) => {
@@ -33446,7 +33895,7 @@ function createEncryptedProfileHistory(profileName, sessionSigner) {
   };
   const readIfPresent = async (file) => {
     try {
-      return await readFile8(file);
+      return await readFile9(file);
     } catch (error) {
       if (error.code === "ENOENT") return void 0;
       throw new ShareHistoryReadError();
@@ -33594,7 +34043,7 @@ function createEncryptedProfileHistory(profileName, sessionSigner) {
       await link3(found.file, target);
       await chmod4(target, PRIVATE_HISTORY_MODE);
       await unlink5(found.file);
-      const directory = await open11(dirname5(found.file), "r");
+      const directory = await open12(dirname8(found.file), "r");
       try {
         await directory.sync();
       } finally {
@@ -33831,9 +34280,9 @@ function createShareAuthorityAdapters(input = {}) {
         // A default clamped to the session's expiry is not the user's duration: a later, longer session must not silently reuse this shorter date.
         ...targetInput.expiresInMs === void 0 || expiryClamped ? {} : { requestedDurationMs: targetInput.expiresInMs },
         contentSha256: (() => {
-          const hash = createHash("sha256");
+          const hash = createHash2("sha256");
           for (const file2 of targetInput.files !== void 0 && targetInput.files.length > 0 ? targetInput.files : [{ bytes: targetInput.source, filename: targetInput.filename }]) {
-            hash.update(file2.filename).update("\0").update(createHash("sha256").update(file2.bytes).digest());
+            hash.update(file2.filename).update("\0").update(createHash2("sha256").update(file2.bytes).digest());
           }
           return hash.digest("hex");
         })()
@@ -34278,9 +34727,9 @@ async function selectedProfileName() {
 init_profiles();
 
 // src/share/html-folder.ts
-import { constants as constants2, existsSync } from "fs";
-import { lstat as lstat8, open as open12, readdir as readdir6, realpath as realpath3, stat as stat6 } from "fs/promises";
-import { basename as basename3, dirname as dirname6, isAbsolute, join as join14, relative as relativePath, resolve as resolve5, sep as sep4 } from "path";
+import { constants as constants3, existsSync as existsSync2 } from "fs";
+import { lstat as lstat8, open as open13, readdir as readdir6, realpath as realpath3, stat as stat7 } from "fs/promises";
+import { basename as basename3, dirname as dirname9, isAbsolute as isAbsolute2, join as join18, relative as relativePath, resolve as resolve7, sep as sep6 } from "path";
 
 // ../share-sdk/dist/html-bundle.js
 var UNSAFE_FILENAME_CODE_POINT3 = /[\p{Cc}\p{Cf}\p{Cs}\u2028\u2029]/u;
@@ -34634,9 +35083,9 @@ function scanMarkup(html, options) {
     if (comments > MAX_ARTIFACT_COMMENTS) fail("limit", "artifact page has too many comments");
   };
   while (index < length5) {
-    const open16 = html.indexOf("<", index);
-    if (open16 === -1) return;
-    index = open16 + 1;
+    const open17 = html.indexOf("<", index);
+    if (open17 === -1) return;
+    index = open17 + 1;
     const next = html[index] ?? "";
     if (html.startsWith("!--", index)) {
       countComment();
@@ -35197,7 +35646,7 @@ var FOLDER_NOT_AVAILABLE = "Folders can only be published as a single page for a
 async function isDirectoryInput(input) {
   if (input === "-") return false;
   try {
-    return (await stat6(resolve5(input))).isDirectory();
+    return (await stat7(resolve7(input))).isDirectory();
   } catch {
     return false;
   }
@@ -35207,7 +35656,7 @@ function limitError(message) {
 }
 function isWithinFolder(root, candidate) {
   const path = relativePath(root, candidate);
-  return path !== "" && path !== ".." && !path.startsWith(`..${sep4}`) && !isAbsolute(path);
+  return path !== "" && path !== ".." && !path.startsWith(`..${sep6}`) && !isAbsolute2(path);
 }
 var CHANGED = "changed while it was read";
 function isRaceError(error) {
@@ -35216,20 +35665,20 @@ function isRaceError(error) {
 }
 var PROC_FD = "/proc/self/fd";
 async function linuxDescriptorPath(fd) {
-  if (process.platform !== "linux" || !existsSync(PROC_FD)) return void 0;
+  if (process.platform !== "linux" || !existsSync2(PROC_FD)) return void 0;
   return realpath3(`${PROC_FD}/${fd}`);
 }
 async function parentChainIsRealDirectories(root, path) {
-  let current = dirname6(path);
+  let current = dirname9(path);
   while (current !== root && isWithinFolder(root, current)) {
     const info = await lstat8(current);
     if (info.isSymbolicLink() || !info.isDirectory()) return false;
-    current = dirname6(current);
+    current = dirname9(current);
   }
   return current === root;
 }
-async function readRegularFile(root, path, relative, remaining, limit, hooks = {}) {
-  const problem = (reason) => ({ code: "UNSUPPORTED_FOLDER_ENTRY", path: relative, reason });
+async function readRegularFile(root, path, relative2, remaining, limit, hooks = {}) {
+  const problem = (reason) => ({ code: "UNSUPPORTED_FOLDER_ENTRY", path: relative2, reason });
   const descriptorPath = hooks.descriptorPath ?? linuxDescriptorPath;
   let handle;
   let before;
@@ -35237,7 +35686,7 @@ async function readRegularFile(root, path, relative, remaining, limit, hooks = {
     await hooks.beforeOpen?.();
     before = await lstat8(path);
     await hooks.afterLstat?.();
-    handle = await open12(path, constants2.O_RDONLY | (constants2.O_NOFOLLOW ?? 0) | (constants2.O_NONBLOCK ?? 0));
+    handle = await open13(path, constants3.O_RDONLY | (constants3.O_NOFOLLOW ?? 0) | (constants3.O_NONBLOCK ?? 0));
   } catch (error) {
     if (error.code === "ELOOP") return problem("symbolic link");
     if (isRaceError(error)) return problem(CHANGED);
@@ -35261,7 +35710,7 @@ async function readRegularFile(root, path, relative, remaining, limit, hooks = {
       if (isRaceError(error)) return problem(CHANGED);
       throw error;
     }
-    if (info.size > remaining) throw limitError(`folder is larger than the ${limit} byte limit (at "${safeClipped(relative)}")`);
+    if (info.size > remaining) throw limitError(`folder is larger than the ${limit} byte limit (at "${safeClipped(relative2)}")`);
     const chunks = [];
     let total = 0;
     for (; ; ) {
@@ -35269,7 +35718,7 @@ async function readRegularFile(root, path, relative, remaining, limit, hooks = {
       const { bytesRead } = await handle.read(chunk, 0, chunk.length, null);
       if (bytesRead === 0) break;
       total += bytesRead;
-      if (total > remaining) throw limitError(`folder is larger than the ${limit} byte limit (at "${safeClipped(relative)}")`);
+      if (total > remaining) throw limitError(`folder is larger than the ${limit} byte limit (at "${safeClipped(relative2)}")`);
       chunks.push(chunk.subarray(0, bytesRead));
     }
     await hooks.afterRead?.();
@@ -35287,8 +35736,8 @@ async function readRegularFile(root, path, relative, remaining, limit, hooks = {
     await handle.close();
   }
 }
-async function listFolderDirectory(root, absolute, relative, hooks = {}) {
-  const problem = (reason) => ({ code: "UNSUPPORTED_FOLDER_ENTRY", path: relative === "" ? "." : relative, reason });
+async function listFolderDirectory(root, absolute, relative2, hooks = {}) {
+  const problem = (reason) => ({ code: "UNSUPPORTED_FOLDER_ENTRY", path: relative2 === "" ? "." : relative2, reason });
   const descriptorPath = hooks.descriptorPath ?? linuxDescriptorPath;
   try {
     await hooks.beforeOpen?.();
@@ -35296,7 +35745,7 @@ async function listFolderDirectory(root, absolute, relative, hooks = {}) {
     if (before.isSymbolicLink()) return problem("symbolic link");
     if (!before.isDirectory()) return problem(CHANGED);
     await hooks.afterLstat?.();
-    const handle = await open12(absolute, constants2.O_RDONLY | (constants2.O_DIRECTORY ?? 0) | (constants2.O_NOFOLLOW ?? 0));
+    const handle = await open13(absolute, constants3.O_RDONLY | (constants3.O_DIRECTORY ?? 0) | (constants3.O_NOFOLLOW ?? 0));
     try {
       await hooks.afterOpen?.();
       const info = await handle.stat();
@@ -35335,13 +35784,13 @@ function problemError(problems) {
   );
 }
 async function readHtmlFolder(directory, limit) {
-  const root = await realpath3(resolve5(directory));
+  const root = await realpath3(resolve7(directory));
   const files = [];
   const problems = [];
   let skippedHidden = 0;
   let total = 0;
-  const walk = async (absolute, relative, depth) => {
-    const listed = await listFolderDirectory(root, absolute, relative);
+  const walk = async (absolute, relative2, depth) => {
+    const listed = await listFolderDirectory(root, absolute, relative2);
     if ("reason" in listed) {
       problems.push(listed);
       return;
@@ -35352,8 +35801,8 @@ async function readHtmlFolder(directory, limit) {
         skippedHidden += 1;
         continue;
       }
-      const path = relative === "" ? entry.name : `${relative}/${entry.name}`;
-      const child = join14(absolute, entry.name);
+      const path = relative2 === "" ? entry.name : `${relative2}/${entry.name}`;
+      const child = join18(absolute, entry.name);
       if (entry.isSymbolicLink()) {
         problems.push({ code: "UNSUPPORTED_FOLDER_ENTRY", path, reason: "symbolic link" });
       } else if (entry.isDirectory()) {
@@ -35413,7 +35862,7 @@ async function jsdomParser() {
   return { parseHtml: (html) => parser.parseFromString(html, "text/html"), close: () => window.close() };
 }
 function htmlFolderFilename(directory, name) {
-  const filename = shareFilename(name ?? `${basename3(resolve5(directory))}.html`);
+  const filename = shareFilename(name ?? `${basename3(resolve7(directory))}.html`);
   if (!/\.html?$/i.test(filename)) throw new CLIError("INVALID_ARGUMENT", "a folder is published as an .html file; --name must end in .html", 2);
   return filename;
 }
@@ -36067,7 +36516,7 @@ init_constants();
 init_errors();
 import { randomBytes as randomBytes7 } from "crypto";
 import { activateValidatedRuntimeDelegation } from "@tinycloud/node-sdk";
-var DAY_MS3 = 864e5;
+var DAY_MS5 = 864e5;
 var TRANSIENT_ACTIVATION_CODES = /* @__PURE__ */ new Set(["NODE_NOT_RESPONDING", "registry_unavailable", "ACTIVATION_TRANSPORT_FAILED"]);
 function activationUnavailable(error) {
   const { reason, code: code5 } = error ?? {};
@@ -36110,7 +36559,7 @@ var approveEmailInviteKey = async (request) => {
     recipientEmail: request.recipientEmail,
     subjectKind: request.subjectKind,
     subjectName: request.subjectName,
-    acceptanceExpiresAt: new Date(Math.floor(Math.min(now + DAY_MS3, Date.parse(accessExpiresAt)) / 1e3) * 1e3).toISOString(),
+    acceptanceExpiresAt: new Date(Math.floor(Math.min(now + DAY_MS5, Date.parse(accessExpiresAt)) / 1e3) * 1e3).toISOString(),
     accessExpiresAt
   };
   const host = (await node.activeNodeIdentity()).origin;
@@ -36177,9 +36626,14 @@ init_retry_policy();
 init_constants();
 init_diagnostic_logs();
 var { version } = JSON.parse(
-  readFileSync2(new URL("../package.json", import.meta.url), "utf-8")
+  readFileSync7(new URL("../package.json", import.meta.url), "utf-8")
 );
+var base5 = baseInstall();
+var installKind = detectInstallKind(base5.packageDir, process.cwd(), homedir4());
+var verifiedKind = recordedInstallKind(base5.root, base5.packageDir, base5.version);
+var selfUpdating = installKind === "npm-global" || installKind === "bun-global" || verifiedKind !== null;
 var program = new Command2();
+program.exitOverride();
 var commandStartedAt = Date.now();
 function fullCommandName(command) {
   const names = [];
@@ -36318,6 +36772,58 @@ setDiagnosticCommandContext({
   disabled: process.env.TINYCLOUD_CLI_LOGS === "0" || argv.includes("--no-diagnostic-logs"),
   cliVersion: version
 });
+function startSelfUpdate(cachePath) {
+  if (!selfUpdating || commandToken === "upgrade") return false;
+  if (autoUpdateOffReason(process.env, readGlobalConfig()) !== null) return false;
+  const entry = join23(base5.packageDir, "dist", "update-check-entry.js");
+  return startAutoUpdateIfDue(base5.root, Date.now(), () => startBackgroundUpdate(entry, version, cachePath));
+}
+function showUpdateNotice() {
+  const cachePath = join23(CONFIG_DIR, "update-check.json");
+  let backgroundStarted = false;
+  try {
+    backgroundStarted = startSelfUpdate(cachePath);
+  } catch (error) {
+    if (process.env.TC_DEBUG === "1") process.stderr.write(`auto-update start failed: ${error instanceof Error ? error.stack : String(error)}
+`);
+  }
+  if (!isAutoUpdateEnabled(process.env) || Number(process.exitCode ?? 0) !== 0) return;
+  if (program.opts().quiet === true || shouldOutputJson() || !process.stderr.isTTY) return;
+  try {
+    const check = readUpdateCheck(version, cachePath);
+    if (check.due && !backgroundStarted) startUpdateCheck(fileURLToPath2(new URL("./update-check-entry.js", import.meta.url)), version, cachePath);
+    const offReason = autoUpdateOffReason(process.env, readGlobalConfig());
+    const npmFound = resolveNpm(process.env) !== null;
+    const pinned = pinnedHere();
+    if (verifiedKind !== null) {
+      for (const line of takeAutoUpdateNotices(base5.root, version, offReason === null && npmFound && !pinned)) process.stderr.write(`${line}
+`);
+    }
+    const offered = check.version && autoUpdateCovers({
+      installKind: verifiedKind ?? "unknown",
+      current: version,
+      available: check.version,
+      offReason,
+      npmOnPath: npmFound,
+      pinned
+    }) ? null : check.version;
+    if (offered) process.stderr.write(`${updateNotice(installKind, version, offered)}
+`);
+    const pending = selfUpdating ? pendingSwitch(base5.root, version) : null;
+    if (pending) process.stderr.write(`TinyCloud CLI ${pending} is ready. Restart Courier to finish the update.
+`);
+  } catch (error) {
+    if (process.env.TC_DEBUG === "1") process.stderr.write(`update notice failed: ${error instanceof Error ? error.stack : String(error)}
+`);
+  }
+}
+function pinnedHere() {
+  const pointer = readPointer(base5.root);
+  return pointer?.base === base5.version && pointer.pinned === true;
+}
+if (selfUpdating && (argv[0] === "courier" || version !== base5.version)) {
+  writeLease(base5.root, { version, courier: argv[0] === "courier" });
+}
 if (argv[0] === "courier") {
   const code5 = await (await loadCourierEntry()).runCourier(argv.slice(1));
   if (code5 !== 0) process.exit(code5);
@@ -36338,16 +36844,21 @@ if (argv[0] === "courier") {
     process.stdin.unref?.();
     if (await closeReplication()) {
       process.exitCode = 0;
-      const stdoutFlushed = Promise.withResolvers();
-      process.stdout.write("", () => stdoutFlushed.resolve());
-      await stdoutFlushed.promise;
-      const stderrFlushed = Promise.withResolvers();
-      process.stderr.write("", () => stderrFlushed.resolve());
-      await stderrFlushed.promise;
+      showUpdateNotice();
+      await new Promise((resolve8) => process.stdout.write("", () => resolve8()));
+      await new Promise((resolve8) => process.stderr.write("", () => resolve8()));
       process.exit();
     }
+    showUpdateNotice();
   } catch (error) {
-    await handleError(error);
+    if (error instanceof CommanderError) {
+      process.exitCode = error.exitCode;
+      showUpdateNotice();
+      await new Promise((resolve8) => process.stderr.write("", () => resolve8()));
+      process.exit(error.exitCode);
+    } else {
+      await handleError(error);
+    }
   }
 }
 /*! Bundled license information:

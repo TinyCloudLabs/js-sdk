@@ -68,6 +68,12 @@ var init_constants = __esm({
       STORAGE_FULL: 10,
       /** A secrets write was refused because the node has no per-secret keys (`NAMED_KEYS_UNSUPPORTED`); nothing was saved. */
       NAMED_KEYS_UNSUPPORTED: 11,
+      /** `tc upgrade` refused before switching anything (`status: "refused"`, with a `reason`). */
+      UPGRADE_REFUSED: 12,
+      /** `tc upgrade` failed and the previous version is still the one that runs. */
+      UPGRADE_FAILED_ROLLED_BACK: 13,
+      /** `tc upgrade` failed and the previous version could not be restored; the output names the recovery command. */
+      UPGRADE_FAILED_NOT_ROLLED_BACK: 14,
       /** Interrupted by SIGINT/SIGTERM (`CANCELLED`). */
       CANCELLED: 130
     };
@@ -246,15 +252,15 @@ function closeReplication(schedule = scheduleTimeout) {
   removeSignalHandlers();
   let resolveClosing;
   let rejectClosing;
-  const closing = new Promise((resolve10, reject) => {
-    resolveClosing = resolve10;
+  const closing = new Promise((resolve13, reject) => {
+    resolveClosing = resolve13;
     rejectClosing = reject;
   });
   state.closing = closing;
   void (async () => {
     let timeout;
-    const deadline = new Promise((resolve10) => {
-      timeout = schedule(() => resolve10(true), CLOSE_TIMEOUT_MS);
+    const deadline = new Promise((resolve13) => {
+      timeout = schedule(() => resolve13(true), CLOSE_TIMEOUT_MS);
     });
     let timedOut = false;
     const abandonQueuedControls = () => {
@@ -280,7 +286,7 @@ function closeReplication(schedule = scheduleTimeout) {
           if (state.generation === generation && state.allControls.size === 0) break;
         }
         if (timedOut) break;
-        const turn = new Promise((resolve10) => setImmediate(() => resolve10(false)));
+        const turn = new Promise((resolve13) => setImmediate(() => resolve13(false)));
         timedOut ||= await Promise.race([turn, deadline]);
         if (timedOut) abandonQueuedControls();
         else if (state.allControls.size === 0) break;
@@ -455,9 +461,9 @@ async function appendDiagnosticLog(options) {
   const lineBytes = Buffer.byteLength(line);
   if (lineBytes >= maximum) return;
   try {
-    const current = await lstat(path);
-    if (current.isSymbolicLink() || !current.isFile()) throw new Error("Diagnostic log path is not a regular file.");
-    if (current.size + lineBytes > maximum) {
+    const current2 = await lstat(path);
+    if (current2.isSymbolicLink() || !current2.isFile()) throw new Error("Diagnostic log path is not a regular file.");
+    if (current2.size + lineBytes > maximum) {
       const old = await readFile2(path);
       const tail = old.subarray(Math.max(0, old.length - Math.floor(maximum / 2)));
       const firstNewline = tail.indexOf(10);
@@ -4349,9 +4355,9 @@ function _validateObject(object3, fields, optFields = {}) {
     const val = object3[fieldName];
     if (isOpt && val === void 0)
       return;
-    const current = typeof val;
-    if (current !== expectedType || val === null)
-      throw new Error(`param "${fieldName}" is invalid: expected ${expectedType}, got ${current}`);
+    const current2 = typeof val;
+    if (current2 !== expectedType || val === null)
+      throw new Error(`param "${fieldName}" is invalid: expected ${expectedType}, got ${current2}`);
   }
   Object.entries(fields).forEach(([k, v]) => checkField(k, v, false));
   Object.entries(optFields).forEach(([k, v]) => checkField(k, v, true));
@@ -6730,9 +6736,9 @@ var init_dist = __esm({
           changes.push({ key: change.key, deleted: false, etag: change.etag, hash, metadata: change.metadata, content: unchanged });
           if (!unchanged) candidates.push({ index: changes.length - 1, key: change.key, etag: change.etag, hash });
         }
-        const held = await this.#store.hasContent([...new Set(candidates.map((candidate) => candidate.hash))]);
+        const held2 = await this.#store.hasContent([...new Set(candidates.map((candidate) => candidate.hash))]);
         const needed = candidates.filter((candidate) => {
-          if (!held.has(candidate.hash)) return true;
+          if (!held2.has(candidate.hash)) return true;
           changes[candidate.index].content = true;
           return false;
         });
@@ -7355,18 +7361,18 @@ function fileKind(details) {
 async function pathComponents(path) {
   const absolute = resolve(path);
   const parts = absolute.slice(parse(absolute).root.length).split(sep).filter(Boolean);
-  let current = parse(absolute).root;
+  let current2 = parse(absolute).root;
   const components = [];
   for (const part of ["", ...parts]) {
-    if (part) current = join8(current, part);
-    const details = await lstat3(current, { bigint: true });
-    if (details.isSymbolicLink()) throw new Error(`Symlink in replica path: ${current}`);
-    if (!details.isDirectory()) throw new Error(`Replica path component is not a directory: ${current}`);
-    components.push({ path: current, identity: details });
+    if (part) current2 = join8(current2, part);
+    const details = await lstat3(current2, { bigint: true });
+    if (details.isSymbolicLink()) throw new Error(`Symlink in replica path: ${current2}`);
+    if (!details.isDirectory()) throw new Error(`Replica path component is not a directory: ${current2}`);
+    components.push({ path: current2, identity: details });
   }
   return components;
 }
-async function pinnedDirectory(path, parent, relative = "") {
+async function pinnedDirectory(path, parent, relative2 = "") {
   const components = process.platform === "linux" ? void 0 : parent?.components ?? await pathComponents(path);
   const before = await lstat3(path, { bigint: true });
   if (before.isSymbolicLink()) throw new Error(`Symlink in replica path: ${path}`);
@@ -7382,7 +7388,7 @@ async function pinnedDirectory(path, parent, relative = "") {
       parent,
       components,
       children: [],
-      relative,
+      relative: relative2,
       name: path,
       path: process.platform === "linux" ? `/proc/self/fd/${handle.fd}` : path
     };
@@ -7399,8 +7405,8 @@ async function checkDirectory(directory) {
   if (directory.parent) await checkDirectory(directory.parent);
   else if (directory.components) {
     for (const component of directory.components) {
-      const current = await lstat3(component.path, { bigint: true });
-      if (current.isSymbolicLink() || !current.isDirectory() || !sameFile(component.identity, current)) {
+      const current2 = await lstat3(component.path, { bigint: true });
+      if (current2.isSymbolicLink() || !current2.isDirectory() || !sameFile(component.identity, current2)) {
         throw new Error(`Replica path component changed: ${component.path}`);
       }
     }
@@ -7418,27 +7424,27 @@ async function inspect(dir, allowAdapterFence) {
       await checkDirectory(parent);
       for (const name of (await readdir3(parent.path)).sort()) {
         await checkDirectory(parent);
-        const relative = parent.relative ? `${parent.relative}/${name}` : name;
+        const relative2 = parent.relative ? `${parent.relative}/${name}` : name;
         const path = join8(parent.path, name);
         const details = await lstat3(path, { bigint: true });
         if (process.platform !== "linux" && details.isSymbolicLink()) {
-          throw new Error(`Symlink in replica path: ${relative}`);
+          throw new Error(`Symlink in replica path: ${relative2}`);
         }
         const kind = fileKind(details);
-        const child = { path, relative, kind, identity: details, parent };
+        const child = { path, relative: relative2, kind, identity: details, parent };
         parent.children.push(child);
         if (parent.relative === "" && name === "replica.db" && kind === "file") hasDatabase = true;
         if (sourceKind(parent.relative, name, allowAdapterFence) !== kind) {
-          unknownPaths.push(relative);
-          unknownEntries.push(identityOf(relative, kind, details));
+          unknownPaths.push(relative2);
+          unknownEntries.push(identityOf(relative2, kind, details));
         } else {
-          knownEntries.push(identityOf(relative, kind, details));
+          knownEntries.push(identityOf(relative2, kind, details));
         }
         if (kind === "directory") {
-          const directory = await pinnedDirectory(path, parent, relative);
+          const directory = await pinnedDirectory(path, parent, relative2);
           if (!sameFile(details, directory.identity)) {
             await directory.handle.close();
-            throw new Error(`Replica directory changed during inspection: ${relative}`);
+            throw new Error(`Replica directory changed during inspection: ${relative2}`);
           }
           child.directory = directory;
           directories.push(directory);
@@ -7469,8 +7475,8 @@ async function inspect(dir, allowAdapterFence) {
         if (pathIndex >= 0) unknownPaths.splice(pathIndex, 1);
         continue;
       }
-      const current = await lstat3(child.path, { bigint: true });
-      if (!sameFile(child.identity, current) || fileKind(current) !== child.kind) {
+      const current2 = await lstat3(child.path, { bigint: true });
+      if (!sameFile(child.identity, current2) || fileKind(current2) !== child.kind) {
         throw new Error(`Replica child changed during schema inspection: ${child.relative}`);
       }
     }
@@ -7580,9 +7586,9 @@ async function acquireSqliteOpen() {
 }
 async function captureNamedPath(path) {
   const names = [];
-  for (let current = resolve2(path); ; current = dirname3(current)) {
-    names.push(current);
-    if (dirname3(current) === current) break;
+  for (let current2 = resolve2(path); ; current2 = dirname3(current2)) {
+    names.push(current2);
+    if (dirname3(current2) === current2) break;
   }
   const identities = [];
   for (const name of names.reverse()) {
@@ -8768,16 +8774,16 @@ CREATE TABLE IF NOT EXISTS grant_install (
       }
       async hasContent(hashes) {
         this.#assertAccepting();
-        const held = /* @__PURE__ */ new Set();
+        const held2 = /* @__PURE__ */ new Set();
         for (let start = 0; start < hashes.length; start += 500) {
           const chunk = hashes.slice(start, start + 500);
           const rows = this.#db.all(
             `SELECT DISTINCT hash FROM entry WHERE content = 1 AND hash IN (${chunk.map(() => "?").join(",")})`,
             ...chunk
           );
-          for (const row of rows) held.add(row.hash);
+          for (const row of rows) held2.add(row.hash);
         }
-        return held;
+        return held2;
       }
       #blobPath(hash) {
         return join22(this.#pinnedDir, "blobs", hash.slice(0, 2), hash);
@@ -9044,17 +9050,17 @@ CREATE TABLE IF NOT EXISTS grant_install (
               throw new ReplicaError3(ReplicaErrorCode3.RUNTIME_UNSUPPORTED, "Replica removal requires an opened or identity-checked directory.");
             }
             const assertDirectory2 = async () => {
-              const current = await lstat2(this.dir, { bigint: true });
-              if (!current.isDirectory() || current.dev !== expected.dev || current.ino !== expected.ino) {
+              const current2 = await lstat2(this.dir, { bigint: true });
+              if (!current2.isDirectory() || current2.dev !== expected.dev || current2.ino !== expected.ino) {
                 throw new ReplicaError3(ReplicaErrorCode3.NOT_FOUND, "The replica directory changed during removal.");
               }
-              return current;
+              return current2;
             };
             const pinned = await assertDirectory2();
             const assertNamedPath = async () => {
               for (const ancestor of this.#namedAncestors) {
-                const current = await lstat2(ancestor.path, { bigint: true });
-                if (current.dev !== ancestor.dev || current.ino !== ancestor.ino) {
+                const current2 = await lstat2(ancestor.path, { bigint: true });
+                if (current2.dev !== ancestor.dev || current2.ino !== ancestor.ino) {
                   throw new ReplicaError3(ReplicaErrorCode3.NOT_FOUND, "The replica ancestry changed during removal.");
                 }
               }
@@ -9365,8 +9371,8 @@ async function pinReplicaRoot(profile, named, operation, allowNamedLogout = fals
           throw refuseUnsafeReplicaPath(profile, `replica path component "${component.path}" changed during cleanup`, operation);
         }
       }
-      const current = await lstat4(named, { bigint: true });
-      if (!current.isDirectory() || current.isSymbolicLink() || current.dev !== initial?.dev || current.ino !== initial?.ino || current.dev !== pinned.dev || current.ino !== pinned.ino) {
+      const current2 = await lstat4(named, { bigint: true });
+      if (!current2.isDirectory() || current2.isSymbolicLink() || current2.dev !== initial?.dev || current2.ino !== initial?.ino || current2.dev !== pinned.dev || current2.ino !== pinned.ino) {
         throw refuseUnsafeReplicaPath(profile, "the replicas directory changed during cleanup", operation);
       }
     };
@@ -9393,8 +9399,8 @@ async function withPinnedReplicaForReset(profile, name, action) {
       if (!entry) throw new ReplicaError(ReplicaErrorCode.NOT_FOUND, `Replica "${name}" was not found.`);
       const { path, identity: initial } = await safeReplicaEntry(profile, fdRoot, entry, "reset");
       const recheck = async () => {
-        const current = await lstat4(path);
-        if (!current.isDirectory() || current.isSymbolicLink() || current.dev !== initial.dev || current.ino !== initial.ino) {
+        const current2 = await lstat4(path);
+        if (!current2.isDirectory() || current2.isSymbolicLink() || current2.dev !== initial.dev || current2.ino !== initial.ino) {
           throw refuseUnsafeReplicaPath(profile, `replica entry "${name}" changed during removal`, "reset");
         }
       };
@@ -9474,8 +9480,8 @@ function assertRecordedChild(profile, name, layout, inventory, empty6) {
   }
 }
 async function inspectApprovedUnknownRoot(profile, root, entry, inventory) {
-  const relative = `replicas/${entry.name}`;
-  if (inventory.roots.has(relative)) {
+  const relative2 = `replicas/${entry.name}`;
+  if (inventory.roots.has(relative2)) {
     throw refuseUnsafeReplicaPath(profile, `legacy entry "${entry.name}" has conflicting recorded identities`);
   }
   const path = join9(root, entry.name);
@@ -9484,15 +9490,15 @@ async function inspectApprovedUnknownRoot(profile, root, entry, inventory) {
   if (kind === null || process.platform !== "linux" && kind === "symlink") {
     throw refuseUnsafeReplicaPath(profile, `legacy entry "${entry.name}" cannot be removed safely`);
   }
-  const identity2 = { path: relative, kind, dev: info.dev.toString(), ino: info.ino.toString() };
-  assertApprovedEntry(profile, relative, identity2, inventory.approvedUnknown);
+  const identity2 = { path: relative2, kind, dev: info.dev.toString(), ino: info.ino.toString() };
+  assertApprovedEntry(profile, relative2, identity2, inventory.approvedUnknown);
   const layout = kind === "directory" ? await inspectSqliteReplicaLayout(path) : null;
   if (layout) {
     if (layout.rootIdentity.dev !== identity2.dev || layout.rootIdentity.ino !== identity2.ino) {
       throw refuseUnsafeReplicaPath(profile, `legacy entry "${entry.name}" changed during inspection`);
     }
     for (const child of [...layout.knownEntries, ...layout.unknownEntries]) {
-      assertApprovedEntry(profile, `${relative}/${child.path}`, child, inventory.approvedUnknown);
+      assertApprovedEntry(profile, `${relative2}/${child.path}`, child, inventory.approvedUnknown);
     }
   }
   return { entry, path, identity: identity2, layout };
@@ -9554,22 +9560,22 @@ async function removeProfileReplicas(profile, options = {}) {
         for (const { entry, identity: identity2, empty: empty6 } of checked) {
           if (!empty6) continue;
           await pinned.assertNamed();
-          const current = await safeReplicaEntry(profile, root, entry);
-          if (current.identity.dev !== identity2.dev || current.identity.ino !== identity2.ino) {
+          const current2 = await safeReplicaEntry(profile, root, entry);
+          if (current2.identity.dev !== identity2.dev || current2.identity.ino !== identity2.ino) {
             throw refuseUnsafeReplicaPath(profile, `empty replica entry "${entry.name}" changed during cleanup`);
           }
-          const handle = await open5(current.path, fsConstants4.O_RDONLY | fsConstants4.O_DIRECTORY | fsConstants4.O_NOFOLLOW);
+          const handle = await open5(current2.path, fsConstants4.O_RDONLY | fsConstants4.O_DIRECTORY | fsConstants4.O_NOFOLLOW);
           try {
             const pinnedEntry = await handle.stat();
-            if (pinnedEntry.dev !== identity2.dev || pinnedEntry.ino !== identity2.ino || (await readdir4(process.platform === "linux" ? `/proc/self/fd/${handle.fd}` : current.path)).length !== 0) {
+            if (pinnedEntry.dev !== identity2.dev || pinnedEntry.ino !== identity2.ino || (await readdir4(process.platform === "linux" ? `/proc/self/fd/${handle.fd}` : current2.path)).length !== 0) {
               throw refuseUnsafeReplicaPath(profile, `empty replica entry "${entry.name}" changed during cleanup`);
             }
             await pinned.assertNamed();
-            const namedEntry = await lstat4(current.path);
+            const namedEntry = await lstat4(current2.path);
             if (!namedEntry.isDirectory() || namedEntry.dev !== pinnedEntry.dev || namedEntry.ino !== pinnedEntry.ino) {
               throw refuseUnsafeReplicaPath(profile, `empty replica entry "${entry.name}" changed at removal`);
             }
-            await rmdir3(current.path);
+            await rmdir3(current2.path);
           } finally {
             await handle.close();
           }
@@ -9622,11 +9628,11 @@ async function removeProfileReplicas(profile, options = {}) {
               await replica.store.close();
               replica.closed = true;
             }
-            const current = inventory && replica ? await inspectSqliteReplicaLayout(path) : null;
-            if (current && inventory) assertRecordedChild(profile, entry.name, current, inventory, false);
+            const current2 = inventory && replica ? await inspectSqliteReplicaLayout(path) : null;
+            if (current2 && inventory) assertRecordedChild(profile, entry.name, current2, inventory, false);
             const layoutOptions = {
               approvedUnknown: inventory ? childEntries(entry.name, inventory.approvedUnknown) : [],
-              expectedKnown: current?.knownEntries ?? (inventory ? childEntries(entry.name, inventory.knownEntries) : void 0),
+              expectedKnown: current2?.knownEntries ?? (inventory ? childEntries(entry.name, inventory.knownEntries) : void 0),
               expectedRoot: inventory?.roots.get(`replicas/${entry.name}`),
               allowMissingDatabase: inventory?.missingDatabases.has(`replicas/${entry.name}/replica.db`) === true || layout?.unknownEntries.some((item) => item.path === "replica.db") === true,
               allowAdapterFence: false
@@ -9654,9 +9660,9 @@ async function removeProfileReplicas(profile, options = {}) {
         }
         for (const { entry, path, identity: identity2, layout } of unknownRoots) {
           await pinned.assertNamed();
-          const current = await lstat4(path, { bigint: true });
-          const kind = current.isDirectory() ? "directory" : current.isSymbolicLink() ? "symlink" : current.isFile() ? "file" : null;
-          if (kind !== identity2.kind || current.dev.toString() !== identity2.dev || current.ino.toString() !== identity2.ino || process.platform !== "linux" && kind === "symlink") {
+          const current2 = await lstat4(path, { bigint: true });
+          const kind = current2.isDirectory() ? "directory" : current2.isSymbolicLink() ? "symlink" : current2.isFile() ? "file" : null;
+          if (kind !== identity2.kind || current2.dev.toString() !== identity2.dev || current2.ino.toString() !== identity2.ino || process.platform !== "linux" && kind === "symlink") {
             throw refuseUnsafeReplicaPath(profile, `approved legacy entry "${entry.name}" changed at removal`);
           }
           if (layout) {
@@ -9848,9 +9854,9 @@ async function finishSignedOutCredentialRemoval(name) {
       throw error;
     }
     await ProfileManager.withLock(name, async () => {
-      const current = await ProfileManager.getProfile(name);
-      if (current.authSignedOut === true) {
-        await clearProfileCredentials(name, true, false, current.authKeyRetained === true);
+      const current2 = await ProfileManager.getProfile(name);
+      if (current2.authSignedOut === true) {
+        await clearProfileCredentials(name, true, false, current2.authKeyRetained === true);
       }
     }, { requireProfile: true });
     return;
@@ -9890,8 +9896,8 @@ async function recoverPendingLogout(name) {
     }
     if (profile.authSignedOut === true && profile.legacyReplicaCleanup === true) {
       await ProfileManager.withLock(name, async () => {
-        const current = await ProfileManager.getProfile(name);
-        if (current.authSignedOut === true && current.legacyReplicaCleanup === true) await finishLegacyReplicaCleanup(name);
+        const current2 = await ProfileManager.getProfile(name);
+        if (current2.authSignedOut === true && current2.legacyReplicaCleanup === true) await finishLegacyReplicaCleanup(name);
       }, { requireProfile: true });
     }
     let remaining;
@@ -10370,8 +10376,8 @@ async function restoreBeforeBootstrap(profileName2, previousProfile, previousSes
   const failures = [];
   for (const write2 of [
     () => previousSession === null ? ProfileManager.clearSession(profileName2) : ProfileManager.setSession(profileName2, previousSession),
-    () => ProfileManager.updateProfile(profileName2, (current) => {
-      const restored = { ...current };
+    () => ProfileManager.updateProfile(profileName2, (current2) => {
+      const restored = { ...current2 };
       for (const field of BOOTSTRAP_PROFILE_FIELDS) {
         if (previousProfile[field] === void 0) delete restored[field];
         else Object.assign(restored, { [field]: previousProfile[field] });
@@ -18099,6 +18105,7 @@ async function post(state2, action, resultRef, ackId, options) {
         "OpenKey-Session-Proof": approvalSessionProof(state2, action, resultRef, ackId)
       },
       body: JSON.stringify(body),
+      // node-floor-ok: Node 20.3+; floor raise tracked in TC-4280
       signal: options.signal ? AbortSignal.any([timeout, options.signal]) : timeout
     });
   } catch (error) {
@@ -18505,7 +18512,7 @@ var init_links = __esm({
         this.status = status;
       }
     };
-    defaultSleep = (ms2) => new Promise((resolve10) => setTimeout(resolve10, ms2));
+    defaultSleep = (ms2) => new Promise((resolve13) => setTimeout(resolve13, ms2));
   }
 });
 
@@ -18518,15 +18525,15 @@ async function tryOpenBrowser(url) {
   } catch {
     return false;
   }
-  return new Promise((resolve10) => {
-    const timer = setTimeout(() => resolve10(true), LAUNCH_CHECK_MS);
+  return new Promise((resolve13) => {
+    const timer = setTimeout(() => resolve13(true), LAUNCH_CHECK_MS);
     launcher.once("error", () => {
       clearTimeout(timer);
-      resolve10(false);
+      resolve13(false);
     });
     launcher.once("exit", (code6) => {
       clearTimeout(timer);
-      resolve10(code6 === 0);
+      resolve13(code6 === 0);
     });
   });
 }
@@ -19171,7 +19178,7 @@ function caveatRestriction(caveats) {
   const restrictions = (caveats ?? []).filter((caveat) => Object.keys(caveat).length > 0).map(canonicalJson).sort();
   return restrictions.length === 0 ? "" : JSON.stringify(restrictions);
 }
-function scopeCovers(granted, held, ownerDid) {
+function scopeCovers(granted, held2, ownerDid) {
   const grants = /* @__PURE__ */ new Map();
   for (const permission2 of granted) {
     const restriction = caveatRestriction(permission2.caveats);
@@ -19181,7 +19188,7 @@ function scopeCovers(granted, held, ownerDid) {
       grants.set(tuple, restrictions);
     }
   }
-  return held.every((permission2) => {
+  return held2.every((permission2) => {
     const restriction = caveatRestriction(permission2.caveats);
     return actionTuples(permission2, ownerDid).every((tuple) => {
       const restrictions = grants.get(tuple);
@@ -19675,8 +19682,8 @@ function assertSessionReplaceable(profileName2, snapshot, ownerDid, scope, newEx
   if (ownerSessionLacksProof3(session, snapshot.profile)) return;
   const expiresAt = sessionExpiresAt(session);
   if (expiresAt !== null && Date.parse(expiresAt) <= Date.now()) return;
-  const held = Array.isArray(session.permissions) ? session.permissions.filter((permission2) => ownerDid === void 0 || typeof session.spaceId !== "string" || !isLegacyNestedDecrypt(permission2, scope, ownerDid, session.spaceId)) : void 0;
-  const keepsScope = ownerDid !== void 0 && session.permissionsSource === SIGNED_RECAP && held !== void 0 && scopeCovers(scope, held, ownerDid);
+  const held2 = Array.isArray(session.permissions) ? session.permissions.filter((permission2) => ownerDid === void 0 || typeof session.spaceId !== "string" || !isLegacyNestedDecrypt(permission2, scope, ownerDid, session.spaceId)) : void 0;
+  const keepsScope = ownerDid !== void 0 && session.permissionsSource === SIGNED_RECAP && held2 !== void 0 && scopeCovers(scope, held2, ownerDid);
   const shortens = newExpiresAt !== void 0 && expiresAt !== null && Date.parse(newExpiresAt) < Date.parse(expiresAt) - CLOCK_SKEW_MS;
   if (keepsScope && !shortens) return;
   const space = typeof session.spaceId === "string" ? session.spaceId : "an unknown space";
@@ -19712,8 +19719,8 @@ function errorMessage(error) {
 }
 async function commitLogin(profileName2, snapshot, commit) {
   await ProfileManager.withLock(profileName2, async () => {
-    const current = await readProfileSnapshot(profileName2);
-    if (canonicalJson(current.profile) !== canonicalJson(snapshot.profile) || canonicalJson(current.key) !== canonicalJson(snapshot.key) || canonicalJson(current.session) !== canonicalJson(snapshot.session)) {
+    const current2 = await readProfileSnapshot(profileName2);
+    if (canonicalJson(current2.profile) !== canonicalJson(snapshot.profile) || canonicalJson(current2.key) !== canonicalJson(snapshot.key) || canonicalJson(current2.session) !== canonicalJson(snapshot.session)) {
       throw new CLIError(
         "PROFILE_CHANGED_DURING_LOGIN",
         `Profile "${profileName2}" changed while this login was in progress (another login, key rotation or logout). Nothing was saved; check \`${CLI_NAME14} --profile ${profileName2} context\` and run the login again if it is still needed.`,
@@ -19732,13 +19739,13 @@ async function commitLogin(profileName2, snapshot, commit) {
     }
     if (commit.approved && !commit.approved.replaceSession) {
       const newExpiresAt = sessionExpiresAt(commit.session) ?? void 0;
-      assertSessionReplaceable(profileName2, current, commit.approved.ownerDid, commit.approved.scope, newExpiresAt);
+      assertSessionReplaceable(profileName2, current2, commit.approved.ownerDid, commit.approved.scope, newExpiresAt);
     }
     try {
       const profile = withVerifiedNamedKeys(commit.profile, commit.session);
       await ProfileManager.setKey(profileName2, commit.key);
       await ProfileManager.setSession(profileName2, commit.session);
-      if (current.profile?.authSignedOut === true || commit.durable === true) {
+      if (current2.profile?.authSignedOut === true || commit.durable === true) {
         await syncAuthCredentialFiles(profilePath9(profileName2));
         const { authKeyRetained: _authKeyRetained, ...signedIn } = profile;
         await ProfileManager.setProfileDurable(profileName2, { ...signedIn, authSignedOut: false });
@@ -19746,7 +19753,7 @@ async function commitLogin(profileName2, snapshot, commit) {
         await ProfileManager.setProfile(profileName2, profile);
       }
     } catch (error) {
-      const failures = await restore(profileName2, current);
+      const failures = await restore(profileName2, current2);
       if (failures.length === 0) throw error;
       throw new CLIError(
         "PROFILE_STATE_INCONSISTENT",
@@ -20212,7 +20219,7 @@ async function acquireDeviceDelegation(input) {
     expiresAt: new Date(deadline).toISOString().replace(/\.\d{3}Z$/, "Z")
   });
   let interval = started.interval;
-  const wait2 = input.wait ?? ((milliseconds) => new Promise((resolve10) => setTimeout(resolve10, milliseconds)));
+  const wait2 = input.wait ?? ((milliseconds) => new Promise((resolve13) => setTimeout(resolve13, milliseconds)));
   while (Date.now() < deadline) {
     await wait2(interval * 1e3);
     let response;
@@ -20622,12 +20629,12 @@ function approvalCommandIntent(request) {
 }
 async function commandParent(profile, entry) {
   const key = await ProfileManager.getKey(profile);
-  const current = await ProfileManager.getProfile(profile);
-  if (!key || current.authSignedOut === true || signerFromJwk(key).did !== entry.request.targetDid || !principalDidEquals2(current.sessionDid ?? current.did, entry.request.targetDid)) {
+  const current2 = await ProfileManager.getProfile(profile);
+  if (!key || current2.authSignedOut === true || signerFromJwk(key).did !== entry.request.targetDid || !principalDidEquals2(current2.sessionDid ?? current2.did, entry.request.targetDid)) {
     throw invalid2("The command's profile or signing key changed.");
   }
   const verified = verifyPendingResult(entry, key);
-  if (current.ownerDid?.toLowerCase() !== verified.session.ownerDid.toLowerCase()) throw invalid2("The command's owner changed.");
+  if (current2.ownerDid?.toLowerCase() !== verified.session.ownerDid.toLowerCase()) throw invalid2("The command's owner changed.");
   return verified;
 }
 async function verifyApprovalCommand(profile, entry, request, result, checkedParent) {
@@ -20774,13 +20781,13 @@ async function dropRefusedApproval(profile, delegation) {
 }
 async function dropApprovalsHoldingKey(profile, x) {
   if (typeof x !== "string") return { dropped: false, approved: false };
-  const held = (await activePending(profile)).filter((entry) => entry.signingKey?.x === x);
-  if (held.length === 0) return { dropped: false, approved: false };
+  const held2 = (await activePending(profile)).filter((entry) => entry.signingKey?.x === x);
+  if (held2.length === 0) return { dropped: false, approved: false };
   await updatePending(profile, (items) => items.filter((item) => item.signingKey?.x !== x));
-  const ends = held.filter((entry) => entry.resultRef !== void 0).map((entry) => Date.parse(entry.requestExpiresAt) + entry.request.grantLifetimeSeconds * 1e3).filter(Number.isFinite);
+  const ends = held2.filter((entry) => entry.resultRef !== void 0).map((entry) => Date.parse(entry.requestExpiresAt) + entry.request.grantLifetimeSeconds * 1e3).filter(Number.isFinite);
   return {
     dropped: true,
-    approved: ends.length > 0 || held.some((entry) => entry.resultRef !== void 0),
+    approved: ends.length > 0 || held2.some((entry) => entry.resultRef !== void 0),
     ...ends.length > 0 ? { latestEnd: new Date(Math.max(...ends)).toISOString() } : {}
   };
 }
@@ -21230,12 +21237,12 @@ async function completeApprovalResult(profile, delegation) {
         return;
       }
       const { delegation: verifiedDelegation, session: verifiedSession } = verified;
-      const current = await ProfileManager.getProfile(profile);
-      if (current.ownerDid?.toLowerCase() !== verifiedSession.ownerDid.toLowerCase()) return;
+      const current2 = await ProfileManager.getProfile(profile);
+      if (current2.ownerDid?.toLowerCase() !== verifiedSession.ownerDid.toLowerCase()) return;
       const session = await ProfileManager.getSession(profile);
       if (session && session.delegationCid === verifiedDelegation.delegationCid && session.signature === verifiedDelegation.signature && session.siwe === verifiedDelegation.siwe) {
         await syncAuthCredentialFiles(profilePath11(profile));
-        await ProfileManager.setProfileDurable(profile, current);
+        await ProfileManager.setProfileDurable(profile, current2);
         saved = true;
       } else {
         const grants = await loadAdditionalDelegations(profile);
@@ -21510,13 +21517,13 @@ Open this URL in a browser to authenticate:
     input: process.stdin,
     output: process.stderr
   });
-  return new Promise((resolve10, reject) => {
+  return new Promise((resolve13, reject) => {
     let answered = false;
     rl.on("line", (input) => {
       if (answered || input.trim() === "") return;
       answered = true;
       rl.close();
-      void delegationFromInput(input, did2, options).then(resolve10, reject);
+      void delegationFromInput(input, did2, options).then(resolve13, reject);
     });
     rl.on("close", () => {
       if (answered) return;
@@ -21961,14 +21968,14 @@ var MAX_CONTENT_BYTES = 128 * 1024;
 var ATTACHMENT_URL = "https://feedback.tinycloud.xyz/reports";
 async function readToken(useStdin) {
   if (useStdin && stdin.isTTY) throw new CLIError("BUG_REPORT_TOKEN_INPUT", "Give the attachment token by piping it to --token-stdin or setting TINYCLOUD_BUG_ATTACH_TOKEN.");
-  const token = useStdin ? await new Promise((resolve10) => {
+  const token = useStdin ? await new Promise((resolve13) => {
     const prompt = createInterface({ input: stdin });
     let settled = false;
     const finish = (value4) => {
       if (settled) return;
       settled = true;
       prompt.close();
-      resolve10(value4);
+      resolve13(value4);
     };
     prompt.once("line", (line) => finish(line.trim()));
     prompt.once("close", () => finish(""));
@@ -22057,8 +22064,8 @@ async function attachLogs(reportId, tokenStdin, dependencies) {
   }
   const fetchImpl = dependencies.fetchImpl ?? fetch;
   const endpoint = dependencies.attachmentUrl ?? ATTACHMENT_URL;
-  const sleep = dependencies.sleep ?? ((milliseconds) => new Promise((resolve10) => {
-    setTimeout(resolve10, milliseconds);
+  const sleep = dependencies.sleep ?? ((milliseconds) => new Promise((resolve13) => {
+    setTimeout(resolve13, milliseconds);
   }));
   let response;
   for (let attempt = 0; ; attempt += 1) {
@@ -36808,9 +36815,9 @@ function createEncryptedProfileHistory(profileName2, sessionSigner) {
     }
     if (readable) return null;
     return ProfileManager.withLock(profile, async () => {
-      const current = await readIfPresent(found.file);
-      if (current === void 0) return null;
-      if (!current.equals(found.bytes)) throw new ShareHistoryRetryError(profile);
+      const current2 = await readIfPresent(found.file);
+      if (current2 === void 0) return null;
+      if (!current2.equals(found.bytes)) throw new ShareHistoryRetryError(profile);
       const target = `${found.file}.unreadable-${(/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-")}`;
       await link2(found.file, target);
       await chmod4(target, PRIVATE_HISTORY_MODE);
@@ -37016,7 +37023,7 @@ async function awaitSpaceSetup(report, deps) {
     process.stderr.write(`${line}
 `);
   });
-  const sleep = deps.sleep ?? ((ms2) => new Promise((resolve10) => setTimeout(resolve10, ms2)));
+  const sleep = deps.sleep ?? ((ms2) => new Promise((resolve13) => setTimeout(resolve13, ms2)));
   const now = deps.now ?? Date.now;
   const timeoutMs = deps.timeoutMs ?? SPACE_SETUP_TIMEOUT_MS;
   const started = now();
@@ -37057,9 +37064,9 @@ async function awaitSpaceSetup(report, deps) {
   );
   let lastProgress = started;
   for (let attempt = 0; ; attempt++) {
-    const current = now();
-    if (current >= deadline) break;
-    await sleep(Math.min(POLL_DELAYS_MS[Math.min(attempt, POLL_DELAYS_MS.length - 1)], deadline - current));
+    const current2 = now();
+    if (current2 >= deadline) break;
+    await sleep(Math.min(POLL_DELAYS_MS[Math.min(attempt, POLL_DELAYS_MS.length - 1)], deadline - current2));
     result = await probe();
     if (result === "hosted") {
       write2("Your space is ready.");
@@ -37094,13 +37101,13 @@ function readTarget(permissions) {
   return { op: "get", key: get.path === "" || get.path.endsWith("/") ? `${get.path}.tinycloud-space-probe` : get.path };
 }
 var UNHOSTED = /space not found/i;
-function kvSpaceProbe(ctx, permissions, restore2 = restoreProfileSessionNode, spaceId, ownSpaceThroughNode = false) {
+function kvSpaceProbe(ctx, permissions, restore3 = restoreProfileSessionNode, spaceId, ownSpaceThroughNode = false) {
   const target = readTarget(permissions);
   const sql2 = permissions?.find((p) => (p.service === "tinycloud.sql" || p.service === "sql") && p.actions.some((a) => a === "read" || a === "tinycloud.sql/read") && p.path !== "" && !p.path.endsWith("/"));
   let restored;
   return async () => {
     if (!target && !sql2) return "unreadable";
-    restored ??= await restore2(ctx);
+    restored ??= await restore3(ctx);
     if ("unavailable" in restored) return "unreadable";
     const primary = restored.node.spaceId;
     const scoped = Boolean(spaceId) && (!ownSpaceThroughNode || primary !== void 0 && normalizePkhIdentifier(spaceId) !== normalizePkhIdentifier(primary));
@@ -37113,7 +37120,7 @@ function kvSpaceProbe(ctx, permissions, restore2 = restoreProfileSessionNode, sp
     return result.error.code === "KV_NOT_FOUND" || status === 404 ? "hosted" : "transient";
   };
 }
-async function ensureSpaceSetup(ctx, delegation, permissions, timeoutMs, restore2 = restoreProfileSessionNode) {
+async function ensureSpaceSetup(ctx, delegation, permissions, timeoutMs, restore3 = restoreProfileSessionNode) {
   if (Array.isArray(delegation.requestedSpaces)) {
     const deadline = Date.now() + (timeoutMs ?? SPACE_SETUP_TIMEOUT_MS);
     for (const entry of delegation.requestedSpaces) {
@@ -37122,7 +37129,7 @@ async function ensureSpaceSetup(ctx, delegation, permissions, timeoutMs, restore
       const id = entry.spaceId;
       const scoped = permissions?.filter((p) => normalizePkhIdentifier(p.space ?? "") === normalizePkhIdentifier(id) || p.space === entry.space);
       await awaitSpaceSetup(report2, {
-        probe: kvSpaceProbe(ctx, scoped, restore2, id),
+        probe: kvSpaceProbe(ctx, scoped, restore3, id),
         timeoutMs: Math.max(0, deadline - Date.now()),
         write: (line) => process.stderr.write(`${id}: ${line}
 `)
@@ -37133,7 +37140,7 @@ async function ensureSpaceSetup(ctx, delegation, permissions, timeoutMs, restore
   const report = spaceSetupReport(delegation);
   if (!report) return;
   const spaceId = typeof delegation.spaceId === "string" ? delegation.spaceId : void 0;
-  await awaitSpaceSetup(report, { probe: kvSpaceProbe(ctx, permissions, restore2, spaceId, true), ...timeoutMs === void 0 ? {} : { timeoutMs } });
+  await awaitSpaceSetup(report, { probe: kvSpaceProbe(ctx, permissions, restore3, spaceId, true), ...timeoutMs === void 0 ? {} : { timeoutMs } });
 }
 async function recheckSpaceHosting(ctx, sessionSpaceId, permissions, options) {
   if (options.confirmed.has(sessionSpaceId)) return;
@@ -37293,8 +37300,8 @@ async function startPreparedOpenKeyHandoff(options) {
   let acceptResponse;
   let resolveResult;
   let rejectResult;
-  const result = new Promise((resolve10, reject) => {
-    resolveResult = resolve10;
+  const result = new Promise((resolve13, reject) => {
+    resolveResult = resolve13;
     rejectResult = reject;
   });
   let delivered = false;
@@ -37386,9 +37393,9 @@ async function startPreparedOpenKeyHandoff(options) {
     });
     server.headersTimeout = 1e4;
     server.requestTimeout = 1e4;
-    await new Promise((resolve10, reject) => {
+    await new Promise((resolve13, reject) => {
       server.once("error", reject);
-      server.listen(0, "127.0.0.1", resolve10);
+      server.listen(0, "127.0.0.1", resolve13);
     });
   }
   const address = server?.address();
@@ -37703,7 +37710,7 @@ async function confirmCurrentSessionRevoke(yes) {
 `);
   const prompt = createInterface4({ input: process.stdin, output: process.stderr });
   try {
-    const answer = await new Promise((resolve10) => prompt.question("Revoke this session? [y/N] ", resolve10));
+    const answer = await new Promise((resolve13) => prompt.question("Revoke this session? [y/N] ", resolve13));
     if (!/^y(es)?$/i.test(answer.trim())) {
       throw new CLIError("REQUEST_CANCELLED", "Current session revocation cancelled.", ExitCode.ERROR);
     }
@@ -38478,7 +38485,7 @@ async function promptAuthMethod() {
     input: process.stdin,
     output: process.stderr
   });
-  return new Promise((resolve10) => {
+  return new Promise((resolve13) => {
     process.stderr.write("\n" + theme.heading("Choose authentication method:") + "\n");
     process.stderr.write(`  ${theme.accent("1)")} OpenKey ${theme.muted("(browser-based, for interactive use)")}
 `);
@@ -38489,9 +38496,9 @@ async function promptAuthMethod() {
       rl.close();
       const trimmed = answer.trim();
       if (trimmed === "2" || trimmed.toLowerCase() === "local") {
-        resolve10("local");
+        resolve13("local");
       } else {
-        resolve10("openkey");
+        resolve13("openkey");
       }
     });
   });
@@ -38616,15 +38623,15 @@ async function prepareProfileRemoteLogout(ctx, expectedSessionCid, discardLocalC
         }
         token = denied.resumeToken;
       } else {
-        const current = await purge.deferredErase();
-        if (!current || current.deniedEpoch !== marker.deniedEpoch || current.principalHash !== marker.principalHash) {
+        const current2 = await purge.deferredErase();
+        if (!current2 || current2.deniedEpoch !== marker.deniedEpoch || current2.principalHash !== marker.principalHash) {
           throw new CLIError(
             "REPLICA_GATED",
             "The pending revocation belongs to a different session; no online revoke or local erase was attempted.",
             ExitCode.ERROR
           );
         }
-        token = current;
+        token = current2;
       }
     }
     return {
@@ -39835,13 +39842,13 @@ async function readStdin() {
   return Buffer.concat(chunks).toString("utf8");
 }
 function readUrl(source) {
-  return new Promise((resolve10, reject) => {
+  return new Promise((resolve13, reject) => {
     const getter = source.startsWith("https://") ? httpsGet : httpGet;
     const request = getter(source, (response) => {
       const status = response.statusCode ?? 0;
       if (status >= 300 && status < 400 && response.headers.location) {
         response.resume();
-        readUrl(new URL(response.headers.location, source).toString()).then(resolve10, reject);
+        readUrl(new URL(response.headers.location, source).toString()).then(resolve13, reject);
         return;
       }
       if (status < 200 || status >= 300) {
@@ -39857,7 +39864,7 @@ function readUrl(source) {
       response.on("data", (chunk) => {
         chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
       });
-      response.on("end", () => resolve10(Buffer.concat(chunks).toString("utf8")));
+      response.on("end", () => resolve13(Buffer.concat(chunks).toString("utf8")));
     });
     request.on("error", reject);
   });
@@ -40186,7 +40193,7 @@ function assertOpenKeyAgentRequest(requested) {
   }
 }
 function execCapturedCommand(command) {
-  return new Promise((resolve10, reject) => {
+  return new Promise((resolve13, reject) => {
     const child = spawn(process.execPath, [process.argv[1], ...command.argv], {
       cwd: command.cwd,
       env: process.env,
@@ -40205,7 +40212,7 @@ function execCapturedCommand(command) {
       if (code6 && code6 !== 0) {
         process.exitCode = code6;
       }
-      resolve10();
+      resolve13();
     });
   });
 }
@@ -40407,8 +40414,8 @@ async function persistCurrentLocalSession(profileName2, profile, session, replic
       ...replicaStamp === void 0 ? {} : { replicaStamp }
     });
     if (profile.sessionDid !== session.verificationMethod || profile.spaceId !== session.spaceId || profile.namedKeys !== void 0) {
-      await ProfileManager.updateProfile(profileName2, (current) => withVerifiedNamedKeys({
-        ...current,
+      await ProfileManager.updateProfile(profileName2, (current2) => withVerifiedNamedKeys({
+        ...current2,
         sessionDid: session.verificationMethod,
         spaceId: session.spaceId
       }, session));
@@ -40815,15 +40822,15 @@ async function undoPreparedAttempt(profileName2, node, owner, gateWasActive) {
   }
   await node.replication?.close();
 }
-function rotatedProfile(current, host, did2) {
-  const { namedKeys: _rotated, ...currentFields } = current;
+function rotatedProfile(current2, host, did2) {
+  const { namedKeys: _rotated, ...currentFields } = current2;
   return {
     ...currentFields,
     host,
     did: did2,
     sessionDid: did2,
-    posture: current.posture ?? "owner-openkey",
-    operatorType: current.operatorType ?? "human",
+    posture: current2.posture ?? "owner-openkey",
+    operatorType: current2.operatorType ?? "human",
     authMethod: "openkey"
   };
 }
@@ -41631,9 +41638,9 @@ async function inspectKnowledge(appId, app, verified, io) {
   const unchanged = [];
   const conflicts = [];
   for (const path of knowledgePaths(app)) {
-    const current = await readKv(`${appId}/${path}`, io);
-    if (current === void 0) missing.push(path);
-    else if (bytesEqual(current, verified.get(path))) unchanged.push(path);
+    const current2 = await readKv(`${appId}/${path}`, io);
+    if (current2 === void 0) missing.push(path);
+    else if (bytesEqual(current2, verified.get(path))) unchanged.push(path);
     else conflicts.push(path);
   }
   return { missing, unchanged, conflicts };
@@ -41935,14 +41942,14 @@ function parseFeedRunner(json) {
   return [argv[0], ...argv.slice(1)];
 }
 function printFeedResponse(response) {
-  return new Promise((resolve10) => {
+  return new Promise((resolve13) => {
     process.stdout.write(`${JSON.stringify(response)}
-`, (error) => resolve10(error ? "unconfirmed" : "delivered"));
+`, (error) => resolve13(error ? "unconfirmed" : "delivered"));
   });
 }
 function runFeedRunner(argv, response, signal) {
   if (signal?.aborted) return Promise.resolve("unconfirmed");
-  return new Promise((resolve10) => {
+  return new Promise((resolve13) => {
     let settled = false;
     let interrupted = false;
     let failed = false;
@@ -41951,7 +41958,7 @@ function runFeedRunner(argv, response, signal) {
       if (settled) return;
       settled = true;
       if (stop) signal?.removeEventListener("abort", stop);
-      resolve10(state2);
+      resolve13(state2);
     };
     try {
       const child = spawn2(argv[0], argv.slice(1), { shell: false, stdio: ["pipe", "inherit", "inherit"] });
@@ -42201,8 +42208,8 @@ async function publishSnapshot(outFile, snapshot, signal) {
   try {
     const identity2 = await parent.stat();
     const assertStableParent = async () => {
-      const current = await lstat9(parentPath);
-      if (!current.isDirectory() || current.dev !== identity2.dev || current.ino !== identity2.ino) {
+      const current2 = await lstat9(parentPath);
+      if (!current2.isDirectory() || current2.dev !== identity2.dev || current2.ino !== identity2.ino) {
         refuse3("The raw export output directory changed during publication.");
       }
     };
@@ -42536,8 +42543,8 @@ async function priorCards(owner, bundle, bytes) {
     if (bundle.source.previousSnapshotId) refuse4();
     return known;
   }
-  const current = await archiveRow(owner, bundle, bundle.source.snapshotId);
-  if (current !== void 0 && current !== bytes) refuse4();
+  const current2 = await archiveRow(owner, bundle, bundle.source.snapshotId);
+  if (current2 !== void 0 && current2 !== bytes) refuse4();
   const publishers = new Map(bundle.publishers.map((publisher) => [publisher.publisherId, publisher]));
   const visited = /* @__PURE__ */ new Set([bundle.source.snapshotId]);
   let predecessor = bundle.source.previousSnapshotId;
@@ -50924,8 +50931,8 @@ Examples:
     try {
       if (isInteractive()) {
         const rl = createInterface6({ input: process.stdin, output: process.stderr });
-        const answer = await new Promise((resolve10) => {
-          rl.question(`Delete profile "${name}"? This cannot be undone. [y/N] `, resolve10);
+        const answer = await new Promise((resolve13) => {
+          rl.question(`Delete profile "${name}"? This cannot be undone. [y/N] `, resolve13);
         });
         rl.close();
         if (answer.toLowerCase() !== "y") {
@@ -51470,8 +51477,8 @@ function localPathChanged(profile) {
   return new ProfileSymlinkError3(profile, "its local replica files contain a symlink or changed while reading");
 }
 async function assertNamedLocalEntry(profile, path, expected, kind) {
-  const current = await lstat11(path, { bigint: true }).catch(() => null);
-  if (!current || current.isSymbolicLink() || (kind === "directory" ? !current.isDirectory() : !current.isFile()) || !sameLocalEntry(expected, current)) throw localPathChanged(profile);
+  const current2 = await lstat11(path, { bigint: true }).catch(() => null);
+  if (!current2 || current2.isSymbolicLink() || (kind === "directory" ? !current2.isDirectory() : !current2.isFile()) || !sameLocalEntry(expected, current2)) throw localPathChanged(profile);
 }
 async function withPinnedLocalDirectory(profile, parent, name, action) {
   const path = join23(parent, name);
@@ -51710,12 +51717,12 @@ or coverage incomplete; 5 grant expired, revoked or not yet valid; 6 network;
             if (options.retentionGrant !== void 0 && options.retentionGrant !== state2.config.retentionGrantCid) {
               await store.setRetentionGrant(options.retentionGrant === "" ? null : options.retentionGrant);
             }
-            const current = await store.open();
-            const transportFor = await grantTransports({ host, space, deviceDid: current.config.deviceDid, jwk });
+            const current2 = await store.open();
+            const transportFor = await grantTransports({ host, space, deviceDid: current2.config.deviceDid, jwk });
             const warning2 = replicaSecretsWarning(space, prefix, options.allowSecrets === true || state2.config.allowSecrets);
             const report2 = await new Replica({ store, transportFor }).sync(options.limit === void 0 ? {} : { limit: options.limit });
             const status2 = await store.status();
-            return { replica: current.config.name, report: report2, status: status2, warning: warning2 };
+            return { replica: current2.config.name, report: report2, status: status2, warning: warning2 };
           } finally {
             await store.close();
           }
@@ -51896,7 +51903,7 @@ async function nodeAt(value4, option) {
   if (!info || typeof info !== "object" || !("nodeId" in info) || typeof info.nodeId !== "string") throw invalid4();
   return { did: info.nodeId, url };
 }
-function preview(payload, current, includeDisclosure) {
+function preview(payload, current2, includeDisclosure) {
   const quote = (value4) => JSON.stringify(value4);
   const nodes = new Map(payload.nodes.map((node) => [node.did, node.url]));
   process.stderr.write(`Account: ${quote(payload.subject)}
@@ -51907,7 +51914,7 @@ Storage servers:
   process.stderr.write("Spaces:\n");
   let hasChanges = false;
   for (const entry of payload.spaces) {
-    const previous = current?.spaces.find(({ space }) => space === entry.space);
+    const previous = current2?.spaces.find(({ space }) => space === entry.space);
     const changed = !previous || JSON.stringify([...previous.nodes].sort((a, b) => a.did.localeCompare(b.did))) !== JSON.stringify([...entry.nodes].sort((a, b) => a.did.localeCompare(b.did)));
     hasChanges ||= changed;
     process.stderr.write(`  ${quote(entry.space)}${changed ? " *" : ""}
@@ -51957,8 +51964,8 @@ function registerRegistryPublishCommand(registry) {
           ...encryptionNode === void 0 ? {} : { encryptionNode },
           cacheStore: cache6,
           sequenceStore: sequences,
-          onPrepared: async (payload, current) => {
-            preview(payload, current, options.yes === true);
+          onPrepared: async (payload, current2) => {
+            preview(payload, current2, options.yes === true);
             previewShown = true;
             if (options.yes) return true;
             const terminal = createInterface7({ input: process.stdin, output: process.stderr });
@@ -52138,14 +52145,14 @@ function runProbeChild(request, options = {}) {
   const args = options.argv ?? probeChildArgv(request);
   const budgetMs = options.budgetMs ?? ATTEMPT_BUDGET_MS;
   const killGraceMs = options.killGraceMs ?? KILL_GRACE_MS;
-  const spawn4 = options.spawn ?? nodeSpawn;
+  const spawn6 = options.spawn ?? nodeSpawn;
   const signal = options.signal;
-  return new Promise((resolve10) => {
+  return new Promise((resolve13) => {
     if (signal?.aborted) {
-      resolve10({ kind: "cancelled" });
+      resolve13({ kind: "cancelled" });
       return;
     }
-    const child = spawn4(command, args, { env: process.env, stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn6(command, args, { env: process.env, stdio: ["ignore", "pipe", "pipe"] });
     let outcome;
     let stdout = Buffer.alloc(0);
     let stderr2 = Buffer.alloc(0);
@@ -52178,7 +52185,7 @@ function runProbeChild(request, options = {}) {
         const envelope = stdout.length > 0 && stdout.length <= MAX_PROBE_LINE_BYTES ? parseStatusEnvelope(stdout.toString("utf8")) : void 0;
         outcome = envelope !== void 0 ? { kind: "ok", envelope } : probeFailed(stderr2.toString("utf8"));
       }
-      resolve10(outcome);
+      resolve13(outcome);
     };
     if (child.pid !== void 0) options.onSpawn?.(child.pid);
     child.stdout?.on("data", (chunk) => {
@@ -52274,8 +52281,8 @@ function parsePsGroups(output2) {
 }
 function processGroups() {
   try {
-    const stat8 = readFileSync2("/proc/self/stat", "utf8");
-    const fields = stat8.slice(stat8.lastIndexOf(")") + 2).split(" ");
+    const stat9 = readFileSync2("/proc/self/stat", "utf8");
+    const fields = stat9.slice(stat9.lastIndexOf(")") + 2).split(" ");
     return { group: Number(fields[2]), foreground: Number(fields[5]) };
   } catch {
   }
@@ -52296,13 +52303,13 @@ function inTerminalForeground() {
   return groups !== void 0 && groups.foreground > 0 && groups.group === groups.foreground;
 }
 function runCommand(argv, env) {
-  return new Promise((resolve10) => {
+  return new Promise((resolve13) => {
     let child;
     try {
       child = spawn3(argv[0], argv.slice(1), { stdio: "inherit", env, shell: false });
     } catch (error) {
       const code6 = error instanceof Error && "code" in error && typeof error.code === "string" ? error.code : void 0;
-      resolve10({ kind: "not_started", ...code6 === void 0 ? {} : { errno: code6 } });
+      resolve13({ kind: "not_started", ...code6 === void 0 ? {} : { errno: code6 } });
       return;
     }
     const forward = (signal) => {
@@ -52312,7 +52319,7 @@ function runCommand(argv, env) {
     for (const signal of FORWARDED_SIGNALS) process.on(signal, forward);
     const settle = (outcome) => {
       for (const signal of FORWARDED_SIGNALS) process.off(signal, forward);
-      resolve10(outcome);
+      resolve13(outcome);
     };
     child.on("error", (error) => {
       if (child.pid === void 0) settle({ kind: "not_started", ...error.code === void 0 ? {} : { errno: error.code } });
@@ -52339,15 +52346,15 @@ var TIMEOUT_RE = /^(0|\d+s|\d+m)$/;
 var RETRYABLE_STATUS_ERRORS = { NODE_UNREACHABLE: true, NODE_ERROR: true };
 var EXPLICIT_KEY_HINT = `${CLI_NAME33} secrets wait never signs in, and an explicit private key has no stored session. Use a local profile signed in once with ${CLI_NAME33} --profile <profile> auth login --method local, without TC_PRIVATE_KEY.`;
 function abortableSleep(ms2, signal) {
-  return new Promise((resolve10) => {
+  return new Promise((resolve13) => {
     if (signal.aborted) {
-      resolve10();
+      resolve13();
       return;
     }
     const done = () => {
       clearTimeout(timer);
       signal.removeEventListener("abort", done);
-      resolve10();
+      resolve13();
     };
     const timer = setTimeout(done, ms2);
     signal.addEventListener("abort", done, { once: true });
@@ -52565,19 +52572,19 @@ function estimateBatchBytes(resources) {
 }
 function batchKeyPaths(keyPaths, resourceOf, budgetBytes, leadBytes = 0) {
   const batches = [];
-  let current = [];
+  let current2 = [];
   let bytes = BASE_RESERVE_BYTES + leadBytes;
   for (const keyPath of [...new Set(keyPaths)].sort()) {
     const cost = estimateKeyBytes(resourceOf(keyPath));
-    if (current.length > 0 && bytes + cost > budgetBytes) {
-      batches.push(current);
-      current = [];
+    if (current2.length > 0 && bytes + cost > budgetBytes) {
+      batches.push(current2);
+      current2 = [];
       bytes = BASE_RESERVE_BYTES;
     }
-    current.push(keyPath);
+    current2.push(keyPath);
     bytes += cost;
   }
-  if (current.length > 0) batches.push(current);
+  if (current2.length > 0) batches.push(current2);
   return batches;
 }
 async function checkHeaderFits(origin2, bytes, fetchImpl = globalThis.fetch) {
@@ -53472,9 +53479,9 @@ function secretMigrateApprovalDeclined(error, index, count, heldUntil) {
   if (!(error instanceof CLIError) || error.exitCode === ExitCode.NETWORK_ERROR) return error;
   if (index > 1 && heldUntil === void 0) return error;
   const until = heldUntil?.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
-  const held = index === 1 ? "" : index === 2 ? ` Approval 1 stays valid until ${until}.` : ` Approvals 1 to ${index - 1} stay valid until ${until}.`;
+  const held2 = index === 1 ? "" : index === 2 ? ` Approval 1 stays valid until ${until}.` : ` Approvals 1 to ${index - 1} stay valid until ${until}.`;
   return Object.assign(
-    new CLIError(error.code, `Approval ${index} of ${count} was declined, so no secret was moved.${held} To move the secrets, run \`${CLI_NAME34} secrets migrate\`.`, error.exitCode, error.metadata),
+    new CLIError(error.code, `Approval ${index} of ${count} was declined, so no secret was moved.${held2} To move the secrets, run \`${CLI_NAME34} secrets migrate\`.`, error.exitCode, error.metadata),
     { cause: error }
   );
 }
@@ -54379,20 +54386,20 @@ async function readShareInput(input, name, limit = MAX_SHARE_STDIN_BYTES) {
 async function assertDirectory(path) {
   const absolute = resolve7(path);
   const segments = absolute.split(sep3).filter(Boolean);
-  let current = absolute.startsWith(sep3) ? sep3 : "";
+  let current2 = absolute.startsWith(sep3) ? sep3 : "";
   for (const segment of segments) {
-    current = current === sep3 ? join25(current, segment) : join25(current, segment);
+    current2 = current2 === sep3 ? join25(current2, segment) : join25(current2, segment);
     try {
-      const info = await lstat12(current);
+      const info = await lstat12(current2);
       if (info.isSymbolicLink()) {
-        const canonical = await realpath3(current);
-        if (current !== "/tmp" && current !== "/var") throw new Error("OUTPUT_EXISTS");
-        if (canonical !== `/private${current}`) throw new Error("OUTPUT_EXISTS");
+        const canonical = await realpath3(current2);
+        if (current2 !== "/tmp" && current2 !== "/var") throw new Error("OUTPUT_EXISTS");
+        if (canonical !== `/private${current2}`) throw new Error("OUTPUT_EXISTS");
       } else if (!info.isDirectory()) throw new Error("OUTPUT_EXISTS");
     } catch (error) {
       if (error.code !== "ENOENT") throw error;
-      await mkdir8(current, { mode: 448 });
-      const created = await lstat12(current);
+      await mkdir8(current2, { mode: 448 });
+      const created = await lstat12(current2);
       if (created.isSymbolicLink() || !created.isDirectory()) throw new Error("OUTPUT_EXISTS");
     }
   }
@@ -54406,8 +54413,8 @@ async function writeShareOutput(directory, filename, bytes, force) {
   const outputPath = join25(stableDirectory, safeName);
   const directoryIdentity = await directoryHandle.stat();
   const assertStableDirectory = async () => {
-    const current = await stat6(stableDirectory);
-    if (current.dev !== directoryIdentity.dev || current.ino !== directoryIdentity.ino) throw new Error("OUTPUT_EXISTS");
+    const current2 = await stat6(stableDirectory);
+    if (current2.dev !== directoryIdentity.dev || current2.ino !== directoryIdentity.ino) throw new Error("OUTPUT_EXISTS");
   };
   await assertStableDirectory();
   const stagingDirectory = await mkdtemp(join25(stableDirectory, ".tinycloud-share-stage-"));
@@ -54813,9 +54820,9 @@ function scanMarkup(html, options) {
     if (comments > MAX_ARTIFACT_COMMENTS) fail("limit", "artifact page has too many comments");
   };
   while (index < length6) {
-    const open21 = html.indexOf("<", index);
-    if (open21 === -1) return;
-    index = open21 + 1;
+    const open23 = html.indexOf("<", index);
+    if (open23 === -1) return;
+    index = open23 + 1;
     const next = html[index] ?? "";
     if (html.startsWith("!--", index)) {
       countComment();
@@ -55399,16 +55406,16 @@ async function linuxDescriptorPath(fd) {
   return realpath4(`${PROC_FD}/${fd}`);
 }
 async function parentChainIsRealDirectories(root, path) {
-  let current = dirname11(path);
-  while (current !== root && isWithinFolder(root, current)) {
-    const info = await lstat13(current);
+  let current2 = dirname11(path);
+  while (current2 !== root && isWithinFolder(root, current2)) {
+    const info = await lstat13(current2);
     if (info.isSymbolicLink() || !info.isDirectory()) return false;
-    current = dirname11(current);
+    current2 = dirname11(current2);
   }
-  return current === root;
+  return current2 === root;
 }
-async function readRegularFile(root, path, relative, remaining, limit, hooks = {}) {
-  const problem = (reason) => ({ code: "UNSUPPORTED_FOLDER_ENTRY", path: relative, reason });
+async function readRegularFile(root, path, relative2, remaining, limit, hooks = {}) {
+  const problem = (reason) => ({ code: "UNSUPPORTED_FOLDER_ENTRY", path: relative2, reason });
   const descriptorPath = hooks.descriptorPath ?? linuxDescriptorPath;
   let handle;
   let before;
@@ -55440,7 +55447,7 @@ async function readRegularFile(root, path, relative, remaining, limit, hooks = {
       if (isRaceError(error)) return problem(CHANGED);
       throw error;
     }
-    if (info.size > remaining) throw limitError(`folder is larger than the ${limit} byte limit (at "${safeClipped(relative)}")`);
+    if (info.size > remaining) throw limitError(`folder is larger than the ${limit} byte limit (at "${safeClipped(relative2)}")`);
     const chunks = [];
     let total = 0;
     for (; ; ) {
@@ -55448,7 +55455,7 @@ async function readRegularFile(root, path, relative, remaining, limit, hooks = {
       const { bytesRead } = await handle.read(chunk, 0, chunk.length, null);
       if (bytesRead === 0) break;
       total += bytesRead;
-      if (total > remaining) throw limitError(`folder is larger than the ${limit} byte limit (at "${safeClipped(relative)}")`);
+      if (total > remaining) throw limitError(`folder is larger than the ${limit} byte limit (at "${safeClipped(relative2)}")`);
       chunks.push(chunk.subarray(0, bytesRead));
     }
     await hooks.afterRead?.();
@@ -55466,8 +55473,8 @@ async function readRegularFile(root, path, relative, remaining, limit, hooks = {
     await handle.close();
   }
 }
-async function listFolderDirectory(root, absolute, relative, hooks = {}) {
-  const problem = (reason) => ({ code: "UNSUPPORTED_FOLDER_ENTRY", path: relative === "" ? "." : relative, reason });
+async function listFolderDirectory(root, absolute, relative2, hooks = {}) {
+  const problem = (reason) => ({ code: "UNSUPPORTED_FOLDER_ENTRY", path: relative2 === "" ? "." : relative2, reason });
   const descriptorPath = hooks.descriptorPath ?? linuxDescriptorPath;
   try {
     await hooks.beforeOpen?.();
@@ -55519,8 +55526,8 @@ async function readHtmlFolder(directory, limit) {
   const problems = [];
   let skippedHidden = 0;
   let total = 0;
-  const walk = async (absolute, relative, depth) => {
-    const listed = await listFolderDirectory(root, absolute, relative);
+  const walk = async (absolute, relative2, depth) => {
+    const listed = await listFolderDirectory(root, absolute, relative2);
     if ("reason" in listed) {
       problems.push(listed);
       return;
@@ -55531,7 +55538,7 @@ async function readHtmlFolder(directory, limit) {
         skippedHidden += 1;
         continue;
       }
-      const path = relative === "" ? entry.name : `${relative}/${entry.name}`;
+      const path = relative2 === "" ? entry.name : `${relative2}/${entry.name}`;
       const child = join26(absolute, entry.name);
       if (entry.isSymbolicLink()) {
         problems.push({ code: "UNSUPPORTED_FOLDER_ENTRY", path, reason: "symbolic link" });
@@ -55875,9 +55882,9 @@ async function notifyRecordedShare(record4, recipient, adapter, storage, publish
     if (!record4.deliveredRecipients?.includes(mailbox)) {
       try {
         if (storage.update === void 0) throw new Error("atomic sender history update is unavailable");
-        const updated = await storage.update(record4.shareId, (current) => ({
-          ...current,
-          deliveredRecipients: current.deliveredRecipients?.includes(mailbox) ? current.deliveredRecipients : [...current.deliveredRecipients ?? [], mailbox]
+        const updated = await storage.update(record4.shareId, (current2) => ({
+          ...current2,
+          deliveredRecipients: current2.deliveredRecipients?.includes(mailbox) ? current2.deliveredRecipients : [...current2.deliveredRecipients ?? [], mailbox]
         }));
         if (updated === void 0) throw new Error("sender history record was removed");
       } catch (error) {
@@ -57065,77 +57072,1204 @@ function plural(count, label) {
 }
 
 // src/commands/upgrade.ts
-init_theme();
-init_errors();
-import { execSync } from "child_process";
+init_constants();
+import { homedir as homedir5 } from "os";
+import { join as join31 } from "path";
+import { createInterface as createInterface8 } from "readline/promises";
+import { CLI_NAME as CLI_NAME39 } from "@tinycloud/operations/cli-name";
+
+// src/lib/auto-update.ts
+import { spawn as spawn4 } from "child_process";
 import { readFileSync as readFileSync3 } from "fs";
-var PACKAGE_NAME = "@tinycloud/cli";
-function getCurrentVersion() {
-  const pkg = JSON.parse(
-    readFileSync3(new URL("../package.json", import.meta.url), "utf-8")
-  );
-  return pkg.version;
+import { mkdir as mkdir10, open as open21, readFile as readFile20, rename as rename7, rm as rm11, stat as stat8 } from "fs/promises";
+import { dirname as dirname13 } from "path";
+function selectUpdateVersion(currentVersion, distTags) {
+  const current2 = parseVersion(currentVersion);
+  if (!current2) return null;
+  const channel = current2.prerelease[0];
+  const candidateString = distTags[channel ?? "latest"];
+  if (!candidateString) return null;
+  const candidate = parseVersion(candidateString);
+  if (!candidate) return null;
+  if (channel === void 0 ? candidate.prerelease.length > 0 : candidate.prerelease[0] !== channel) return null;
+  return compareVersions(candidate, current2) > 0 ? formatVersion(candidate) : null;
 }
-async function getLatestVersion() {
-  const res = await fetch(`https://registry.npmjs.org/${PACKAGE_NAME}/latest`);
-  if (!res.ok) {
-    throw new Error(`Failed to fetch latest version: ${res.status} ${res.statusText}`);
+function parseVersion(value4) {
+  const match = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$/.exec(value4);
+  if (!match) return null;
+  return {
+    major: Number(match[1]),
+    minor: Number(match[2]),
+    patch: Number(match[3]),
+    prerelease: match[4] === void 0 ? [] : match[4].split(".")
+  };
+}
+function formatVersion(version) {
+  const core = `${version.major}.${version.minor}.${version.patch}`;
+  return version.prerelease.length === 0 ? core : `${core}-${version.prerelease.join(".")}`;
+}
+function compareVersionStrings(left, right) {
+  const a = parseVersion(left);
+  const b = parseVersion(right);
+  return a && b ? compareVersions(a, b) : null;
+}
+function compareVersions(left, right) {
+  for (const key of ["major", "minor", "patch"]) {
+    if (left[key] !== right[key]) return left[key] > right[key] ? 1 : -1;
   }
-  const data = await res.json();
-  return data.version;
+  if (left.prerelease.length === 0 || right.prerelease.length === 0) {
+    return left.prerelease.length === right.prerelease.length ? 0 : left.prerelease.length === 0 ? 1 : -1;
+  }
+  const length6 = Math.max(left.prerelease.length, right.prerelease.length);
+  for (let index = 0; index < length6; index += 1) {
+    const a = left.prerelease[index];
+    const b = right.prerelease[index];
+    if (a === void 0 || b === void 0) return a === b ? 0 : a === void 0 ? -1 : 1;
+    if (a === b) continue;
+    const aNumeric = /^\d+$/.test(a);
+    const bNumeric = /^\d+$/.test(b);
+    if (aNumeric && bNumeric) return Number(a) > Number(b) ? 1 : -1;
+    if (aNumeric !== bNumeric) return aNumeric ? -1 : 1;
+    return a > b ? 1 : -1;
+  }
+  return 0;
 }
-function detectPackageManager() {
+var DAY_MS5 = 24 * 60 * 60 * 1e3;
+function isAutoUpdateEnabled(env) {
+  const ci = env.CI?.toLowerCase();
+  const inCi = ci !== void 0 && ci !== "" && ci !== "false" && ci !== "0";
+  return env.TC_NO_AUTO_UPDATE !== "1" && !inCi;
+}
+function detectInstallKind(packagePath, workingDirectory, homeDirectory) {
+  const normalized = packagePath.replaceAll("\\", "/");
+  if (normalized.includes("/Cellar/")) return "homebrew";
+  if (normalized.includes("/_npx/") || normalized.includes("/_bunx/")) return "npx";
+  if (isWithin(`${workingDirectory.replaceAll("\\", "/")}/node_modules`, normalized)) return "project";
+  if (normalized.includes("/.bun/install/global/node_modules/")) return "bun-global";
+  if (normalized.includes("/lib/node_modules/")) return "npm-global";
+  if (normalized.startsWith(`${homeDirectory.replaceAll("\\", "/")}/.nvm/`)) return "npm-global";
+  return "unknown";
+}
+function isWithin(parent, child) {
+  const normalizedParent = parent.endsWith("/") ? parent : `${parent}/`;
+  return child.startsWith(normalizedParent);
+}
+
+// src/lib/self-update.ts
+init_constants();
+import { spawn as spawn5 } from "child_process";
+import { appendFileSync as appendFileSync2, existsSync as existsSync3, mkdirSync as mkdirSync4, readdirSync as readdirSync5, readFileSync as readFileSync7, renameSync as renameSync3, rmSync as rmSync3, statSync as statSync5, truncateSync } from "fs";
+import { homedir as homedir4 } from "os";
+import { dirname as dirname15, isAbsolute as isAbsolute2, join as join30, relative, resolve as resolve12, sep as sep6 } from "path";
+import { fileURLToPath } from "url";
+
+// src/lib/install-lock.ts
+import { randomUUID as randomUUID5 } from "crypto";
+import { mkdirSync as mkdirSync3, readdirSync as readdirSync4, readFileSync as readFileSync5, rmSync as rmSync2, statSync as statSync3, writeFileSync as writeFileSync2 } from "fs";
+import { hostname as hostname2 } from "os";
+import { join as join28 } from "path";
+
+// src/lib/versions.ts
+import { spawnSync } from "child_process";
+import { closeSync as closeSync2, fsyncSync, mkdirSync as mkdirSync2, openSync as openSync2, readFileSync as readFileSync4, readdirSync as readdirSync3, realpathSync, renameSync as renameSync2, rmSync, statSync as statSync2, unlinkSync, writeSync } from "fs";
+import { homedir as homedir2 } from "os";
+import { dirname as dirname14, join as join27, resolve as resolve10, sep as sep5 } from "path";
+var CLI_PACKAGE = "@tinycloud/cli";
+var VERSION = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?$/;
+var LAUNCH_CONTEXT = /* @__PURE__ */ Symbol.for("tinycloud.cli.launchContext");
+function isVersion(value4) {
+  return typeof value4 === "string" && VERSION.test(value4);
+}
+function versionsRoot(env = process.env, home = homedir2()) {
+  return env.TC_VERSIONS_DIR ? resolve10(env.TC_VERSIONS_DIR) : join27(home, ".tinycloud", "versions");
+}
+function versionPackageDir(root, version) {
+  return join27(root, version, "node_modules", "@tinycloud", "cli");
+}
+function readPackageVersion(packageDir) {
   try {
-    const bunGlobals = execSync("bun pm ls -g", { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] });
-    if (bunGlobals.includes(PACKAGE_NAME)) {
-      return "bun";
+    const { name, version } = JSON.parse(readFileSync4(join27(packageDir, "package.json"), "utf8"));
+    return name === CLI_PACKAGE && isVersion(version) ? version : null;
+  } catch {
+    return null;
+  }
+}
+function readPointer(root) {
+  try {
+    const value4 = JSON.parse(readFileSync4(join27(root, "current.json"), "utf8"));
+    if (!isVersion(value4.version) || !isVersion(value4.base) || typeof value4.auto !== "boolean" || typeof value4.pinned !== "boolean") return null;
+    if (value4.previous !== void 0 && !isVersion(value4.previous)) return null;
+    if (value4.floor !== void 0 && !isVersion(value4.floor)) return null;
+    return { version: value4.version, base: value4.base, auto: value4.auto, pinned: value4.pinned, ...value4.previous ? { previous: value4.previous } : {}, ...value4.floor ? { floor: value4.floor } : {} };
+  } catch {
+    return null;
+  }
+}
+function writeFileAtomic2(file, content) {
+  mkdirSync2(dirname14(file), { recursive: true, mode: 448 });
+  const temporary = `${file}.${process.pid}.${Math.random().toString(36).slice(2)}.tmp`;
+  try {
+    const fd = openSync2(temporary, "wx", 384);
+    try {
+      writeSync(fd, content);
+      fsyncSync(fd);
+    } finally {
+      closeSync2(fd);
     }
+    renameSync2(temporary, file);
+  } catch (error) {
+    rmSync(temporary, { force: true });
+    throw error;
+  }
+}
+function writePointer(root, pointer) {
+  writeFileAtomic2(join27(root, "current.json"), `${JSON.stringify(pointer)}
+`);
+}
+function removePointer(root) {
+  rmSync(join27(root, "current.json"), { force: true });
+}
+function isVerified(root, version) {
+  if (!isVersion(version) || readPackageVersion(versionPackageDir(root, version)) !== version) return false;
+  try {
+    return JSON.parse(readFileSync4(join27(root, version, ".verified"), "utf8")).version === version;
+  } catch {
+    return false;
+  }
+}
+function markVerified(directory, version, integrity) {
+  writeFileAtomic2(join27(directory, ".verified"), `${JSON.stringify({ version, integrity })}
+`);
+}
+function isWithin2(parent, child) {
+  const realParent = realpathOr(parent);
+  const realChild = realpathOr(child);
+  return realChild.startsWith(realParent.endsWith(sep5) ? realParent : `${realParent}${sep5}`);
+}
+function realpathOr(path) {
+  try {
+    return realpathSync(path);
+  } catch {
+    return resolve10(path);
+  }
+}
+function activeVersion(root, basePackageDir, baseVersion) {
+  const own = { version: baseVersion, packageDir: basePackageDir };
+  if (isWithin2(root, basePackageDir)) return own;
+  const pointer = readPointer(root);
+  if (!pointer || pointer.base !== baseVersion || pointer.version === baseVersion || !isVerified(root, pointer.version)) return own;
+  return { version: pointer.version, packageDir: versionPackageDir(root, pointer.version) };
+}
+function launchContext() {
+  return globalThis[LAUNCH_CONTEXT];
+}
+var LEASE_MAX_AGE_MS = 24 * 60 * 60 * 1e3;
+var LEASE_RENEW_MS = 60 * 60 * 1e3;
+var START_SLACK_MS = 5e3;
+function liveLeases(root, alive = processAlive) {
+  const directory = join27(root, ".leases");
+  let names;
+  try {
+    names = readdirSync3(directory);
+  } catch {
+    return [];
+  }
+  const leases = [];
+  for (const name of names) {
+    if (!/^\d+\.json$/.test(name)) continue;
+    const file = join27(directory, name);
+    try {
+      const value4 = JSON.parse(readFileSync4(file, "utf8"));
+      if (typeof value4.pid !== "number" || !Number.isSafeInteger(value4.pid) || !isVersion(value4.version)) continue;
+      if (!alive(value4.pid) || Date.now() - statSync2(file).mtimeMs > LEASE_MAX_AGE_MS || startChanged(value4.start, value4.pid)) {
+        rmSync(file, { force: true });
+        continue;
+      }
+      leases.push({ pid: value4.pid, version: value4.version, courier: value4.courier === true });
+    } catch {
+    }
+  }
+  return leases;
+}
+function processAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return error.code === "EPERM";
+  }
+}
+function processStartTime(pid) {
+  if (process.platform === "win32") return null;
+  if (process.platform === "linux") {
+    try {
+      const stat9 = readFileSync4(`/proc/${pid}/stat`, "utf8");
+      const ticks = stat9.slice(stat9.lastIndexOf(")") + 2).split(" ")[19] ?? "";
+      return /^\d+$/.test(ticks) ? `${readFileSync4("/proc/sys/kernel/random/boot_id", "utf8").trim()}:${ticks}` : null;
+    } catch {
+      return null;
+    }
+  }
+  if (pid === process.pid) return `@${Math.round(performance.timeOrigin)}`;
+  const ps = spawnSync("ps", ["-o", "lstart=", "-p", String(pid)], { encoding: "utf8", timeout: 2e3, env: { ...process.env, LC_ALL: "C", TZ: "UTC" } });
+  const started = ps.status === 0 ? Date.parse(`${ps.stdout.trim()} UTC`) : Number.NaN;
+  return Number.isFinite(started) ? `@${started}` : null;
+}
+function startChanged(recorded, pid) {
+  if (typeof recorded !== "string") return false;
+  const current2 = processStartTime(pid);
+  if (current2 === null) return false;
+  if (recorded.startsWith("@") && current2.startsWith("@")) return Math.abs(Number(recorded.slice(1)) - Number(current2.slice(1))) > START_SLACK_MS;
+  return recorded !== current2;
+}
+function installedVersions(root) {
+  try {
+    return readdirSync3(root).filter(isVersion);
+  } catch {
+    return [];
+  }
+}
+
+// src/lib/install-lock.ts
+var LOCK_MAX_AGE_MS = 45 * 60 * 1e3;
+var HOLDER_MARGIN_MS = 5 * 60 * 1e3;
+var UNWRITTEN_GRACE_MS = 1e4;
+var heldTokens = /* @__PURE__ */ new Set();
+function acquireInstallLock(root, options = {}) {
+  const now = options.now ?? Date.now;
+  const alive = options.alive ?? processAlive;
+  const directory = join28(root, ".install-lock");
+  mkdirSync3(directory, { recursive: true, mode: 448 });
+  const latest = latestGeneration(directory);
+  if (latest > 0 && held(directory, latest, now(), alive)) return null;
+  const generation = latest + 1;
+  const owner = { pid: process.pid, host: hostname2(), startedAt: now(), token: randomUUID5() };
+  try {
+    writeFileSync2(join28(directory, `${generation}.json`), JSON.stringify(owner), { flag: "wx", mode: 384 });
+  } catch (error) {
+    if (error.code === "EEXIST") return null;
+    throw error;
+  }
+  if (latestGeneration(directory) !== generation) {
+    rmSync2(join28(directory, `${generation}.json`), { force: true });
+    return null;
+  }
+  heldTokens.add(owner.token);
+  for (const name of readdirSync4(directory)) {
+    const number = Number.parseInt(name, 10);
+    if (Number.isSafeInteger(number) && number < generation - 1) rmSync2(join28(directory, name), { force: true });
+  }
+  return {
+    generation,
+    valid: () => heldTokens.has(owner.token) && now() - owner.startedAt < LOCK_MAX_AGE_MS - HOLDER_MARGIN_MS && latestGeneration(directory) === generation && readOwner(directory, generation)?.token === owner.token,
+    release: () => {
+      if (!heldTokens.delete(owner.token)) return;
+      try {
+        writeFileSync2(join28(directory, `${generation}.released`), "", { flag: "wx", mode: 384 });
+      } catch {
+      }
+    }
+  };
+}
+function latestGeneration(directory) {
+  let latest = 0;
+  for (const name of readdirSync4(directory)) {
+    const match = /^(\d+)\.json$/.exec(name);
+    if (match) latest = Math.max(latest, Number(match[1]));
+  }
+  return latest;
+}
+function readOwner(directory, generation) {
+  try {
+    const value4 = JSON.parse(readFileSync5(join28(directory, `${generation}.json`), "utf8"));
+    if (typeof value4.pid !== "number" || typeof value4.host !== "string" || typeof value4.startedAt !== "number" || typeof value4.token !== "string") return null;
+    return value4;
+  } catch {
+    return null;
+  }
+}
+function held(directory, generation, now, alive) {
+  try {
+    statSync3(join28(directory, `${generation}.released`));
+    return false;
   } catch {
   }
-  try {
-    const npmGlobals = execSync("npm ls -g --depth=0", { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] });
-    if (npmGlobals.includes(PACKAGE_NAME)) {
-      return "npm";
+  const owner = readOwner(directory, generation);
+  if (!owner) {
+    try {
+      return now - statSync3(join28(directory, `${generation}.json`)).mtimeMs < UNWRITTEN_GRACE_MS;
+    } catch {
+      return false;
     }
+  }
+  if (now - owner.startedAt >= LOCK_MAX_AGE_MS) return false;
+  if (owner.host !== hostname2()) return true;
+  if (owner.pid === process.pid) return heldTokens.has(owner.token);
+  return alive(owner.pid);
+}
+
+// src/lib/install-kind.ts
+import { readFileSync as readFileSync6, realpathSync as realpathSync2 } from "fs";
+import { homedir as homedir3 } from "os";
+import { join as join29, resolve as resolve11 } from "path";
+function bunGlobalModules(env = process.env, home = homedir3()) {
+  const globalDir = env.BUN_INSTALL_GLOBAL_DIR || join29(env.BUN_INSTALL || join29(home, ".bun"), "install", "global");
+  return join29(globalDir, "node_modules");
+}
+async function verifyInstallKind(packageDir, roots) {
+  const actual = realpathOrNull(packageDir);
+  if (!actual) return null;
+  if (realpathOrNull(join29(roots.bun(), CLI_PACKAGE)) === actual) return "bun-global";
+  const npmRoot = await roots.npm();
+  if (npmRoot && realpathOrNull(join29(npmRoot, CLI_PACKAGE)) === actual) return "npm-global";
+  return null;
+}
+function recordInstallKind(root, packageDir, version, kind) {
+  const actual = realpathOrNull(packageDir);
+  if (!actual) return;
+  try {
+    writeFileAtomic2(join29(root, "install.json"), `${JSON.stringify({ packageDir: actual, version, kind })}
+`);
   } catch {
   }
-  return "bun";
+}
+function realpathOrNull(path) {
+  try {
+    return realpathSync2(resolve11(path));
+  } catch {
+    return null;
+  }
+}
+
+// src/lib/npm-command.ts
+import { accessSync, constants as constants4, statSync as statSync4 } from "fs";
+import { posix, win32 } from "path";
+function isExecutableFile(file) {
+  try {
+    accessSync(file, constants4.X_OK);
+    return statSync4(file).isFile();
+  } catch {
+    return false;
+  }
+}
+function resolveNpm(env = process.env, platform = process.platform, execPath = process.execPath, exists = isExecutableFile) {
+  const path = platform === "win32" ? win32 : posix;
+  const directories = (env.PATH ?? env.Path ?? "").split(path.delimiter).filter((directory) => directory !== "" && path.isAbsolute(directory));
+  if (platform !== "win32") {
+    const npm = directories.map((directory) => path.join(directory, "npm")).find(exists);
+    return npm ? { command: npm, args: [] } : null;
+  }
+  const npmDirectories = [path.dirname(execPath), ...directories.filter((directory) => exists(path.join(directory, "npm.cmd")))];
+  for (const directory of npmDirectories) {
+    const cli = path.join(directory, "node_modules", "npm", "bin", "npm-cli.js");
+    if (exists(cli)) return { command: execPath, args: [cli] };
+  }
+  return null;
+}
+
+// src/lib/provenance.ts
+import { createHash as createHash9, createPublicKey, verify as verifySignature2 } from "crypto";
+
+// src/lib/tarball.ts
+import { gunzipSync } from "zlib";
+function readTarballFiles(tgz, wanted) {
+  const tar = gunzipSync(tgz);
+  const found = /* @__PURE__ */ new Map();
+  let offset = 0;
+  let paxPath;
+  while (offset + 512 <= tar.length) {
+    const header = tar.subarray(offset, offset + 512);
+    if (header.every((byte) => byte === 0)) break;
+    const field = (start, length6) => {
+      const raw = header.subarray(start, start + length6);
+      const end = raw.indexOf(0);
+      return raw.subarray(0, end === -1 ? length6 : end).toString("utf8");
+    };
+    const size = parseInt(field(124, 12).trim() || "0", 8);
+    if (!Number.isFinite(size) || size < 0) throw new Error("unreadable tarball");
+    const type = field(156, 1);
+    const prefix = field(345, 155);
+    const name = paxPath ?? (prefix ? `${prefix}/${field(0, 100)}` : field(0, 100));
+    const body = tar.subarray(offset + 512, offset + 512 + size);
+    offset += 512 + Math.ceil(size / 512) * 512;
+    if (type === "x") {
+      paxPath = /(?:^|\n)\d+ path=([^\n]*)\n/.exec(body.toString("utf8"))?.[1];
+      continue;
+    }
+    paxPath = void 0;
+    if (type !== "0" && type !== "") continue;
+    const relative2 = name.replace(/^\.?\/?[^/]+\//, "");
+    if (wanted.includes(relative2)) found.set(relative2, Buffer.from(body));
+  }
+  return found;
+}
+
+// src/lib/provenance.ts
+var REGISTRY2 = "https://registry.npmjs.org";
+var RELEASE_IDENTITY = {
+  certificateIssuer: "https://token.actions.githubusercontent.com",
+  certificateIdentityURI: "https://github.com/TinyCloudLabs/js-sdk/.github/workflows/changesets.yml@refs/heads/master",
+  /** Fulcio extensions 1.3.6.1.4.1.57264.1.12 / .14 / .15: source repository URI, ref and (rename-proof) id. */
+  sourceRepositoryURI: "https://github.com/TinyCloudLabs/js-sdk",
+  sourceRepositoryRef: "refs/heads/master",
+  sourceRepositoryId: "913991042"
+};
+var SLSA_PROVENANCE = "https://slsa.dev/provenance/v1";
+var FULCIO_SOURCE_OIDS = {
+  "1.3.6.1.4.1.57264.1.12": RELEASE_IDENTITY.sourceRepositoryURI,
+  "1.3.6.1.4.1.57264.1.14": RELEASE_IDENTITY.sourceRepositoryRef,
+  "1.3.6.1.4.1.57264.1.15": RELEASE_IDENTITY.sourceRepositoryId
+};
+var VerificationError = class extends Error {
+  constructor(code6, packageId, detail) {
+    super(`${packageId}: ${detail}`);
+    this.code = code6;
+    this.packageId = packageId;
+    this.name = "VerificationError";
+  }
+};
+var ProvenanceUnavailableError = class extends Error {
+  constructor(cause) {
+    super(`sigstore trust root unavailable: ${cause instanceof Error ? cause.message : String(cause)}`);
+    this.name = "ProvenanceUnavailableError";
+  }
+};
+function derUtf8(value4) {
+  const bytes = Buffer.from(value4);
+  if (bytes[0] !== 12 || bytes.length < 2) return null;
+  let length6 = bytes[1];
+  let offset = 2;
+  if (length6 & 128) {
+    const count = length6 & 127;
+    if (count === 0 || count > 2 || bytes.length < 2 + count) return null;
+    length6 = 0;
+    for (let index = 0; index < count; index += 1) length6 = length6 * 256 + bytes[2 + index];
+    offset = 2 + count;
+  }
+  return bytes.length === offset + length6 ? bytes.subarray(offset).toString("utf8") : null;
+}
+function releaseIdentityMismatch(identity2) {
+  if (identity2.subjectAlternativeName !== RELEASE_IDENTITY.certificateIdentityURI) {
+    return `signed by ${JSON.stringify(identity2.subjectAlternativeName)}, not the Release workflow`;
+  }
+  if (identity2.extensions?.issuer !== RELEASE_IDENTITY.certificateIssuer) return `issuer ${JSON.stringify(identity2.extensions?.issuer)}`;
+  for (const [oid, expected] of Object.entries(FULCIO_SOURCE_OIDS)) {
+    const values = (identity2.oids ?? []).filter((entry) => entry.oid?.id.join(".") === oid).map((entry) => derUtf8(entry.value));
+    if (values.length !== 1 || values[0] !== expected) return `certificate extension ${oid} is ${JSON.stringify(values)}, not ${JSON.stringify(expected)}`;
+  }
+  return null;
+}
+function packageUrlPath(name) {
+  return name.startsWith("@") ? `@${encodeURIComponent(name.slice(1))}` : encodeURIComponent(name);
+}
+function purl(name, version) {
+  return `pkg:npm/${name.startsWith("@") ? `%40${name.slice(1)}` : name}@${version}`;
+}
+function sha512Hex(integrity) {
+  const sri = integrity.split(/\s+/).find((part) => part.startsWith("sha512-"));
+  return sri ? Buffer.from(sri.slice("sha512-".length), "base64").toString("hex") : null;
+}
+async function verifyRegistrySignature(registry, manifest, keys) {
+  const id = `${manifest.name}@${manifest.version}`;
+  const signatures = manifest.dist.signatures ?? [];
+  if (signatures.length === 0) throw new VerificationError("SIGNATURE_INVALID", id, "no registry signature");
+  const message = Buffer.from(`${id}:${manifest.dist.integrity}`);
+  for (const { keyid, sig } of signatures) {
+    const key = keys.find((candidate) => candidate.keyid === keyid);
+    if (!key) continue;
+    if (key.expires && Date.parse(key.expires) < await registry.publishedAt(manifest.name, manifest.version)) continue;
+    const publicKey = createPublicKey({ key: Buffer.from(key.key, "base64"), format: "der", type: "spki" });
+    if (verifySignature2("sha256", message, publicKey, Buffer.from(sig, "base64"))) return;
+  }
+  throw new VerificationError("SIGNATURE_INVALID", id, "registry signature does not verify");
+}
+async function verifyProvenance(registry, verifyBundle, manifest) {
+  const id = `${manifest.name}@${manifest.version}`;
+  const attestations = await registry.attestations(manifest.name, manifest.version);
+  const provenance = attestations?.find((attestation) => attestation.predicateType === SLSA_PROVENANCE);
+  if (!provenance) return false;
+  const statement = dsseStatement(provenance.bundle);
+  const subject = statement?.subject?.[0];
+  if (!subject || subject.name !== purl(manifest.name, manifest.version) || subject.digest?.sha512 !== sha512Hex(manifest.dist.integrity)) {
+    throw new VerificationError("PROVENANCE_INVALID", id, "provenance does not name this package's tarball");
+  }
+  let signer;
+  try {
+    signer = await verifyBundle(provenance.bundle);
+  } catch (error) {
+    if (error instanceof ProvenanceUnavailableError) throw new VerificationError("PROVENANCE_UNAVAILABLE", id, error.message);
+    const code6 = error.code;
+    throw new VerificationError("PROVENANCE_INVALID", id, `provenance does not verify: ${typeof code6 === "string" ? `${code6}: ` : ""}${error.message}`);
+  }
+  const mismatch = releaseIdentityMismatch(signer);
+  if (mismatch) throw new VerificationError("PROVENANCE_INVALID", id, `provenance ${mismatch}`);
+  return true;
+}
+function dsseStatement(bundle) {
+  if (!bundle || typeof bundle !== "object" || !("dsseEnvelope" in bundle)) return null;
+  const envelope = bundle.dsseEnvelope;
+  if (!envelope || typeof envelope !== "object" || !("payload" in envelope) || typeof envelope.payload !== "string") return null;
+  try {
+    const statement = JSON.parse(Buffer.from(envelope.payload, "base64").toString("utf8"));
+    return statement && typeof statement === "object" ? statement : null;
+  } catch {
+    return null;
+  }
+}
+async function verifyCliRelease(registry, verifyBundle, version) {
+  const manifest = await registry.manifest(CLI_PACKAGE, version);
+  if (manifest.name !== CLI_PACKAGE || manifest.version !== version) {
+    throw new VerificationError("SIGNATURE_INVALID", `${CLI_PACKAGE}@${version}`, "registry returned a different package");
+  }
+  await verifyRegistrySignature(registry, manifest, await registry.keys());
+  if (!await verifyProvenance(registry, verifyBundle, manifest)) {
+    throw new VerificationError("PROVENANCE_MISSING", `${CLI_PACKAGE}@${version}`, "no provenance attestation");
+  }
+  return manifest;
+}
+function lockedPackages(lockfile) {
+  if (!lockfile || typeof lockfile !== "object" || !("packages" in lockfile) || !lockfile.packages || typeof lockfile.packages !== "object") {
+    throw new VerificationError("SIGNATURE_INVALID", "package-lock.json", "unreadable lockfile");
+  }
+  const packages = [];
+  for (const [path, entry] of Object.entries(lockfile.packages)) {
+    if (path === "" || !entry || typeof entry !== "object") continue;
+    if ("inBundle" in entry && entry.inBundle === true) continue;
+    const name = "name" in entry && typeof entry.name === "string" ? entry.name : path.slice(path.lastIndexOf("node_modules/") + "node_modules/".length);
+    const version = "version" in entry ? entry.version : void 0;
+    const integrity = "integrity" in entry ? entry.integrity : void 0;
+    const resolved = "resolved" in entry ? entry.resolved : void 0;
+    const link5 = "link" in entry && entry.link === true;
+    if (link5 || typeof version !== "string" || typeof integrity !== "string" || typeof resolved !== "string" || !isRegistryTarball(resolved, name)) {
+      throw new VerificationError("DEPENDENCY_NOT_FROM_REGISTRY", path, `not a package from the npm registry (${JSON.stringify(resolved ?? null)})`);
+    }
+    packages.push({
+      name,
+      version,
+      integrity,
+      ..."dev" in entry && entry.dev === true ? { dev: true } : {},
+      ..."optional" in entry && entry.optional === true ? { optional: true } : {}
+    });
+  }
+  return packages;
+}
+function isRegistryTarball(resolved, name) {
+  let url;
+  try {
+    url = new URL(resolved);
+  } catch {
+    return false;
+  }
+  return url.origin === REGISTRY2 && url.search === "" && url.hash === "" && url.pathname.startsWith(`/${name}/-/`) && url.pathname.endsWith(".tgz") && !url.pathname.slice(name.length + 4).includes("/");
+}
+function sha512Base64(data) {
+  return createHash9("sha512").update(data).digest("base64");
+}
+async function releaseShrinkwrap(registry, cli) {
+  const id = `${cli.name}@${cli.version}`;
+  const tarball = await registry.tarball(cli.name, cli.version);
+  const expected = cli.dist.integrity.split(/\s+/).find((part) => part.startsWith("sha512-"))?.slice("sha512-".length);
+  if (!expected || sha512Base64(tarball) !== expected) throw new VerificationError("SIGNATURE_INVALID", id, "downloaded tarball is not the one the registry signed");
+  let file;
+  try {
+    file = readTarballFiles(tarball, ["npm-shrinkwrap.json"]).get("npm-shrinkwrap.json");
+  } catch {
+    throw new VerificationError("SIGNATURE_INVALID", id, "unreadable tarball");
+  }
+  if (!file) return null;
+  let shrinkwrap;
+  try {
+    shrinkwrap = JSON.parse(file.toString("utf8"));
+  } catch {
+    throw new VerificationError("SIGNATURE_INVALID", id, "unreadable npm-shrinkwrap.json");
+  }
+  return lockedPackages(shrinkwrap).filter((entry) => !entry.dev);
+}
+function checkResolvedAgainstShrinkwrap(resolved, shrinkwrap, cli) {
+  const key = (entry) => `${entry.name}@${entry.version} ${entry.integrity}`;
+  const want = /* @__PURE__ */ new Set([...shrinkwrap.map(key), key({ name: cli.name, version: cli.version, integrity: cli.dist.integrity })]);
+  const got = new Set(resolved.filter((entry) => !entry.dev).map(key));
+  const extra = [...got].filter((entry) => !want.has(entry));
+  const missing = [...want].filter((entry) => !got.has(entry));
+  if (extra.length > 0 || missing.length > 0) {
+    throw new VerificationError(
+      "SIGNATURE_INVALID",
+      `${cli.name}@${cli.version}`,
+      `resolved tree differs from the release's npm-shrinkwrap.json (extra: ${extra.slice(0, 3).join(", ") || "none"}; missing: ${missing.slice(0, 3).join(", ") || "none"})`
+    );
+  }
+}
+async function verifyStagedTree(registry, verifyBundle, packages, cli, concurrency = 8) {
+  const cliEntries = packages.filter((entry) => entry.name === CLI_PACKAGE);
+  if (cliEntries.length !== 1 || cliEntries[0].version !== cli.version || cliEntries[0].integrity !== cli.dist.integrity) {
+    throw new VerificationError("SIGNATURE_INVALID", `${CLI_PACKAGE}@${cli.version}`, "the installed CLI is not the verified release");
+  }
+  const keys = await registry.keys();
+  const unattested = [];
+  const queue = [...new Map(packages.map((entry) => [`${entry.name}@${entry.version}\0${entry.integrity}`, entry])).values()];
+  const worker = async () => {
+    for (let entry = queue.shift(); entry; entry = queue.shift()) {
+      const id = `${entry.name}@${entry.version}`;
+      const manifest = entry.name === CLI_PACKAGE ? cli : await registry.manifest(entry.name, entry.version);
+      if (manifest.name !== entry.name || manifest.version !== entry.version || manifest.dist.integrity !== entry.integrity) {
+        throw new VerificationError("SIGNATURE_INVALID", id, "installed tarball is not the one the registry signed");
+      }
+      if (entry.name === CLI_PACKAGE) continue;
+      await verifyRegistrySignature(registry, manifest, keys);
+      if (entry.name.startsWith("@tinycloud/") && !await verifyProvenance(registry, verifyBundle, manifest) && !unattested.includes(id)) unattested.push(id);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(concurrency, queue.length) }, worker));
+  return unattested.sort();
+}
+async function getJson(url, timeoutMs) {
+  const response = await fetch(url, { signal: AbortSignal.timeout(timeoutMs), headers: { accept: "application/json" } });
+  return { status: response.status, body: response.status === 200 ? await response.json() : null };
+}
+function npmRegistry(timeoutMs = 3e4) {
+  let keys;
+  const packuments = /* @__PURE__ */ new Map();
+  const expect = async (url) => {
+    const { status, body } = await getJson(url, timeoutMs);
+    if (status !== 200) throw new Error(`${url} returned ${status}`);
+    return body;
+  };
+  return {
+    async manifest(name, version) {
+      return await expect(`${REGISTRY2}/${packageUrlPath(name)}/${version}`);
+    },
+    async attestations(name, version) {
+      const { status, body } = await getJson(`${REGISTRY2}/-/npm/v1/attestations/${packageUrlPath(name)}@${version}`, timeoutMs);
+      if (status === 404) return null;
+      if (status !== 200 || !body || typeof body !== "object" || !("attestations" in body) || !Array.isArray(body.attestations)) {
+        throw new Error(`attestations for ${name}@${version} returned ${status}`);
+      }
+      return body.attestations;
+    },
+    keys() {
+      keys ??= expect(`${REGISTRY2}/-/npm/v1/keys`).then((body) => {
+        if (!body || typeof body !== "object" || !("keys" in body) || !Array.isArray(body.keys)) throw new Error("registry keys unreadable");
+        return body.keys;
+      });
+      return keys;
+    },
+    async publishedAt(name, version) {
+      let packument = packuments.get(name);
+      if (!packument) packuments.set(name, packument = expect(`${REGISTRY2}/${packageUrlPath(name)}`));
+      const body = await packument;
+      const time = body && typeof body === "object" && "time" in body && body.time && typeof body.time === "object" && version in body.time ? Date.parse(String(body.time[version])) : NaN;
+      if (!Number.isFinite(time)) throw new Error(`no publish time for ${name}@${version}`);
+      return time;
+    },
+    async tarball(name, version) {
+      const url = `${REGISTRY2}/${name}/-/${name.split("/").pop()}-${version}.tgz`;
+      const response = await fetch(url, { signal: AbortSignal.timeout(Math.max(timeoutMs, 12e4)) });
+      if (response.status !== 200) throw new Error(`${url} returned ${response.status}`);
+      return new Uint8Array(await response.arrayBuffer());
+    }
+  };
+}
+function sigstoreVerifier(tufCachePath) {
+  let verifier;
+  return async (bundle) => {
+    const pending = verifier ??= import("sigstore").then(({ createVerifier }) => createVerifier({ tufCachePath })).catch((error) => {
+      verifier = void 0;
+      throw new ProvenanceUnavailableError(error);
+    });
+    const { identity: identity2 } = (await pending).verify(bundle);
+    if (!identity2) throw new Error("the bundle has no certificate identity");
+    return identity2;
+  };
+}
+
+// src/lib/self-update.ts
+function baseInstall() {
+  const context2 = launchContext();
+  const packageDir = context2?.basePackageDir ?? fileURLToPath(new URL("../", import.meta.url));
+  const version = context2?.baseVersion ?? readPackageVersion(packageDir) ?? "0.0.0";
+  return { version, packageDir, bin: join30(packageDir, "bin", "tinycloud"), root: context2?.root ?? versionsRoot() };
+}
+var HOUR_MS2 = 60 * 60 * 1e3;
+var DAY_MS6 = 24 * HOUR_MS2;
+var SOAK_MS = 6 * HOUR_MS2;
+var SPAWN_CLAIM_MS = 15 * 60 * 1e3;
+var MIN_TARGET_VERSION = "1.10.0";
+var MIN_BUN_VERSION = "1.4.0";
+function runtimeRefusal(deps) {
+  if (deps.bunVersion === void 0 || (compareVersionStrings(deps.bunVersion, MIN_BUN_VERSION) ?? -1) >= 0) return null;
+  return { status: "refused", reason: "UNSUPPORTED_RUNTIME", from: current(deps), detail: `Bun ${deps.bunVersion}` };
+}
+var UpdateStop = class extends Error {
+  constructor(result) {
+    super(result.status);
+    this.result = result;
+  }
+};
+function channelOf(version) {
+  return /^[^-+]+-([0-9A-Za-z-]+)/.exec(version)?.[1] ?? "latest";
+}
+function readJson3(file) {
+  try {
+    return JSON.parse(readFileSync7(file, "utf8"));
+  } catch {
+    return void 0;
+  }
+}
+function readState2(root) {
+  const value4 = readJson3(join30(root, "auto-update.json"));
+  if (!value4 || typeof value4 !== "object") return {};
+  const state2 = {};
+  if ("pending" in value4 && isVersion(value4.pending)) state2.pending = value4.pending;
+  if ("soak" in value4 && value4.soak && typeof value4.soak === "object") {
+    const soak = value4.soak;
+    if ("channel" in soak && typeof soak.channel === "string" && "version" in soak && isVersion(soak.version) && "firstSeen" in soak && typeof soak.firstSeen === "number" && Number.isFinite(soak.firstSeen)) {
+      state2.soak = { channel: soak.channel, version: soak.version, firstSeen: soak.firstSeen };
+    }
+  }
+  return state2;
+}
+function writeState(root, state2) {
+  writeFileAtomic2(join30(root, "auto-update.json"), `${JSON.stringify(state2)}
+`);
+}
+function courierRunning(deps, version) {
+  return liveLeases(deps.root, deps.alive ?? processAlive).some((lease) => lease.courier && lease.version === version);
+}
+function current(deps) {
+  return activeVersion(deps.root, deps.base.packageDir, deps.base.version).version;
+}
+function livePointer(deps) {
+  const pointer = readPointer(deps.root);
+  return pointer && pointer.base === deps.base.version && current(deps) === pointer.version ? pointer : null;
+}
+async function prepareVersion(deps, version, from6) {
+  if (version === deps.base.version || isVerified(deps.root, version)) return [];
+  const refused = (error) => new UpdateStop(error instanceof VerificationError ? { status: "refused", reason: error.code, from: from6, to: version, detail: error.message } : { status: "refused", reason: /\b404\b/.test(String(error.message)) ? "VERSION_NOT_FOUND" : "REGISTRY_UNAVAILABLE", from: from6, to: version });
+  let manifest;
+  let shrinkwrap;
+  try {
+    manifest = await verifyCliRelease(deps.registry, deps.verifyBundle, version);
+    shrinkwrap = await releaseShrinkwrap(deps.registry, manifest);
+  } catch (error) {
+    throw refused(error);
+  }
+  if (!shrinkwrap) throw new UpdateStop({ status: "refused", reason: "TARGET_TOO_OLD", from: from6, to: version, detail: "the release has no npm-shrinkwrap.json" });
+  mkdirSync4(deps.root, { recursive: true, mode: 448 });
+  const staging = join30(deps.root, `.staging-${version}-${process.pid}-${Math.random().toString(36).slice(2)}`);
+  const failed = (reason, detail) => new UpdateStop({ status: "failed-rolled-back", reason, from: from6, to: version, current: from6, ...detail ? { detail } : {} });
+  const npmStep = async (step) => {
+    try {
+      await step();
+    } catch (error) {
+      if (error.code === "ENOENT") throw new UpdateStop({ status: "refused", reason: "NPM_NOT_FOUND", from: from6, to: version });
+      throw failed("INSTALL_FAILED", error.message);
+    }
+  };
+  try {
+    mkdirSync4(staging, { mode: 448 });
+    await npmStep(() => deps.resolve(staging, version));
+    const lockfile = readJson3(join30(staging, "package-lock.json"));
+    let unattested;
+    try {
+      const locked = lockedPackages(lockfile);
+      checkResolvedAgainstShrinkwrap(locked, shrinkwrap, manifest);
+      unattested = await verifyStagedTree(deps.registry, deps.verifyBundle, locked, manifest);
+    } catch (error) {
+      throw refused(error);
+    }
+    for (const id of unattested) deps.log(`${id} has no provenance attestation; its registry signature verified`);
+    await npmStep(() => deps.install(staging));
+    const mismatch = installedTreeMismatch(staging, lockfile);
+    if (mismatch) throw failed("INSTALL_FAILED", mismatch);
+    const packageDir = join30(staging, "node_modules", "@tinycloud", "cli");
+    if (!existsSync3(join30(packageDir, "dist", "launcher.js"))) throw new UpdateStop({ status: "refused", reason: "TARGET_TOO_OLD", from: from6, to: version });
+    const smoke = await deps.run(join30(packageDir, "bin", "tinycloud"), ["--version"]);
+    if (smoke.code !== 0 || smoke.stdout.trim() !== version) throw failed("SMOKE_FAILED", `staged --version printed ${JSON.stringify(smoke.stdout.trim())}`);
+    const courier = await deps.run(join30(packageDir, "bin", "tinycloud"), ["courier", "--version"]);
+    if (courier.code !== 0) throw failed("SMOKE_FAILED", `staged courier --version exited ${courier.code}`);
+    markVerified(staging, version, manifest.dist.integrity);
+    const final = join30(deps.root, version);
+    if (!holdsLock(deps)) throw new UpdateStop({ status: "refused", reason: "LOCKED", from: from6, to: version });
+    if (existsSync3(final)) discard(deps.root, final);
+    renameSync3(staging, final);
+    return unattested;
+  } finally {
+    rmSync3(staging, { recursive: true, force: true });
+  }
+}
+function installedTreeMismatch(directory, lockfile) {
+  const locked = lockfile?.packages ?? {};
+  const hidden = readJson3(join30(directory, "node_modules", ".package-lock.json"));
+  const installed = hidden && typeof hidden === "object" && "packages" in hidden && hidden.packages && typeof hidden.packages === "object" ? Object.keys(hidden.packages) : null;
+  if (!installed) return "npm left no record of the install";
+  const extra = installed.filter((path) => !(path in locked) || locked[path]?.dev === true);
+  if (extra.length > 0) return `installed ${extra[0]}, which the verified lockfile doesn't hold`;
+  for (const [path, entry] of Object.entries(locked)) {
+    if (path === "" || entry.dev === true || entry.inBundle === true) continue;
+    const name = typeof entry.name === "string" ? entry.name : path.slice(path.lastIndexOf("node_modules/") + "node_modules/".length);
+    const manifest = readJson3(join30(directory, path, "package.json"));
+    if (manifest === void 0 && entry.optional === true && !installed.includes(path)) continue;
+    const got = manifest && typeof manifest === "object" && "name" in manifest && "version" in manifest ? `${String(manifest.name)}@${String(manifest.version)}` : "nothing";
+    if (got !== `${name}@${String(entry.version)}`) return `${path} holds ${got}, not the verified ${name}@${String(entry.version)}`;
+  }
+  return null;
+}
+function discard(root, directory) {
+  const trash = join30(root, `.trash-${process.pid}-${Math.random().toString(36).slice(2)}`);
+  renameSync3(directory, trash);
+  rmSync3(trash, { recursive: true, force: true });
+}
+async function switchTo(deps, version, flags) {
+  const from6 = current(deps);
+  const before = readPointer(deps.root);
+  const floor = flags.auto ? livePointer(deps)?.floor : version;
+  const failure = (detail) => restore2(deps, before, from6, version, detail);
+  if (!holdsLock(deps)) return { status: "refused", reason: "LOCKED", from: from6, to: version };
+  try {
+    writePointer(deps.root, { version, base: deps.base.version, ...flags, ...from6 !== version ? { previous: from6 } : before?.previous ? { previous: before.previous } : {}, ...floor ? { floor } : {} });
+  } catch (error) {
+    return failure(error.message);
+  }
+  const check = await deps.run(deps.base.bin, ["--version"]);
+  if (check.code !== 0 || check.stdout.trim() !== version) return failure(`tinycloud --version printed ${JSON.stringify(check.stdout.trim())}`);
+  return { status: "ok", from: from6, to: version, changed: from6 !== version };
+}
+async function restore2(deps, before, from6, to, detail) {
+  try {
+    if (!holdsLock(deps)) return { status: "failed-not-rolled-back", reason: "SWITCH_FAILED", from: from6, to, detail };
+    if (before) writePointer(deps.root, before);
+    else removePointer(deps.root);
+    const check = await deps.run(deps.base.bin, ["--version"]);
+    if (check.code === 0 && check.stdout.trim() === from6) return { status: "failed-rolled-back", reason: "SWITCH_FAILED", from: from6, to, current: from6, detail };
+  } catch {
+  }
+  return { status: "failed-not-rolled-back", reason: "SWITCH_FAILED", from: from6, to, detail };
+}
+function prune(deps) {
+  if (!holdsLock(deps)) return;
+  const pointer = readPointer(deps.root);
+  const keep = /* @__PURE__ */ new Set([deps.base.version, current(deps), pointer?.version, pointer?.previous, readState2(deps.root).pending]);
+  for (const lease of liveLeases(deps.root, deps.alive ?? processAlive)) keep.add(lease.version);
+  for (const version of installedVersions(deps.root)) {
+    if (!keep.has(version)) discard(deps.root, join30(deps.root, version));
+  }
+  let entries = [];
+  try {
+    entries = readdirSync5(deps.root);
+  } catch {
+  }
+  for (const leftover of entries) {
+    if (leftover.startsWith(".staging-") || leftover.startsWith(".trash-")) rmSync3(join30(deps.root, leftover), { recursive: true, force: true });
+  }
+}
+async function withLock(deps, locked, busy) {
+  mkdirSync4(deps.root, { recursive: true, mode: 448 });
+  const lock = acquireInstallLock(deps.root, deps.alive ? { alive: deps.alive } : {});
+  if (!lock) return busy();
+  try {
+    return await locked({ ...deps, lock });
+  } finally {
+    lock.release();
+  }
+}
+function holdsLock(deps) {
+  return deps.lock === void 0 || deps.lock.valid();
+}
+async function recoverFromUnexpected(deps, before, from6, to, error) {
+  if (to === void 0 || JSON.stringify(readPointer(deps.root)) === JSON.stringify(before)) throw error;
+  return restore2(deps, before, from6, to, error instanceof Error ? error.message : String(error));
+}
+async function runManualUpgrade(deps, options) {
+  const from6 = current(deps);
+  const unsupported = runtimeRefusal(deps);
+  if (unsupported) return unsupported;
+  if (options.installKind !== "npm-global" && options.installKind !== "bun-global") return { status: "refused", reason: "UNSUPPORTED_INSTALL", from: from6 };
+  if (options.to !== void 0 && !isVersion(options.to)) return { status: "refused", reason: "INVALID_VERSION", from: from6, to: options.to };
+  if (options.to !== void 0 && (compareVersionStrings(options.to, MIN_TARGET_VERSION) ?? -1) < 0) {
+    return { status: "refused", reason: "TARGET_TOO_OLD", from: from6, to: options.to };
+  }
+  return withLock(deps, async (locked) => {
+    const before = readPointer(locked.root);
+    const attempt = {};
+    try {
+      return await manualLocked(locked, options, from6, attempt);
+    } catch (error) {
+      if (error instanceof UpdateStop) return error.result;
+      return recoverFromUnexpected(locked, before, from6, attempt.to, error);
+    }
+  }, () => ({ status: "refused", reason: "LOCKED", from: from6 }));
+}
+async function manualLocked(deps, options, from6, attempt) {
+  const pointer = livePointer(deps);
+  let target = options.to;
+  if (target === void 0) {
+    let tags;
+    try {
+      tags = await deps.registry.distTags();
+    } catch {
+      return { status: "refused", reason: "REGISTRY_UNAVAILABLE", from: from6 };
+    }
+    const channel = channelOf(from6);
+    const tag = tags[channel];
+    if (!isVersion(tag) || selectUpdateVersion(from6, { [channel]: tag }) !== tag) {
+      if (pointer?.pinned && holdsLock(deps)) writePointer(deps.root, { ...pointer, pinned: false });
+      return { status: "ok", from: from6, to: from6, changed: false };
+    }
+    target = tag;
+  }
+  if (target === from6) {
+    if (options.to !== void 0 && holdsLock(deps)) writePointer(deps.root, { version: from6, base: deps.base.version, auto: false, pinned: true, ...pointer?.previous ? { previous: pointer.previous } : {}, floor: from6 });
+    return { status: "ok", from: from6, to: from6, changed: false };
+  }
+  if (options.confirm && !await options.confirm(from6, target)) return { status: "refused", reason: "DECLINED", from: from6, to: target };
+  attempt.to = target;
+  const unattested = await prepareVersion(deps, target, from6);
+  if (courierRunning(deps, from6)) return { status: "refused", reason: "COURIER_RUNNING", from: from6, to: target };
+  const result = await switchTo(deps, target, { auto: false, pinned: options.to !== void 0 });
+  if (result.status === "ok") {
+    writeState(deps.root, {});
+    rmSync3(join30(deps.root, LAST_SWITCH_FILE), { force: true });
+    prune(deps);
+    return unattested.length > 0 ? { ...result, unattested } : result;
+  }
+  return result;
+}
+var LAST_SWITCH_FILE = "last-switch.json";
+function appendUpdateLog(root, line, now = /* @__PURE__ */ new Date()) {
+  const file = join30(root, "auto-update.log");
+  try {
+    mkdirSync4(root, { recursive: true, mode: 448 });
+    if (existsSync3(file) && statSync5(file).size > 256 * 1024) truncateSync(file, 0);
+    appendFileSync2(file, `${now.toISOString()} ${line}
+`, { mode: 384 });
+  } catch {
+  }
+}
+function runProcess(command, args, options) {
+  return new Promise((done, reject) => {
+    const child = spawn5(command, args, { env: options.env, cwd: options.cwd, shell: false, stdio: ["ignore", "pipe", "pipe"], timeout: options.timeoutMs });
+    let stdout = "";
+    let stderr2 = "";
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk;
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr2 = (stderr2 + chunk).slice(-4096);
+    });
+    child.on("error", reject);
+    child.on("close", (code6) => done({ code: code6, stdout, stderr: stderr2 }));
+  });
+}
+function runNpm(args, cwd, timeoutMs, env = process.env) {
+  const npm = resolveNpm(env);
+  if (!npm) return Promise.reject(Object.assign(new Error("npm not found"), { code: "ENOENT" }));
+  return runProcess(npm.command, [...npm.args, ...args], { env, cwd, timeoutMs });
+}
+function systemGlobalRoots(env = process.env) {
+  return {
+    async npm() {
+      try {
+        const result = await runNpm(["root", "-g"], homedir4(), 3e4, env);
+        return result.code === 0 && result.stdout.trim() ? result.stdout.trim() : null;
+      } catch {
+        return null;
+      }
+    },
+    bun: () => bunGlobalModules(env)
+  };
+}
+function defaultUpdater(install, log, fetchedTags) {
+  const { root, ...base6 } = install;
+  const deps = productionDeps(root, base6, npmRegistry(), sigstoreVerifier(join30(root, ".tuf")), log, fetchedTags);
+  return process.versions.bun !== void 0 ? { ...deps, bunVersion: process.versions.bun } : deps;
+}
+function stringEntries(value4) {
+  if (!value4 || typeof value4 !== "object") return void 0;
+  return Object.fromEntries(Object.entries(value4).filter((entry) => typeof entry[1] === "string"));
+}
+function productionDeps(root, base6, registry, verifyBundle, log, fetchedTags) {
+  return {
+    root,
+    base: base6,
+    now: Date.now,
+    registry: {
+      manifest: (name, version) => registry.manifest(name, version),
+      attestations: (name, version) => registry.attestations(name, version),
+      keys: () => registry.keys(),
+      publishedAt: (name, version) => registry.publishedAt(name, version),
+      tarball: (name, version) => registry.tarball(name, version),
+      async distTags() {
+        if (fetchedTags) return fetchedTags;
+        const response = await fetch(`${REGISTRY2}/-/package/${packageUrlPath(CLI_PACKAGE)}/dist-tags`, { signal: AbortSignal.timeout(3e4) });
+        if (!response.ok) throw new Error(`dist-tags returned ${response.status}`);
+        const tags = stringEntries(await response.json());
+        if (!tags) throw new Error("dist-tags unreadable");
+        return tags;
+      }
+    },
+    verifyBundle,
+    async resolve(directory, version) {
+      writeFileAtomic2(join30(directory, "package.json"), `${JSON.stringify({ private: true, dependencies: { [CLI_PACKAGE]: version } })}
+`);
+      const result = await runNpm([
+        "install",
+        "--package-lock-only",
+        "--ignore-scripts",
+        "--no-audit",
+        "--no-fund",
+        "--registry",
+        `${REGISTRY2}/`
+      ], directory, 5 * 60 * 1e3);
+      if (result.code !== 0) throw new Error(`npm install --package-lock-only exited ${result.code}: ${result.stderr.trim().split("\n").slice(-3).join(" ")}`);
+    },
+    async install(directory) {
+      const result = await runNpm(["ci", "--ignore-scripts", "--no-audit", "--no-fund", "--registry", `${REGISTRY2}/`], directory, 15 * 60 * 1e3);
+      if (result.code !== 0) throw new Error(`npm ci exited ${result.code}: ${result.stderr.trim().split("\n").slice(-3).join(" ")}`);
+    },
+    async run(bin, args) {
+      const { code: code6, stdout } = await runProcess(process.execPath, [bin, ...args], { env: { ...process.env, TC_NO_AUTO_UPDATE: "1" }, cwd: dirname15(bin), timeoutMs: 12e4 });
+      return { code: code6, stdout };
+    },
+    log
+  };
+}
+
+// src/commands/upgrade.ts
+init_formatter();
+init_theme();
+var EXIT_FOR_STATUS = {
+  ok: ExitCode.SUCCESS,
+  refused: ExitCode.UPGRADE_REFUSED,
+  "failed-rolled-back": ExitCode.UPGRADE_FAILED_ROLLED_BACK,
+  "failed-not-rolled-back": ExitCode.UPGRADE_FAILED_NOT_ROLLED_BACK
+};
+function manualCommand(kind, version) {
+  const spec = `${CLI_PACKAGE}@${version}`;
+  if (kind === "npx") return `npx ${spec}`;
+  if (kind === "project") return `npm install ${spec}`;
+  return `npm install -g ${spec}`;
+}
+var FAILURE_PHRASE = {
+  INSTALL_FAILED: "the install failed",
+  SMOKE_FAILED: "the new version didn't start",
+  SWITCH_FAILED: "the switch failed"
+};
+function resultLines(result, extra) {
+  switch (result.status) {
+    case "ok":
+      if (!result.changed) return [`TinyCloud CLI ${result.from} is the newest version on the ${channelOf(result.from)} channel.`];
+      return [
+        `Updated TinyCloud CLI from ${result.from} to ${result.to}. Your next ${CLI_NAME39} command uses ${result.to}.`,
+        "Next steps:",
+        `  Run one normal command for each profile, for example: ${CLI_NAME39} --profile <name> auth caps`,
+        `  Restart any running Courier (${CLI_NAME39} courier watch, ${CLI_NAME39} courier broker): it keeps the old version until it restarts.`
+      ];
+    case "refused":
+      return [refusalLine(result, extra.manualCommand)];
+    case "failed-rolled-back":
+      return [`The update to ${result.to} failed (${FAILURE_PHRASE[result.reason]}). You're on ${result.current}.`];
+    case "failed-not-rolled-back":
+      return [
+        `The update to ${result.to} failed (${FAILURE_PHRASE[result.reason]}) and the previous version couldn't be restored.`,
+        `To go back to the version npm installed, run: ${extra.recoveryCommand}`
+      ];
+  }
+}
+function refusalLine(result, manual) {
+  const to = result.to ?? "the new version";
+  switch (result.reason) {
+    case "UNSUPPORTED_INSTALL":
+      return `This TinyCloud CLI wasn't installed globally with npm or bun, so ${CLI_NAME39} upgrade can't update it. Update it with: ${manual}`;
+    case "NEEDS_YES":
+      return `${CLI_NAME39} upgrade needs --yes when it doesn't run in a terminal or when CI is set to anything but false or 0.`;
+    case "DECLINED":
+      return "Nothing was changed.";
+    case "LOCKED":
+      return "Another TinyCloud CLI update is running. Retry in a few minutes.";
+    case "NPM_NOT_FOUND":
+      return `${CLI_NAME39} upgrade needs npm to download and verify ${to}, and npm isn't on your PATH.`;
+    case "INVALID_VERSION":
+      return `${to} isn't a version number (for example ${MIN_TARGET_VERSION}).`;
+    case "VERSION_NOT_FOUND":
+      return `TinyCloud CLI ${to} isn't on npm.`;
+    case "TARGET_TOO_OLD":
+      return `${CLI_NAME39} upgrade can't install versions before ${MIN_TARGET_VERSION}. To install ${to} anyway, run: npm install -g ${CLI_PACKAGE}@${to}`;
+    case "REGISTRY_UNAVAILABLE":
+      return "Couldn't reach the npm registry. Retry in a few minutes.";
+    case "COURIER_RUNNING":
+      return `Courier is running, so ${to} was downloaded and verified but not switched on. Stop Courier, rerun ${CLI_NAME39} upgrade, then start Courier.`;
+    // Monica (TC-4276, 21:06Z), verbatim; detail is "Bun <version>".
+    case "UNSUPPORTED_RUNTIME":
+      return `TinyCloud CLI can't verify updates under ${result.detail}; it needs Node or Bun 1.4 or newer. Nothing was installed. Run ${CLI_NAME39} with Node (without \`bun --bun\`).`;
+    case "PROVENANCE_MISSING":
+      return `TinyCloud CLI ${to} has no provenance record, so it can't be verified and wasn't installed.`;
+    case "PROVENANCE_INVALID":
+      return `TinyCloud CLI ${to} failed the provenance check, so it wasn't installed.`;
+    case "SIGNATURE_INVALID":
+      return `A package in TinyCloud CLI ${to} failed npm's signature check, so it wasn't installed.`;
+    case "PROVENANCE_UNAVAILABLE":
+      return `Couldn't reach the provenance service to verify TinyCloud CLI ${to}, so nothing was installed. Check your network and retry in a few minutes.`;
+    case "DEPENDENCY_NOT_FROM_REGISTRY":
+      return `TinyCloud CLI ${to} depends on a package that isn't from the npm registry, so it can't be verified and nothing was installed.`;
+  }
+}
+async function confirmInTerminal(from6, to) {
+  const prompt = createInterface8({ input: process.stdin, output: process.stderr });
+  try {
+    return /^y(es)?$/i.test((await prompt.question(`Update TinyCloud CLI from ${from6} to ${to}? [y/N] `)).trim());
+  } finally {
+    prompt.close();
+  }
+}
+function confirmation(yes, stdinIsTTY, env) {
+  if (yes) return "skip";
+  return stdinIsTTY && isAutoUpdateEnabled({ CI: env.CI }) ? "ask" : "refuse";
 }
 function registerUpgradeCommand(program) {
-  program.command("upgrade").description("Upgrade the TinyCloud CLI to the latest version").action(async () => {
-    try {
-      const current = getCurrentVersion();
-      process.stderr.write(theme.muted("Checking for updates...") + "\n");
-      const latest = await getLatestVersion();
-      if (current === latest) {
-        process.stdout.write(theme.success(`Already on latest version (${current})`) + "\n");
-        return;
-      }
-      process.stdout.write(`Current: ${theme.warn(current)} \u2192 Latest: ${theme.success(latest)}
-`);
-      const pm = detectPackageManager();
-      const cmd = pm === "bun" ? `bun install -g ${PACKAGE_NAME}@latest` : `npm install -g ${PACKAGE_NAME}@latest`;
-      process.stderr.write(theme.muted(`Upgrading via ${pm}...`) + "\n\n");
-      try {
-        execSync(cmd, { stdio: "inherit" });
-        process.stdout.write("\n" + theme.success(`Upgraded to ${latest}`) + "\n");
-      } catch {
-        process.stderr.write("\n" + theme.warn("Automatic upgrade failed.") + "\n");
-        process.stderr.write(theme.muted("Try running manually:") + "\n");
-        process.stderr.write(`  ${theme.command(`bun install -g ${PACKAGE_NAME}@latest`)}
-`);
-        process.stderr.write(theme.muted("  or") + "\n");
-        process.stderr.write(`  ${theme.command(`npm install -g ${PACKAGE_NAME}@latest`)}
-`);
-      }
-    } catch (error) {
-      return handleError(error);
+  program.command("upgrade").description("Update the TinyCloud CLI to a newer verified version").option("--to <version>", "Switch to this exact version; automatic updates pause until a plain upgrade").option("-y, --yes", "Don't ask before switching (needed outside a terminal)").action(async (options) => {
+    const json = shouldOutputJson();
+    const base6 = baseInstall();
+    const guessedKind = detectInstallKind(base6.packageDir, process.cwd(), homedir5());
+    const verifiedKind = await verifyInstallKind(base6.packageDir, systemGlobalRoots());
+    if (verifiedKind) recordInstallKind(base6.root, base6.packageDir, base6.version, verifiedKind);
+    const deps = defaultUpdater(base6, (line) => appendUpdateLog(base6.root, line));
+    const mode = confirmation(options.yes === true, Boolean(process.stdin.isTTY), process.env);
+    let result;
+    const unsupported = runtimeRefusal(deps);
+    if (unsupported) {
+      result = unsupported;
+    } else if (mode === "refuse" && verifiedKind) {
+      result = { status: "refused", reason: "NEEDS_YES", from: deps.base.version };
+    } else {
+      if (!json) process.stderr.write(theme.muted("Checking for a verified update\u2026") + "\n");
+      result = await runManualUpgrade(deps, {
+        installKind: verifiedKind ?? "unknown",
+        ...options.to !== void 0 ? { to: options.to } : {},
+        ...mode === "ask" ? { confirm: confirmInTerminal } : {}
+      });
     }
+    const extra = {};
+    if (result.status === "refused" && result.reason === "UNSUPPORTED_INSTALL") {
+      const channel = channelOf(result.from);
+      const target = options.to ?? (await deps.registry.distTags().catch(() => ({})))[channel] ?? channel;
+      extra.manualCommand = manualCommand(guessedKind, target);
+    }
+    if (result.status === "failed-not-rolled-back") extra.recoveryCommand = `rm "${join31(base6.root, "current.json")}"`;
+    if (json) {
+      outputJson({ ...result, ...extra });
+    } else {
+      const lines = resultLines(result, extra);
+      const write2 = result.status === "ok" ? (line) => process.stdout.write(`${line}
+`) : (line) => process.stderr.write(`${line}
+`);
+      for (const line of lines) write2(line);
+    }
+    process.exitCode = EXIT_FOR_STATUS[result.status];
   });
 }
 
 // src/commands/vault.ts
-import { readFile as readFile20 } from "fs/promises";
+import { readFile as readFile21 } from "fs/promises";
 init_profiles();
 init_formatter();
 init_errors();
@@ -57197,7 +58331,7 @@ function registerVaultCommand(program) {
         throw new CLIError("USAGE_ERROR", "Provide only one of: value argument, --file, or --stdin", ExitCode.USAGE_ERROR);
       }
       if (options.file) {
-        putValue = new Uint8Array(await readFile20(options.file));
+        putValue = new Uint8Array(await readFile21(options.file));
       } else if (options.stdin) {
         putValue = new Uint8Array(await readStdin5());
       } else {
@@ -57312,7 +58446,7 @@ function registerVaultCommand(program) {
 }
 
 // src/commands/vars.ts
-import { readFile as readFile21 } from "fs/promises";
+import { readFile as readFile22 } from "fs/promises";
 init_profiles();
 init_formatter();
 init_errors();
@@ -57417,7 +58551,7 @@ function registerVarsCommand(program) {
         throw new CLIError("USAGE_ERROR", "Provide only one of: value argument, --file, or --stdin", ExitCode.USAGE_ERROR);
       }
       if (options.file) {
-        varValue = await readFile21(options.file, "utf-8");
+        varValue = await readFile22(options.file, "utf-8");
       } else if (options.stdin) {
         varValue = (await readStdin6()).toString("utf-8");
       } else {

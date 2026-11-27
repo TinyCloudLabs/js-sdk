@@ -5,9 +5,7 @@
     "@tinycloud/web-sdk"
   ],
   "baselines": {
-    "@tinycloud/web-sdk": "3.16.0"
-  },
-  "expect": {
     "@tinycloud/web-sdk": "3.17.0"
-  }
+  },
+  "expect": {}
 }
