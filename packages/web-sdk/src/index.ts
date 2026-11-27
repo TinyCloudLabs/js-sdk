@@ -3,6 +3,7 @@ export { sharePlacementCore as __sharePlacementCore } from "./share-placement-co
 // Main class and config
 export {
   TinyCloudWeb,
+  type AccountSetupPendingEvent,
   type Config,
   type RuntimePermissionSigner,
   type ShareReceiveResult,

@@ -61,6 +61,8 @@ export const STRINGS = {
 
   "toast.done": "Done",
   "toast.signed_in": "Successfully signed in",
+  "toast.account_setup_pending": "Finish setting up your account",
+  "toast.account_setup_action": "Set up",
   "toast.attention": "Something needs your attention. Details are in the console.",
   "toast.error_generic": "Something went wrong.",
   "toast.unexpected_error": "An unexpected error occurred. Try refreshing the page.",

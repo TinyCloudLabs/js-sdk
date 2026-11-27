@@ -5,12 +5,20 @@
 
 export type ToastKind = "info" | "success" | "warning" | "error";
 
+/** A button in the toast. Clicking it dismisses the toast, then calls `run` in the click's tick (a popup it opens is not blocked). */
+export interface ToastAction {
+  readonly labelCode: string;
+  readonly run: () => void;
+}
+
 export interface ToastRequest {
   readonly kind: ToastKind;
   /** A launcher code, or a panel or section code when the panel raises the toast. Unknown codes render the neutral line. */
   readonly textCode: string;
   readonly href?: string;
   readonly hrefLabelCode?: string;
+  /** A toast with an action stays until it is clicked or closed; it never auto-dismisses. */
+  readonly action?: ToastAction;
 }
 
 /** Delivers a toast to the page's host. Returns false when nothing was shown. */
@@ -23,6 +31,7 @@ export interface ToastView {
   /** Present only when it is an absolute https URL. */
   readonly href?: string;
   readonly hrefLabelCode?: string;
+  readonly action?: ToastAction;
 }
 
 export interface ToastStoreOptions {
@@ -83,7 +92,7 @@ export function createToastStore(options: ToastStoreOptions = {}): ToastStore {
   }
 
   function arm(entry: Entry): void {
-    if (entry.timer !== undefined || holds > 0) return;
+    if (entry.timer !== undefined || holds > 0 || entry.view.action !== undefined) return;
     entry.startedAt = Date.now();
     const id = entry.view.id;
     entry.timer = setTimeout(() => {
@@ -111,7 +120,7 @@ export function createToastStore(options: ToastStoreOptions = {}): ToastStore {
     push(request, owner) {
       const href = safeHref(request.href);
       const linkLabel = href !== undefined ? request.hrefLabelCode : undefined;
-      const key = `${request.kind}|${request.textCode}|${href ?? ""}`;
+      const key = `${request.kind}|${request.textCode}|${href ?? ""}|${request.action?.labelCode ?? ""}`;
       for (const entry of entries.values()) {
         if (entry.key === key) return entry.view.id;
       }
@@ -124,6 +133,7 @@ export function createToastStore(options: ToastStoreOptions = {}): ToastStore {
         ...(href !== undefined && linkLabel !== undefined
           ? { href, hrefLabelCode: linkLabel }
           : {}),
+        ...(request.action !== undefined ? { action: request.action } : {}),
       };
       const entry: Entry = { key, owner, view, timer: undefined, remainingMs: durationMs, startedAt: 0 };
       entries.set(id, entry);
