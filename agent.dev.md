@@ -89,18 +89,9 @@ Use changesets for package-facing changes that need release notes or version bum
 bun changeset add
 ```
 
-Changesets are `minor` (features) or `patch` (fixes), never `major`, even when a change breaks
-compatibility; say what breaks in the changeset text. A major version is a human decision. A
-maintainer approves one with an empty commit on the PR, and agents never write that commit or start
-a release that would publish an unapproved major:
+Changesets describe compatibility: for stable packages, use `major` for incompatible public API changes with migration notes, `minor` for compatible features and `patch` for compatible fixes. Preparing a major changeset is permitted before release approval. Never label a breaking stable API change as minor to pass CI.
 
-```bash
-git commit --allow-empty -m "approve-major-release: @tinycloud/<package>"
-```
-
-The `Major release guard` check fails a PR that adds a `major` changeset or raises a major version
-without that sign-off. The Release workflow applies the same rule before versioning a release
-(`check-major-release-signoff.mjs release`, TC-615).
+The PR guard's `prepare-pr` mode allows major changesets while requiring the existing sign-off for actual major version bumps. Release, beta and stable modes still require maintainer sign-off before versioning or publishing. Agents do not write approval markers. The current legacy sign-off is a maintainer's empty `approve-major-release: <package>` commit; it is not cryptographic proof of authorship.
 
 Every changeset a PR adds or modifies needs a line that starts `Details: TC-<number>` (several
 tickets: `Details: TC-1, TC-2`); the `Changeset details` check fails the PR otherwise. It becomes
