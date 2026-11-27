@@ -1,5 +1,7 @@
 # Erasing one account's hosted MCP connector data
 
+> **As of 27 Nov, production has no shell; this runbook can't be run until an in-service erase path exists (TC-4420).**
+
 Runbook for an emailed request to erase what the hosted MCP server (`https://mcp.tinycloud.xyz`, Phala CVM `tinycloud-mcp`) stores for one account. It covers the connector's own state on the CVM volume only. Line references are to `packages/mcp` at master `cd055616`.
 
 **Deadline.** The privacy policy (§14) promises a reply within 30 days. This runbook sets no other deadline.
@@ -53,13 +55,21 @@ Disconnecting is not deleting:
 
 ## 1. Verify and map
 
-1. The privacy contact confirms the request came from the account holder.
+1. The privacy contact confirms the request came from the account holder, using one of these two methods and recording which in the ticket:
+   - **Email path: a one-time code.** The OpenKey operator confirms that the email on file for the account is the address the request came from. The privacy contact then sends a random one-time code to that address. The request is verified when the requester replies from that address with the code.
+   - **Address path (step 3 below): a signed message.** The privacy contact sends the exact text to sign, naming the ticket id and the date: `Erase my TinyCloud hosted MCP connector data. Ticket: <ticket id>. Date: <YYYY-MM-DD>. Address: <0x address>`. The requester signs it with that address (an EIP-191 personal message) and sends back the signature. The privacy contact checks it on their own machine with this one command:
+
+     ```bash
+     ERASE_ADDRESS='0x…' ERASE_MESSAGE='<the exact text>' ERASE_SIGNATURE='0x…' sh -c 'cd "$(mktemp -d)" && npm i -s --no-audit --no-fund viem@2 && node --input-type=module -e '"'"'import { verifyMessage } from "viem"; const { ERASE_ADDRESS: address, ERASE_MESSAGE: message, ERASE_SIGNATURE: signature } = process.env; console.log((await verifyMessage({ address, message, signature })) ? "VALID" : "INVALID")'"'"''
+     ```
+
+     Act only on `VALID`, and only if the ticket id and date in the text match this request. A smart-contract wallet prints `INVALID` here. Escalate that case; do not act on it.
 2. **Email known to OpenKey.** The OpenKey operator returns:
    - every OAuth subject (`sub`) OpenKey has issued for the account to any of the five MCP resources;
    - every owner DID on the account (the `https://tinycloud.xyz/owner_dids` claim, `oauth.ts:13`).
 
    The MCP server never sees the email (`http.ts:659-669`), so only OpenKey can make this mapping.
-3. **Email cannot be mapped** (no email on file, or the OpenKey account is already deleted). Ask the requester for the wallet address (`0x…`) the account signed in with. Addresses are public, so require proof of control before acting, for example a message signed by that address that names the request. From the address alone:
+3. **Email cannot be mapped** (no email on file, or the OpenKey account is already deleted). Ask the requester for the wallet address (`0x…`) the account signed in with, and verify it with the signed message in item 1. Addresses are public, so never act on an address without that signature. From the address alone:
    - **Native tenants:** found by scanning each native grant's owner DID (step 3, `find`). This covers every chain.
    - **OAuth tenants:** found only where a file still names the address:
      - `profile.json` after a completed approval;
@@ -86,7 +96,13 @@ phala cvms get tinycloud-mcp --json | jq '.os.is_dev'
 
 If this prints `false`, there is no SSH. **Stop** and escalate: this runbook cannot be carried out on that image. Do not change the OS image to get in.
 
-**Open a shell and stage the helper.** Open a shell with `phala ssh tinycloud-mcp`. Every command below runs inside the `mcp` container as its own user, so the state secret stays in the container and is never printed. Write the helper to a private directory on the CVM:
+**Open a shell and stage the helper.** Open a shell with `phala ssh tinycloud-mcp`. Turn shell history off before anything else, so no subject, address or id is written to the CVM's history (`command` keeps shells without a `history` option running):
+
+```bash
+unset HISTFILE; command set +o history 2>/dev/null
+```
+
+Every command below runs inside the `mcp` container as its own user, so the state secret stays in the container and is never printed. Inputs reach the container as variable names (`-e NAME`), so their values never appear in a process list. Write the helper to a private directory on the CVM:
 
 ```bash
 W=$(mktemp -d)
@@ -192,6 +208,14 @@ erase() { docker exec -i -e ERASE_MODE="$1" -e ERASE_SUBJECTS -e ERASE_DIDS -e E
   -e ERASE_TENANT_IDS -e ERASE_NATIVE_IDS -e ERASE_CONFIRM "$C" node - < "$W/erase-account.cjs"; }
 ```
 
+**Precondition: token introspection.** Check by name only that the server checks tokens with OpenKey:
+
+```bash
+docker exec "$C" sh -c 'test -n "$TC_MCP_INTROSPECTION_URL" && echo configured || echo missing'
+```
+
+If it prints `configured`, the server refuses a revoked access token within about 90 s. Its cache keeps an "active" answer for 30 s and tolerates OpenKey being unreachable for 60 s (`token-status.ts:46,52`), and the 900 s wait in step 2 covers both. If it prints `missing`, only the token's own signature and expiry are checked. Then the second `verify` in step 4 must also wait until OpenKey's access-token lifetime has passed since the revocation; ask the OpenKey operator for that lifetime.
+
 **Compute or find the ids.** Values are newline-separated. Set inputs with `export`, not as a prefix on the `erase` call: some shells (busybox `sh`) do not pass prefix assignments through a function. Then the helper sees no input and stops.
 
 ```bash
@@ -222,13 +246,13 @@ erase verify                            # every target must print "absent"; exit
 - `plan` lists each tenant id under all five roots and each native id under `native-tenants/`, with a file count. Copy its output into the ticket.
 - `delete` refuses to run without `ERASE_CONFIRM=delete`. It refuses any id that is not 64 lowercase hex characters, so it cannot be pointed at a parent directory. It removes only `<root>/tenants/<id>` and `native-tenants/<id>`.
 
-**Read-back proof.** Paste the following into the ticket:
-1. The `verify` output: every target `absent`, and each per-root count lower than in `plan` by exactly the number of targets deleted under that root.
-2. A second `verify` at least `TC_MCP_APPROVAL_TTL_SECONDS` (900 s) later, which shows nothing was recreated.
+**Read-back proof.** The per-target `absent` lines are the proof. The per-root counts are only a sanity check: other accounts can add or remove tenants between `plan` and `verify`, so a count that moves by a different amount does not, on its own, mean the erase failed. Paste the following into the ticket:
+1. The `verify` output, with every target `absent` and the exit status 0.
+2. A second `verify` at least `TC_MCP_APPROVAL_TTL_SECONDS` (900 s) after the delete, which shows nothing was recreated. If introspection is `missing`, also wait until the access-token lifetime has passed since the revocation (step 3 precondition).
 
 If the second run shows a target `PRESENT`, a client is still authorised. Go back to step 2.
 
-When the second `verify` passes, remove the helper with `rm -r -- "$W"`. Then the privacy contact replies to the requester.
+When the second `verify` passes, remove the helper with `rm -r -- "$W"` and close the shell. Then the privacy contact replies to the requester.
 
 ## What not to touch
 
@@ -249,4 +273,7 @@ Unknowns to settle before the first live run:
 - whether OpenKey issues one subject per account, or one per OAuth client;
 - whether the `phala ssh` shell on the dev image has the `docker` CLI and finds exactly one `mcp` container.
 
-How it was tested: the helper and the session commands above were run under `dash` and busybox `sh` with Node 22. They ran against a synthetic state directory built with `RemoteTenantStore`, with `docker exec` stubbed to run Node locally. The helper's ids matched the ids the server's own code derives. It has not been run on the CVM.
+How it was tested:
+- The history line, the helper, the introspection check and the session commands were run under `dash` and busybox `sh` with Node 22. They ran against a synthetic state directory built with `RemoteTenantStore`, with `docker exec` stubbed to run Node locally. The helper's ids matched the ids the server's own code derives.
+- The signature check printed `VALID` for a freshly signed message and `INVALID` once the ticket id in the text was changed.
+- None of it has been run on the CVM.
