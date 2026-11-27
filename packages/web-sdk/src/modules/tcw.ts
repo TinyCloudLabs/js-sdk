@@ -81,6 +81,7 @@ import {
   SignInOptions,
   ACCOUNT_MANIFEST_PERMISSIONS,
   isFirstPartyOrigin,
+  AccountSetupRequiredError,
   genericAppId,
   warnOnceWithoutAppHost,
   composeManifestRequest,
@@ -171,6 +172,27 @@ interface OpenKeyMessageSigner extends OpenKeyConnection {
 }
 
 /**
+ * `@openkey/sdk`'s account setup (0.13.0-beta.5 and later): opens OpenKey's own setup page, where the owner sets the
+ * account up and OpenKey publishes its registry record. Rejects when the owner cancels or setup does not finish.
+ */
+interface OpenKeyAccountSetup {
+  setupAccount?: (opts: { keyId: string }) => Promise<{ outcome: "published" | "present" }>;
+}
+
+/** An OpenKey key as `connect()` (`lastAuth`) or the sign-in continuation's identity names it. */
+type OpenKeyKeyLike = { readonly keyId?: unknown; readonly keyType?: unknown; readonly address?: unknown };
+
+/** The client's connected key; a `lastAuth` getter that throws reads as not connected. */
+function readOpenKeyAuth(client: OpenKeyAuthorizeTinyCloud): OpenKeyKeyLike | undefined {
+  try {
+    const auth = "lastAuth" in client ? client.lastAuth : undefined;
+    return auth !== null && typeof auth === "object" ? auth : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
  * Configuration for TinyCloudWeb.
  *
  * Extends ClientConfig with browser-specific options.
@@ -188,6 +210,12 @@ export interface Config extends ClientConfig {
    * `expiryChangeable: true` asks OpenKey to let the user change the session expiry in the approval. The SDK then
    * accepts the changed expiry and builds the session with the SIGNED value. It is a pass-through: `@openkey/sdk`
    * >= 0.13.0 (beta: 0.13.0-beta.0) forwards it; it is inert on 0.12.x, so the expiry stays as requested.
+   *
+   * On a third-party site, an owner with no registry record is refused before OpenKey is asked to approve anything.
+   * With `@openkey/sdk` >= 0.13.0-beta.5 (`setupAccount`) and a managed OpenKey key, `signIn()` then opens OpenKey's
+   * account setup, and once the owner has set the account up it signs in again. In popup mode, if the browser blocks
+   * that second popup, it asks in OpenKey's frame instead. When the owner cancels or setup fails, and for wallet keys
+   * and older clients, `signIn()` rejects with the `AccountSetupRequiredError` as before.
    */
   openkey?: {
     client: OpenKeyAuthorizeTinyCloud;
@@ -1380,6 +1408,51 @@ export class TinyCloudWeb {
       : { expiryChangeable: true, maxExpiresAt: openkey.maxExpiresAt };
   }
 
+  /**
+   * The OpenKey key to set up after a refusal before approval, or undefined when OpenKey can't set it up from here:
+   * the client has no `setupAccount` (`@openkey/sdk` before 0.13.0-beta.5), or the key is not a managed OpenKey key
+   * of the account signing in. A wallet key is set up in TinyCloud One; with no keyId, OpenKey would set up the
+   * account's primary key, which may be another account.
+   */
+  private openKeyAccountSetupKey(key: OpenKeyKeyLike | null | undefined, address: string | undefined): string | undefined {
+    const client = this.config.openkey?.client as (OpenKeyAuthorizeTinyCloud & OpenKeyAccountSetup) | undefined;
+    if (typeof client?.setupAccount !== "function" || key?.keyType !== "MANAGED") return undefined;
+    if (typeof key.keyId !== "string" || key.keyId === "" || typeof key.address !== "string" || !address ||
+        key.address.toLowerCase() !== address.toLowerCase()) return undefined;
+    return key.keyId;
+  }
+
+  /**
+   * Opens OpenKey's account setup for `keyId` and waits for it. True when OpenKey reports the account set up; false
+   * when the owner cancelled or setup did not finish, so the caller keeps its `AccountSetupRequiredError`.
+   */
+  private async setUpOpenKeyAccount(keyId: string): Promise<boolean> {
+    const client = this.config.openkey!.client as OpenKeyAuthorizeTinyCloud & OpenKeyAccountSetup;
+    try {
+      const { outcome } = await client.setupAccount!({ keyId });
+      return outcome === "published" || outcome === "present";
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * The sign-in again once OpenKey set the account up; its preparation reads the registry afresh. The owner's clicks
+   * went to OpenKey's window, so this one may no longer open a popup: a blocked popup asks in OpenKey's frame instead.
+   */
+  private async signInWithOpenKeyAfterAccountSetup(node: TinyCloudNode): Promise<SignInResult | void> {
+    const openkey = this.config.openkey!;
+    const mode = openkey.mode ?? "popup";
+    try {
+      return await node.signInWithOpenKey(wireOpenKeyAuthorize(openkey.client, { mode }), this.openKeySignInOptions());
+    } catch (error) {
+      const blocked = error !== null && typeof error === "object" && "code" in error && error.code === "POPUP_BLOCKED" &&
+        !("reason" in error && error.reason === "embedded-webview");
+      if (mode !== "popup" || !blocked) throw error;
+      return node.signInWithOpenKey(wireOpenKeyAuthorize(openkey.client, { mode: "iframe" }), this.openKeySignInOptions());
+    }
+  }
+
   signIn = (options?: SignInOptions): Promise<ClientSignInResult> => {
     this.warnIfWithoutAppHost();
     if (!this.config.openkey) return this.performSignIn(options);
@@ -1475,31 +1548,68 @@ export class TinyCloudWeb {
     this._sessionRestoreStatus = "logging-in";
     const was = node.spaceId;
     let result: SignInResult | void;
+    // A third-party sign-in of an owner with no registry record is refused before OpenKey is asked to approve
+    // anything. Only that refusal is offered OpenKey's account setup; a refusal after the approval is not.
+    let refusedBeforeApproval: { key: OpenKeyKeyLike | null | undefined; address: string | undefined } | undefined;
     try {
-      if (continuation?.handle) {
-        continuation.node = node;
-        const signed = await continuation.handle.authorize(async identity => {
+      try {
+        if (continuation?.handle) {
+          continuation.node = node;
+          const signed = await continuation.handle.authorize(async identity => {
+            assertNotSignedOut();
+            let prepared: PreparedOpenKeyAuthorization;
+            try {
+              prepared = await node.prepareOpenKeySignIn(this.openKeySignInOptions(), identity);
+            } catch (error) {
+              if (error instanceof AccountSetupRequiredError) refusedBeforeApproval = { key: identity, address: identity.address };
+              throw error;
+            }
+            assertNotSignedOut();
+            continuation.pending = prepared;
+            return prepared.request;
+          });
           assertNotSignedOut();
-          const prepared = await node.prepareOpenKeySignIn(this.openKeySignInOptions(), identity);
-          assertNotSignedOut();
-          continuation.pending = prepared;
-          return prepared.request;
-        });
+          if (!continuation.pending) throw new Error("OpenKey sign-in was not prepared");
+          result = await node.signInWithPreparedOpenKey(continuation.pending, async () => signed);
+        } else if (pending) {
+          result = await node.signInWithPreparedOpenKey(
+            pending.request,
+            wireOpenKeyAuthorize(this.config.openkey!.client, { mode: this.config.openkey!.mode ?? "popup" }),
+          );
+        } else if (this.config.openkey) {
+          const authorize = wireOpenKeyAuthorize(this.config.openkey.client, { mode: this.config.openkey.mode ?? "popup" });
+          let approvalAsked = false;
+          try {
+            result = await node.signInWithOpenKey((request) => {
+              approvalAsked = true;
+              return authorize(request);
+            }, this.openKeySignInOptions());
+          } catch (error) {
+            if (!approvalAsked && error instanceof AccountSetupRequiredError) {
+              refusedBeforeApproval = {
+                key: readOpenKeyAuth(this.config.openkey.client),
+                address: await this.walletSigner?.getConnectedAddress().catch(() => undefined),
+              };
+            }
+            throw error;
+          }
+        } else {
+          result = await node.signIn(options);
+        }
+      } catch (error) {
+        const refusal = refusedBeforeApproval;
+        const keyId = refusal && this.openKeyAccountSetupKey(refusal.key, refusal.address);
+        if (keyId === undefined) throw error;
+        // The continuation's window waits on an approval that will not come; close it before OpenKey's setup opens.
+        if (continuation?.handle) {
+          const handle = continuation.handle;
+          continuation.handle = undefined;
+          await handle.cancel();
+        }
         assertNotSignedOut();
-        if (!continuation.pending) throw new Error("OpenKey sign-in was not prepared");
-        result = await node.signInWithPreparedOpenKey(continuation.pending, async () => signed);
-      } else if (pending) {
-        result = await node.signInWithPreparedOpenKey(
-          pending.request,
-          wireOpenKeyAuthorize(this.config.openkey!.client, { mode: this.config.openkey!.mode ?? "popup" }),
-        );
-      } else if (this.config.openkey) {
-        result = await node.signInWithOpenKey(
-          wireOpenKeyAuthorize(this.config.openkey.client, { mode: this.config.openkey.mode ?? "popup" }),
-          this.openKeySignInOptions(),
-        );
-      } else {
-        result = await node.signIn(options);
+        if (!(await this.setUpOpenKeyAccount(keyId))) throw error;
+        assertNotSignedOut();
+        result = await this.signInWithOpenKeyAfterAccountSetup(node);
       }
     } finally {
       if (was && was !== node.spaceId && this.signOutCount === signOuts && !this.signOutInFlight) this.uiClient.reset();
