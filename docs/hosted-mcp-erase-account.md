@@ -60,7 +60,7 @@ Disconnecting is not deleting:
    - **Address path (step 3 below): a signed message.** The privacy contact sends the exact text to sign, naming the ticket id and the date: `Erase my TinyCloud hosted MCP connector data. Ticket: <ticket id>. Date: <YYYY-MM-DD>. Address: <0x address>`. The requester signs it with that address (an EIP-191 personal message) and sends back the signature. The privacy contact checks it on their own machine with this one command:
 
      ```bash
-     ERASE_ADDRESS='0x…' ERASE_MESSAGE='<the exact text>' ERASE_SIGNATURE='0x…' sh -c 'cd "$(mktemp -d)" && npm i -s --no-audit --no-fund viem@2 && node --input-type=module -e '"'"'import { verifyMessage } from "viem"; const { ERASE_ADDRESS: address, ERASE_MESSAGE: message, ERASE_SIGNATURE: signature } = process.env; console.log((await verifyMessage({ address, message, signature })) ? "VALID" : "INVALID")'"'"''
+     ERASE_ADDRESS='0x…' ERASE_MESSAGE='<the exact text>' ERASE_SIGNATURE='0x…' sh -c 'cd "$(mktemp -d)" && npm i -s --no-audit --no-fund viem@2.58.8 && node --input-type=module -e '"'"'import { verifyMessage } from "viem"; const { ERASE_ADDRESS: address, ERASE_MESSAGE: message, ERASE_SIGNATURE: signature } = process.env; console.log((await verifyMessage({ address, message, signature })) ? "VALID" : "INVALID")'"'"''
      ```
 
      Act only on `VALID`, and only if the ticket id and date in the text match this request. A smart-contract wallet prints `INVALID` here. Escalate that case; do not act on it.
