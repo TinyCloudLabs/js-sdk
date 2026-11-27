@@ -3990,6 +3990,33 @@
     },
     "reason": "Both canonical jobs (SQLite and Postgres, run 45657409735 at 9c1ff656, base f4c3a74d) measured 1501551/1487585 gzip bytes against tc4322ReservedKeyRoot's 1542479/1487573. The node-sdk activation refusal carries the host response as cause, compiled into the Web SDK root. Details: TC-4329"
   },
+  "tc4344OpenKeyAccountSetupRoot": {
+    "label": "OpenKey account setup on a missing registry record (TC-4344)",
+    "ruling": "test-ruling: TC-4344 (Naomi 18:27Z). New ledger row tc4344OpenKeyAccountSetupRoot in replica-size-ledger.json after tc4329ActivationCauseRoot, web-sdk root cjs ceiling 1487585 → 1489180 (+1595, the measured sqlite number; +1700 at most), mjs unchanged 1542479, base 09760efe6, canonicalCI both Replica jobs at 6335d4cc (run 46047647106). Mirror it in replica-size-policy.ts beside each tc4329ActivationCauseRoot site. Add tc4344OpenKeyAccountSetupRoot beside every tc4329ActivationCauseRoot delete/undefined/filter site in scripts/*size-policy*.test.ts. No assertion value changes; no other test edits.",
+    "base": "09760efe6861c08849cb4511408698ed31d385d7",
+    "sourceCommits": [
+      "472a4018afac3da32c235ca9f8d02923f625fef0",
+      "6335d4cce36ad1b3c56e0e86d702fffcd634ce83"
+    ],
+    "canonicalCI": {
+      "run": "46047647106",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/46047647106/job/140670812678",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/46047647106/job/140670812946"
+      ]
+    },
+    "root": {
+      "delta": {
+        "index.mjs": 0,
+        "index.cjs": 1595
+      },
+      "ceiling": {
+        "index.mjs": 1542479,
+        "index.cjs": 1489180
+      }
+    },
+    "reason": "Both canonical jobs (SQLite and Postgres, run 46047647106 at 6335d4cc, base 09760efe6) measured 1502085/1489180 gzip bytes against tc4329ActivationCauseRoot's 1542479/1487585, and master 09760efe6 measured 1501551/1487585. The Web SDK root carries the OpenKey account setup flow (setupAccount, one retry, the iframe fallback) and node-sdk's hosted-owner proof refusal brand. Details: TC-4344"
+  },
   "tc3522InvocationRefusalKvWorker": {
     "label": "retain invocation-refusal attribution in the kv-storage worker (TC-3522)",
     "ruling": "Naomi ACBX 2026-11-23: admit only the exact worker gzip bytes reproduced by SQLite and PostgreSQL, with zero headroom. Root, optional and gated ceilings are unchanged.",
