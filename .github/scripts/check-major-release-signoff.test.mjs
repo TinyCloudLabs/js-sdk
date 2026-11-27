@@ -218,3 +218,22 @@ test("stable: nothing to check outside pre mode", (t) => {
   const result = repo.check("stable");
   assert.equal(result.status, 0, result.stderr);
 });
+
+
+test("prepare-pr: a breaking changeset can be reviewed before release authorization", (t) => {
+  const repo = prRepository(t);
+  const head = repo.commit("breaking API with migration", { ".changeset/big.md": changeset({ "@x/a": "major" }) });
+  const prepared = repo.check("prepare-pr", repo.base, head);
+  assert.equal(prepared.status, 0, prepared.stderr);
+  const release = repo.check("release");
+  assert.equal(release.status, 1);
+  assert.match(release.stderr, /No sign-off for a major release/);
+});
+
+test("prepare-pr: actual major version bumps still require release authorization", (t) => {
+  const repo = prRepository(t);
+  const head = repo.commit("bump", { "packages/a/package.json": pkg("@x/a", "2.0.0") });
+  const result = repo.check("prepare-pr", repo.base, head);
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /No sign-off for a major release/);
+});
