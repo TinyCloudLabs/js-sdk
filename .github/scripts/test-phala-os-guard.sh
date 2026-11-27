@@ -9,8 +9,8 @@ root="$(mktemp -d -p "${TMPDIR:-/var/tmp}")"
 trap 'rm -rf "${root}"' EXIT
 mkdir "${root}/bin" "${root}/tmp" "${root}/fixtures"
 
-PROD_NAME=dstack-0.5.12
-PROD_HASH=8db40cb23008d6213668b5816702d100b37b859a8a5bfd18d938ae3a1b3715bd
+PROD_NAME=dstack-0.5.15
+PROD_HASH=4597735f1a38ad8ec9f781356b88737fc052062deb7c9aaa4be89bf1b35643ca
 REAL_DEV_HASH=e866e987221db357129ebc3f066b6706ef955889ea95e5510acbdf3d3055186b
 
 # The stubs print what the real tools would, driven by STUB_* variables.

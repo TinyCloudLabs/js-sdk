@@ -24,8 +24,8 @@ permissions:
 
 env:
   # Production dstack OS the tinycloud-mcp CVM must run (the Phala KMS only releases app keys to this image).
-  PHALA_OS_IMAGE: dstack-0.5.12
-  PHALA_OS_IMAGE_HASH: 8db40cb23008d6213668b5816702d100b37b859a8a5bfd18d938ae3a1b3715bd
+  PHALA_OS_IMAGE: dstack-0.5.15
+  PHALA_OS_IMAGE_HASH: 4597735f1a38ad8ec9f781356b88737fc052062deb7c9aaa4be89bf1b35643ca
 
 jobs:
   resolve:
@@ -131,7 +131,8 @@ jobs:
           echo "Phala: CVM tinycloud-mcp readable; status=$(jq -r '.status // .cvm_status // "unknown"' <<<"$cvm")"
       # Fail closed before any build or deploy unless the CVM runs the pinned production OS, or the one pinned dev OS
       # in .github/scripts/phala-dev-os-allowlist.txt after a fresh integrity check (.github/scripts/phala-os-guard.sh).
-      # To fix it, set the OS by hand: `phala api -X PATCH /cvms/<id>/os-image -F os_image_name=dstack-0.5.12`.
+      # If it fails, do not change the OS from here or by hand to match the pin: find out why the CVM moved, and if the
+      # move was intended, update PHALA_OS_IMAGE / PHALA_OS_IMAGE_HASH from a read-back of the CVM in a reviewed PR.
       - name: Test the OS guard and complete Phala deploy environment
         env:
           PHALA_BIN: ${{ runner.temp }}/mcp-deploy-tools/node_modules/.bin/phala
