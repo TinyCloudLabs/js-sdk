@@ -252,7 +252,12 @@ import {
 import { RequestLog, observeReplicaReads, readOnlyRequestLog } from "@tinycloud/sdk-services/telemetry/requestLog";
 import { parseEncryptionResource } from "@tinycloud/sdk-services/encryption/resource";
 import type { NamedKeyClient } from "./encryption-keys";
-import { NodeUserAuthorization, type PreparedOpenKeyAuthorization, type SpaceHosting } from "./authorization/NodeUserAuthorization";
+import {
+  hostedOwnerProofRefusal,
+  NodeUserAuthorization,
+  type PreparedOpenKeyAuthorization,
+  type SpaceHosting,
+} from "./authorization/NodeUserAuthorization";
 import { refuseCaveated } from "./authorization/caveatRefusal";
 import type { SignStrategy } from "./authorization/strategies";
 import { AccountService } from "./account/AccountService";
@@ -1985,7 +1990,7 @@ export class TinyCloudNode {
     }
     auth.failHostedOwnerProof(proof, true);
     throw outcome === "refused" || outcome === "no-read"
-      ? new AccountSetupRequiredError()
+      ? hostedOwnerProofRefusal()
       : new NodeNotRespondingError([proof.host], new Error("The hosted-space check did not answer."));
   }
 

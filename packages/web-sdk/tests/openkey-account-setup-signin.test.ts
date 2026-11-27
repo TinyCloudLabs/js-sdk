@@ -5,9 +5,10 @@ import { privateKeyToAccount, type PrivateKeyAccount } from "viem/accounts";
 import { startBrowserLocationRegistry, type BrowserLocationRegistry } from "../../node-sdk/src/test-support/browser-location-registry";
 
 // A third-party sign-in of an owner with no registry record: the registry refuses it before OpenKey is asked to approve
-// anything, and an OpenKey client with `setupAccount` sets the account up, then the sign-in runs again and finishes.
+// anything (or, for an app that asks only for its own space, the default node's hosted-owner proof refuses it after the
+// approval), and an OpenKey client with `setupAccount` sets the account up, then the sign-in runs again and finishes.
 // Real TinyCloudWeb (dist), TinyCloudNode and registry lookups against a local registry; the OpenKey client and the
-// node are simulated.
+// nodes are simulated.
 
 const NODE = "https://node.example.test";
 const nodeDid = "did:key:z6MktLHQwkV2x8WKZhmyB8qEShgvcMHfJbNjb2k21pVJQvfB";
@@ -18,6 +19,13 @@ const manifest = { app_id: "xyz.tinycloud.setup", name: "Setup app", defaults: f
     { service: "tinycloud.kv", space: "applications", path: "xyz.tinycloud.setup/", actions: ["get", "list"] },
     { service: "tinycloud.kv", space: "default", path: "notes/", actions: ["get"] },
   ] };
+// Only the app's own `applications` space: an unregistered owner gets the hosted-owner proof on the default node.
+const ownSpaceManifest = { app_id: "xyz.tinycloud.setup", name: "Setup app", defaults: false,
+  permissions: [{ service: "tinycloud.kv", space: "applications", path: "xyz.tinycloud.setup/", actions: ["get", "list"] }] };
+const DEFAULT_NODE = "https://node.tinycloud.xyz";
+const defaultNodeDid = "did:key:z6MkjHi79SMX4doJyo2w7jDTM6Fa7iX6EVZWXNbJ6RzBm3Wi";
+/** What the default node was asked, path only. It hosts no space, so every hosted-owner proof is refused. */
+let defaultNodeCalls: string[] = [];
 let registry: BrowserLocationRegistry;
 let oldWindow: typeof window | undefined;
 let oldLocation: typeof location | undefined;
@@ -33,9 +41,18 @@ beforeEach(() => {
   globalThis.window = { location: { host: "example.test", hostname: "example.test", origin: "https://example.test" },
     addEventListener() {}, removeEventListener() {}, open: () => ({}) } as unknown as Window & typeof globalThis;
   globalThis.location = window.location;
+  defaultNodeCalls = [];
   globalThis.fetch = async (input, init) => {
     const url = input instanceof Request ? input.url : String(input);
     if (url.startsWith(`${registry.url.origin}/`)) return oldFetch(input, init);
+    if (url.startsWith(`${DEFAULT_NODE}/`)) {
+      const path = new URL(url).pathname;
+      defaultNodeCalls.push(path);
+      if (path === "/info") return Response.json({ nodeId: defaultNodeDid, protocol: 1, version: "1.0.0", features: [] });
+      if (path === "/.well-known/tinycloud/node-keys") return Response.json({ nodeDid: defaultNodeDid });
+      if (path === "/delegate" && init?.method === "POST") return Response.json({ activated: [], skipped: [] });
+      return Response.json({});
+    }
     if (!url.startsWith(`${NODE}/`)) throw new Error(`Unexpected fetch: ${url}`);
     if (url.endsWith("/info")) return Response.json({ nodeId: nodeDid, protocol: 1, version: "1.0.0", features: [] });
     if (url.endsWith("/.well-known/tinycloud/node-keys")) return Response.json({ nodeDid });
@@ -79,6 +96,9 @@ async function setup(options: {
   mode?: "iframe" | "popup";
   /** The client reserves OpenKey's window in the click tick (`beginTinyCloudSignIn`). */
   continuation?: boolean;
+  /** In the reserved window, a refused first prepare, then the owner's record appears and a second prepare runs. */
+  prepareAgainAfterRefusal?: boolean;
+  manifest?: typeof manifest | typeof ownSpaceManifest;
 } = {}) {
   const ownerKey = `0x${(nextKey++).toString(16).padStart(64, "0")}` as const;
   const owner = privateKeyToAccount(ownerKey);
@@ -115,15 +135,24 @@ async function setup(options: {
         cancel: () => { calls.events.push("cancel"); },
         authorize: async (prepare: (identity: Record<string, unknown>) => Promise<{ siwe: string }>) => {
           calls.events.push("continuation");
-          const request = await prepare({ address: owner.address, chainId: 1, keyId: "key_1",
-            keyType: options.keyType ?? "MANAGED", requestId: "request" });
+          const identity = { address: owner.address, chainId: 1, keyId: "key_1", keyType: options.keyType ?? "MANAGED", requestId: "request" };
+          let request: { siwe: string };
+          try {
+            request = await prepare(identity);
+          } catch (error) {
+            if (!options.prepareAgainAfterRefusal) throw error;
+            calls.events.push("prepare-refused");
+            await registry.register(ownerKey, NODE, nodeDid);
+            registered = true;
+            request = await prepare(identity);
+          }
           return signedResult(owner, request.siwe);
         },
       }),
     } : {}),
   };
   const web = await require("../dist/index.cjs").TinyCloudWeb.create({
-    openkey: { client, ...(options.mode ? { mode: options.mode } : {}) }, manifest, tinycloudHosts: [NODE],
+    openkey: { client, ...(options.mode ? { mode: options.mode } : {}) }, manifest: options.manifest ?? manifest, tinycloudHosts: [NODE],
     tinycloudRegistryUrl: registry.url.origin, autoDiscoverLocalNode: false,
     persistSession: false, autoCreateSpace: false, autoBootstrapAccount: false, ui: false,
   });
@@ -178,11 +207,16 @@ test("a wallet key is not offered OpenKey's setup", async () => {
   expect(calls.approvals).toEqual([]);
 });
 
-test("only a refusal before OpenKey is asked to approve is offered setup, and only once", async () => {
-  // The SDK bundle's own error class, taken from a real registry refusal (a wallet key is not offered setup).
+/** The SDK bundle's own AccountSetupRequiredError class, taken from a real registry refusal (a wallet key is not offered setup). */
+async function bundleRefusalClass(): Promise<new () => Error> {
   const probe = await setup({ keyType: "EXTERNAL" });
   const Refusal = (await probe.web.signIn().catch((error: Error) => error)).constructor as new () => Error;
   await probe.web.signOut();
+  return Refusal;
+}
+
+test("a refusal before OpenKey is asked to approve is offered setup once; another refusal after the approval is not", async () => {
+  const Refusal = await bundleRefusalClass();
   for (const approvalAsked of [false, true]) {
     const { web, calls } = await setup();
     const refusal = new Refusal();
@@ -195,4 +229,40 @@ test("only a refusal before OpenKey is asked to approve is offered setup, and on
     await expect(web.signIn()).rejects.toBe(refusal);
     expect(calls.setup).toHaveLength(approvalAsked ? 0 : 1);
   }
+});
+
+test("the hosted-owner proof's refusal after the approval opens setup, then the sign-in is approved once more", async () => {
+  const { web, calls, owner } = await setup({ manifest: ownSpaceManifest });
+  expect((await web.signIn()).address).toBe(owner.address);
+  // The default node was asked to host the owner's own space and did not.
+  expect(defaultNodeCalls).toContain("/delegate");
+  expect(calls.setup).toEqual([{ keyId: "key_1" }]);
+  expect(calls.approvals).toEqual(["popup", "popup"]);
+  expect(calls.registeredBeforeApproval).toEqual([false, true]);
+});
+
+test("the hosted-owner proof's refusal in OpenKey's reserved window opens setup, then one more approval", async () => {
+  const { web, calls, owner } = await setup({ manifest: ownSpaceManifest, continuation: true });
+  expect((await web.signIn()).address).toBe(owner.address);
+  expect(calls.events.slice(0, 3)).toEqual(["continuation", "cancel", "setup"]);
+  expect(calls.approvals).toEqual(["popup"]);
+  expect(calls.registeredBeforeApproval).toEqual([true]);
+});
+
+test("an owner who closes setup after the hosted-owner proof's refusal gets that refusal and no second approval", async () => {
+  const { web, calls } = await setup({ manifest: ownSpaceManifest, setupOutcome: "cancelled" });
+  await expect(web.signIn()).rejects.toMatchObject({ code: "ACCOUNT_SETUP_REQUIRED" });
+  expect(calls.setup).toHaveLength(1);
+  expect(calls.approvals).toEqual(["popup"]);
+});
+
+test("a refused prepare, then a prepare that succeeds, then a refusal after the approval: no setup", async () => {
+  const Refusal = await bundleRefusalClass();
+  const { web, calls } = await setup({ continuation: true, prepareAgainAfterRefusal: true });
+  const refusal = new Refusal();
+  const node = await web.ensureNode();
+  node.signInWithPreparedOpenKey = async () => { throw refusal; };
+  await expect(web.signIn()).rejects.toBe(refusal);
+  expect(calls.events).toContain("prepare-refused");
+  expect(calls.setup).toEqual([]);
 });

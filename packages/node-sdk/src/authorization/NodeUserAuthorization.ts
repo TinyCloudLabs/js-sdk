@@ -199,6 +199,24 @@ export interface HostedOwnerProof {
   status: "pending" | "proven";
 }
 
+const hostedOwnerProofRefusals = new WeakSet<object>();
+
+/**
+ * The refusal a sign-in's hosted-owner proof (TC-4082) ends with, after the owner approved: the default node does not
+ * host the owner's own `applications` space, or refused the proof's read. The owner has no registry record, so a caller
+ * may offer account setup for it. A node that did not answer is a `NodeNotRespondingError` instead.
+ */
+export function hostedOwnerProofRefusal(): AccountSetupRequiredError {
+  const refusal = new AccountSetupRequiredError();
+  hostedOwnerProofRefusals.add(refusal);
+  return refusal;
+}
+
+/** Whether `error` is exactly a {@link hostedOwnerProofRefusal}; every other `AccountSetupRequiredError` is not. */
+export function isHostedOwnerProofRefusal(error: unknown): boolean {
+  return typeof error === "object" && error !== null && hostedOwnerProofRefusals.has(error);
+}
+
 type JsonValue =
   | null
   | boolean
@@ -2016,7 +2034,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
     const hostsPrimary = activated.success && (activated.activated ?? []).some((space) => pkhSpaceIdentity(space) === pkhSpaceIdentity(proof.spaceId));
     if (!hostsPrimary) {
       this.failHostedOwnerProof(proof, activated.success);
-      throw new AccountSetupRequiredError();
+      throw hostedOwnerProofRefusal();
     }
     if (this._pendingHostedOwnerProof !== proof) throw new Error("Sign-in was replaced before the hosted-space check finished.");
     this._pendingHostedOwnerProof = { ...proof, delegationCid: session.delegationCid };

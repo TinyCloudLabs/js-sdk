@@ -18,6 +18,7 @@ import {
   TinyCloudNode,
   TinyCloudNodeConfig,
   wireOpenKeyAuthorize,
+  isHostedOwnerProofRefusal,
   type OpenKeyAuthorizeTinyCloud,
   type PreparedOpenKeyAuthorization,
   type BootstrapWarning,
@@ -211,11 +212,13 @@ export interface Config extends ClientConfig {
    * accepts the changed expiry and builds the session with the SIGNED value. It is a pass-through: `@openkey/sdk`
    * >= 0.13.0 (beta: 0.13.0-beta.0) forwards it; it is inert on 0.12.x, so the expiry stays as requested.
    *
-   * On a third-party site, an owner with no registry record is refused before OpenKey is asked to approve anything.
-   * With `@openkey/sdk` >= 0.13.0-beta.5 (`setupAccount`) and a managed OpenKey key, `signIn()` then opens OpenKey's
-   * account setup, and once the owner has set the account up it signs in again. In popup mode, if the browser blocks
-   * that second popup, it asks in OpenKey's frame instead. When the owner cancels or setup fails, and for wallet keys
-   * and older clients, `signIn()` rejects with the `AccountSetupRequiredError` as before.
+   * On a third-party site, an owner with no registry record is refused before OpenKey is asked to approve anything, or,
+   * for an app that asks only for its own `applications` space, after the approval when the default node does not host
+   * that space (the hosted-owner proof). With `@openkey/sdk` >= 0.13.0-beta.5 (`setupAccount`) and a managed OpenKey key,
+   * `signIn()` then opens OpenKey's account setup, and once the owner has set the account up it signs in again, which
+   * OpenKey asks the owner to approve. In popup mode, if the browser blocks that popup, it asks in OpenKey's frame
+   * instead. When the owner cancels or setup fails, for wallet keys and older clients, and for any other refusal after
+   * the approval, `signIn()` rejects with the `AccountSetupRequiredError` as before.
    */
   openkey?: {
     client: OpenKeyAuthorizeTinyCloud;
@@ -1409,7 +1412,7 @@ export class TinyCloudWeb {
   }
 
   /**
-   * The OpenKey key to set up after a refusal before approval, or undefined when OpenKey can't set it up from here:
+   * The OpenKey key to set up after a refusal setup is offered for, or undefined when OpenKey can't set it up from here:
    * the client has no `setupAccount` (`@openkey/sdk` before 0.13.0-beta.5), or the key is not a managed OpenKey key
    * of the account signing in. A wallet key is set up in TinyCloud One; with no keyId, OpenKey would set up the
    * account's primary key, which may be another account.
@@ -1548,20 +1551,24 @@ export class TinyCloudWeb {
     this._sessionRestoreStatus = "logging-in";
     const was = node.spaceId;
     let result: SignInResult | void;
-    // A third-party sign-in of an owner with no registry record is refused before OpenKey is asked to approve
-    // anything. Only that refusal is offered OpenKey's account setup; a refusal after the approval is not.
-    let refusedBeforeApproval: { key: OpenKeyKeyLike | null | undefined; address: string | undefined } | undefined;
+    // Only two refusals are offered OpenKey's account setup, each kept with its exact error and the key it names:
+    // the registry's refusal before OpenKey is asked to approve anything, and after the approval only the hosted-owner
+    // proof's refusal (TC-4082: the default node does not host the owner's own space). Any other error, including any
+    // other AccountSetupRequiredError after the approval, is the sign-in's error.
+    let setupOffer: { error: unknown; key: OpenKeyKeyLike | null | undefined; address: string | undefined } | undefined;
     try {
       try {
         if (continuation?.handle) {
           continuation.node = node;
           const signed = await continuation.handle.authorize(async identity => {
             assertNotSignedOut();
+            // Each prepare starts afresh: an earlier prepare's refusal says nothing about this one.
+            setupOffer = undefined;
             let prepared: PreparedOpenKeyAuthorization;
             try {
               prepared = await node.prepareOpenKeySignIn(this.openKeySignInOptions(), identity);
             } catch (error) {
-              if (error instanceof AccountSetupRequiredError) refusedBeforeApproval = { key: identity, address: identity.address };
+              if (error instanceof AccountSetupRequiredError) setupOffer = { error, key: identity, address: identity.address };
               throw error;
             }
             assertNotSignedOut();
@@ -1569,8 +1576,14 @@ export class TinyCloudWeb {
             return prepared.request;
           });
           assertNotSignedOut();
-          if (!continuation.pending) throw new Error("OpenKey sign-in was not prepared");
-          result = await node.signInWithPreparedOpenKey(continuation.pending, async () => signed);
+          const approved = continuation.pending;
+          if (!approved) throw new Error("OpenKey sign-in was not prepared");
+          try {
+            result = await node.signInWithPreparedOpenKey(approved, async () => signed);
+          } catch (error) {
+            if (isHostedOwnerProofRefusal(error)) setupOffer = { error, key: approved.identity, address: approved.identity?.address };
+            throw error;
+          }
         } else if (pending) {
           result = await node.signInWithPreparedOpenKey(
             pending.request,
@@ -1585,8 +1598,9 @@ export class TinyCloudWeb {
               return authorize(request);
             }, this.openKeySignInOptions());
           } catch (error) {
-            if (!approvalAsked && error instanceof AccountSetupRequiredError) {
-              refusedBeforeApproval = {
+            if ((!approvalAsked && error instanceof AccountSetupRequiredError) || isHostedOwnerProofRefusal(error)) {
+              setupOffer = {
+                error,
                 key: readOpenKeyAuth(this.config.openkey.client),
                 address: await this.walletSigner?.getConnectedAddress().catch(() => undefined),
               };
@@ -1597,8 +1611,8 @@ export class TinyCloudWeb {
           result = await node.signIn(options);
         }
       } catch (error) {
-        const refusal = refusedBeforeApproval;
-        const keyId = refusal && this.openKeyAccountSetupKey(refusal.key, refusal.address);
+        const offer = setupOffer?.error === error ? setupOffer : undefined;
+        const keyId = offer && this.openKeyAccountSetupKey(offer.key, offer.address);
         if (keyId === undefined) throw error;
         // The continuation's window waits on an approval that will not come; close it before OpenKey's setup opens.
         if (continuation?.handle) {
@@ -1609,6 +1623,7 @@ export class TinyCloudWeb {
         assertNotSignedOut();
         if (!(await this.setUpOpenKeyAccount(keyId))) throw error;
         assertNotSignedOut();
+        // One more sign-in, which OpenKey asks the owner to approve (again, after a hosted-owner proof's refusal).
         result = await this.signInWithOpenKeyAfterAccountSetup(node);
       }
     } finally {
