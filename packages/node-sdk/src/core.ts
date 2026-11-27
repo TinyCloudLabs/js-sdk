@@ -120,6 +120,7 @@ export { FileSessionStorage } from "./storage/FileSessionStorage";
 // Authorization
 export {
   NodeUserAuthorization,
+  isHostedOwnerProofRefusal,
   type NodeUserAuthorizationConfig,
   type PreparedOpenKeyAuthorization,
   type SpaceHosting,

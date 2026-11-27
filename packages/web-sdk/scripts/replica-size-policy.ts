@@ -514,6 +514,7 @@ export type Ledger = {
   tc4222PermissionLineRoot?: LogoutRatchet;
   tc4322ReservedKeyRoot?: LogoutRatchet;
   tc4329ActivationCauseRoot?: LogoutRatchet;
+  tc4344OpenKeyAccountSetupRoot?: LogoutRatchet;
   tc3522InvocationRefusalKvWorker?: WorkerRatchet;
   tc3522InvocationRefusalReplicaWorker?: Omit<WorkerRatchet, "worker"> & { replicaWorker: { delta: number; ceiling: number } };
   tc2773LazyRestoreReplicaWorker?: Omit<WorkerRatchet, "worker"> & { replicaWorker: { delta: number; ceiling: number } };
@@ -1184,6 +1185,7 @@ export function ancestryPins(root: Ledger, hasGatedOnly: boolean): Array<{ row: 
   if (root.tc4222PermissionLineRoot !== undefined) pins.push({ row: "tc4222PermissionLineRoot", pin: root.tc4222PermissionLineRoot.sourceCommits.at(-1)! });
   if (root.tc4322ReservedKeyRoot !== undefined) pins.push({ row: "tc4322ReservedKeyRoot", pin: root.tc4322ReservedKeyRoot.sourceCommits.at(-1)! });
   if (root.tc4329ActivationCauseRoot !== undefined) pins.push({ row: "tc4329ActivationCauseRoot", pin: root.tc4329ActivationCauseRoot.sourceCommits.at(-1)! });
+  if (root.tc4344OpenKeyAccountSetupRoot !== undefined) pins.push({ row: "tc4344OpenKeyAccountSetupRoot", pin: root.tc4344OpenKeyAccountSetupRoot.sourceCommits.at(-1)! });
   if (root.tc3522InvocationRefusalKvWorker !== undefined) pins.push({ row: "tc3522InvocationRefusalKvWorker", pin: root.tc3522InvocationRefusalKvWorker.sourceCommits.at(-1)! });
   if (root.tc3522InvocationRefusalReplicaWorker !== undefined) pins.push({ row: "tc3522InvocationRefusalReplicaWorker", pin: root.tc3522InvocationRefusalReplicaWorker.sourceCommits.at(-1)! });
   if (hasGatedOnly) pins.push({ row: "gatedOnlyRatchet", pin: approvedGatedOnlyRatchet.sourceCommit });
@@ -1324,6 +1326,7 @@ export function rootCeilings(root: Ledger): Array<{ row: string; ceiling: GzipSi
     ["tc4222PermissionLineRoot", root.tc4222PermissionLineRoot?.root.ceiling],
     ["tc4322ReservedKeyRoot", root.tc4322ReservedKeyRoot?.root.ceiling],
     ["tc4329ActivationCauseRoot", root.tc4329ActivationCauseRoot?.root.ceiling],
+    ["tc4344OpenKeyAccountSetupRoot", root.tc4344OpenKeyAccountSetupRoot?.root.ceiling],
   ];
   return rows.flatMap(([row, ceiling]) => ceiling === undefined ? [] : [{ row, ceiling }]);
 }
@@ -4390,6 +4393,34 @@ export const approvedTc4329ActivationCauseRoot: LogoutRatchet = {
   "reason": "Both canonical jobs (SQLite and Postgres, run 45657409735 at 9c1ff656, base f4c3a74d) measured 1501551/1487585 gzip bytes against tc4322ReservedKeyRoot's 1542479/1487573. The node-sdk activation refusal carries the host response as cause, compiled into the Web SDK root. Details: TC-4329"
 };
 
+export const approvedTc4344OpenKeyAccountSetupRoot: LogoutRatchet = {
+  "label": "OpenKey account setup on a missing registry record (TC-4344)",
+  "ruling": "test-ruling: TC-4344 (Naomi 18:27Z). New ledger row tc4344OpenKeyAccountSetupRoot in replica-size-ledger.json after tc4329ActivationCauseRoot, web-sdk root cjs ceiling 1487585 → 1489180 (+1595, the measured sqlite number; +1700 at most), mjs unchanged 1542479, base 09760efe6, canonicalCI both Replica jobs at 6335d4cc (run 46047647106). Mirror it in replica-size-policy.ts beside each tc4329ActivationCauseRoot site. Add tc4344OpenKeyAccountSetupRoot beside every tc4329ActivationCauseRoot delete/undefined/filter site in scripts/*size-policy*.test.ts. No assertion value changes; no other test edits.",
+  "base": "09760efe6861c08849cb4511408698ed31d385d7",
+  "sourceCommits": [
+    "472a4018afac3da32c235ca9f8d02923f625fef0",
+    "6335d4cce36ad1b3c56e0e86d702fffcd634ce83"
+  ],
+  "canonicalCI": {
+    "run": "46047647106",
+    "jobs": [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/46047647106/job/140670812678",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/46047647106/job/140670812946"
+    ]
+  },
+  "root": {
+    "delta": {
+      "index.mjs": 0,
+      "index.cjs": 1595
+    },
+    "ceiling": {
+      "index.mjs": 1542479,
+      "index.cjs": 1489180
+    }
+  },
+  "reason": "Both canonical jobs (SQLite and Postgres, run 46047647106 at 6335d4cc, base 09760efe6) measured 1502085/1489180 gzip bytes against tc4329ActivationCauseRoot's 1542479/1487585, and master 09760efe6 measured 1501551/1487585. The Web SDK root carries the OpenKey account setup flow (setupAccount, one retry, the iframe fallback) and node-sdk's hosted-owner proof refusal brand. Details: TC-4344"
+};
+
 export const approvedLedgerRows: Record<string, unknown> = {
   phase2Ratchet: approvedPhase2,
   fixRequiredRatchet: approvedFixRequiredRatchet,
@@ -4525,6 +4556,7 @@ export const approvedLedgerRows: Record<string, unknown> = {
   tc4222PermissionLineRoot: approvedTc4222PermissionLineRoot,
   tc4322ReservedKeyRoot: approvedTc4322ReservedKeyRoot,
   tc4329ActivationCauseRoot: approvedTc4329ActivationCauseRoot,
+  tc4344OpenKeyAccountSetupRoot: approvedTc4344OpenKeyAccountSetupRoot,
   tc3522InvocationRefusalKvWorker: approvedTc3522InvocationRefusalKvWorker,
   tc3522InvocationRefusalReplicaWorker: approvedTc3522InvocationRefusalReplicaWorker,
 };
@@ -5160,6 +5192,11 @@ export function validateLedger(value: Ledger, historicalBase = false): void {
       (!value.tc4322ReservedKeyRoot ||
         JSON.stringify(value.tc4329ActivationCauseRoot) !== JSON.stringify(approvedTc4329ActivationCauseRoot))) {
     throw new Error("Only the exact TC-4329 activation cause root admission is approved.");
+  }
+  if (value.tc4344OpenKeyAccountSetupRoot !== undefined &&
+      (!value.tc4329ActivationCauseRoot ||
+        JSON.stringify(value.tc4344OpenKeyAccountSetupRoot) !== JSON.stringify(approvedTc4344OpenKeyAccountSetupRoot))) {
+    throw new Error("Only the exact TC-4344 OpenKey account setup root admission is approved.");
   }
   if (value.tc3522InvocationRefusalKvWorker !== undefined || value.tc3522InvocationRefusalReplicaWorker !== undefined) {
     if (!value.tc3947ReplicaRevokeRoot ||

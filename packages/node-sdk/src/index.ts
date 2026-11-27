@@ -167,6 +167,7 @@ export { FileSessionStorage } from "./storage/FileSessionStorage";
 // Authorization
 export {
   NodeUserAuthorization,
+  isHostedOwnerProofRefusal,
   type NodeUserAuthorizationConfig,
   type OpenKeyAuthorizeInput,
   type OpenKeyAuthorizationResultV1,
