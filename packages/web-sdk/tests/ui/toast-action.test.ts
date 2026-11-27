@@ -1,6 +1,7 @@
 import { afterAll, afterEach, beforeAll, beforeEach, expect, jest, test } from "bun:test";
 import { JSDOM } from "jsdom";
 
+import { mountToastRegion } from "../../src/ui/panel-toasts";
 import { createToastsPart } from "../../src/ui/parts/toasts";
 import type { HostContext } from "../../src/ui/slots";
 import { createToastStore } from "../../src/ui/toast-store";
@@ -53,4 +54,20 @@ test("an action toast does not auto-dismiss; closing it does not run the action"
   expect(layer.querySelectorAll(".toast").length).toBe(0);
   expect(runs).toEqual([]);
   stop();
+});
+
+test("the panel's toast region, once mounted, keeps the action button", () => {
+  const store = createToastStore({ durationMs: 40 });
+  const layer = page.document.createElement("div");
+  page.document.body.append(layer);
+  const region = mountToastRegion(layer, store, () => null);
+  const runs: string[] = [];
+  store.push({ kind: "info", textCode: "toast.account_setup_pending", action: { labelCode: "toast.account_setup_action", run: () => runs.push("run") } });
+  const button = layer.querySelector(".toast__action") as HTMLButtonElement;
+  expect(button.textContent).toBe("Set up");
+  button.click();
+  expect(runs).toEqual(["run"]);
+  expect(layer.querySelectorAll(".toast").length).toBe(0);
+  region.dispose();
+  layer.remove();
 });

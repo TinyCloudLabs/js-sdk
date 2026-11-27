@@ -55,19 +55,19 @@ export const TOAST_REGION_CSS = `
 .tstack .toast__icon .ui-ic{width:20px;height:20px}
 .tstack .toast__body{flex:1;min-width:0;padding-top:12px;overflow-wrap:anywhere}
 .tstack .toast__title{display:block;font-weight:700}
-.tstack .toast a,.tstack .toast__copy{display:inline-flex;align-items:center;min-height:44px;margin-top:2px;padding:0;border:0;background:transparent;color:inherit;font:inherit;font-weight:700;text-decoration:underline;text-underline-offset:3px;white-space:nowrap;cursor:pointer}
+.tstack .toast a,.tstack .toast__copy,.tstack .toast__action{display:inline-flex;align-items:center;min-height:44px;margin-top:2px;padding:0;border:0;background:transparent;color:inherit;font:inherit;font-weight:700;text-decoration:underline;text-underline-offset:3px;white-space:nowrap;cursor:pointer}
 .tstack .toast__close{display:inline-flex;align-items:center;justify-content:center;flex:none;box-sizing:border-box;width:44px;height:44px;padding:0;border:0;border-radius:50%;background:transparent;color:inherit;cursor:pointer}
 .tstack .toast__close .ui-ic{width:20px;height:20px}
 .tstack .slip{margin-top:8px;padding:8px 0;border-top:2px dashed #71717a;border-bottom:2px dashed #71717a;font:12px/1.7 ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;overflow-wrap:anywhere}
 .tstack .slip>div{display:block}
-.toast a:focus-visible,.toast__close:focus-visible,.toast__copy:focus-visible{outline:2px solid #111827;outline-offset:2px;box-shadow:0 0 0 6px #fafafa}
+.toast a:focus-visible,.toast__close:focus-visible,.toast__copy:focus-visible,.toast__action:focus-visible{outline:2px solid #111827;outline-offset:2px;box-shadow:0 0 0 6px #fafafa}
 @keyframes tc-toast-in{from{opacity:0;transform:translateY(14px)}}
 @media (prefers-reduced-motion:reduce){
 .tstack .toast{animation:none}
 }
 @media (prefers-color-scheme: dark){
 .tstack .toast{background:#151517;color:#fafafa;box-shadow:0 12px 32px -8px rgba(0,0,0,.6),0 0 0 1px #69696b}
-.toast a:focus-visible,.toast__close:focus-visible,.toast__copy:focus-visible{outline-color:#fafafa;box-shadow:0 0 0 6px #111827}
+.toast a:focus-visible,.toast__close:focus-visible,.toast__copy:focus-visible,.toast__action:focus-visible{outline-color:#fafafa;box-shadow:0 0 0 6px #111827}
 }
 `;
 
@@ -127,6 +127,19 @@ export function mountToastRegion(
       link.rel = "noopener noreferrer";
       link.textContent = panelText(view.hrefLabelCode);
       body.append(link);
+    }
+    if (view.action !== undefined) {
+      const { labelCode, run } = view.action;
+      const action = document.createElement("button");
+      action.type = "button";
+      action.className = "toast__action";
+      action.textContent = panelText(labelCode);
+      // Dismiss, then run in the click's own tick: an action that opens a window is not popup-blocked.
+      action.addEventListener("click", () => {
+        store.dismiss(view.id);
+        run();
+      });
+      body.append(action);
     }
     el.append(closeButton(() => store.dismiss(view.id)));
     // Hover holds every timer; the hold is released on leave or removal.

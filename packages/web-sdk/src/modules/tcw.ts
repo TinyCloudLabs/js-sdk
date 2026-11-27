@@ -513,6 +513,8 @@ export class TinyCloudWeb {
   private readonly storageFullHandlers = new Set<(event: StorageFullEvent) => void>();
   private readonly purgeFailedHandlers = new Set<(event: LocalCopyPurgeFailedEvent) => void>();
   private readonly accountSetupHandlers = new Set<(event: AccountSetupPendingEvent) => void>();
+  /** The setup the account-setup toast's button runs: the latest sign-in's offer, which refuses once that session ends. */
+  private latestAccountSetupOffer?: () => Promise<boolean>;
 
   /** Promise that resolves when WASM + node are ready */
   private _initPromise: Promise<void>;
@@ -1491,10 +1493,12 @@ export class TinyCloudWeb {
       return flight;
     };
     if (this.accountSetupHandlers.size === 0) {
+      // The toast store keeps one visible copy of this toast across sign-ins, so its button runs the latest offer.
+      this.latestAccountSetupOffer = finishSetup;
       this.showToast({
         kind: "info",
         textCode: "toast.account_setup_pending",
-        action: { labelCode: "toast.account_setup_action", run: () => { void finishSetup(); } },
+        action: { labelCode: "toast.account_setup_action", run: () => { void this.latestAccountSetupOffer?.(); } },
       });
       return;
     }

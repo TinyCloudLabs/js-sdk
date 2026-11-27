@@ -18,8 +18,8 @@ const defaultNodeDid = "did:key:z6MkjHi79SMX4doJyo2w7jDTM6Fa7iX6EVZWXNbJ6RzBm3Wi
 const manifest = { app_id: "xyz.tinycloud.offer", name: "Offer app", defaults: false,
   permissions: [{ service: "tinycloud.kv", space: "applications", path: "xyz.tinycloud.offer/", actions: ["get", "list"] }] };
 
-/** The owner whose `applications` space the default node hosts; undefined hosts nothing. */
-let hostedOwner: string | undefined;
+/** The owners whose `applications` space the default node hosts. */
+const hostedOwners = new Set<string>();
 let registry: BrowserLocationRegistry;
 let oldWindow: typeof window | undefined;
 let oldLocation: typeof location | undefined;
@@ -35,7 +35,7 @@ beforeEach(() => {
   globalThis.window = { location: { host: "example.test", hostname: "example.test", origin: "https://example.test" },
     addEventListener() {}, removeEventListener() {}, open: () => ({}) } as unknown as Window & typeof globalThis;
   globalThis.location = window.location;
-  hostedOwner = undefined;
+  hostedOwners.clear();
   globalThis.fetch = async (input, init) => {
     const url = input instanceof Request ? input.url : String(input);
     if (url.startsWith(`${registry.url.origin}/`)) return oldFetch(input, init);
@@ -44,10 +44,10 @@ beforeEach(() => {
       if (path === "/info") return Response.json({ nodeId: defaultNodeDid, protocol: 1, version: "1.0.0", features: [] });
       if (path === "/.well-known/tinycloud/node-keys") return Response.json({ nodeDid: defaultNodeDid });
       if (path === "/delegate" && init?.method === "POST") {
-        return Response.json({ activated: hostedOwner ? [`tinycloud:pkh:eip155:1:${hostedOwner}:applications`] : [], skipped: [] });
+        return Response.json({ activated: [...hostedOwners].map((owner) => `tinycloud:pkh:eip155:1:${owner}:applications`), skipped: [] });
       }
-      // The proof's signed read: a 2xx only when the owner's space is hosted here.
-      if (path === "/invoke") return hostedOwner ? Response.json({}) : new Response("not found", { status: 404 });
+      // The proof's signed read: a 2xx only when an owner's space is hosted here.
+      if (path === "/invoke") return hostedOwners.size > 0 ? Response.json({}) : new Response("not found", { status: 404 });
       return Response.json({});
     }
     if (!url.startsWith(`${NODE}/`)) throw new Error(`Unexpected fetch: ${url}`);
@@ -85,27 +85,32 @@ async function signedResult(owner: PrivateKeyAccount, siwe: string) {
 type Offer = { address: string; finishSetup(): Promise<boolean> };
 type ToastRequest = { kind: string; textCode: string; action?: { labelCode: string; run(): void } };
 
+function newOwner() {
+  const key = `0x${(nextKey++).toString(16).padStart(64, "0")}` as const;
+  return { key, account: privateKeyToAccount(key) };
+}
+
 async function setup(owner: "hosted" | "registered" | "refused", options: { keyType?: "MANAGED" | "EXTERNAL" } = {}) {
-  const ownerKey = `0x${(nextKey++).toString(16).padStart(64, "0")}` as const;
-  const account = privateKeyToAccount(ownerKey);
-  if (owner === "hosted") hostedOwner = account.address;
-  if (owner === "registered") await registry.register(ownerKey, NODE, nodeDid);
+  let current = newOwner();
+  const account = current.account;
+  if (owner === "hosted") hostedOwners.add(account.address);
+  if (owner === "registered") await registry.register(current.key, NODE, nodeDid);
   const calls = { setup: [] as Array<{ keyId: string }>, approvals: 0 };
   const provider = { request: async ({ method }: { method: string }) => {
     if (method === "eth_chainId") return "0x1";
-    if (method === "eth_accounts") return [account.address];
+    if (method === "eth_accounts") return [current.account.address];
     throw new Error(`Unexpected wallet method ${method}`);
   } };
   const client = {
-    lastAuth: { keyId: "key_7", address: account.address, keyType: options.keyType ?? "MANAGED" },
+    get lastAuth() { return { keyId: "key_7", address: current.account.address, keyType: options.keyType ?? "MANAGED" }; },
     getContinuationProvider: () => provider,
     authorizeTinyCloud: async (request: { siwe: string }) => {
       calls.approvals++;
-      return signedResult(account, request.siwe);
+      return signedResult(current.account, request.siwe);
     },
     setupAccount: async (opts: { keyId: string }) => {
       calls.setup.push(opts);
-      await registry.register(ownerKey, NODE, nodeDid);
+      await registry.register(current.key, NODE, nodeDid);
       return { outcome: "published" as const };
     },
   };
@@ -118,7 +123,14 @@ async function setup(owner: "hosted" | "registered" | "refused", options: { keyT
   const toasts: ToastRequest[] = [];
   (web as { uiClient: { toast(request: ToastRequest): boolean } }).uiClient.toast = (request) => { toasts.push(request); return true; };
   const offers: Offer[] = [];
-  return { web, calls, account, toasts, offers, listen: () => web.on("account.setup.pending", (event: Offer) => offers.push(event)) };
+  /** OpenKey now signs as another hosted owner with no record. */
+  const switchOwner = () => {
+    current = newOwner();
+    hostedOwners.add(current.account.address);
+    return current.account;
+  };
+  return { web, calls, account, toasts, offers, switchOwner,
+    listen: () => web.on("account.setup.pending", (event: Offer) => offers.push(event)) };
 }
 
 test("a hosted owner with no record signs in, then a toast offers setup and its button sets up the signing key", async () => {
@@ -155,6 +167,36 @@ test("finishSetup after sign-out opens nothing", async () => {
   await web.signOut();
   expect(await offers[0]!.finishSetup()).toBe(false);
   expect(calls.setup).toEqual([]);
+});
+
+test("finishSetup after another owner signs in, with no sign-out, opens nothing", async () => {
+  const { web, calls, offers, listen, switchOwner } = await setup("hosted");
+  listen();
+  await web.signIn();
+  const other = switchOwner();
+  expect((await web.signIn()).address).toBe(other.address);
+  expect(offers.map((offer) => offer.address)).toHaveLength(2);
+  expect(await offers[0]!.finishSetup()).toBe(false);
+  expect(calls.setup).toEqual([]);
+});
+
+test("two finishSetup calls while setup is open open it once", async () => {
+  const { web, calls, offers, listen } = await setup("hosted");
+  listen();
+  await web.signIn();
+  expect(await Promise.all([offers[0]!.finishSetup(), offers[0]!.finishSetup()])).toEqual([true, true]);
+  expect(calls.setup).toEqual([{ keyId: "key_7" }]);
+});
+
+test("a toast still on screen from before a sign-out and sign-in opens setup for the new session", async () => {
+  const { web, calls, toasts } = await setup("hosted");
+  await web.signIn();
+  // The page keeps one copy of an identical toast, so the first toast's button is the one the owner sees.
+  const first = toasts.find((toast) => toast.textCode === "toast.account_setup_pending")!;
+  await web.signOut();
+  await web.signIn();
+  first.action!.run();
+  expect(calls.setup).toEqual([{ keyId: "key_7" }]);
 });
 
 test("a hosted owner signing in with a wallet key is not offered OpenKey's setup", async () => {
