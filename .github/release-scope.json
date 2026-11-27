@@ -6,11 +6,8 @@
     "@tinycloud/node-sdk"
   ],
   "baselines": {
-    "@tinycloud/web-sdk": "3.17.0",
-    "@tinycloud/node-sdk": "3.16.1"
-  },
-  "expect": {
     "@tinycloud/web-sdk": "3.18.0",
     "@tinycloud/node-sdk": "3.18.0"
-  }
+  },
+  "expect": {}
 }
