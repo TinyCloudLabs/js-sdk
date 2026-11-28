@@ -13,12 +13,14 @@ import { ensureSpaceSetup } from "../auth/space-setup.js";
  * A new profile with a fresh session key and no sign-in, as `init --key-only`
  * makes it. It becomes the default profile when it is named `default` or no
  * default profile exists yet.
+ * App-key callers opt into signed-out creation while holding the profile lock;
+ * their pre-existing sign-out fence must survive key regeneration and config I/O.
  */
-export async function createKeyOnlyProfile(profileName: string, host: string, defaultSpace?: string): Promise<{ did: string; previousDefaultProfile: string }> {
+export async function createKeyOnlyProfile(profileName: string, host: string, defaultSpace?: string, options: { signedOut?: true } = {}): Promise<{ did: string; previousDefaultProfile: string }> {
   await ProfileManager.ensureConfigDir();
   const { jwk, did } = await generateKey();
   await ProfileManager.setKey(profileName, jwk);
-  await ProfileManager.setProfile(profileName, {
+  const profile = {
     name: profileName,
     host,
     chainId: DEFAULT_CHAIN_ID,
@@ -26,7 +28,10 @@ export async function createKeyOnlyProfile(profileName: string, host: string, de
     did,
     createdAt: new Date().toISOString(),
     ...(defaultSpace ? { defaultSpace } : {}),
-  });
+    ...(options.signedOut ? { authSignedOut: true } : {}),
+  };
+  if (options.signedOut) await ProfileManager.setProfileDurable(profileName, profile);
+  else await ProfileManager.setProfile(profileName, profile);
   const config = await ProfileManager.getConfig();
   if (profileName === "default" || !await ProfileManager.profileExists(config.defaultProfile)) {
     await ProfileManager.setConfig({ ...config, defaultProfile: profileName });

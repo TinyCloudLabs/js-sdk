@@ -10,6 +10,8 @@ import { ensureAuthenticated } from "../lib/sdk.js";
 import type { CLIContext, ProfileConfig } from "../config/types.js";
 import { keyPathInPrefix, namedKeysNetworkId } from "../lib/named-keys.js";
 import { validatePrivateOutput, writePrivateOutput } from "../lib/private-output.js";
+import { openVerifiedAppKey, verifiedSavedAppKey } from "../auth/app-key.js";
+import { assertSealAad, openSealedPlaintext, parseRecordKey, sealHeader, sealPlaintext } from "../lib/app-seal.js";
 
 async function readStdin(): Promise<Buffer> {
   const chunks: Buffer[] = [];
@@ -109,6 +111,94 @@ function parseEnvelope(bytes: Buffer): NamedKeyEnvelope {
   return envelope as NamedKeyEnvelope;
 }
 
+function recordKeyRequired(): CLIError {
+  return new CLIError(
+    "RECORD_KEY_REQUIRED",
+    "An app key needs `--record-key <full-record-key>`, the storage key of the record the value belongs to.",
+    ExitCode.USAGE_ERROR,
+  );
+}
+
+/** An app-key call failed: a named-key refusal keeps its usual mapping, anything else is the approval being refused. */
+function cliErrorFromAppKey(error: unknown, command: KeysCommand, path: string): unknown {
+  if (error instanceof CLIError) return error;
+  if (error instanceof NamedKeyError) {
+    if (error.code === "NETWORK_NOT_FOUND") {
+      return new CLIError(
+        "NOT_FOUND",
+        "This account has no default encryption network, and an app-key approval can't create one. Create it with an ordinary `auth login --keys <folder>` sign-in first.",
+        ExitCode.NOT_FOUND,
+      );
+    }
+    return cliErrorFromNamedKey(error, command, path);
+  }
+  return new CLIError("APP_KEY_UNAVAILABLE", error instanceof Error ? error.message : "The app-key approval can't be used.", ExitCode.PERMISSION_DENIED);
+}
+
+function registryUrlFor(ctx: CLIContext, profile: ProfileConfig): string | undefined {
+  return process.env.TC_REGISTRY_URL || ctx.tinycloudRegistryUrl || profile.tinycloudRegistryUrl || undefined;
+}
+
+/** `keys encrypt <app-key> --record-key <key>`: seal one JSON value to one record with the approved app key. */
+async function encryptForRecord(deps: KeysCommandDeps, ctx: CLIContext, path: string, options: Record<string, string | undefined>): Promise<void> {
+  const recordKey = parseRecordKey(options.recordKey);
+  if (options.out) await validatePrivateOutput(options.out, "--out");
+  const approval = await verifiedSavedAppKey(ctx.profile, ctx.host, path);
+  const header = sealHeader(approval.ownerDid, recordKey);
+  const input = (await readInput(options.in)).toString("utf8");
+  let plaintext: Uint8Array;
+  try {
+    plaintext = sealPlaintext(header, input);
+  } catch {
+    throw new CLIError("INVALID_INPUT", "The input isn't JSON. A value to encrypt must be one JSON value.", ExitCode.USAGE_ERROR);
+  }
+  const registryUrl = registryUrlFor(ctx, await deps.getProfile(ctx.profile));
+  const envelope = await withSpinner(`Encrypting with ${path}…`, async () => {
+    const client = await openVerifiedAppKey(approval, registryUrl);
+    return client.encrypt(plaintext, new TextEncoder().encode(header));
+  }).catch((error) => {
+    throw cliErrorFromAppKey(error, "encrypt", path);
+  });
+  const json = JSON.stringify(envelope);
+  if (options.out) {
+    await writePrivateOutput(options.out, new TextEncoder().encode(json));
+    deps.outputJson({ keyPath: envelope.keyPath, networkId: envelope.networkId, written: options.out });
+    return;
+  }
+  process.stdout.write(json + "\n");
+}
+
+/** `keys decrypt --record-key <key>`: open an envelope only for the record, owner and space it was sealed for. */
+async function decryptForRecord(deps: KeysCommandDeps, ctx: CLIContext, options: Record<string, string | undefined>): Promise<void> {
+  const recordKey = parseRecordKey(options.recordKey);
+  if (options.out) await validatePrivateOutput(options.out, "--out");
+  const envelope = parseEnvelope(await readInput(options.in));
+  const approval = await verifiedSavedAppKey(ctx.profile, ctx.host, envelope.keyPath);
+  if (envelope.networkId !== namedKeysNetworkId(approval.ownerDid)) {
+    throw new CLIError(
+      "KEY_OUTSIDE_GRANTED_PREFIX",
+      "This envelope was made with a different encryption network than this profile's, so this profile can't decrypt it.",
+      ExitCode.PERMISSION_DENIED,
+    );
+  }
+  const header = sealHeader(approval.ownerDid, recordKey);
+  assertSealAad(envelope.aad, header);
+  const registryUrl = registryUrlFor(ctx, await deps.getProfile(ctx.profile));
+  const plaintext = await withSpinner("Decrypting…", async () => {
+    const client = await openVerifiedAppKey(approval, registryUrl);
+    return client.decrypt(envelope);
+  }).catch((error) => {
+    throw cliErrorFromAppKey(error, "decrypt", envelope.keyPath);
+  });
+  const value = new TextEncoder().encode(openSealedPlaintext(plaintext, header));
+  if (options.out) {
+    await writePrivateOutput(options.out, value);
+    deps.outputJson({ keyPath: envelope.keyPath, written: options.out });
+    return;
+  }
+  process.stdout.write(value);
+}
+
 /** What the key commands reach outside themselves; tests pass stand-ins. */
 export interface KeysCommandDeps {
   resolveContext(options: Record<string, unknown>): Promise<CLIContext>;
@@ -155,9 +245,15 @@ export function registerKeysCommand(program: Command, deps: KeysCommandDeps = de
     .description("Encrypt data with a named key and output the encrypted envelope as JSON")
     .option("--in <file>", "Read the data to encrypt from a file (default: standard input)")
     .option("--out <file>", "Write the envelope to a file (default: standard output)")
+    .option("--record-key <key>", "The full storage key of the record this value belongs to, for an app key from `auth login --keys <full-app-key> --app-key`. The value must be JSON. It is encrypted for this owner and record only.")
     .action(async (path: string, options, cmd) => {
       try {
         const ctx = await deps.resolveContext(cmd.optsWithGlobals());
+        if (options.recordKey !== undefined) {
+          await encryptForRecord(deps, ctx, path, options);
+          return;
+        }
+        if (path.startsWith("apps/")) throw recordKeyRequired();
         assertInGrantedPrefix(await grantedPrefix(deps, ctx.profile), path, ctx.profile);
         if (options.out) await validatePrivateOutput(options.out, "--out");
         const plaintext = await readInput(options.in);
@@ -183,9 +279,14 @@ export function registerKeysCommand(program: Command, deps: KeysCommandDeps = de
     .description("Decrypt an envelope made with a named key and output the original data")
     .option("--in <file>", "Read the envelope from a file (default: standard input)")
     .option("--out <file>", "Write the decrypted data to a file (default: standard output)")
+    .option("--record-key <key>", "The full storage key of the record this envelope was encrypted for, for an app key from `auth login --keys <full-app-key> --app-key`. Any other record, owner or space is refused.")
     .action(async (options, cmd) => {
       try {
         const ctx = await deps.resolveContext(cmd.optsWithGlobals());
+        if (options.recordKey !== undefined) {
+          await decryptForRecord(deps, ctx, options);
+          return;
+        }
         const prefix = await grantedPrefix(deps, ctx.profile);
         if (options.out) await validatePrivateOutput(options.out, "--out");
         const envelope = parseEnvelope(await readInput(options.in));

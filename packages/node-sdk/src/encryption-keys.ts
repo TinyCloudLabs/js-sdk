@@ -16,7 +16,15 @@ import {
   NamedKeyError,
   type NamedKeyClientConfig,
 } from "@tinycloud/sdk-services/encryption/named-keys";
+import { DECRYPT_ACTION } from "@tinycloud/sdk-services";
 import type { EncryptionCrypto } from "@tinycloud/sdk-services";
+import { KEY_CREATE_ABILITY } from "@tinycloud/sdk-services/encryption/resource";
+import type { NamedKeyEnvelope } from "@tinycloud/sdk-services/encryption/named-keys";
+import {
+  verifyExactAppKeyProof,
+  type ExactAppKeyProof,
+  type ExactAppKeyRequest,
+} from "./exact-app-key-proof.js";
 import type { TinyCloudNode } from "./TinyCloudNode";
 
 export {
@@ -32,6 +40,17 @@ export {
   type NamedKeyErrorCode,
   type PublicKeyDescriptor,
 } from "@tinycloud/sdk-services/encryption/named-keys";
+
+export {
+  EXACT_APP_KEY_MAX_LIFETIME_MS,
+  buildExactAppKeyProof,
+  prepareExactAppKeyRequest,
+  verifyExactAppKeyProof,
+  type ExactAppKeyApproval,
+  type ExactAppKeyProof,
+  type ExactAppKeyRequest,
+  type PreparedExactAppKeyRequest,
+} from "./exact-app-key-proof.js";
 
 interface NodeSigningInternals {
   readonly config?: { keyWrapV2?: boolean; requireKeyWrapV2?: boolean };
@@ -83,16 +102,7 @@ export function createNamedKeyClient(
   node: TinyCloudNode,
   options: CreateNamedKeyClientOptions = {},
 ): NamedKeyClient {
-  const internals = node as unknown as Partial<NodeSigningInternals>;
-  for (const hook of ["signRawNetworkAuthorization", "createEncryptionCrypto", "encryptionDestination"] as const) {
-    if (typeof internals[hook] !== "function") {
-      throw new NamedKeyError(
-        "NODE_HOOK_MISSING",
-        `TinyCloudNode.${hook} is not available; named keys cannot sign invocations`,
-      );
-    }
-  }
-  const signer = internals as NodeSigningInternals;
+  const signer = namedKeyHooks(node);
   const resolvedHost = node.hosts[0];
   if (resolvedHost === undefined) throw new Error("TinyCloud node host has not been resolved");
   // Key calls carry public keys and key admin, so each network's calls go to
@@ -136,4 +146,103 @@ export function createNamedKeyClient(
     },
   };
   return new NamedKeyClient(config);
+}
+
+function namedKeyHooks(node: TinyCloudNode): NodeSigningInternals {
+  const internals = node as unknown as Partial<NodeSigningInternals>;
+  for (const hook of ["signRawNetworkAuthorization", "createEncryptionCrypto", "encryptionDestination"] as const) {
+    if (typeof internals[hook] !== "function") {
+      throw new NamedKeyError(
+        "NODE_HOOK_MISSING",
+        `TinyCloudNode.${hook} is not available; named keys cannot sign invocations`,
+      );
+    }
+  }
+  return internals as NodeSigningInternals;
+}
+
+/** The only operations an approved exact app key allows. */
+export interface ExactAppKeyClient {
+  readonly expiresAt: string;
+  encrypt(plaintext: Uint8Array, aad?: Uint8Array): Promise<NamedKeyEnvelope>;
+  decrypt(envelope: NamedKeyEnvelope): Promise<Uint8Array>;
+}
+
+/** A raw app-key permit never signs in to a storage space or installs a session. */
+export async function openExactAppKeyClient(
+  node: TinyCloudNode,
+  request: ExactAppKeyRequest,
+  proof: ExactAppKeyProof,
+): Promise<ExactAppKeyClient> {
+  const verified = verifyExactAppKeyProof(request, proof);
+  if (!verified.ok) throw new Error(`The saved app-key proof is not usable (${verified.reason}).`);
+  const { resource, networkId, expiresAt, sessionDid } = verified;
+  const path = request.path;
+  const session = {
+    delegationCid: proof.delegationCid,
+    delegationHeader: { Authorization: proof.delegationHeader.Authorization },
+    verificationMethod: sessionDid,
+    jwk: structuredClone(request.sessionKey),
+    spaceId: proof.spaceId, // Required by WASM serialization, not a signed space.
+  };
+  const signer = namedKeyHooks(node);
+  const destination = await signer.encryptionDestination(networkId);
+  const end = Date.parse(expiresAt);
+  const assertActive = () => {
+    if (Date.now() >= end) throw new Error("The app-key approval has expired.");
+  };
+  assertActive();
+  const response = await fetch(`${destination.url}/delegate`, {
+    method: "POST",
+    headers: session.delegationHeader,
+    redirect: "error",
+    signal: AbortSignal.timeout(15_000),
+  });
+  if (!response.ok) {
+    await response.body?.cancel();
+    throw new Error(`The node refused this app-key approval (HTTP ${response.status}).`);
+  }
+  const ack = await response.json() as { cid?: unknown; activated?: unknown; skipped?: unknown } | null;
+  if (ack === null || typeof ack !== "object" || ack.cid !== session.delegationCid || !Array.isArray(ack.activated) ||
+    ack.activated.length !== 0 || !Array.isArray(ack.skipped) || ack.skipped.length !== 0) {
+    throw new Error("The node did not acknowledge the exact app-key approval.");
+  }
+  assertActive();
+  const client = new NamedKeyClient({
+    host: destination.url,
+    defaultNetworkId: () => networkId,
+    resolveNode: async (id) => {
+      if (id !== networkId) throw new Error("The app-key approval does not cover that network.");
+      return destination;
+    },
+    keyWrapV2: true,
+    crypto: signer.createEncryptionCrypto(),
+    fetch: Object.assign(
+      (input: Parameters<typeof fetch>[0], init?: RequestInit) => fetch(input, { ...init, redirect: "error" }),
+      { preconnect: () => {} },
+    ) as typeof fetch,
+    signInvocation: (input) => {
+      if (input.resource !== resource || input.targetNode !== destination.nodeDid ||
+        (input.action !== KEY_CREATE_ABILITY && input.action !== DECRYPT_ACTION)) {
+        throw new Error("The app-key approval does not cover that operation.");
+      }
+      return signer.signRawNetworkAuthorization({
+        targetNode: destination.nodeDid, networkId: resource, action: input.action, facts: input.facts,
+      }, { graph: { assertActive }, session, exactSession: true });
+    },
+  });
+  return {
+    expiresAt,
+    async encrypt(plaintext: Uint8Array, aad?: Uint8Array) {
+      assertActive();
+      return client.encrypt(path, plaintext, { ensureKey: true, ...(aad === undefined ? {} : { aad }) });
+    },
+    async decrypt(envelope: NamedKeyEnvelope) {
+      assertActive();
+      if (envelope.v !== 2 || envelope.networkId !== networkId || envelope.keyPath !== path) {
+        throw new NamedKeyError("INVALID_ENVELOPE", "This envelope does not use the approved app key.");
+      }
+      return client.decrypt(envelope);
+    },
+  };
 }

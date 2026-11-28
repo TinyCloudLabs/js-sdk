@@ -12,6 +12,8 @@ import { canonicalOwnerDid } from "../lib/owner-did.js";
 type Authorize = Parameters<TinyCloudNode["signInWithOpenKey"]>[0];
 type SignedResult = Awaited<ReturnType<Authorize>>;
 type Prepared = Parameters<Authorize>[0] & { verificationMethod: string };
+/** The fields the hand-off carries to OpenKey; the SDK's prepared session satisfies it. */
+export type HandoffPrepared = Pick<Prepared, "siwe" | "jwk" | "host" | "verificationMethod"> & Partial<Pick<Prepared, "keyId" | "presentation">>;
 
 export interface PreparedOpenKeyHandoff {
   readonly result: Promise<SignedResult>;
@@ -75,11 +77,13 @@ function apiOrigin(openKeyHost: string): string {
 }
 
 export async function startPreparedOpenKeyHandoff(options: {
-  prepared: Prepared;
+  prepared: HandoffPrepared;
   openKeyHost: string;
   apiHost?: string;
   noPopup?: boolean;
   paste?: boolean;
+  /** One exact app key the owner is asked to approve, repeated byte-for-byte as the wire's `request.appKey`. */
+  appKey?: { readonly appId: string; readonly key: string };
   /** How long the approval stays open; tests shorten the five-minute default. */
   expiryMs?: number;
 }): Promise<PreparedOpenKeyHandoff> {
@@ -216,6 +220,7 @@ export async function startPreparedOpenKeyHandoff(options: {
         protocolVersion: 1, siwe: options.prepared.siwe, jwk: sessionJwk,
         host: options.prepared.host,
         sessionDid: options.prepared.verificationMethod,
+        ...(options.appKey ? { appKey: { appId: options.appKey.appId, key: options.appKey.key } } : {}),
         ...(options.prepared.keyId ? { keyId: options.prepared.keyId } : {}),
         ...(options.prepared.presentation ? { presentation: options.prepared.presentation } : {}),
       },
@@ -265,7 +270,7 @@ export async function startPreparedOpenKeyHandoff(options: {
         rejectResult(invalid("V2_EXPIRED",
           !options.paste && !process.stdin.isTTY
             ? "The browser could not reach the CLI. Re-run with --paste (Safari may require it). No session or key was saved."
-            : "Prepared OpenKey handoff expired; restart login for a fresh SIWE. No session or key was saved."));
+            : "The OpenKey request ended before it was approved. Start a new login. No session or key was saved."));
         close();
         void cancel();
       }

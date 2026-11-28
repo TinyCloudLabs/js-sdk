@@ -72,6 +72,9 @@ async function secureProfileDirectory(directory: string): Promise<void> {
     }
     for (const entry of entries) {
       if (!entry.isFile()) continue;
+      // Exact app-key permit mode is its publication fence. Its owning loader
+      // enforces regular-file/owner/no-follow/exact0600; never widen staged000.
+      if (entry.name === "app-key-permit.json") continue;
       let file;
       try {
         file = await open(
